@@ -1,0 +1,302 @@
+"""DescriptorService: registry list, describe, submit (validation, cache, compute job)."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+from ..datasets import compute_fingerprint
+from ..errors import (
+    AppError,
+    DATASET_NOT_FOUND,
+    DESCRIPTOR_CONFIGURATION_ERROR,
+    INVALID_PARAMS,
+    UNSUPPORTED_PERIODICITY,
+)
+from ..mdescriptor_adapter import engine_exception_to_app_error
+from ..storage.database import Database
+from .dataset_service import DatasetService
+from .job_service import JobService
+
+log = logging.getLogger(__name__)
+
+_NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
+
+_VALIDATE_TYPES = {"integer", "number", "boolean", "string", "enum", "array", "object", "model", "species"}
+
+
+class DescriptorService:
+    def __init__(
+        self,
+        db: Database,
+        adapter,
+        jobs: JobService,
+        datasets: DatasetService,
+        data_dir: Path,
+        engine_version: str,
+    ):
+        self.db = db
+        self.adapter = adapter
+        self.jobs = jobs
+        self.datasets = datasets
+        self.data_dir = data_dir
+        self.engine_version = engine_version
+
+    # -- registry / describe --------------------------------------------------
+    def list(self, params: dict) -> list[dict]:
+        out = []
+        for name in self.adapter.list_names():
+            s = self.adapter.schema(name)
+            out.append(
+                {
+                    "name": s["name"],
+                    "display_name": s.get("display_name", name),
+                    "level": s.get("level"),
+                    "backend": s.get("backend"),
+                    "category": s.get("category"),
+                    "capabilities": s.get("capabilities", []),
+                }
+            )
+        return out
+
+    def describe(self, params: dict) -> dict:
+        name = params.get("name")
+        if not name:
+            raise AppError(INVALID_PARAMS, "'name' is required")
+        return self.adapter.schema(name)
+
+    # -- submit -----------------------------------------------------------------
+    def submit(self, params: dict) -> dict:
+        ds_id = params.get("dataset_id")
+        name = params.get("descriptor_name")
+        parameters = params.get("parameters") or {}
+        scope = params.get("scope", "dataset")
+        if scope not in ("frame", "dataset"):
+            raise AppError(INVALID_PARAMS, "scope must be 'frame' or 'dataset'")
+        frame_index = params.get("frame_index")
+        if scope == "frame" and not isinstance(frame_index, int):
+            raise AppError(INVALID_PARAMS, "scope=frame requires integer 'frame_index'")
+        row = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (ds_id,))
+        if row is None:
+            raise AppError(DATASET_NOT_FOUND, f"dataset {ds_id} does not exist")
+        schema = self.adapter.schema(name) if name else None
+        if schema is None:
+            raise AppError(INVALID_PARAMS, "'descriptor_name' is required")
+        self._validate_parameters(schema, parameters)
+        self._check_input_capability(schema, row)
+
+        fingerprint = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])
+        canonical = json.dumps(parameters, sort_keys=True, ensure_ascii=False)
+        cache_key = hashlib.sha256(
+            "\x1f".join(
+                [
+                    fingerprint,
+                    name,
+                    canonical,
+                    self.engine_version,
+                    scope,
+                    str(frame_index),
+                    str(params.get("output_dtype") or ""),
+                ]
+            ).encode("utf-8")
+        ).hexdigest()
+        hit = self.db.query_one(
+            "SELECT id FROM descriptor_runs WHERE cache_key = ? AND status = 'COMPLETED'",
+            (cache_key,),
+        )
+        if hit and not params.get("force"):
+            return {
+                "job_id": None,
+                "cache": {"existing_run_id": hit["id"], "cache_key": cache_key},
+            }
+
+        run_id = f"run_{uuid.uuid4().hex[:12]}"
+        info = self.adapter.runtime_info()
+        self.db.execute(
+            "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, descriptor_version,"
+            " engine_version, parameters_json, scope, frame_index, output_dtype, cache_key,"
+            " status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)",
+            (
+                run_id,
+                ds_id,
+                name,
+                info.get("version"),  # no per-descriptor version in 0.2.3 (engine-api-report §5)
+                info.get("version"),
+                canonical,
+                scope,
+                frame_index,
+                params.get("output_dtype"),
+                cache_key,
+                _NOW(),
+            ),
+        )
+
+        def runner(ctx):
+            return self._run_compute(ctx, run_id, row, name, parameters, scope, frame_index, params.get("output_dtype"))
+
+        job_id = self.jobs.submit(
+            "descriptor.compute", runner, dataset_id=ds_id, descriptor_run_id=run_id
+        )
+        return {"job_id": job_id, "cache": None}
+
+    # -- validation / compat (ADR-11) ---------------------------------------------
+    def _validate_parameters(self, schema: dict, parameters: dict) -> None:
+        spec = schema.get("parameters", {})
+        for key, value in parameters.items():
+            if key not in spec:
+                raise AppError(
+                    DESCRIPTOR_CONFIGURATION_ERROR,
+                    f"unknown parameter {key!r} for {schema['name']}",
+                    {"parameter": key},
+                )
+            self._check_value(key, spec[key], value)
+        for key, meta in spec.items():
+            if meta.get("required") and key not in parameters:
+                raise AppError(
+                    DESCRIPTOR_CONFIGURATION_ERROR,
+                    f"missing required parameter {key!r} for {schema['name']}",
+                    {"parameter": key},
+                )
+
+    def _check_value(self, key: str, meta: dict, value) -> None:
+        ptype = meta.get("type")
+        if ptype == "object" and isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                sub_meta = (meta.get("properties") or {}).get(sub_key)
+                if sub_meta is None:
+                    raise AppError(
+                        DESCRIPTOR_CONFIGURATION_ERROR,
+                        f"unknown nested parameter {key}.{sub_key}",
+                    )
+                self._check_value(f"{key}.{sub_key}", sub_meta, sub_value)
+            return
+        if value is None:
+            return
+        try:
+            if ptype == "integer":
+                if not isinstance(value, int) or isinstance(value, bool):
+                    raise ValueError("expected integer")
+            elif ptype == "number":
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError("expected number")
+            elif ptype == "boolean":
+                if not isinstance(value, bool):
+                    raise ValueError("expected boolean")
+            elif ptype == "species":
+                if not (isinstance(value, list) and value and all(isinstance(v, int) for v in value)):
+                    raise ValueError("expected list of atomic numbers")
+            elif ptype in ("array",):
+                if not isinstance(value, list):
+                    raise ValueError("expected array")
+            elif ptype == "enum":
+                if value not in (meta.get("enum") or []):
+                    raise ValueError(f"expected one of {meta.get('enum')}")
+            elif ptype in ("string", "model"):
+                if not isinstance(value, str):
+                    raise ValueError("expected string path")
+        except ValueError as exc:
+            raise AppError(
+                DESCRIPTOR_CONFIGURATION_ERROR,
+                f"parameter {key}: {exc}",
+                {"parameter": key},
+            ) from exc
+
+    def _check_input_capability(self, schema: dict, dataset_row: dict) -> None:
+        caps = schema.get("input") or {}
+        periodicity = json.loads(dataset_row["periodicity"])
+        allowed = caps.get("periodicity") or ["isolated", "fully_periodic"]
+        if periodicity.get("mixed") and not caps.get("mixed_periodicity", True):
+            raise AppError(
+                UNSUPPORTED_PERIODICITY,
+                f"{schema['name']} rejects mixed periodicity datasets",
+            )
+        if periodicity.get("fully_periodic") and not periodicity.get("isolated"):
+            need = "fully_periodic"
+        elif periodicity.get("isolated") and not periodicity.get("fully_periodic"):
+            need = "isolated"
+        else:
+            return  # uniform datasets above; mixed handled below
+        if need not in allowed:
+            raise AppError(
+                UNSUPPORTED_PERIODICITY,
+                f"{schema['name']} supports periodicity {allowed}, dataset is {need}",
+            )
+
+    # -- compute job ------------------------------------------------------------
+    def _run_compute(self, ctx, run_id, row, name, parameters, scope, frame_index, output_dtype):
+        import numpy as np
+
+        self.db.execute(
+            "UPDATE descriptor_runs SET status = 'RUNNING', started_at = ? WHERE id = ?",
+            (_NOW(), run_id),
+        )
+        ctx.check_cancelled()
+        descriptor = self.adapter.build(name, parameters)
+        if scope == "frame":
+            frames = [self.datasets._adapter_for(row).get_frame(frame_index)]
+            total = 1
+        else:
+            adapter = self.datasets._adapter_for(row)
+            frames = []
+            total = max(len(adapter), 1)
+            for i, frame in enumerate(adapter.iter_frames()):
+                ctx.check_cancelled()
+                frames.append(frame)
+                if (i + 1) % 500 == 0 or (i + 1) == total:
+                    ctx.progress(i + 1, total, "loading frames")
+        batch = self.adapter.to_structure_batch(frames)
+        control = self.adapter.make_control()
+        ctx.attach_control(control)
+        ctx.progress(0, total, "computing descriptor")
+        try:
+            result = self.adapter.compute(descriptor, batch, control)
+        except Exception as exc:
+            raise engine_exception_to_app_error(exc) from exc
+        ctx.check_cancelled()
+
+        values = np.asarray(result.values)
+        if output_dtype == "float32" and values.dtype != np.float32:
+            values = values.astype(np.float32)
+        run_dir = self.data_dir / "results" / f"run_{run_id.removeprefix('run_')}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        np.save(run_dir / "values.npy", values)
+        if result.row_offsets is not None:
+            np.save(run_dir / "row_offsets.npy", np.asarray(result.row_offsets))
+        metadata = {
+            "run_id": run_id,
+            "descriptor": name,
+            "engine_version": self.engine_version,
+            "descriptor_version": self.engine_version,  # no per-descriptor version in 0.2.3
+            "descriptor_info_schema": self.adapter.runtime_info().get("descriptor_info_schema_version"),
+            "configuration": parameters,
+            "dataset_id": row["id"],
+            "dataset_fingerprint": compute_fingerprint(Path(row["source_path"]), row["number_of_frames"]),
+            "scope": scope,
+            "frame_index": frame_index,
+            "shape": list(values.shape),
+            "dtype": str(values.dtype),
+            "level": str(getattr(result, "level", "")),
+            "feature_count": int(getattr(result, "feature_count", values.shape[-1] if values.ndim > 1 else 0)),
+            "structure_ids": list(getattr(result, "structure_ids", []) or []),
+            "created_at": _NOW(),
+        }
+        (run_dir / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self.db.execute(
+            "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ? WHERE id = ?",
+            (_NOW(), str(run_dir), run_id),
+        )
+        ctx.progress(total, total, "done")
+        return {
+            "run_id": run_id,
+            "shape": metadata["shape"],
+            "dtype": metadata["dtype"],
+            "level": metadata["level"],
+            "feature_count": metadata["feature_count"],
+        }

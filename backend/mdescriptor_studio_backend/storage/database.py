@@ -1,0 +1,141 @@
+"""SQLite storage: WAL, single-writer lock, versioned migrations (design doc §42/§43)."""
+
+from __future__ import annotations
+
+import logging
+import sqlite3
+import threading
+from pathlib import Path
+
+log = logging.getLogger(__name__)
+
+MIGRATIONS: dict[int, str] = {
+    1: """
+    CREATE TABLE datasets (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        format TEXT NOT NULL,
+        source_path TEXT NOT NULL UNIQUE,
+        number_of_frames INTEGER NOT NULL,
+        elements TEXT NOT NULL,
+        properties TEXT NOT NULL,
+        periodicity TEXT NOT NULL,
+        fingerprint TEXT NOT NULL,
+        file_size INTEGER,
+        created_at TEXT NOT NULL,
+        last_scan_at TEXT
+    );
+    CREATE TABLE dataset_statistics (
+        dataset_id TEXT PRIMARY KEY REFERENCES datasets(id) ON DELETE CASCADE,
+        fingerprint TEXT NOT NULL,
+        stats_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE jobs (
+        id TEXT PRIMARY KEY,
+        job_type TEXT NOT NULL,
+        dataset_id TEXT,
+        descriptor_run_id TEXT,
+        status TEXT NOT NULL,
+        progress REAL NOT NULL DEFAULT 0,
+        completed INTEGER,
+        total INTEGER,
+        message TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT
+    );
+    CREATE TABLE descriptor_runs (
+        id TEXT PRIMARY KEY,
+        dataset_id TEXT NOT NULL,
+        descriptor_name TEXT NOT NULL,
+        descriptor_version TEXT,
+        engine_version TEXT NOT NULL,
+        parameters_json TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        frame_index INTEGER,
+        output_dtype TEXT,
+        cache_key TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        result_path TEXT,
+        error_message TEXT
+    );
+    CREATE TABLE analysis_runs (
+        id TEXT PRIMARY KEY,
+        descriptor_run_id TEXT NOT NULL,
+        analysis_type TEXT NOT NULL,
+        params_json TEXT,
+        status TEXT NOT NULL,
+        result_path TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT
+    );
+    CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    """,
+}
+
+
+class Database:
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        self._write_lock = threading.RLock()
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._migrate()
+
+    def _migrate(self) -> None:
+        with self._write_lock:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)"
+            )
+            row = self._conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()
+            current = row["v"] or 0
+            for version in sorted(MIGRATIONS):
+                if version > current:
+                    log.info("applying migration %d -> %d", current, version)
+                    self._conn.executescript(MIGRATIONS[version])
+                    self._conn.execute("DELETE FROM schema_version")
+                    self._conn.execute("INSERT INTO schema_version VALUES (?)", (version,))
+                    self._conn.commit()
+
+    def execute(self, sql: str, params: tuple = ()) -> int:
+        with self._write_lock:
+            cur = self._conn.execute(sql, params)
+            self._conn.commit()
+            return cur.lastrowid
+
+    def executemany(self, sql: str, seq) -> None:
+        with self._write_lock:
+            self._conn.executemany(sql, seq)
+            self._conn.commit()
+
+    def query(self, sql: str, params: tuple = ()) -> list[dict]:
+        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+
+    def query_one(self, sql: str, params: tuple = ()) -> dict | None:
+        row = self._conn.execute(sql, params).fetchone()
+        return dict(row) if row else None
+
+    def get_setting(self, key: str) -> str | None:
+        row = self.query_one("SELECT value FROM settings WHERE key = ?", (key,))
+        return row["value"] if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        self.execute(
+            "INSERT INTO settings(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+    def close(self) -> None:
+        with self._write_lock:
+            self._conn.close()

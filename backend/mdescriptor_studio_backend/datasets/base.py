@@ -1,0 +1,101 @@
+"""Dataset layer: frames, adapter contract, format detection (design doc §9–§12)."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+
+from ..errors import AppError, INVALID_DATASET, UNSUPPORTED_FORMAT
+
+
+@dataclass
+class DatasetFrame:
+    """GUI-side frame; energy/forces/virial never enter StructureBatch (§10)."""
+
+    numbers: np.ndarray  # (natoms,) int atomic numbers
+    positions: np.ndarray  # (natoms, 3) float64
+    cell: np.ndarray  # (3, 3) float64, zero for isolated
+    pbc: np.ndarray  # (3,) bool
+    energy: float | None = None
+    forces: np.ndarray | None = None  # (natoms, 3)
+    virial: np.ndarray | None = None  # (3, 3)
+    index: int = 0
+    id: str = field(default="")
+
+
+@dataclass
+class ScanMeta:
+    number_of_frames: int
+    file_size: int
+    elements: list[str]  # may be empty when only statistics can determine it
+    properties: dict  # {"energy": bool, "forces": bool, "virial": bool}
+    periodicity: dict  # {"fully_periodic": bool, "isolated": bool, "mixed": bool, "flags": [..]}
+
+
+class DatasetAdapter(ABC):
+    format_name: str
+
+    def __init__(self, source_path: Path):
+        self.source_path = Path(source_path)
+
+    @abstractmethod
+    def scan(self) -> ScanMeta: ...
+
+    @abstractmethod
+    def __len__(self) -> int: ...
+
+    @abstractmethod
+    def get_frame(self, index: int) -> DatasetFrame: ...
+
+    def iter_frames(self):
+        for i in range(len(self)):
+            yield self.get_frame(i)
+
+
+def detect_format(path: Path) -> str:
+    if path.is_dir():
+        if (path / "type.raw").exists() and (path / "coord.npy").exists():
+            return "deepmd"
+        raise AppError(
+            UNSUPPORTED_FORMAT,
+            f"directory without DeepMD raw layout (type.raw/coord.npy missing): {path}",
+        )
+    if path.is_file() and path.suffix.lower() in (".xyz", ".extxyz"):
+        return "extxyz"
+    raise AppError(UNSUPPORTED_FORMAT, f"unsupported dataset path: {path}")
+
+
+def create_adapter(path: Path, fmt: str | None = None) -> DatasetAdapter:
+    from .deepmd import DeepMDAdapter
+    from .extxyz import ExtXYZAdapter
+
+    path = Path(path)
+    fmt = fmt or detect_format(path)
+    if fmt == "deepmd":
+        return DeepMDAdapter(path)
+    if fmt == "extxyz":
+        return ExtXYZAdapter(path)
+    raise AppError(UNSUPPORTED_FORMAT, f"unknown format {fmt!r}")
+
+
+def require_dir(path: Path) -> Path:
+    if not path.exists():
+        raise AppError(INVALID_DATASET, f"path does not exist: {path}")
+    return path
+
+
+def pbc_summary(pbc_tuples: set[tuple[bool, bool, bool]]) -> dict:
+    flags = sorted(
+        "".join("XYZ"[i] if v else "." for i, v in enumerate(t)) for t in pbc_tuples
+    )
+    all_true = pbc_tuples == {(True, True, True)}
+    all_false = pbc_tuples == {(False, False, False)}
+    return {
+        "fully_periodic": all_true,
+        "isolated": all_false,
+        "mixed": not (all_true or all_false),
+        "flags": flags,
+    }
