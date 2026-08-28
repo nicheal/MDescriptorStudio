@@ -1,0 +1,2582 @@
+{
+  "engine_version": "0.2.3",
+  "runtime_info": {
+    "version": "0.2.3",
+    "api_version": 1,
+    "configuration_schema_version": 1,
+    "descriptor_info_schema_version": 1,
+    "result_schema_version": 1
+  },
+  "descriptor_names": [
+    "ACE",
+    "ACSF",
+    "AtomicComposition",
+    "C00PSMLFF",
+    "CoulombMatrix",
+    "DPA4",
+    "DPA4C",
+    "EAD",
+    "EwaldSumMatrix",
+    "LBispectrum",
+    "LMBTR",
+    "LodeSphericalExpansion",
+    "MBTR",
+    "MTP",
+    "NEP",
+    "NeighborList",
+    "SNAP",
+    "SO3",
+    "SO4",
+    "SOAP",
+    "SOAPTurbo",
+    "SineMatrix",
+    "SoapPowerSpectrum",
+    "SoapRadialSpectrum",
+    "SortedDistances",
+    "SphericalExpansion",
+    "SphericalExpansionByPair",
+    "ValleOganov"
+  ],
+  "descriptor_count": 28,
+  "capabilities_observed": [
+    "charge_spin",
+    "cooperative_cancel",
+    "model",
+    "num_threads",
+    "sparse",
+    "spin"
+  ],
+  "parameter_types": {
+    "array": 11,
+    "boolean": 22,
+    "enum": 14,
+    "integer": 34,
+    "model": 4,
+    "number": 48,
+    "object": 21,
+    "species": 16
+  },
+  "descriptors": {
+    "ACE": {
+      "schema_version": 1,
+      "name": "ACE",
+      "display_name": "ACE",
+      "description": "Atomic cluster expansion descriptor.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "N": {
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "minimum": 1
+        },
+        "r0": {
+          "type": "number",
+          "required": false,
+          "default": 2.5,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "trans": {
+          "type": "object",
+          "required": false,
+          "default": null,
+          "properties": {
+            "type": {
+              "type": "enum",
+              "required": false,
+              "default": "PolyTransform",
+              "enum": [
+                "PolyTransform"
+              ]
+            },
+            "p": {
+              "type": "number",
+              "required": false,
+              "default": 2.0,
+              "exclusiveMinimum": 0.0
+            },
+            "r0": {
+              "type": "number",
+              "required": false,
+              "exclusiveMinimum": 0.0
+            },
+            "a": {
+              "type": "number",
+              "required": false,
+              "default": 1.0,
+              "minimum": 0.0
+            }
+          }
+        },
+        "wL": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "number"
+          }
+        },
+        "maxdeg": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "number"
+          }
+        },
+        "D": {
+          "type": "object",
+          "required": false,
+          "default": null,
+          "properties": {
+            "type": {
+              "type": "enum",
+              "required": false,
+              "default": "SparsePSHDegree",
+              "enum": [
+                "SparsePSHDegree"
+              ]
+            },
+            "wL": {
+              "type": "number",
+              "required": false,
+              "default": 1.5,
+              "exclusiveMinimum": 0.0
+            },
+            "csp": {
+              "type": "number",
+              "required": false,
+              "default": 1.0,
+              "minimum": 0.0
+            },
+            "chc": {
+              "type": "number",
+              "required": false,
+              "default": 0.0,
+              "minimum": 0.0
+            },
+            "ahc": {
+              "type": "number",
+              "required": false,
+              "default": 0.0,
+              "minimum": 0.0
+            },
+            "bhc": {
+              "type": "number",
+              "required": false,
+              "default": 0.0,
+              "minimum": 0.0
+            }
+          }
+        },
+        "rcut": {
+          "type": "number",
+          "required": false,
+          "default": 5.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "rin": {
+          "type": "number",
+          "required": false,
+          "minimum": 0.0,
+          "unit": "Å"
+        },
+        "pcut": {
+          "type": "integer",
+          "required": false,
+          "default": 2,
+          "minimum": 0
+        },
+        "pin": {
+          "type": "integer",
+          "required": false,
+          "default": 2,
+          "minimum": 0
+        },
+        "constants": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "ACSF": {
+      "schema_version": 1,
+      "name": "ACSF",
+      "display_name": "ACSF",
+      "description": "Atom-centred symmetry functions descriptor.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "r_cut": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "g2_params": {
+          "type": "object",
+          "required": false,
+          "default": {}
+        },
+        "g3_params": {
+          "type": "array",
+          "required": false,
+          "default": [],
+          "items": {
+            "type": "number"
+          }
+        },
+        "g4_params": {
+          "type": "object",
+          "required": false,
+          "default": {}
+        },
+        "g5_params": {
+          "type": "object",
+          "required": false,
+          "default": {}
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "AtomicComposition": {
+      "schema_version": 1,
+      "name": "AtomicComposition",
+      "display_name": "Atomic Composition",
+      "description": "Species composition vector descriptor.",
+      "category": "local",
+      "level": "structure",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "per_system": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "C00PSMLFF": {
+      "schema_version": 1,
+      "name": "C00PSMLFF",
+      "display_name": "C00PS-MLFF",
+      "description": "C00 plus power-spectrum machine-learning force-field descriptor.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "r_cut": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "n_radial": {
+          "type": "integer",
+          "required": false,
+          "default": 8,
+          "minimum": 1
+        },
+        "l_max": {
+          "type": "integer",
+          "required": false,
+          "default": 4,
+          "minimum": 0
+        },
+        "cutoff_function": {
+          "type": "enum",
+          "required": false,
+          "default": "bp",
+          "enum": [
+            "bp",
+            "mo",
+            "rj",
+            "wmc"
+          ]
+        },
+        "radial_sigma": {
+          "type": "number",
+          "required": false,
+          "default": 0.5,
+          "minimum": 0.0,
+          "unit": "Å"
+        },
+        "include_radial": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "include_angular": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "normalize_radial": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "normalize_angular": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "super_vector": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        },
+        "radial_weight": {
+          "type": "number",
+          "required": false,
+          "default": 1.0,
+          "minimum": 0.0
+        },
+        "angular_weight": {
+          "type": "number",
+          "required": false,
+          "default": 1.0,
+          "minimum": 0.0
+        },
+        "exclude_self_interaction": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "CoulombMatrix": {
+      "schema_version": 1,
+      "name": "CoulombMatrix",
+      "display_name": "Coulomb Matrix",
+      "description": "Coulomb interaction matrix descriptor.",
+      "category": "matrix",
+      "level": "structure",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "n_atoms_max": {
+          "type": "integer",
+          "required": false,
+          "minimum": 1
+        },
+        "permutation": {
+          "type": "enum",
+          "required": false,
+          "default": "sorted_l2",
+          "enum": [
+            "none",
+            "sorted_l2",
+            "eigenspectrum"
+          ]
+        },
+        "exponent": {
+          "type": "number",
+          "required": false,
+          "default": 2.4
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "DPA4": {
+      "schema_version": 1,
+      "name": "DPA4",
+      "display_name": "DPA4",
+      "description": "Deep potential atom descriptor backed by a local checkpoint.",
+      "category": "model_backed",
+      "level": "atom",
+      "backend": "numpy",
+      "capabilities": [
+        "charge_spin",
+        "model",
+        "num_threads",
+        "sparse",
+        "spin"
+      ],
+      "parameters": {
+        "model": {
+          "type": "model",
+          "required": false,
+          "default": {
+            "__type__": "ModelResource",
+            "name": "DPA4-Air-OMat24-v20260704.pt",
+            "expected_sha256": "e75a9d5bc1c9b68e4d8aa097d4ab6be690a42d658fc13f030080da6c119f6a23",
+            "identifier": "DPA4-Air-OMat24-v20260704"
+          },
+          "description": "Optional model resource. A JSON string is an explicit local path; a serialized ModelResource selects a named or checked resource."
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": false
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": true,
+        "charge_spin": true
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "required",
+        "parameter": "model",
+        "allow_external": true,
+        "bundled_resources": [
+          "DPA4-Air-OMat24-v20260704.pt"
+        ],
+        "file_extensions": [
+          ".pt"
+        ]
+      }
+    },
+    "DPA4C": {
+      "schema_version": 1,
+      "name": "DPA4C",
+      "display_name": "DPA4C",
+      "description": "Calibrated deep potential atom descriptor backed by a local checkpoint.",
+      "category": "model_backed",
+      "level": "atom",
+      "backend": "numpy",
+      "capabilities": [
+        "charge_spin",
+        "model",
+        "num_threads",
+        "sparse",
+        "spin"
+      ],
+      "parameters": {
+        "model": {
+          "type": "model",
+          "required": false,
+          "default": {
+            "__type__": "ModelResource",
+            "name": "DPA4C-Air-OMat24-v20260819.pt",
+            "expected_sha256": "ff596ce704c9b4bc7149fbb0a0f12df611924cccb045917e8abb95b6a6cd4ad8",
+            "identifier": "DPA4C-Air-OMat24-v20260819"
+          },
+          "description": "Optional model resource. A JSON string is an explicit local path; a serialized ModelResource selects a named or checked resource."
+        },
+        "calibrate": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": false
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": true,
+        "charge_spin": true
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "required",
+        "parameter": "model",
+        "allow_external": true,
+        "bundled_resources": [
+          "DPA4C-Air-OMat24-v20260819.pt"
+        ],
+        "file_extensions": [
+          ".pt"
+        ]
+      }
+    },
+    "EAD": {
+      "schema_version": 1,
+      "name": "EAD",
+      "display_name": "EAD",
+      "description": "Equivariant angular descriptor.",
+      "category": "rotational",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "parameters": {
+          "type": "object",
+          "required": false,
+          "default": {
+            "L": 3,
+            "eta": [
+              0.05,
+              0.1,
+              0.5
+            ],
+            "Rs": [
+              0.0
+            ]
+          }
+        },
+        "Rc": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "cutoff": {
+          "type": "enum",
+          "required": false,
+          "default": "cosine",
+          "enum": [
+            "cosine"
+          ]
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "EwaldSumMatrix": {
+      "schema_version": 1,
+      "name": "EwaldSumMatrix",
+      "display_name": "Ewald Sum Matrix",
+      "description": "Ewald-summed periodic interaction matrix descriptor.",
+      "category": "matrix",
+      "level": "structure",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "n_atoms_max": {
+          "type": "integer",
+          "required": false,
+          "minimum": 1
+        },
+        "permutation": {
+          "type": "enum",
+          "required": false,
+          "default": "sorted_l2",
+          "enum": [
+            "none",
+            "sorted_l2",
+            "eigenspectrum"
+          ]
+        },
+        "accuracy": {
+          "type": "number",
+          "required": false,
+          "default": 1e-05,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0
+        },
+        "w": {
+          "type": "number",
+          "required": false,
+          "default": 1.0,
+          "exclusiveMinimum": 0.0
+        },
+        "r_cut": {
+          "type": "number",
+          "required": false,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "g_cut": {
+          "type": "number",
+          "required": false,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "a": {
+          "type": "number",
+          "required": false,
+          "exclusiveMinimum": 0.0
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "LBispectrum": {
+      "schema_version": 1,
+      "name": "LBispectrum",
+      "display_name": "L-Bispectrum",
+      "description": "Low-rank bispectrum descriptor with optional element profiles.",
+      "category": "rotational",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "twojmax": {
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "minimum": 0
+        },
+        "diagonal": {
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "minimum": 0,
+          "maximum": 3
+        },
+        "rfac0": {
+          "type": "number",
+          "required": false,
+          "default": 0.99363,
+          "exclusiveMinimum": 0.0
+        },
+        "rmin0": {
+          "type": "number",
+          "required": false,
+          "default": 0.0,
+          "minimum": 0.0,
+          "unit": "Å"
+        },
+        "rcutfac": {
+          "type": "number",
+          "required": false,
+          "default": 1.0,
+          "exclusiveMinimum": 0.0
+        },
+        "element_profile": {
+          "type": "object",
+          "required": false
+        },
+        "element_radii": {
+          "type": "object",
+          "required": false
+        },
+        "weights": {
+          "type": "object",
+          "required": false
+        },
+        "rcut": {
+          "type": "number",
+          "required": false,
+          "default": 3.5,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "normalize_U": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "LMBTR": {
+      "schema_version": 1,
+      "name": "LMBTR",
+      "display_name": "Local MBTR",
+      "description": "Local many-body tensor representation descriptor.",
+      "category": "many_body",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "geometry": {
+          "type": "object",
+          "required": false,
+          "default": {
+            "function": "distance"
+          }
+        },
+        "grid": {
+          "type": "object",
+          "required": false,
+          "default": {
+            "min": 0.0,
+            "max": 6.0,
+            "n": 50,
+            "sigma": 0.1
+          }
+        },
+        "weighting": {
+          "type": "object",
+          "required": false,
+          "default": {
+            "function": "exp",
+            "scale": 0.5,
+            "threshold": 0.001
+          }
+        },
+        "periodic": {
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "enum": [
+            true
+          ]
+        },
+        "normalize_gaussians": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "normalization": {
+          "type": "enum",
+          "required": false,
+          "default": "none",
+          "enum": [
+            "none",
+            "l2",
+            "n_atoms",
+            "valle_oganov"
+          ]
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "LodeSphericalExpansion": {
+      "schema_version": 1,
+      "name": "LodeSphericalExpansion",
+      "display_name": "LODE Spherical Expansion",
+      "description": "Long-distance equivariant spherical density expansion descriptor.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "cutoff": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "density_width": {
+          "type": "number",
+          "required": false,
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "max_radial": {
+          "type": "integer",
+          "required": false,
+          "default": 6,
+          "minimum": 0
+        },
+        "max_angular": {
+          "type": "integer",
+          "required": false,
+          "default": 4,
+          "minimum": 0
+        },
+        "k_cutoff": {
+          "type": "number",
+          "required": false,
+          "default": 2.5,
+          "exclusiveMinimum": 0.0
+        },
+        "exponent": {
+          "type": "integer",
+          "required": false,
+          "default": 1,
+          "minimum": 0
+        },
+        "radial_radius": {
+          "type": "number",
+          "required": false,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "MBTR": {
+      "schema_version": 1,
+      "name": "MBTR",
+      "display_name": "MBTR",
+      "description": "Many-body tensor representation descriptor.",
+      "category": "many_body",
+      "level": "structure",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "geometry": {
+          "type": "object",
+          "required": false,
+          "default": {
+            "function": "distance"
+          }
+        },
+        "grid": {
+          "type": "object",
+          "required": false,
+          "default": {
+            "min": 0.0,
+            "max": 6.0,
+            "n": 50,
+            "sigma": 0.1
+          }
+        },
+        "weighting": {
+          "type": "object",
+          "required": false,
+          "default": {
+            "function": "exp",
+            "scale": 0.5,
+            "threshold": 0.001
+          }
+        },
+        "periodic": {
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "enum": [
+            true
+          ]
+        },
+        "normalize_gaussians": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "normalization": {
+          "type": "enum",
+          "required": false,
+          "default": "none",
+          "enum": [
+            "none",
+            "l2",
+            "n_atoms",
+            "valle_oganov"
+          ]
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "MTP": {
+      "schema_version": 1,
+      "name": "MTP",
+      "display_name": "MTP",
+      "description": "Moment tensor potential basis descriptor.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "model",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "model": {
+          "type": "model",
+          "required": false,
+          "description": "Optional model resource. A JSON string is an explicit local path; a serialized ModelResource selects a named or checked resource."
+        },
+        "min_dist": {
+          "type": "number",
+          "required": false,
+          "default": 0.0,
+          "minimum": 0.0,
+          "unit": "Å"
+        },
+        "max_dist": {
+          "type": "number",
+          "required": false,
+          "default": 5.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "r_cut": {
+          "type": "number",
+          "required": false,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "radial_basis_size": {
+          "type": "integer",
+          "required": false,
+          "default": 4,
+          "minimum": 1
+        },
+        "radial_funcs_count": {
+          "type": "integer",
+          "required": false,
+          "default": 1,
+          "minimum": 1
+        },
+        "max_rank": {
+          "type": "integer",
+          "required": false,
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5
+        },
+        "radial_basis_type": {
+          "type": "enum",
+          "required": false,
+          "default": "RBChebyshev",
+          "enum": [
+            "RBChebyshev",
+            "Chebyshev",
+            "polynomial"
+          ]
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "optional",
+        "parameter": "model",
+        "allow_external": true,
+        "bundled_resources": [],
+        "file_extensions": [
+          ".json",
+          ".mtp"
+        ]
+      }
+    },
+    "NEP": {
+      "schema_version": 1,
+      "name": "NEP",
+      "display_name": "NEP",
+      "description": "Neuroevolution potential descriptor backed by a local model.",
+      "category": "model_backed",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "model",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "model": {
+          "type": "model",
+          "required": false,
+          "default": {
+            "__type__": "ModelResource",
+            "name": "nep89_20250409.txt",
+            "expected_sha256": "75168ece02e840e4a32644f982b78d43cba697f5b64b4c8134ab66c7a8c28be1",
+            "identifier": "nep89_20250409"
+          },
+          "description": "Optional model resource. A JSON string is an explicit local path; a serialized ModelResource selects a named or checked resource."
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "required",
+        "parameter": "model",
+        "allow_external": true,
+        "bundled_resources": [
+          "nep89_20250409.txt"
+        ],
+        "file_extensions": [
+          ".txt"
+        ]
+      }
+    },
+    "NeighborList": {
+      "schema_version": 1,
+      "name": "NeighborList",
+      "display_name": "Neighbor List",
+      "description": "Neighbor pair displacement and distance descriptor.",
+      "category": "local",
+      "level": "pair",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "cutoff": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "full_neighbor_list": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "self_pairs": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SNAP": {
+      "schema_version": 1,
+      "name": "SNAP",
+      "display_name": "SNAP",
+      "description": "Spectral neighbor analysis potential bispectrum descriptor.",
+      "category": "rotational",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "weights": {
+          "type": "object",
+          "required": false,
+          "default": {}
+        },
+        "lmax": {
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "minimum": 0
+        },
+        "rcut": {
+          "type": "number",
+          "required": false,
+          "default": 3.5,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "normalize_U": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SO3": {
+      "schema_version": 1,
+      "name": "SO3",
+      "display_name": "SO3",
+      "description": "SO(3) rotationally invariant descriptor.",
+      "category": "rotational",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "nmax": {
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "minimum": 1
+        },
+        "lmax": {
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "minimum": 0
+        },
+        "rcut": {
+          "type": "number",
+          "required": false,
+          "default": 3.5,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "alpha": {
+          "type": "number",
+          "required": false,
+          "default": 2.0,
+          "exclusiveMinimum": 0.0
+        },
+        "weight_on": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SO4": {
+      "schema_version": 1,
+      "name": "SO4",
+      "display_name": "SO4",
+      "description": "SO(4) rotationally invariant descriptor.",
+      "category": "rotational",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "lmax": {
+          "type": "integer",
+          "required": false,
+          "default": 3,
+          "minimum": 0
+        },
+        "rcut": {
+          "type": "number",
+          "required": false,
+          "default": 3.5,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "normalize_U": {
+          "type": "boolean",
+          "required": false,
+          "default": false
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SOAP": {
+      "schema_version": 1,
+      "name": "SOAP",
+      "display_name": "SOAP",
+      "description": "Smooth overlap of atomic positions descriptor.",
+      "category": "local",
+      "level": "structure",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "rbf": {
+          "type": "enum",
+          "required": false,
+          "default": "gto",
+          "enum": [
+            "gto",
+            "polynomial"
+          ]
+        },
+        "n_max": {
+          "type": "integer",
+          "required": false,
+          "default": 8,
+          "minimum": 1
+        },
+        "l_max": {
+          "type": "integer",
+          "required": false,
+          "default": 6,
+          "minimum": 0,
+          "maximum": 20
+        },
+        "sigma": {
+          "type": "number",
+          "required": false,
+          "default": 1.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "average": {
+          "type": "enum",
+          "required": false,
+          "default": "inner",
+          "enum": [
+            "off",
+            "inner",
+            "outer"
+          ]
+        },
+        "weighting": {
+          "type": "object",
+          "required": false,
+          "default": {}
+        },
+        "r_cut": {
+          "type": "number",
+          "required": false,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "compression": {
+          "type": "object",
+          "required": false,
+          "default": {
+            "mode": "off",
+            "species_weighting": null
+          }
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SOAPTurbo": {
+      "schema_version": 1,
+      "name": "SOAPTurbo",
+      "display_name": "SOAP Turbo",
+      "description": "Species-resolved compressed SOAP power spectrum descriptor.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "alpha_max": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "integer"
+          }
+        },
+        "l_max": {
+          "type": "integer",
+          "required": false,
+          "default": 6,
+          "minimum": 0,
+          "maximum": 20
+        },
+        "rcut_hard": {
+          "type": "number",
+          "required": false,
+          "default": 5.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "rcut_soft": {
+          "type": "number",
+          "required": false,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "nf": {
+          "type": "number",
+          "required": false,
+          "default": 1.0,
+          "exclusiveMinimum": 0.0
+        },
+        "radial_enhancement": {
+          "type": "integer",
+          "required": false,
+          "default": 0,
+          "enum": [
+            0,
+            1,
+            2
+          ]
+        },
+        "basis": {
+          "type": "enum",
+          "required": false,
+          "default": "poly3",
+          "enum": [
+            "poly3",
+            "poly3gauss"
+          ]
+        },
+        "compression": {
+          "type": "enum",
+          "required": false,
+          "default": "off",
+          "enum": [
+            "off",
+            "trivial",
+            "0_0",
+            "0_1",
+            "0_2",
+            "1_0",
+            "1_1",
+            "1_2",
+            "2_0",
+            "2_1",
+            "2_2"
+          ]
+        },
+        "atom_sigma_r": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "number"
+          }
+        },
+        "atom_sigma_r_scaling": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "number"
+          }
+        },
+        "atom_sigma_t": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "number"
+          }
+        },
+        "atom_sigma_t_scaling": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "number"
+          }
+        },
+        "amplitude_scaling": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "number"
+          }
+        },
+        "central_weight": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "number"
+          }
+        },
+        "central_species": {
+          "type": "array",
+          "required": false,
+          "items": {
+            "type": "integer"
+          }
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SineMatrix": {
+      "schema_version": 1,
+      "name": "SineMatrix",
+      "display_name": "Sine Matrix",
+      "description": "Periodic sine interaction matrix descriptor.",
+      "category": "matrix",
+      "level": "structure",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "n_atoms_max": {
+          "type": "integer",
+          "required": false,
+          "minimum": 1
+        },
+        "permutation": {
+          "type": "enum",
+          "required": false,
+          "default": "sorted_l2",
+          "enum": [
+            "none",
+            "sorted_l2",
+            "eigenspectrum"
+          ]
+        },
+        "exponent": {
+          "type": "number",
+          "required": false,
+          "default": 2.4
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SoapPowerSpectrum": {
+      "schema_version": 1,
+      "name": "SoapPowerSpectrum",
+      "display_name": "SOAP Power Spectrum",
+      "description": "Power spectrum derived from a spherical density expansion.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "cutoff": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "density_width": {
+          "type": "number",
+          "required": false,
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "max_radial": {
+          "type": "integer",
+          "required": false,
+          "default": 6,
+          "minimum": 0
+        },
+        "max_angular": {
+          "type": "integer",
+          "required": false,
+          "default": 4,
+          "minimum": 0
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SoapRadialSpectrum": {
+      "schema_version": 1,
+      "name": "SoapRadialSpectrum",
+      "display_name": "SOAP Radial Spectrum",
+      "description": "Radial spectrum derived from a spherical density expansion.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "cutoff": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "density_width": {
+          "type": "number",
+          "required": false,
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "max_radial": {
+          "type": "integer",
+          "required": false,
+          "default": 6,
+          "minimum": 0
+        },
+        "max_angular": {
+          "type": "integer",
+          "required": false,
+          "default": 4,
+          "minimum": 0
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SortedDistances": {
+      "schema_version": 1,
+      "name": "SortedDistances",
+      "display_name": "Sorted Distances",
+      "description": "Sorted neighbor distance descriptor.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "cutoff": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "max_neighbors": {
+          "type": "integer",
+          "required": false,
+          "default": 8,
+          "minimum": 1
+        },
+        "separate_neighbor_types": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SphericalExpansion": {
+      "schema_version": 1,
+      "name": "SphericalExpansion",
+      "display_name": "Spherical Expansion",
+      "description": "Species-resolved spherical density expansion descriptor.",
+      "category": "local",
+      "level": "atom",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "cutoff": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "density_width": {
+          "type": "number",
+          "required": false,
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "max_radial": {
+          "type": "integer",
+          "required": false,
+          "default": 6,
+          "minimum": 0
+        },
+        "max_angular": {
+          "type": "integer",
+          "required": false,
+          "default": 4,
+          "minimum": 0
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "SphericalExpansionByPair": {
+      "schema_version": 1,
+      "name": "SphericalExpansionByPair",
+      "display_name": "Spherical Expansion by Pair",
+      "description": "Pair-level spherical density expansion descriptor.",
+      "category": "local",
+      "level": "pair",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "cutoff": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "density_width": {
+          "type": "number",
+          "required": false,
+          "default": 0.3,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "max_radial": {
+          "type": "integer",
+          "required": false,
+          "default": 6,
+          "minimum": 0
+        },
+        "max_angular": {
+          "type": "integer",
+          "required": false,
+          "default": 4,
+          "minimum": 0
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "isolated",
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    },
+    "ValleOganov": {
+      "schema_version": 1,
+      "name": "ValleOganov",
+      "display_name": "Valle–Oganov",
+      "description": "Valle-Oganov structural fingerprint descriptor.",
+      "category": "many_body",
+      "level": "structure",
+      "backend": "cpp",
+      "capabilities": [
+        "cooperative_cancel",
+        "num_threads",
+        "sparse"
+      ],
+      "parameters": {
+        "species": {
+          "type": "species",
+          "required": true,
+          "description": "Chemical species included in the descriptor."
+        },
+        "function": {
+          "type": "enum",
+          "required": false,
+          "default": "distance",
+          "enum": [
+            "distance",
+            "angle"
+          ]
+        },
+        "n": {
+          "type": "integer",
+          "required": false,
+          "default": 50,
+          "minimum": 2
+        },
+        "sigma": {
+          "type": "number",
+          "required": false,
+          "default": 0.1,
+          "exclusiveMinimum": 0.0
+        },
+        "r_cut": {
+          "type": "number",
+          "required": false,
+          "default": 6.0,
+          "exclusiveMinimum": 0.0,
+          "unit": "Å"
+        },
+        "geometry": {
+          "type": "object",
+          "required": false
+        },
+        "grid": {
+          "type": "object",
+          "required": false
+        },
+        "weighting": {
+          "type": "object",
+          "required": false
+        },
+        "periodic": {
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "enum": [
+            true
+          ]
+        },
+        "normalize_gaussians": {
+          "type": "boolean",
+          "required": false,
+          "default": true
+        },
+        "normalization": {
+          "type": "enum",
+          "required": false,
+          "default": "valle_oganov",
+          "enum": [
+            "none",
+            "l2",
+            "n_atoms",
+            "valle_oganov"
+          ]
+        }
+      },
+      "execution": {
+        "devices": [
+          "cpu"
+        ],
+        "num_threads": true,
+        "cooperative_cancel": true
+      },
+      "input": {
+        "periodicity": [
+          "fully_periodic"
+        ],
+        "mixed_periodicity": false,
+        "spin": false,
+        "charge_spin": false
+      },
+      "output": {
+        "dtypes": [
+          "float32",
+          "float64"
+        ],
+        "sparse": true
+      },
+      "asset": {
+        "policy": "none",
+        "parameter": null,
+        "allow_external": false,
+        "bundled_resources": [],
+        "file_extensions": []
+      }
+    }
+  },
+  "error_types": [
+    "CancelledError",
+    "ClosedDescriptorError",
+    "DescriptorConfigError",
+    "DescriptorInputError",
+    "MDescriptorError",
+    "ModelLoadError",
+    "PackageNotFoundError"
+  ],
+  "compute_control_methods": [
+    "cancel",
+    "cancelled",
+    "completed",
+    "mark_completed",
+    "reset",
+    "total"
+  ],
+  "symbols_present": {
+    "StructureBatch": true,
+    "Descriptor": true,
+    "DescriptorResult": true,
+    "DescriptorRegistry": true,
+    "DescriptorConfiguration": true,
+    "ExecutionOptions": true,
+    "OutputOptions": true,
+    "ComputeControl": true,
+    "describe_descriptor": true,
+    "get_runtime_info": true,
+    "list_descriptors": true,
+    "create_descriptor": true
+  }
+}
