@@ -77,10 +77,13 @@ class ExtXYZAdapter(DatasetAdapter):
             comment = f.readline()
             meta = {**_parse_comment(comment), "natoms": natoms}
             cols = meta["columns"]
-            species_i = cols.index("species")
-            pos_i = cols.index("pos") if "pos" in cols else cols.index("positions")
-            forces_i = cols.index("forces") if "forces" in cols else (
-                cols.index("force") if "force" in cols else None
+            names = [c[0] for c in cols]
+            species_i = names.index("species")
+            pos_i = names.index("pos") if "pos" in names else names.index("positions")
+            forces_i = (
+                names.index("forces")
+                if "forces" in names
+                else names.index("force") if "force" in names else None
             )
             n_cols = sum(c for _, c in cols)
             species: list[str] = []

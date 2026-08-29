@@ -64,7 +64,7 @@ class DeepMDAdapter(DatasetAdapter):
         )
 
     def _periodicity(self) -> dict:
-        sample = np.asarray(self.box)
+        sample = np.asarray(self.box).reshape(self.box.shape[0], 3, 3)
         nonzero = np.abs(sample).sum(axis=(1, 2)) > 1e-8
         if nonzero.all():
             return pbc_summary({(True, True, True)})

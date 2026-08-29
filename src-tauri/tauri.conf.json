@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "MDescriptor Studio",
+  "version": "0.1.0",
+  "identifier": "com.mdescriptor.studio",
+  "build": {
+    "beforeDevCommand": "npm run dev --prefix ../frontend",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build --prefix ../frontend",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "MDescriptor Studio",
+        "label": "main",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1280,
+        "minHeight": 760
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "externalBin": ["binaries/backend"],
+    "resources": [],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": ["English", "SimpChinese"]
+      }
+    }
+  }
+}
