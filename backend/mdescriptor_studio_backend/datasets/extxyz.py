@@ -93,15 +93,24 @@ class ExtXYZAdapter(DatasetAdapter):
                 tokens = f.readline().split()
                 if len(tokens) < n_cols:
                     raise AppError(INVALID_DATASET, f"frame {index} row {row}: truncated")
-                sym = _Z_RE.match(tokens[species_i])
-                species.append(sym.group(1) if sym else tokens[species_i])
-                positions[row] = [float(tokens[pos_i]), float(tokens[pos_i + 1]), float(tokens[pos_i + 2])]
-                if forces is not None:
-                    forces[row] = [
-                        float(tokens[forces_i]),
-                        float(tokens[forces_i + 1]),
-                        float(tokens[forces_i + 2]),
+                try:
+                    sym = _Z_RE.match(tokens[species_i])
+                    species.append(sym.group(1) if sym else tokens[species_i])
+                    positions[row] = [
+                        float(tokens[pos_i]),
+                        float(tokens[pos_i + 1]),
+                        float(tokens[pos_i + 2]),
                     ]
+                    if forces is not None:
+                        forces[row] = [
+                            float(tokens[forces_i]),
+                            float(tokens[forces_i + 1]),
+                            float(tokens[forces_i + 2]),
+                        ]
+                except (ValueError, IndexError) as exc:
+                    raise AppError(
+                        INVALID_DATASET, f"frame {index} row {row}: malformed atom line ({exc})"
+                    ) from exc
         numbers = np.array([_SYMBOL_TO_Z.get(s, 0) for s in species], dtype=np.int64)
         lattice = meta.get("lattice")
         cell = lattice.reshape(3, 3) if lattice is not None else np.zeros((3, 3))
@@ -141,6 +150,11 @@ def _parse_comment(comment: str) -> dict:
         elif key == "Properties":
             cols: list[tuple[str, int]] = []
             parts = value.split(":")
+            if len(parts) % 3 != 0:
+                raise AppError(
+                    INVALID_DATASET,
+                    f"malformed Properties spec: {value!r} (expected name:type:size triples)",
+                )
             for i in range(0, len(parts), 3):
                 cols.append((parts[i], int(parts[i + 2])))
             meta["columns"] = cols

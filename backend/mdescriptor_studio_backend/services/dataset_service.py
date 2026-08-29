@@ -79,11 +79,14 @@ class DatasetService:
         }
 
     def _adapter_for(self, row: dict):
+        # cache keyed by the registry fingerprint: a recompute that converges the
+        # fingerprint naturally rebuilds; otherwise entries live for the session
         cached = self._adapters.get(row["id"])
-        if cached is None:
-            cached = create_adapter(Path(row["source_path"]), row["format"])
-            self._adapters[row["id"]] = cached
-        return cached
+        if cached is not None and cached[0] == row["fingerprint"]:
+            return cached[1]
+        adapter = create_adapter(Path(row["source_path"]), row["format"])
+        self._adapters[row["id"]] = (row["fingerprint"], adapter)
+        return adapter
 
     # -- IPC methods -----------------------------------------------------------
     def list(self, params: dict) -> list[dict]:
@@ -146,25 +149,34 @@ class DatasetService:
             else:
                 elements = [e["symbol"] for e in stats["elements"]]
             periodicity = scan.periodicity if scan.periodicity["flags"] else stats["periodicity"]
-            self.db.execute(
-                "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
-                " properties, periodicity, fingerprint, file_size, created_at, last_scan_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    ds_id,
-                    name,
-                    fmt,
-                    str(path),
-                    scan.number_of_frames,
-                    json.dumps(elements),
-                    json.dumps(stats["properties"]),
-                    json.dumps(periodicity),
-                    fingerprint,
-                    scan.file_size,
-                    _NOW(),
-                    _NOW(),
-                ),
-            )
+            try:
+                self.db.execute(
+                    "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
+                    " properties, periodicity, fingerprint, file_size, created_at, last_scan_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ds_id,
+                        name,
+                        fmt,
+                        str(path),
+                        scan.number_of_frames,
+                        json.dumps(elements),
+                        json.dumps(stats["properties"]),
+                        json.dumps(periodicity),
+                        fingerprint,
+                        scan.file_size,
+                        _NOW(),
+                        _NOW(),
+                    ),
+                )
+            except Exception as exc:
+                # a concurrent register of the same path loses here; surface the
+                # domain error instead of a raw UNIQUE constraint (red-team #5)
+                if "UNIQUE constraint failed: datasets.source_path" in str(exc):
+                    raise AppError(
+                        INVALID_DATASET, f"already registered: {path}"
+                    ) from exc
+                raise
             self.db.execute(
                 "INSERT INTO dataset_statistics (dataset_id, fingerprint, stats_json, created_at)"
                 " VALUES (?, ?, ?, ?)",
@@ -179,6 +191,14 @@ class DatasetService:
     def remove(self, params: dict) -> dict:
         ds_id = params.get("id")
         self._row(ds_id)
+        # explicit cleanup: FK covers statistics; runs/jobs have no FK rows
+        self.db.execute(
+            "DELETE FROM analysis_runs WHERE descriptor_run_id IN"
+            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?)",
+            (ds_id,),
+        )
+        self.db.execute("DELETE FROM descriptor_runs WHERE dataset_id = ?", (ds_id,))
+        self.db.execute("DELETE FROM jobs WHERE dataset_id = ?", (ds_id,))
         self.db.execute("DELETE FROM datasets WHERE id = ?", (ds_id,))
         self._adapters.pop(ds_id, None)
         return {"ok": True}
@@ -206,9 +226,13 @@ class DatasetService:
 
     def _recompute(self, ds_id: str) -> str:
         row = self._row(ds_id)
+        # the on-disk files may have changed since registration: never reuse the
+        # adapter built against the old content
+        self._adapters.pop(ds_id, None)
 
         def runner(ctx):
-            adapter = self._adapter_for(row)
+            adapter = create_adapter(Path(row["source_path"]), row["format"])
+            self._adapters[ds_id] = (row["fingerprint"], adapter)
             total = max(len(adapter), 1)
             count = 0
 
@@ -243,8 +267,8 @@ class DatasetService:
                 (ds_id, fingerprint, json.dumps(stats), _NOW()),
             )
             self.db.execute(
-                "UPDATE datasets SET number_of_frames = ?, last_scan_at = ? WHERE id = ?",
-                (len(adapter), _NOW(), ds_id),
+                "UPDATE datasets SET number_of_frames = ?, fingerprint = ?, last_scan_at = ? WHERE id = ?",
+                (len(adapter), fingerprint, _NOW(), ds_id),
             )
             return {"dataset_id": ds_id}
 
@@ -266,7 +290,12 @@ class DatasetService:
             raise AppError(INVALID_PARAMS, "'index' (int) is required")
         row = self._row(ds_id)
         adapter = self._adapter_for(row)
-        f = adapter.get_frame(index)
+        try:
+            f = adapter.get_frame(index)
+        except AppError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - parse/data errors are dataset faults
+            raise AppError(INVALID_DATASET, f"cannot read frame {index}: {exc}") from exc
         symbols = [_symbol(z) for z in f.numbers.tolist()]
         positions = np.asarray(f.positions)
         rows = []
@@ -290,8 +319,9 @@ class DatasetService:
                 )
             rows.append(entry)
         cell = np.asarray(f.cell)
-        periodic = bool(np.all(np.asarray(f.pbc)) and np.abs(cell).sum() > 1e-8)
-        volume = abs(float(np.linalg.det(cell))) if np.abs(cell).sum() > 1e-8 else None
+        det = abs(float(np.linalg.det(cell)))
+        periodic = bool(np.all(np.asarray(f.pbc)) and det > 1e-8)
+        volume = det if det > 1e-8 else None
         header = f"frame {index} of dataset {row['name']}"
         if periodic:
             lat = " ".join(f"{v:.6f}" for v in cell.reshape(-1))
@@ -340,7 +370,10 @@ def periodic_boundary_ghosts(
     perpendicular distance to that cell face is below `cutoff` (VESTA-style
     boundary padding). Returns (element, position) pairs, capped at max_ghosts.
     """
-    a_inv = np.linalg.inv(cell)
+    try:
+        a_inv = np.linalg.inv(cell)
+    except np.linalg.LinAlgError:
+        return []  # singular cell: no well-defined images (red-team #7)
     frac = positions @ a_inv
     spacing = 1.0 / np.linalg.norm(a_inv, axis=0)  # interplanar distance per axis
     out: list[tuple[str, np.ndarray]] = []

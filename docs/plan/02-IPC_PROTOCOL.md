@@ -51,7 +51,7 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 
 | method | params → result | 异步 |
 |---|---|---|
-| `system.info` | {} → {backend_version, mdescriptor_version, mdescriptor_api_version, protocol_version, platform} | 否 |
+| `system.info` | {} → {backend_version, mdescriptor_version, mdescriptor_api_version, protocol_version, platform, data_dir, cpu_threads} | 否 |
 | `dataset.list` | {} → [{id,name,format,source_path,number_of_frames,elements,properties,periodicity,fingerprint,file_size,created_at,cache_valid}] | 否 |
 | `dataset.register` | {path, format?: "deepmd"\|"extxyz", name?} → {job_id}（扫描+统计入 cache） | 是 |
 | `dataset.remove` | {id} → {ok} | 否 |
@@ -64,6 +64,10 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `result.list` | {dataset_id?, descriptor_name?} → [runs] | 否 |
 | `result.get` | {run_id} → metadata + 摘要（不含大数组） | 否 |
 | `analysis.pca` | {run_id, params?} → {job_id} | 是 |
+| `result.get_pca` | {analysis_id} → pca.json 全文（points/explained_variance，点数=帧数，非大数组） | 否 |
+| `result.heatmap` | {run_id, frame_index, max_features?} → {atoms, features, values, atomOffset}；max_features 硬上限 256（§25） | 否 |
+| `settings.get` | {key} → {key, value\|null}（settings 表 KV） | 否 |
+| `settings.set` | {key, value} → {ok} | 否 |
 | `engine.check_update` | {} → {installed, latest, has_update, status: idle\|checking\|up_to_date\|available\|error\|unsupported, error?, restart_required?}；后台线程查 PyPI，完成后再次广播 `engine.update.state` 事件（同结构） | 否（后台线程） |
 | `engine.update` | {version?}（缺省用 latest）→ {job_id, target_version}；pip 升级 job，终态后需重启后端生效；frozen 构建报 `ENGINE_UPDATE_UNSUPPORTED` | 是 |
 | `job.list` / `job.get` / `job.cancel` | 见 §4 | 否 |

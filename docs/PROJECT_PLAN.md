@@ -2,7 +2,7 @@
 
 > 文档版本：v0.3
 > 日期：2026-08-29
-> 状态：**M0–M5 实施完成**（11 项后端集成测试全绿；GUI 实机验证记录见 `docs/plan/VERIFICATION.md`；剩余：干净机安装验证）
+> 状态：**M0–M5 实施完成 + 对抗式审查修复完成**（17 项后端集成测试全绿；GUI 实机验证记录见 `docs/plan/VERIFICATION.md`；剩余：干净机安装验证）
 > 输入材料：`docs/MDescriptor_GUI_Design.md`（设计基线 v0.1）、`docs/UI.png`（视觉基准 mockup）、`docs/logos.png`（品牌规范）
 > 决策方式：grill-me 访谈，4 项关键决策已由项目所有者确认；实施中新增约束见 `docs/plan/05-ENGINE_ADAPTER.md` §6
 
@@ -37,7 +37,7 @@ MDescriptor                                         （Descriptor Compute Engine
 | OS / 硬件 / 磁盘 | Windows 10 22H2 x64；Ryzen 9 7950X / 63.1 GB；C: 剩 449 GB，D: 剩 1.9 TB |
 | 测试数据 | 真实：`D:\Al-Cu\train.xyz`（extxyz，2,000 帧，4 MB）；合成：M1 生成 12,480 帧 DeepMD+extxyz fixture（ADR-9） |
 
-**结论：无环境缺口，git 仓库尚未初始化（M0 第一步执行）。**
+**结论：无环境缺口。**
 
 ---
 
@@ -77,13 +77,13 @@ venv 建立、0.2.3 API 探测（`engine-api-report.md`）、Rust/MSVC/WebView2 
 
 | 文档 | 状态 | 内容 |
 |---|---|---|
-| `PROJECT_PLAN.md`（本文件） | ✅ v0.2 | 里程碑、验收、风险 |
+| `PROJECT_PLAN.md`（本文件） | ✅ v0.3 | 里程碑、验收、风险 |
 | `plan/01-DECISIONS.md` | ✅ | ADR-1～17 全文 + mockup 对照表定稿 |
 | `plan/engine-api-report.md` + `.json` | ✅ | 0.2.3 实测 API 面（`scripts/probe_engine.py` 产出） |
 | `plan/05-ENGINE_ADAPTER.md` | ✅ | adapter 边界、版本策略、能力/错误映射 |
-| `plan/02-IPC_PROTOCOL.md` | ⬜ M0 入口条件 | protocol_version=1、NDJSON 帧、方法目录、事件、错误码全集、sidecar 生命周期 |
-| `plan/04-FRONTEND_DESIGN.md` | ⬜ M0 入口条件 | 路由与页面、WorkspaceState、AntD tokens（logos.png 色板）、四基准页线框 |
-| `plan/03-BACKEND_DESIGN.md` | ⬜ M1 入口条件 | 包结构、SQLite DDL + migration、DatasetAdapter、JobService 线程模型、存储布局 |
+| `plan/02-IPC_PROTOCOL.md` | ✅ | protocol_version=1、NDJSON 帧、方法目录、事件、错误码全集、sidecar 生命周期 |
+| `plan/04-FRONTEND_DESIGN.md` | ✅ | 路由与页面、WorkspaceState、AntD tokens（logos.png 色板）、四基准页线框 |
+| `plan/03-BACKEND_DESIGN.md` | ✅ | 包结构、SQLite DDL + migration、DatasetAdapter、JobService 线程模型、存储布局 |
 
 ---
 

@@ -65,6 +65,12 @@ class JobService:
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="job")
         self._contexts: dict[str, JobContext] = {}
         self._lock = threading.Lock()
+        # jobs left non-terminal by a previous session can never finish: close them
+        self.db.execute(
+            "UPDATE jobs SET status = 'CANCELLED', finished_at = ?, error = 'backend_restart'"
+            " WHERE status IN ('QUEUED', 'RUNNING')",
+            (_NOW(),),
+        )
 
     # -- submit / run -----------------------------------------------------
     def submit(
@@ -168,4 +174,17 @@ class JobService:
         return self.db.query(sql, tuple(args))
 
     def shutdown(self, wait_seconds: float = 3.0) -> None:
-        self._executor.shutdown(wait=True, cancel_futures=True)
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        deadline = time.monotonic() + wait_seconds
+        while time.monotonic() < deadline:
+            with self._lock:
+                if not self._contexts:
+                    break
+            time.sleep(0.05)
+        # anything still non-terminal can no longer reach the about-to-close db:
+        # close it out here so the table never keeps zombie RUNNING rows
+        self.db.execute(
+            "UPDATE jobs SET status = 'CANCELLED', finished_at = ?, error = 'backend_shutdown'"
+            " WHERE status IN ('QUEUED', 'RUNNING')",
+            (_NOW(),),
+        )

@@ -85,7 +85,6 @@ export default function Descriptors() {
     if (schema.parameters.species && Array.isArray(params.species)) {
       params.species = speciesToNumbers(params.species as string[], elementOptions);
     }
-    if (threads) params.num_threads = threads;
     setSubmitting(true);
     try {
       const r = await ipc.request<{ job_id: string | null; cache: { existing_run_id: string } | null }>(
@@ -225,7 +224,9 @@ export default function Descriptors() {
                 <div style={{ marginBottom: 12 }}>
                   <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Threads</Typography.Text>
                   <div style={{ marginTop: 4 }}>
-                    <InputNumber min={1} max={64} value={threads} onChange={(v) => setThreads(v ?? undefined)} style={{ width: 200 }} placeholder="engine default" />
+                    <Tooltip title="v0.1 uses the engine default thread count">
+                      <InputNumber min={1} max={64} value={threads} disabled onChange={(v) => setThreads(v ?? undefined)} style={{ width: 200 }} placeholder="engine default" />
+                    </Tooltip>
                   </div>
                 </div>
               )}

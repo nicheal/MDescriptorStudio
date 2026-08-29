@@ -89,6 +89,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._write_lock = threading.RLock()
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._migrate()
 

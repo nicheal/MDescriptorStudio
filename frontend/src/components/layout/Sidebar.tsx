@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { App as AntApp, Button, Empty, Input, Modal, Space, Typography } from "antd";
 import { SearchOutlined } from "@ant-design/icons";
-import { Add16Regular } from "@fluentui/react-icons";
+import { Add16Regular, Document16Regular, FolderOpen16Regular } from "@fluentui/react-icons";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ipc } from "../../ipc/client";
 import { useWorkspace } from "../../stores/workspace";
 import type { DatasetMeta } from "../../types/protocol";
@@ -63,6 +64,24 @@ export default function Sidebar() {
     if (!useWorkspace.getState().activeDatasetId && first) setActiveDataset(first.id);
   };
 
+  const browse = async (directory: boolean) => {
+    try {
+      const selected = await openDialog(
+        directory
+          ? { directory: true, multiple: false, title: "Select DeepMD dataset folder" }
+          : {
+              multiple: false,
+              title: "Select extxyz dataset file",
+              filters: [{ name: "extxyz", extensions: ["xyz", "extxyz"] }],
+            },
+      );
+      const p = Array.isArray(selected) ? selected[0] : selected;
+      if (p) setPath(p);
+    } catch {
+      message.error("Could not open the file dialog");
+    }
+  };
+
   return (
     <div
       style={{
@@ -113,11 +132,23 @@ export default function Sidebar() {
         okButtonProps={{ disabled: !path.trim() }}
       >
         <Space direction="vertical" style={{ width: "100%" }} size={12}>
-          <Input
-            placeholder="D:\datasets\GaAs  (DeepMD directory or .xyz file)"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-          />
+          <Space.Compact style={{ width: "100%" }}>
+            <Input
+              placeholder="D:\datasets\GaAs  (DeepMD directory or .xyz file)"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+            />
+            <Button
+              icon={<FolderOpen16Regular />}
+              onClick={() => void browse(true)}
+              title="Browse for a DeepMD dataset folder"
+            />
+            <Button
+              icon={<Document16Regular />}
+              onClick={() => void browse(false)}
+              title="Browse for an .xyz / .extxyz file"
+            />
+          </Space.Compact>
           <Input
             placeholder="Display name (optional)"
             value={name}

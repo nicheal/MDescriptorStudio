@@ -116,11 +116,18 @@ class UpdateService:
         )
         assert process.stdout is not None
         tail = ""
-        for line in process.stdout:
-            tail = line.strip()[:160]
-            ctx.progress(0, 1, f"pip: {tail}")
-            ctx.check_cancelled()
-        code = process.wait(timeout=600)
+        try:
+            for line in process.stdout:
+                tail = line.strip()[:160]
+                ctx.progress(0, 1, f"pip: {tail}")
+                ctx.check_cancelled()
+            code = process.wait(timeout=600)
+        finally:
+            # a cancelled job must not leave pip finishing the install in the
+            # background (red-team follow-up)
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
         if code != 0:
             self._set(status="error", error=f"pip exit {code}: {tail}")
             raise AppError(INTERNAL_ERROR, f"pip upgrade failed (exit {code}): {tail}")

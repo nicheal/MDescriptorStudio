@@ -81,7 +81,12 @@ class ResultService:
             raise AppError(INVALID_PARAMS, f"frame index out of range: {frame_index}")
         lo, hi = int(offsets[frame_index]), int(offsets[frame_index + 1])
         block = values[lo:hi]
-        max_features = int(params.get("max_features", 256))
+        try:
+            max_features = int(params.get("max_features", 256))
+        except (TypeError, ValueError):
+            max_features = 256
+        # hard cap: never stream the full matrix over IPC (design doc §25)
+        max_features = max(1, min(max_features, 256))
         block = block[:, :max_features]
         return {
             "atomOffset": lo,

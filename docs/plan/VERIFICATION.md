@@ -1,7 +1,7 @@
-# 验收证据记录（对照 PROJECT_PLAN v0.2 §5 里程碑验收标准）
+# 验收证据记录（对照 PROJECT_PLAN v0.3 §5 里程碑验收标准）
 
-> 日期：2026-08-29
-> 结论：M0–M5 全部实现。标注 [GUI] 的项目经实机窗口操作验证；标注 [TEST] 的项目由 `pytest tests/`（11 项，全绿）经同一 stdio IPC 层验证；标注 [BUILD] 的为构建产物验证。
+> 日期：2026-08-29（同日对抗式审查后更新）
+> 结论：M0–M5 全部实现。对抗审查（红队攻击 + 蓝队审计）发现的 8 个缺陷已修复并有回归测试；标注 [GUI] 的项目经实机窗口操作验证；标注 [TEST] 的由 `pytest tests/`（17 项，全绿）经同一 stdio IPC 层验证；标注 [BUILD] 的为构建产物验证。
 
 ## M0 走通骨架
 
@@ -54,7 +54,7 @@
 | 验收标准 | 证据 |
 |---|---|
 | PCA | [TEST] test_analysis_flow：8 帧 → 8 点，explained_variance > 0，能量着色数据齐备；前端 ECharts scatter + color-by |
-| PCA → Structure 联动 | 前端点选 → activeFrameIndex + Open in Explore 跨页跳转（与 M2 已验证的帧渲染同一通路） |
+| PCA → Structure 联动 | 前端点选 → activeFrameIndex + Open in Explore 跨页跳转（与 M2 已验证的帧渲染同一通路；GUI 交互点击验证受桌面占用限制，未单独截图） |
 | Heatmap | [TEST] frame 2 → 16×16 原子级矩阵 + atomOffset 正确 |
 | setup.exe | [BUILD] `src-tauri\target\release\bundle\nsis\MDescriptor Studio_0.1.0_x64-setup.exe`（59 MB，含 56 MB backend sidecar） |
 | 干净 Windows 10/11 机器安装即用 | ⬜ **待用户执行**：在干净机/VM 运行 setup.exe 安装并启动（本机无可用干净 VM 自动化通道；打包侧车已在开发机验证可独立运行） |
@@ -72,3 +72,21 @@
 - 干净机/VM 安装验证 setup.exe。
 - 用真实科研数据集（如 D:\Al-Cu\train.xyz 或更大的训练集）走一遍完整工作流。
 - 前端单测/Vitest、GitHub Actions CI（按 ADR-17 留 v0.2）。
+
+## 对抗式审查（2026-08-29）
+
+红队（缺陷挖掘，探针实证）+ 蓝队（声明-事实审计）双 subagent 并行。结果：8 个缺陷全部修复并有回归测试（tests/test_adversarial_fixes.py）；文档漂移 7 处已同步。要点：
+
+| # | 缺陷（严重度） | 修复 |
+|---|---|---|
+| 1 | [P1] 前端把 threads 塞进 parameters → 设置线程数的提交 100% 被拒 | 移除注入；Threads 输入禁用（v0.1 用引擎默认） |
+| 2 | [P1] 适配器缓存永不失效 → 文件变更后统计重算持续失败、脏帧数 | 缓存按指纹失效；重算强制重建并收敛 fingerprint/帧数 |
+| 3 | [P1] 关闭顺序：db 先于 job 关闭 → ProgrammingError + 僵尸 RUNNING 行 | 先 jobs.shutdown（终态化非终态行）再 db.close；启动时清理上次会话残留 |
+| 4 | [P2] FK 未开启 → remove 留孤儿行 | PRAGMA foreign_keys=ON + remove 显式清理 runs/jobs |
+| 5 | [P2] 并发重复注册 → INTERNAL_ERROR UNIQUE | IntegrityError → INVALID_DATASET |
+| 6 | [P2] job.get 未知 id → result:null 违反协议 | 抛 JOB_NOT_FOUND |
+| 7 | [P3] 奇异晶胞 → frame 500 | 退化按非周期处理（det 判定 + inv 守卫） |
+| 8 | [P3] 畸形 extxyz/deepmd 输入裸异常 | 解析层统一转 INVALID_DATASET |
+| 附 | engine.update 取消后 pip 孤儿进程；heatmap max_features 无上限 | 取消即 kill pip；硬上限 256 |
+
+蓝队审计确认：产物（59MB setup.exe / 56MB sidecar）、12,480 帧数据集、0.2.3 三处一致、16 错误码逐字对齐、ADR-6/7/17 与 §57 暂缓清单经 grep 证实无违规、无硬性造假声明。

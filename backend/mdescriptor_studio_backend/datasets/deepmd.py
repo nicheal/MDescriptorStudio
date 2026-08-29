@@ -38,8 +38,13 @@ class DeepMDAdapter(DatasetAdapter):
     @staticmethod
     def _read_symbols(p: Path) -> list[int]:
         text = p.read_text(encoding="utf-8").split()
-        symbol_to_z = _SYMBOL_TO_Z
-        return [symbol_to_z[s] for s in text]
+        out = []
+        for s in text:
+            z = _SYMBOL_TO_Z.get(s)
+            if z is None:
+                raise AppError(INVALID_DATASET, f"unknown element symbol {s!r} in {p.name}")
+            out.append(z)
+        return out
 
     def _optional_npy(self, name: str):
         p = self.source_path / name

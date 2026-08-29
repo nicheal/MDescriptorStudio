@@ -8,7 +8,7 @@ import sys
 
 from . import __version__
 from .config import data_dir
-from .errors import INVALID_PARAMS
+from .errors import AppError, INVALID_PARAMS, JOB_NOT_FOUND
 from .logging_setup import setup_logging
 from .mdescriptor_adapter import EngineAdapter
 from .protocol import frames
@@ -60,6 +60,12 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         settings_kv.set_setting(key, str(value))
         return {"ok": True}
 
+    def job_get(params):
+        row = jobs.get_job(params.get("id"))
+        if row is None:
+            raise AppError(JOB_NOT_FOUND, f"job {params.get('id')} does not exist")
+        return row
+
     return {
         "system.info": system_info,
         "settings.get": settings_get,
@@ -74,7 +80,7 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         "descriptor.describe": descriptors.describe,
         "descriptor.submit": descriptors.submit,
         "job.list": jobs.list_jobs,
-        "job.get": lambda params: jobs.get_job(params.get("id")),
+        "job.get": job_get,
         "job.cancel": lambda params: jobs.cancel(params.get("id")),
         "result.list": results.list,
         "result.get": results.get,
@@ -100,7 +106,8 @@ def main() -> int:
     adapter.warmup()
     log.info("engine warmup complete")
 
-    server = Server(methods={}, on_stop=db.close)
+    # note: no on_stop here — the db must outlive the job pool; main() closes it
+    server = Server(methods={})
     jobs = JobService(db, server.emit)
     datasets = DatasetService(db, adapter, jobs)
     results = ResultService(db)
@@ -127,7 +134,9 @@ def main() -> int:
     try:
         server.serve_forever()
     finally:
+        # job pool first (it finalizes rows), then the database (red-team #3)
         jobs.shutdown()
+        db.close()
     log.info("backend stopped")
     return 0
 
