@@ -90,6 +90,11 @@ class IpcClient {
     set.add(handler);
     return () => set!.delete(handler);
   }
+
+  /** Feed a raw protocol line captured before the listener attached. */
+  processLine(line: string) {
+    this.onLine(line);
+  }
 }
 
 export const ipc = new IpcClient();

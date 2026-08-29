@@ -48,14 +48,14 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
+    let poller: ReturnType<typeof setInterval> | null = null;
     (async () => {
       await ipc.connect(() => {
         useWorkspace.getState().setBackendError();
         message.error("Backend process exited");
       });
-      // handshake line arrives as an event frame; wait for ready, then verify
-      const offReady = ipc.on("backend.ready", async () => {
-        if (disposed) return;
+      const handleReady = async () => {
+        if (disposed || useWorkspace.getState().backendStatus === "ready") return;
         try {
           const info = await ipc.request<{
             mdescriptor_version: string;
@@ -67,13 +67,31 @@ export default function App() {
           console.error(e);
           setBackendError();
         }
-      });
-      return () => {
-        offReady();
       };
+      ipc.on("backend.ready", handleReady);
+      // pull the ready snapshot in case the line arrived before our listener
+      const { invoke } = await import("@tauri-apps/api/core");
+      const started = Date.now();
+      poller = setInterval(async () => {
+        if (disposed) return;
+        try {
+          const line = await invoke<string | null>("backend_ready_line");
+          if (line) {
+            ipc.processLine(line);
+            clearInterval(poller!);
+            poller = null;
+          } else if (Date.now() - started > 90_000) {
+            clearInterval(poller!);
+            setBackendError();
+          }
+        } catch {
+          /* window not ready yet */
+        }
+      }, 600);
     })();
     return () => {
       disposed = true;
+      if (poller) clearInterval(poller);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

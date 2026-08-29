@@ -11,11 +11,16 @@ use std::thread;
 
 use tauri::{Emitter, Manager};
 
-struct BackendState(Mutex<Option<Child>>);
+struct BackendState {
+    child: Mutex<Option<Child>>,
+    // backend.ready line cache: the webview may attach its listener after the
+    // line was emitted, so it pulls the snapshot via backend_ready_line().
+    ready_line: Mutex<Option<String>>,
+}
 
 #[tauri::command]
 fn backend_send(state: tauri::State<BackendState>, line: String) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    let mut guard = state.child.lock().map_err(|e| e.to_string())?;
     match guard.as_mut() {
         Some(child) => {
             let stdin = child.stdin.as_mut().ok_or("backend stdin closed")?;
@@ -30,14 +35,22 @@ fn backend_send(state: tauri::State<BackendState>, line: String) -> Result<(), S
 }
 
 #[tauri::command]
+fn backend_ready_line(state: tauri::State<BackendState>) -> Option<String> {
+    state.ready_line.lock().ok().and_then(|g| g.clone())
+}
+
+#[tauri::command]
 fn backend_restart(app: tauri::AppHandle, state: tauri::State<BackendState>) -> Result<(), String> {
     kill_backend(&state);
+    if let Ok(mut r) = state.ready_line.lock() {
+        *r = None;
+    }
     spawn_backend(&app);
     Ok(())
 }
 
 fn kill_backend(state: &BackendState) {
-    if let Ok(mut guard) = state.0.lock() {
+    if let Ok(mut guard) = state.child.lock() {
         if let Some(mut child) = guard.take() {
             // graceful: close stdin, give it a moment, then kill
             drop(child.stdin.take());
@@ -73,6 +86,11 @@ fn spawn_backend(app: &tauri::AppHandle) {
         for line in reader.lines() {
             match line {
                 Ok(l) => {
+                    if l.contains("\"backend.ready\"") {
+                        if let Ok(mut r) = handle.state::<BackendState>().ready_line.lock() {
+                            *r = Some(l.clone());
+                        }
+                    }
                     if handle.emit("backend-message", l).is_err() {
                         break;
                     }
@@ -82,7 +100,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
         }
         let _ = handle.emit("backend-exit", ());
     });
-    *state.0.lock().expect("backend state poisoned") = Some(child);
+    *state.child.lock().expect("backend state poisoned") = Some(child);
 }
 
 fn backend_command() -> (Command, &'static str) {
@@ -118,8 +136,15 @@ const TRIPLE: &str = "x86_64-pc-windows-msvc";
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(BackendState(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![backend_send, backend_restart])
+        .manage(BackendState {
+            child: Mutex::new(None),
+            ready_line: Mutex::new(None),
+        })
+        .invoke_handler(tauri::generate_handler![
+            backend_send,
+            backend_restart,
+            backend_ready_line
+        ])
         .setup(|app| {
             spawn_backend(app.handle());
             Ok(())

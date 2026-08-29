@@ -10,6 +10,7 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
+import { elementColor } from "../util/elements";
 import type { FramePayload } from "../types/protocol";
 
 export default function Explore() {
@@ -29,6 +30,8 @@ export default function Explore() {
       render: () => void;
     } | null
   >(null);
+  const [viewerReady, setViewerReady] = useState(false);
+  const [viewerError, setViewerError] = useState<string | null>(null);
   const loadStart = useRef<number>(0);
 
   const total = d?.number_of_frames ?? 0;
@@ -64,15 +67,24 @@ export default function Explore() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const $3Dmol = (await import("3dmol")).default;
-      if (cancelled || !viewerDiv.current) return;
-      viewerRef.current = ($3Dmol as never as { createViewer: (el: HTMLElement, opts: object) => never }).createViewer(
-        viewerDiv.current,
-        { backgroundColor: "white" },
-      ) as never;
+      try {
+        const mod = await import("3dmol");
+        const $3Dmol = ((mod as { default?: unknown }).default ?? mod) as {
+          createViewer: (el: HTMLElement, opts: object) => never;
+        };
+        if (cancelled || !viewerDiv.current) return;
+        viewerRef.current = $3Dmol.createViewer(viewerDiv.current, {
+          backgroundColor: "white",
+        }) as never;
+        setViewerReady(true);
+      } catch (e) {
+        console.error("3dmol init failed", e);
+        setViewerError(String(e));
+      }
     })();
     return () => {
       cancelled = true;
+      setViewerReady(false);
       viewerRef.current?.clear();
       viewerRef.current = null;
       if (viewerDiv.current) viewerDiv.current.innerHTML = "";
@@ -81,17 +93,18 @@ export default function Explore() {
 
   useEffect(() => {
     const v = viewerRef.current;
-    if (!v || !frame) return;
+    if (!viewerReady || !v || !frame) return;
     v.clear();
     v.addModel(frame.xyz, "xyz");
-    v.setStyle({}, { sphere: { scale: 0.28 }, stick: { radius: 0.12 } });
-    v.addStyle({}, { line: { opacity: 0.0 } });
-    // cell box for periodic frames (from xyz we rebuild via backend cell? use positions bbox)
+    for (const el of new Set(frame.atom_rows.map((r) => r.el))) {
+      const color = elementColor(el);
+      v.setStyle({ elem: el }, { sphere: { scale: 0.28, color }, stick: { radius: 0.12, color } });
+    }
     v.zoomTo();
     v.render();
     const ms = performance.now() - loadStart.current;
     console.info(`frame ${frame.index} fetched+rendered in ${ms.toFixed(0)}ms`);
-  }, [frame, viewerRef.current]);
+  }, [viewerReady, frame]);
 
   if (!d) return <Empty description="Register a dataset first" style={{ marginTop: 120 }} />;
 
@@ -151,6 +164,20 @@ export default function Explore() {
           }}
         >
           <div ref={viewerDiv} style={{ width: "100%", height: "100%", minHeight: 420 }} />
+          {viewerError && (
+            <div
+              style={{
+                position: "absolute",
+                top: 8,
+                left: 8,
+                color: "#C42B1C",
+                fontSize: 12,
+                fontFamily: "monospace",
+              }}
+            >
+              viewer error: {viewerError}
+            </div>
+          )}
         </div>
         {/* Structure Inspector ~30% */}
         <div
