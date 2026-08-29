@@ -18,12 +18,13 @@ from .services.dataset_service import DatasetService
 from .services.descriptor_service import DescriptorService
 from .services.job_service import JobService
 from .services.result_service import ResultService
+from .services.update_service import UpdateService
 from .storage.database import Database
 
 log = logging.getLogger(__name__)
 
 
-def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root):
+def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root, updates):
     def system_info(_params):
         return {
             "backend_version": __version__,
@@ -34,6 +35,17 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
             "data_dir": str(root),
             "cpu_threads": platform.os.cpu_count(),
         }
+
+    def engine_check_update(_params):
+        return updates.start_check()
+
+    def engine_update(params):
+        snap = updates.snapshot()
+        target = (params or {}).get("version") or snap.get("latest")
+        if not target:
+            raise AppError(INVALID_PARAMS, "no target version — call engine.check_update first")
+        job_id = jobs.submit("engine.update", lambda ctx: updates.update_runner(ctx, str(target)))
+        return {"job_id": job_id, "target_version": str(target)}
 
     def settings_get(params):
         key = params.get("key")
@@ -69,6 +81,8 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         "result.get_pca": results.get_pca,
         "result.heatmap": results.heatmap,
         "analysis.pca": analysis.pca,
+        "engine.check_update": engine_check_update,
+        "engine.update": engine_update,
     }
 
 
@@ -94,8 +108,9 @@ def main() -> int:
         db, adapter, jobs, datasets, root, info.get("version", "unknown")
     )
     analysis = AnalysisService(db, jobs, results, datasets, root)
+    updates = UpdateService(server.emit, info.get("version", "unknown"))
     server.methods = build_methods(
-        db, jobs, datasets, descriptors, results, analysis, db, info, root
+        db, jobs, datasets, descriptors, results, analysis, db, info, root, updates
     )
 
     # handshake must be the first frame (docs/plan/02 §2)
@@ -107,6 +122,8 @@ def main() -> int:
             "mdescriptor_api_version": info.get("api_version"),
         },
     )
+    # non-blocking PyPI check so the UI can offer an engine update (ADR-2)
+    updates.start_check()
     try:
         server.serve_forever()
     finally:

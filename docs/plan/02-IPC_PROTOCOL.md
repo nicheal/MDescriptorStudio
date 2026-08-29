@@ -64,9 +64,11 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `result.list` | {dataset_id?, descriptor_name?} → [runs] | 否 |
 | `result.get` | {run_id} → metadata + 摘要（不含大数组） | 否 |
 | `analysis.pca` | {run_id, params?} → {job_id} | 是 |
+| `engine.check_update` | {} → {installed, latest, has_update, status: idle\|checking\|up_to_date\|available\|error\|unsupported, error?, restart_required?}；后台线程查 PyPI，完成后再次广播 `engine.update.state` 事件（同结构） | 否（后台线程） |
+| `engine.update` | {version?}（缺省用 latest）→ {job_id, target_version}；pip 升级 job，终态后需重启后端生效；frozen 构建报 `ENGINE_UPDATE_UNSUPPORTED` | 是 |
 | `job.list` / `job.get` / `job.cancel` | 见 §4 | 否 |
 
-## 6. 错误码全集（15）
+## 6. 错误码全集（16）
 
 ```text
 DATASET_NOT_FOUND        DATASET_CHANGED         INVALID_DATASET
@@ -74,7 +76,7 @@ UNSUPPORTED_FORMAT       UNSUPPORTED_PERIODICITY MDESCRIPTOR_INCOMPATIBLE
 DESCRIPTOR_CONFIGURATION_ERROR                   MODEL_NOT_FOUND
 OUT_OF_MEMORY            JOB_CANCELLED           RESULT_INCOMPATIBLE
 INTERNAL_ERROR           PROTOCOL_VERSION_MISMATCH       JOB_NOT_FOUND
-INVALID_PARAMS
+INVALID_PARAMS           ENGINE_UPDATE_UNSUPPORTED
 ```
 
 （`JOB_CANCEL_UNSUPPORTED` 由 job.cancel 以 `INVALID_PARAMS` 携带 details 表达，不单列。）

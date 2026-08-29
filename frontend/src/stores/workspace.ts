@@ -18,6 +18,7 @@ interface WorkspaceState {
   page: Page;
 
   setBackendReady: (engineVersion: string | null) => void;
+  setBackendStarting: () => void;
   setBackendError: () => void;
   setDatasets: (datasets: DatasetMeta[]) => void;
   setActiveDataset: (id: string | null) => void;
@@ -39,6 +40,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   page: "overview",
 
   setBackendReady: (engineVersion) => set({ backendStatus: "ready", engineVersion }),
+  setBackendStarting: () => set({ backendStatus: "starting", engineVersion: null }),
   setBackendError: () => set({ backendStatus: "error" }),
   setDatasets: (datasets) => set({ datasets }),
   setActiveDataset: (id) =>
