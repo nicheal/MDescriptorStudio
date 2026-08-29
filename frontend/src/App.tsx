@@ -12,7 +12,7 @@ import Sidebar from "./components/layout/Sidebar";
 import ContextBar from "./components/layout/ContextBar";
 import StatusBar from "./components/layout/StatusBar";
 import RightRail from "./components/layout/RightRail";
-import JobsDrawer from "./components/JobsDrawer";
+import TitleBar from "./components/layout/TitleBar";
 import Overview from "./pages/Overview";
 import Explore from "./pages/Explore";
 import Descriptors from "./pages/Descriptors";
@@ -192,23 +192,33 @@ export default function App() {
           height: "100vh",
           display: "flex",
           flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
+          overflow: "hidden",
         }}
       >
-        <img
-          src={APP_ICON_URL}
-          alt="MDescriptor Studio"
+        <TitleBar />
+        <div
           style={{
-            width: 96,
-            height: 96,
-            objectFit: "contain",
-            display: "block",
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
           }}
-        />
-        <div style={{ color: "#616161" }}>
-          {backendStatus === "starting" ? "Starting backend…" : "Backend exited. Restart the app."}
+        >
+          <img
+            src={APP_ICON_URL}
+            alt="MDescriptor Studio"
+            style={{
+              width: 96,
+              height: 96,
+              objectFit: "contain",
+              display: "block",
+            }}
+          />
+          <div style={{ color: "#616161" }}>
+            {backendStatus === "starting" ? "Starting backend…" : "Backend exited. Restart the app."}
+          </div>
         </div>
       </div>
     );
@@ -216,30 +226,7 @@ export default function App() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "8px 16px",
-          borderBottom: "1px solid #E1E4E8",
-          background: "#FFFFFF",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
-          <img
-            src={APP_ICON_URL}
-            alt="MDescriptor Studio"
-            style={{
-              width: 28,
-              height: 28,
-              objectFit: "contain",
-              display: "block",
-            }}
-          />
-        </div>
-        <JobsDrawer />
-      </div>
+      <TitleBar />
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
         <Sidebar />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>

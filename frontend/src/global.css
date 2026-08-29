@@ -13,6 +13,95 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Unified title bar used by both the startup and ready states. */
+.app-titlebar {
+  flex: 0 0 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-bottom: 1px solid #e1e4e8;
+  background: #ffffff;
+  color: #242424;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.app-titlebar-brand {
+  height: 100%;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.app-titlebar-brand img {
+  width: 28px;
+  height: 28px;
+  display: block;
+  object-fit: contain;
+}
+
+.app-titlebar-drag-region {
+  height: 100%;
+  flex: 1;
+  min-width: 0;
+}
+
+.app-titlebar-actions {
+  height: 100%;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.app-titlebar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 8px;
+  background: #eaecf0;
+}
+
+.app-window-controls {
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+}
+
+.app-window-control {
+  width: 46px;
+  height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: #424242;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.app-window-control:hover {
+  background: #f3f4f6;
+  color: #242424;
+}
+
+.app-window-control:focus-visible {
+  outline: 2px solid #0f6cbd;
+  outline-offset: -2px;
+}
+
+.app-window-control-close:hover {
+  background: #c42b1c;
+  color: #ffffff;
+}
+
 /* Slim scrollbars for inner scroll panes — only appear once content overflows. */
 *::-webkit-scrollbar {
   width: 10px;
