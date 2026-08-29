@@ -72,7 +72,11 @@ def test_register_statistics_frame_flow(tmp_path: Path) -> None:
         assert payload["natoms"] == 64
         assert payload["formula"] in ("Ga32As32", "As32Ga32")
         assert len(payload["atom_rows"]) == 64
-        assert payload["xyz"].splitlines()[0] == "64"
+        # periodic frame: lattice in xyz header + boundary image atoms for bonds
+        assert payload["cell"] is not None and len(payload["cell"]) == 9
+        assert 'Lattice="' in payload["xyz"].splitlines()[1]
+        assert payload["ghost_count"] > 0
+        assert int(payload["xyz"].splitlines()[0]) == 64 + payload["ghost_count"]
         assert payload["energy_per_atom"] is not None
 
         # duplicate registration rejected

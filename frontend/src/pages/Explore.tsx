@@ -23,7 +23,8 @@ export default function Explore() {
   const viewerRef = useRef<
     {
       clear: () => void;
-      addModel: (s: string, f: string) => void;
+      addModel: (s: string, f: string) => unknown;
+      addLine: (spec: object) => void;
       setStyle: (sel: object, style: object) => void;
       addStyle: (sel: object, style: object) => void;
       zoomTo: () => void;
@@ -100,8 +101,34 @@ export default function Explore() {
       const color = elementColor(el);
       v.setStyle({ elem: el }, { sphere: { scale: 0.28, color }, stick: { radius: 0.12, color } });
     }
+    // unit cell wireframe (12 edges) for periodic frames; cell is row-major a1,a2,a3
+    if (frame.cell && frame.cell.length === 9) {
+      const A = frame.cell;
+      const p = (i: number, j: number, k: number) => ({
+        x: i * A[0] + j * A[3] + k * A[6],
+        y: i * A[1] + j * A[4] + k * A[7],
+        z: i * A[2] + j * A[5] + k * A[8],
+      });
+      const edges: [number, number, number, number, number, number][] = [
+        [0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 0, 1, 1], [1, 1, 1, 1, 0, 1], [1, 1, 1, 1, 1, 0],
+        [1, 0, 0, 1, 1, 0], [1, 0, 0, 1, 0, 1],
+        [0, 1, 0, 1, 1, 0], [0, 1, 0, 0, 1, 1],
+        [0, 0, 1, 1, 0, 1], [0, 0, 1, 0, 1, 1],
+      ];
+      for (const [i1, j1, k1, i2, j2, k2] of edges) {
+        v.addLine({
+          start: p(i1, j1, k1),
+          end: p(i2, j2, k2),
+          color: "#0F6CBD",
+          opacity: 0.9,
+          linewidth: 2,
+        });
+      }
+    }
     v.zoomTo();
     v.render();
+    if (frame.ghost_count) console.info(`frame ${frame.index}: +${frame.ghost_count} periodic image atoms`);
     const ms = performance.now() - loadStart.current;
     console.info(`frame ${frame.index} fetched+rendered in ${ms.toFixed(0)}ms`);
   }, [viewerReady, frame]);

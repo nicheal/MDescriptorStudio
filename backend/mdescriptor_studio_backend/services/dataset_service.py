@@ -290,9 +290,22 @@ class DatasetService:
                 )
             rows.append(entry)
         cell = np.asarray(f.cell)
+        periodic = bool(np.all(np.asarray(f.pbc)) and np.abs(cell).sum() > 1e-8)
         volume = abs(float(np.linalg.det(cell))) if np.abs(cell).sum() > 1e-8 else None
-        xyz_lines = [str(len(symbols)), f"frame {index} of dataset {row['name']}"]
-        for s, pos in zip(symbols, positions):
+        header = f"frame {index} of dataset {row['name']}"
+        if periodic:
+            lat = " ".join(f"{v:.6f}" for v in cell.reshape(-1))
+            header += f' Lattice="{lat}"'
+        # periodic images appended to the SAME model so cross-boundary bonds form
+        ghosts = periodic_boundary_ghosts(symbols, positions, cell) if periodic else []
+        display_symbols = symbols + [g[0] for g in ghosts]
+        display_positions = (
+            np.vstack([positions, np.array([g[1] for g in ghosts])]) if ghosts else positions
+        )
+        if ghosts:
+            header += f" +{len(ghosts)} periodic images"
+        xyz_lines = [str(len(display_symbols)), header]
+        for s, pos in zip(display_symbols, display_positions):
             xyz_lines.append(f"{s} {pos[0]:.6f} {pos[1]:.6f} {pos[2]:.6f}")
         energy_per_atom = None
         if f.energy is not None and symbols:
@@ -312,4 +325,41 @@ class DatasetService:
             "force_max": force_max,
             "volume": round(volume, 4) if volume else None,
             "pbc": "".join("XYZ"[i] for i, v in enumerate(f.pbc) if v) or "—",
+            "cell": cell.reshape(-1).tolist() if periodic else None,
+            "ghost_count": len(ghosts),
         }
+
+
+def periodic_boundary_ghosts(
+    symbols: list[str], positions: np.ndarray, cell: np.ndarray,
+    cutoff: float = 2.4, max_ghosts: int = 3000,
+) -> list[tuple[str, np.ndarray]]:
+    """Periodic-image atoms near cell faces so cross-boundary bonds are complete.
+
+    An atom contributes an image shifted by n (per axis: -1/0/+1) when its
+    perpendicular distance to that cell face is below `cutoff` (VESTA-style
+    boundary padding). Returns (element, position) pairs, capped at max_ghosts.
+    """
+    a_inv = np.linalg.inv(cell)
+    frac = positions @ a_inv
+    spacing = 1.0 / np.linalg.norm(a_inv, axis=0)  # interplanar distance per axis
+    out: list[tuple[str, np.ndarray]] = []
+    for i in range(len(symbols)):
+        if len(out) > max_ghosts:
+            break
+        opts: list[list[int]] = []
+        for ax in range(3):
+            axis_opts = [0]
+            if frac[i, ax] * spacing[ax] < cutoff:
+                axis_opts.append(-1)
+            if (1.0 - frac[i, ax]) * spacing[ax] < cutoff:
+                axis_opts.append(1)
+            opts.append(axis_opts)
+        for dx in opts[0]:
+            for dy in opts[1]:
+                for dz in opts[2]:
+                    if dx == dy == dz == 0:
+                        continue
+                    pos = positions[i] + np.array([dx, dy, dz], dtype=np.float64) @ cell
+                    out.append((symbols[i], pos))
+    return out[:max_ghosts]

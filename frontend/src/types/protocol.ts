@@ -91,6 +91,8 @@ export interface FramePayload {
   force_max: number | null;
   volume: number | null;
   pbc: string;
+  cell: number[] | null;
+  ghost_count: number;
 }
 
 export interface DescriptorInfo {

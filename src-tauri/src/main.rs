@@ -104,19 +104,23 @@ fn spawn_backend(app: &tauri::AppHandle) {
 }
 
 fn backend_command() -> (Command, &'static str) {
-    if let Ok(exe) = std::env::current_exe() {
-        let dir = exe.parent().unwrap().to_path_buf();
-        // bundled install: backend-<triple>.exe (externalBin); target/release: backend.exe
-        for name in [format!("backend-{TRIPLE}.exe"), "backend.exe".to_string()] {
-            let sidecar = dir.join(&name);
-            if sidecar.exists() {
-                let mut c = Command::new(sidecar);
-                if let Ok(data_dir) = std::env::var("MDS_DATA_DIR") {
-                    if !data_dir.is_empty() {
-                        c.env("MDS_DATA_DIR", data_dir);
+    // dev build: always run the live Python package (the sidecar in target/debug
+    // is a stale copy made by `tauri dev` from src-tauri/binaries)
+    if !cfg!(debug_assertions) {
+        if let Ok(exe) = std::env::current_exe() {
+            let dir = exe.parent().unwrap().to_path_buf();
+            // bundled install: backend-<triple>.exe (externalBin); target/release: backend.exe
+            for name in [format!("backend-{TRIPLE}.exe"), "backend.exe".to_string()] {
+                let sidecar = dir.join(&name);
+                if sidecar.exists() {
+                    let mut c = Command::new(sidecar);
+                    if let Ok(data_dir) = std::env::var("MDS_DATA_DIR") {
+                        if !data_dir.is_empty() {
+                            c.env("MDS_DATA_DIR", data_dir);
+                        }
                     }
+                    return (c, "sidecar");
                 }
-                return (c, "sidecar");
             }
         }
     }
