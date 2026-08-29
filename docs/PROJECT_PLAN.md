@@ -1,10 +1,10 @@
 # MDescriptor Studio 项目规划（PROJECT PLAN）
 
-> 文档版本：v0.2
-> 日期：2026-08-28
-> 状态：**共识定稿**（grilling 两轮访谈，17 项决策全部裁决，无遗留「待定」；决策全文见 `docs/plan/01-DECISIONS.md`）
+> 文档版本：v0.3
+> 日期：2026-08-29
+> 状态：**M0–M5 实施完成**（11 项后端集成测试全绿；GUI 实机验证记录见 `docs/plan/VERIFICATION.md`；剩余：干净机安装验证）
 > 输入材料：`docs/MDescriptor_GUI_Design.md`（设计基线 v0.1）、`docs/UI.png`（视觉基准 mockup）、`docs/logos.png`（品牌规范）
-> 修订记录：v0.1 → v0.2 合并两轮共 14 项裁决（ADR-5～17），清理多轮复查遗留的过期矛盾；v0.1 原文存档于 `docs/plan/archive/PROJECT_PLAN_v0.1.md`
+> 决策方式：grill-me 访谈，4 项关键决策已由项目所有者确认；实施中新增约束见 `docs/plan/05-ENGINE_ADAPTER.md` §6
 
 ---
 
