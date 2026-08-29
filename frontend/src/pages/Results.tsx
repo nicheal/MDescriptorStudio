@@ -17,6 +17,10 @@ import { activeDataset, useWorkspace } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
 import type { PcaPayload, RunRow } from "../types/protocol";
 
+// PCA payloads survive tab switches and dataset switches (bug1/bug2): keyed by
+// run id, module-level so remounting the page restores the last chart.
+const pcaCache = new Map<string, PcaPayload>();
+
 export default function Results() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
@@ -40,6 +44,13 @@ export default function Results() {
     void refreshRuns();
   }, [refreshRuns]);
 
+  // selected run (or dataset) changed: show that run's cached PCA, or clear —
+  // never keep the previous dataset's chart on screen (bug2)
+  useEffect(() => {
+    setPca(selectedRun ? pcaCache.get(selectedRun) ?? null : null);
+    setSelectedPoint(null);
+  }, [selectedRun, d?.id]);
+
   const runPca = async () => {
     if (!selectedRun) return;
     setPcaBusy(true);
@@ -49,6 +60,7 @@ export default function Results() {
       const done = await watchJob(r.job_id);
       if (done.status === "COMPLETED") {
         const full = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: done.result?.analysis_id });
+        pcaCache.set(selectedRun, full);
         setPca(full);
         message.success("PCA ready");
       } else {

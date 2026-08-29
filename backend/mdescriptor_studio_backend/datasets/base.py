@@ -57,11 +57,14 @@ class DatasetAdapter(ABC):
 
 def detect_format(path: Path) -> str:
     if path.is_dir():
-        if (path / "type.raw").exists() and (path / "coord.npy").exists():
+        if (path / "type.raw").exists() and (
+            (path / "coord.npy").exists()
+            or any(d.is_dir() and (d / "coord.npy").exists() for d in path.iterdir() if d.name.startswith("set"))
+        ):
             return "deepmd"
         raise AppError(
             UNSUPPORTED_FORMAT,
-            f"directory without DeepMD raw layout (type.raw/coord.npy missing): {path}",
+            f"directory without DeepMD raw layout (set.*/coord.npy or coord.npy missing): {path}",
         )
     if path.is_file() and path.suffix.lower() in (".xyz", ".extxyz"):
         return "extxyz"
