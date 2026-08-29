@@ -48,7 +48,12 @@ export default function Histogram({
     series: [
       {
         type: "bar",
-        data: hist?.counts ?? [],
+        // value-axis pairs so bars land inside [edges0, edgesN]
+        data:
+          hist?.counts.map((c, i) => [
+            (hist.edges[i] + hist.edges[i + 1]) / 2,
+            c,
+          ]) ?? [],
         itemStyle: { color, borderRadius: [1, 1, 0, 0] },
         barCategoryGap: "8%",
       },

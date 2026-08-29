@@ -47,3 +47,45 @@ class ResultService:
         row = self.get({"run_id": run_id})
         path = Path(row["result_path"])
         return np.load(path / "values.npy"), row
+
+    # -- M5 helpers ------------------------------------------------------------
+    def get_pca(self, params: dict) -> dict:
+        analysis_id = params.get("analysis_id")
+        if not analysis_id:
+            raise AppError(INVALID_PARAMS, "'analysis_id' is required")
+        row = self.db.query_one(
+            "SELECT result_path FROM analysis_runs WHERE id = ? AND analysis_type = 'pca'",
+            (analysis_id,),
+        )
+        if row is None or not row["result_path"]:
+            raise AppError(INVALID_PARAMS, f"analysis {analysis_id} does not exist")
+        return json.loads((Path(row["result_path"]) / "pca.json").read_text(encoding="utf-8"))
+
+    def heatmap(self, params: dict) -> dict:
+        """Atom-level values for ONE structure: N_atoms x min(features, 256)."""
+        import numpy as np
+
+        run_id = params.get("run_id")
+        frame_index = params.get("frame_index", 0)
+        values, row = self.load_values(run_id)
+        path = Path(row["result_path"])
+        offsets_file = path / "row_offsets.npy"
+        if not offsets_file.exists() or values.ndim != 2:
+            raise AppError(
+                RESULT_INCOMPATIBLE,
+                "heatmap requires an atom/pair-level run with row_offsets",
+            )
+        offsets = np.load(offsets_file)
+        n_struct = offsets.size - 1
+        if frame_index < 0 or frame_index >= n_struct:
+            raise AppError(INVALID_PARAMS, f"frame index out of range: {frame_index}")
+        lo, hi = int(offsets[frame_index]), int(offsets[frame_index + 1])
+        block = values[lo:hi]
+        max_features = int(params.get("max_features", 256))
+        block = block[:, :max_features]
+        return {
+            "atomOffset": lo,
+            "atoms": list(range(lo, hi)),
+            "features": list(range(block.shape[1])),
+            "values": [[round(float(v), 6) for v in r] for r in block.tolist()],
+        }

@@ -1,22 +1,27 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
 import { App as AntApp } from "antd";
 import Sidebar from "./components/layout/Sidebar";
 import ContextBar from "./components/layout/ContextBar";
 import StatusBar from "./components/layout/StatusBar";
-import JobsBadge from "./components/layout/JobsBadge";
+import JobsDrawer from "./components/JobsDrawer";
 import Overview from "./pages/Overview";
 import Explore from "./pages/Explore";
 import Descriptors from "./pages/Descriptors";
 import Results from "./pages/Results";
 import { ipc } from "./ipc/client";
 import { useWorkspace } from "./stores/workspace";
+import { wireJobEvents } from "./stores/jobs";
 import type { DatasetMeta } from "./types/protocol";
 
-export type Page = "overview" | "explore" | "descriptors" | "results";
+const TABS: [string, string][] = [
+  ["overview", "Overview"],
+  ["explore", "Explore"],
+  ["descriptors", "Descriptors"],
+  ["results", "Results"],
+];
 
 export default function App() {
   const { message } = AntApp.useApp();
-  const [page, setPage] = useState<Page>("overview");
   const {
     backendStatus,
     setBackendReady,
@@ -24,6 +29,8 @@ export default function App() {
     setDatasets,
     setActiveDataset,
     activeDatasetId,
+    page,
+    setPage,
   } = useWorkspace();
 
   const refreshDatasets = useCallback(async () => {
@@ -69,6 +76,7 @@ export default function App() {
         }
       };
       ipc.on("backend.ready", handleReady);
+      wireJobEvents(useWorkspace.getState().setRunningJobs);
       // pull the ready snapshot in case the line arrived before our listener
       const { invoke } = await import("@tauri-apps/api/core");
       const started = Date.now();
@@ -146,10 +154,10 @@ export default function App() {
           </span>
           MDescriptor Studio
         </div>
-        <JobsBadge />
+        <JobsDrawer />
       </div>
       <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
-        <Sidebar onGo={setPage} />
+        <Sidebar />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
           <ContextBar />
           <div
@@ -161,17 +169,10 @@ export default function App() {
               gap: 4,
             }}
           >
-            {(
-              [
-                ["overview", "Overview"],
-                ["explore", "Explore"],
-                ["descriptors", "Descriptors"],
-                ["results", "Results"],
-              ] as [Page, string][]
-            ).map(([key, label]) => (
+            {TABS.map(([key, label]) => (
               <button
                 key={key}
-                onClick={() => setPage(key)}
+                onClick={() => setPage(key as typeof page)}
                 style={{
                   padding: "10px 14px",
                   border: "none",
@@ -188,7 +189,7 @@ export default function App() {
             ))}
           </div>
           <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
-            {page === "overview" && <Overview onGo={setPage} />}
+            {page === "overview" && <Overview />}
             {page === "explore" && <Explore />}
             {page === "descriptors" && <Descriptors />}
             {page === "results" && <Results />}

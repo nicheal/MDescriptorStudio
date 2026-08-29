@@ -23,7 +23,7 @@ from .storage.database import Database
 log = logging.getLogger(__name__)
 
 
-def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_kv, engine_info):
+def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root):
     def system_info(_params):
         return {
             "backend_version": __version__,
@@ -31,6 +31,8 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
             "platform": platform.platform(),
             "mdescriptor_version": engine_info.get("version"),
             "mdescriptor_api_version": engine_info.get("api_version"),
+            "data_dir": str(root),
+            "cpu_threads": platform.os.cpu_count(),
         }
 
     def settings_get(params):
@@ -61,9 +63,11 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         "descriptor.submit": descriptors.submit,
         "job.list": jobs.list_jobs,
         "job.get": lambda params: jobs.get_job(params.get("id")),
-        "job.cancel": jobs.cancel,
+        "job.cancel": lambda params: jobs.cancel(params.get("id")),
         "result.list": results.list,
         "result.get": results.get,
+        "result.get_pca": results.get_pca,
+        "result.heatmap": results.heatmap,
         "analysis.pca": analysis.pca,
     }
 
@@ -91,7 +95,7 @@ def main() -> int:
     )
     analysis = AnalysisService(db, jobs, results, datasets, root)
     server.methods = build_methods(
-        db, jobs, datasets, descriptors, results, analysis, db, info
+        db, jobs, datasets, descriptors, results, analysis, db, info, root
     )
 
     # handshake must be the first frame (docs/plan/02 §2)

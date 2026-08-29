@@ -5,9 +5,8 @@ import { Add16Regular } from "@fluentui/react-icons";
 import { ipc } from "../../ipc/client";
 import { useWorkspace } from "../../stores/workspace";
 import type { DatasetMeta } from "../../types/protocol";
-import type { Page } from "../../App";
 
-export default function Sidebar(_props: { onGo?: (p: Page) => void }) {
+export default function Sidebar() {
   const { message } = AntApp.useApp();
   const { datasets, setActiveDataset } = useWorkspace();
   const [query, setQuery] = useState("");

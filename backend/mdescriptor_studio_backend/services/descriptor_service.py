@@ -59,6 +59,7 @@ class DescriptorService:
                     "backend": s.get("backend"),
                     "category": s.get("category"),
                     "capabilities": s.get("capabilities", []),
+                    "input": s.get("input", {}),
                 }
             )
         return out

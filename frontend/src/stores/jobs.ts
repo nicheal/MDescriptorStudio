@@ -1,0 +1,110 @@
+// Job registry fed by job.progress / job.finished events (docs/plan/02 §4).
+import { create } from "zustand";
+import { ipc } from "../ipc/client";
+import type { JobRow } from "../types/protocol";
+
+export interface JobState {
+  id: string;
+  job_type: string;
+  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+  progress: number;
+  completed: number | null;
+  total: number | null;
+  message: string | null;
+  error: { code: string; message: string } | null;
+}
+
+interface JobsStore {
+  jobs: Record<string, JobState>;
+  order: string[]; // newest first
+  setRunning: (n: number) => void;
+}
+
+export const useJobs = create<JobsStore>(() => ({ jobs: {}, order: [], setRunning: () => {} }));
+
+export function trackJob(jobId: string, jobType: string) {
+  useJobs.setState((st) => ({
+    jobs: {
+      ...st.jobs,
+      [jobId]: {
+        id: jobId,
+        job_type: jobType,
+        status: "QUEUED",
+        progress: 0,
+        completed: null,
+        total: null,
+        message: null,
+        error: null,
+      },
+    },
+    order: [jobId, ...st.order.filter((j) => j !== jobId)],
+  }));
+}
+
+export function watchJob(jobId: string): Promise<{
+  status: string;
+  result: Record<string, unknown> | null;
+  error: JobState["error"];
+}> {
+  return new Promise((resolve) => {
+    const off = ipc.on("job.finished", (data) => {
+      const d = data as { job_id: string; status: string; result: Record<string, unknown> | null; error: JobState["error"] };
+      if (d.job_id !== jobId) return;
+      off();
+      resolve(d);
+    });
+  });
+}
+
+let wired = false;
+export function wireJobEvents(setRunning: (n: number) => void) {
+  if (wired) return;
+  wired = true;
+  ipc.on("job.progress", (data) => {
+    const d = data as { job_id: string; progress: number; completed: number; total: number; message: string | null };
+    useJobs.setState((st) => {
+      const cur = st.jobs[d.job_id];
+      if (!cur) return st;
+      return {
+        jobs: {
+          ...st.jobs,
+          [d.job_id]: { ...cur, status: "RUNNING", progress: d.progress, completed: d.completed, total: d.total, message: d.message },
+        },
+      };
+    });
+  });
+  ipc.on("job.finished", (data) => {
+    const d = data as { job_id: string; status: JobState["status"]; result: Record<string, unknown> | null; error: JobState["error"] };
+    useJobs.setState((st) => {
+      const cur = st.jobs[d.job_id];
+      if (!cur) return st;
+      return {
+        jobs: {
+          ...st.jobs,
+          [d.job_id]: { ...cur, status: d.status, progress: d.status === "COMPLETED" ? 1 : cur.progress, error: d.error },
+        },
+      };
+    });
+  });
+  ipc.on("job.progress", () => {
+    const st = useJobs.getState();
+    setRunning(Object.values(st.jobs).filter((j) => j.status === "RUNNING" || j.status === "QUEUED").length);
+  });
+  ipc.on("job.finished", () => {
+    const st = useJobs.getState();
+    setRunning(Object.values(st.jobs).filter((j) => j.status === "RUNNING" || j.status === "QUEUED").length);
+  });
+}
+
+export function fromJobRow(row: JobRow): JobState {
+  return {
+    id: row.id,
+    job_type: row.job_type,
+    status: row.status,
+    progress: row.progress,
+    completed: row.completed,
+    total: row.total,
+    message: row.message,
+    error: row.error ? { code: row.error, message: row.error } : null,
+  };
+}

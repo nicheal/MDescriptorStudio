@@ -4,6 +4,7 @@ import { ipc } from "../ipc/client";
 import type { DatasetMeta } from "../types/protocol";
 
 export type BackendStatus = "starting" | "ready" | "error";
+export type Page = "overview" | "explore" | "descriptors" | "results";
 
 interface WorkspaceState {
   backendStatus: BackendStatus;
@@ -14,6 +15,7 @@ interface WorkspaceState {
   activeDescriptorRunId: string | null;
   datasets: DatasetMeta[];
   runningJobs: number;
+  page: Page;
 
   setBackendReady: (engineVersion: string | null) => void;
   setBackendError: () => void;
@@ -22,6 +24,7 @@ interface WorkspaceState {
   setActiveFrame: (index: number) => void;
   setActiveRun: (id: string | null) => void;
   setRunningJobs: (n: number) => void;
+  setPage: (p: Page) => void;
 }
 
 export const useWorkspace = create<WorkspaceState>((set) => ({
@@ -33,6 +36,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   activeDescriptorRunId: null,
   datasets: [],
   runningJobs: 0,
+  page: "overview",
 
   setBackendReady: (engineVersion) => set({ backendStatus: "ready", engineVersion }),
   setBackendError: () => set({ backendStatus: "error" }),
@@ -50,6 +54,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   setActiveFrame: (index) => set({ activeFrameIndex: index }),
   setActiveRun: (id) => set({ activeDescriptorRunId: id }),
   setRunningJobs: (n) => set({ runningJobs: n }),
+  setPage: (p) => set({ page: p }),
 }));
 
 export const activeDataset = (st: WorkspaceState): DatasetMeta | undefined =>

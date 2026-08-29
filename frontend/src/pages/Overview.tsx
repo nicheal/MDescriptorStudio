@@ -9,12 +9,12 @@ import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { elementColor } from "../util/elements";
 import type { Stats } from "../types/protocol";
-import type { Page } from "../App";
 
-export default function Overview({ onGo }: { onGo: (p: Page) => void }) {
+export default function Overview() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
   const d = activeDataset(st);
+  const onGo = st.setPage;
   const [stats, setStats] = useState<Stats | null>(null);
   const [recalculating, setRecalculating] = useState(false);
 
@@ -112,7 +112,7 @@ export default function Overview({ onGo }: { onGo: (p: Page) => void }) {
             </Item>
             <Item k="Format">{d.format}</Item>
             <Item k="PBC">{d.periodicity.flags.join("/") || "—"}</Item>
-            <Item k="Created">{new Date(d.created_at + "Z").toLocaleString()}</Item>
+            <Item k="Created">{new Date(d.created_at).toLocaleString()}</Item>
             <Item k="File Size">{d.file_size ? formatSize(d.file_size) : "—"}</Item>
           </Descriptions>
         </Section>
