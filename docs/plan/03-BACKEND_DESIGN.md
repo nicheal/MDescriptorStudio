@@ -17,7 +17,8 @@ backend/mdescriptor_studio_backend/
 │   └── server.py                # stdio 循环 + 4 线程请求池 + 写锁；版本不匹配 os._exit(2)
 ├── datasets/
 │   ├── base.py                  # DatasetFrame / DatasetAdapter / 格式探测 / pbc 汇总
-│   ├── deepmd.py                # type.raw/type_map.raw + npy memmap（随机访问 O(1)）
+│   ├── deepmd.py                # dpdata 封装（deepmd/npy 语义，全量载入内存；ADR-19）
+│   ├── deepmd_symbols.py        # 元素符号 ↔ 原子序数表（extxyz/统计共用）
 │   ├── extxyz.py                # 字节偏移帧索引（大文件随机访问），纯手写解析
 │   ├── fingerprint.py           # SHA-256(path+文件表+size+mtime+帧数)
 │   └── statistics.py            # 流式统计，40-bin 直方图（大数组不过 IPC）

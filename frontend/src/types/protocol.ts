@@ -199,10 +199,12 @@ export interface RunRow {
 export interface PcaPayload {
   analysis_id: string;
   run_id: string;
+  mode?: "structure" | "atom";
   n_points: number;
   points: {
     i: number;
     frame: number;
+    atom?: number;
     pc1: number;
     pc2: number;
     energy: number | null;

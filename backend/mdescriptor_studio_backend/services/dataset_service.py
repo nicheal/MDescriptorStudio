@@ -33,7 +33,7 @@ _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa:
 
 
 def _symbol(z: int) -> str:
-    from ..datasets.deepmd import _Z_TO_SYMBOL
+    from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
 
     return _Z_TO_SYMBOL.get(int(z), f"Z{z}")
 
@@ -187,6 +187,16 @@ class DatasetService:
 
         job_id = self.jobs.submit("dataset.register", runner)
         return {"job_id": job_id}
+
+    def rename(self, params: dict) -> dict:
+        name = params.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise AppError(INVALID_PARAMS, "'name' (non-empty string) is required")
+        row = self._row(params.get("id"))
+        self.db.execute(
+            "UPDATE datasets SET name = ? WHERE id = ?", (name.strip(), row["id"])
+        )
+        return self._meta(self._row(row["id"]))
 
     def remove(self, params: dict) -> dict:
         ds_id = params.get("id")
@@ -364,35 +374,50 @@ def periodic_boundary_ghosts(
     symbols: list[str], positions: np.ndarray, cell: np.ndarray,
     cutoff: float = 2.4, max_ghosts: int = 3000,
 ) -> list[tuple[str, np.ndarray]]:
-    """Periodic-image atoms near cell faces so cross-boundary bonds are complete.
+    """Periodic-image atoms that complete bonds cut by the cell boundary.
 
-    An atom contributes an image shifted by n (per axis: -1/0/+1) when its
-    perpendicular distance to that cell face is below `cutoff` (VESTA-style
-    boundary padding). Returns (element, position) pairs, capped at max_ghosts.
+    An atom whose *wrapped* fractional position lies within `cutoff` of a
+    cell face contributes candidate images at ±1 lattice shifts; a candidate
+    is kept only when it lands within `cutoff` of a displayed atom (and does
+    not coincide with one), so only bond-completing images survive. The
+    distance check is what keeps unwrapped frames (deepmd sets are often
+    centered on the origin, with negative coordinates) from spraying stray
+    atoms a full lattice vector outside the structure. Returns (element,
+    position) pairs, capped at max_ghosts.
     """
+    pos = np.asarray(positions, dtype=np.float64)
+    if len(symbols) == 0:
+        return []
     try:
         a_inv = np.linalg.inv(cell)
     except np.linalg.LinAlgError:
         return []  # singular cell: no well-defined images (red-team #7)
-    frac = positions @ a_inv
+    frac = pos @ a_inv
+    frac_w = frac - np.floor(frac)  # face test needs in-cell fraction
     spacing = 1.0 / np.linalg.norm(a_inv, axis=0)  # interplanar distance per axis
+    near_face = (frac_w * spacing < cutoff) | ((1.0 - frac_w) * spacing < cutoff)
+    cand = np.nonzero(near_face.any(axis=1))[0]
+    if cand.size == 0:
+        return []
+    shifts = np.array(
+        [(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)
+         if (dx, dy, dz) != (0, 0, 0)], dtype=np.float64,
+    ) @ cell
+    pos_sq = (pos * pos).sum(axis=1)
     out: list[tuple[str, np.ndarray]] = []
-    for i in range(len(symbols)):
-        if len(out) > max_ghosts:
-            break
-        opts: list[list[int]] = []
-        for ax in range(3):
-            axis_opts = [0]
-            if frac[i, ax] * spacing[ax] < cutoff:
-                axis_opts.append(-1)
-            if (1.0 - frac[i, ax]) * spacing[ax] < cutoff:
-                axis_opts.append(1)
-            opts.append(axis_opts)
-        for dx in opts[0]:
-            for dy in opts[1]:
-                for dz in opts[2]:
-                    if dx == dy == dz == 0:
-                        continue
-                    pos = positions[i] + np.array([dx, dy, dz], dtype=np.float64) @ cell
-                    out.append((symbols[i], pos))
-    return out[:max_ghosts]
+    chunk = max(1, int(4_000_000 // max(len(symbols), 1)))
+    for start in range(0, cand.size, chunk):
+        idx = cand[start:start + chunk]
+        imgs = (pos[idx][:, None, :] + shifts[None, :, :]).reshape(-1, 3)
+        d2 = (imgs * imgs).sum(axis=1)[:, None] - 2.0 * (imgs @ pos.T) + pos_sq[None, :]
+        d2min = np.maximum(d2.min(axis=1), 0.0)
+        # bonded to something on screen, and not exactly standing on an atom
+        keep = (d2min <= cutoff * cutoff) & (d2min > 1e-6)
+        if not keep.any():
+            continue
+        src = np.repeat(idx, len(shifts))[keep]
+        for i, p in zip(src, imgs[keep]):
+            out.append((symbols[i], p))
+            if len(out) >= max_ghosts:
+                return out
+    return out

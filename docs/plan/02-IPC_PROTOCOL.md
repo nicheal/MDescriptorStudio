@@ -14,7 +14,7 @@
 backend 初始化完成后，**第一帧**输出：
 
 ```json
-{"protocol_version":1,"event":"backend.ready","data":{"backend_version":"0.1.0","mdescriptor_version":"0.2.3","mdescriptor_api_version":1}}
+{"protocol_version":1,"event":"backend.ready","data":{"backend_version":"0.1.0","mdescriptor_version":"0.2.5","mdescriptor_api_version":1}}
 ```
 
 前端收到前，计算相关 UI 保持 disabled。`system.info` 可随时查询同等信息。
@@ -54,7 +54,8 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `system.info` | {} → {backend_version, mdescriptor_version, mdescriptor_api_version, protocol_version, platform, data_dir, cpu_threads} | 否 |
 | `dataset.list` | {} → [{id,name,format,source_path,number_of_frames,elements,properties,periodicity,fingerprint,file_size,created_at,cache_valid}] | 否 |
 | `dataset.register` | {path, format?: "deepmd"\|"extxyz", name?} → {job_id}（扫描+统计入 cache） | 是 |
-| `dataset.remove` | {id} → {ok} | 否 |
+| `dataset.remove` | {id} → {ok}；级联删除统计缓存与 descriptor runs/results，不碰源文件 | 否 |
+| `dataset.rename` | {id, name} → DatasetMeta（仅改显示名，name 首尾空白被裁剪） | 否 |
 | `dataset.get` | {id} → Dataset + {fingerprint_valid, stats} | 否 |
 | `dataset.statistics` | {id} → stats（直方图 bins + 摘要 + property availability）；缓存失效时自动触发重算 job | 否/是 |
 | `dataset.frame` | {id, index} → {index,natoms,formula,xyz,atom_rows,energy,energy_per_atom,force_max,volume,pbc} | 否 |
@@ -63,8 +64,8 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `descriptor.submit` | {dataset_id, descriptor_name, parameters, scope: "frame"\|"dataset", frame_index?, output_dtype?} → {job_id, cache?: {existing_run_id, cache_key}} | 是 |
 | `result.list` | {dataset_id?, descriptor_name?} → [runs] | 否 |
 | `result.get` | {run_id} → metadata + 摘要（不含大数组） | 否 |
-| `analysis.pca` | {run_id, params?} → {job_id} | 是 |
-| `result.get_pca` | {analysis_id} → pca.json 全文（points/explained_variance，点数=帧数，非大数组） | 否 |
+| `analysis.pca` | {run_id, mode?: "structure"\|"atom"} → {job_id}；mode 缺省 structure（每帧一点，原子/配对行均值池化）；atom 模式每个原子/配对行一点并带 frame/atom 索引，超大结果均匀降采样至 ≤20k 点 | 是 |
+| `result.get_pca` | {analysis_id} → pca.json 全文（points/explained_variance/x_label/y_label/mode，点数=帧数或原子行数，非大数组） | 否 |
 | `result.heatmap` | {run_id, frame_index, max_features?} → {atoms, features, values, atomOffset}；max_features 硬上限 256（§25） | 否 |
 | `settings.get` | {key} → {key, value\|null}（settings 表 KV） | 否 |
 | `settings.set` | {key, value} → {ok} | 否 |

@@ -21,7 +21,7 @@ def _make_multi_set(root: Path) -> None:
     b = root.parent / "b"
     write_deepmd(a, 4, 16, seed=1)
     write_deepmd(b, 3, 16, seed=2)
-    for dst, src in ((root / "set.000", a), (root / "set.001", b)):
+    for dst, src in ((root / "set.000", a / "set.000"), (root / "set.001", b / "set.000")):
         for f in src.glob("*.npy"):
             f.replace(dst / f.name)
     (root / "type.raw").write_text((a / "type.raw").read_text(encoding="utf-8"), encoding="utf-8")

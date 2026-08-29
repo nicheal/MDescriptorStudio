@@ -54,20 +54,24 @@ def _lattice_positions(natoms: int) -> np.ndarray:
 
 
 def write_deepmd(out_dir: Path, n_frames: int, natoms: int = 64, seed: int = 7) -> None:
+    """Standard DeepMD npy layout (dpdata deepmd/npy semantics): type.raw +
+    type_map.raw at the root, all arrays under set.000/."""
     out_dir.mkdir(parents=True, exist_ok=True)
     types, _, box, frames = make_frames(n_frames, natoms, seed)
     (out_dir / "type_map.raw").write_text(" ".join(SYMBOLS), encoding="utf-8")
     np.savetxt(out_dir / "type.raw", types, fmt="%d")
+    set_dir = out_dir / "set.000"
+    set_dir.mkdir(parents=True, exist_ok=True)
     coords = np.stack([f[0].reshape(-1) for f in frames])
     boxes = np.stack([box.reshape(-1) for _ in frames])
     energies = np.array([f[1] for f in frames], dtype=np.float64)
     forces = np.stack([f[2].reshape(-1) for f in frames])
     virials = np.stack([f[3] for f in frames])
-    np.save(out_dir / "coord.npy", coords)
-    np.save(out_dir / "box.npy", boxes)
-    np.save(out_dir / "energy.npy", energies)
-    np.save(out_dir / "force.npy", forces)
-    np.save(out_dir / "virial.npy", virials)
+    np.save(set_dir / "coord.npy", coords)
+    np.save(set_dir / "box.npy", boxes)
+    np.save(set_dir / "energy.npy", energies)
+    np.save(set_dir / "force.npy", forces)
+    np.save(set_dir / "virial.npy", virials)
     print(f"wrote {out_dir} ({n_frames} frames)")
 
 

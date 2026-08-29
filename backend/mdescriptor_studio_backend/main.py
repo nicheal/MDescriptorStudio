@@ -73,6 +73,7 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         "dataset.list": datasets.list,
         "dataset.register": datasets.register,
         "dataset.remove": datasets.remove,
+        "dataset.rename": datasets.rename,
         "dataset.get": datasets.get,
         "dataset.statistics": datasets.statistics,
         "dataset.frame": datasets.frame,

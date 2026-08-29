@@ -1,8 +1,9 @@
 import { useWorkspace } from "../../stores/workspace";
 
 export default function StatusBar() {
-  const { backendStatus, engineVersion, runningJobs } = useWorkspace();
+  const { backendStatus, engineVersion, runningJobs, cpuThreads } = useWorkspace();
   const color = backendStatus === "ready" ? "#107C10" : "#C42B1C";
+  const threads = cpuThreads ?? (typeof navigator !== "undefined" ? navigator.hardwareConcurrency : null);
   return (
     <div
       style={{
@@ -11,21 +12,25 @@ export default function StatusBar() {
         background: "#FAFAFA",
         display: "flex",
         alignItems: "center",
-        justifyContent: "space-between",
         padding: "0 12px",
         fontSize: 12,
         color: "#616161",
+        gap: 16,
       }}
     >
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 6, flex: 1 }}>
         <span
           style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }}
         />
         {runningJobs > 0 ? `${runningJobs} job${runningJobs > 1 ? "s" : ""} running` : "Ready"}
       </span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 16 }}>
-        <span>MDescriptor {engineVersion ?? "—"}</span>
-        <span style={{ color: "#8A8A8A" }}>Windows x64</span>
+      <span style={{ display: "inline-flex", alignItems: "center" }}>
+        MDescriptor {engineVersion ?? "—"}
+      </span>
+      <span
+        style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", flex: 1, gap: 16 }}
+      >
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>CPU {threads ?? "—"} threads</span>
       </span>
     </div>
   );

@@ -15,7 +15,7 @@ Pop-Location
 Copy-Item "$root\backend\dist\backend.exe" "$root\src-tauri\binaries\backend-x86_64-pc-windows-msvc.exe" -Force
 
 Push-Location $root
-& node "$root\frontend\node_modules\@tauri-apps\cli\tauri.js" build
+& node "$root\node_modules\@tauri-apps\cli\tauri.js" build
 Pop-Location
 
 Write-Host "Done. Installer:"

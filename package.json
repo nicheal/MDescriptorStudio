@@ -1,0 +1,13 @@
+{
+  "name": "mdescriptor-studio",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev",
+    "web:dev": "npm --prefix frontend run dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4"
+  }
+}

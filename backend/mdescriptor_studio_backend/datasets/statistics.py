@@ -8,7 +8,7 @@ from collections import Counter
 import numpy as np
 
 from .base import DatasetAdapter, pbc_summary
-from .deepmd import _Z_TO_SYMBOL as _Z_LOOKUP
+from .deepmd_symbols import _Z_TO_SYMBOL as _Z_LOOKUP
 
 BINS = 40
 

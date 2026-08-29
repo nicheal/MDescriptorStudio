@@ -50,6 +50,24 @@ def test_pca_and_heatmap(tmp_path: Path) -> None:
         assert payload["result"]["explained_variance"][0] > 0
         assert pts[0]["energy"] is not None  # color-by data attached
 
+        # PCA atom mode: one point per atom row (8 frames x 16 atoms = 128)
+        pca_atom = bp.request(15, "analysis.pca", {"run_id": run_id, "mode": "atom"})
+        done = wait_job(bp, pca_atom["result"]["job_id"], timeout=120)
+        assert done["status"] == "COMPLETED", done
+        a_id = done["result"]["analysis_id"]
+        assert done["result"]["n_points"] == 8 * 16
+        a_payload = bp.request(16, "result.get_pca", {"analysis_id": a_id})
+        a_pts = a_payload["result"]["points"]
+        assert a_payload["result"]["mode"] == "atom"
+        assert len(a_pts) == 8 * 16
+        assert a_pts[0]["atom"] == 0 and a_pts[0]["frame"] == 0
+        assert a_pts[20]["frame"] == 1 and a_pts[20]["atom"] == 4
+        assert a_pts[127]["frame"] == 7 and a_pts[127]["atom"] == 15
+
+        # bad mode rejected before any job is created
+        bad = bp.request(17, "analysis.pca", {"run_id": run_id, "mode": "bogus"})
+        assert bad["error"]["code"] == "INVALID_PARAMS", bad
+
         # heatmap for frame 2 (atom level: 16 atoms x <=256 features)
         hm = bp.request(14, "result.heatmap", {"run_id": run_id, "frame_index": 2})
         h = hm["result"]

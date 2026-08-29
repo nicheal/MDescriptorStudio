@@ -1,0 +1,42 @@
+/* Full-bleed app shell: the window itself never scrolls; individual panes do. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+body {
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Slim scrollbars for inner scroll panes — only appear once content overflows. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #c9cdd4;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #a8adb8;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Sidebar dataset rows: reveal the per-row ⋯ menu on hover or while open. */
+.dataset-item .dataset-item-actions {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.dataset-item:hover .dataset-item-actions,
+.dataset-item .dataset-item-actions.ant-dropdown-open {
+  opacity: 1;
+}

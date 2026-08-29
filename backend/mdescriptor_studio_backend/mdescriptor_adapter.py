@@ -1,7 +1,7 @@
 """Single boundary to the mdescriptor engine (docs/plan/05-ENGINE_ADAPTER.md).
 
 No other module may `import mdescriptor`. All engine exceptions are converted
-to AppError here. Pinned: mdescriptor==0.2.3 (ADR-2).
+to AppError here. Engine updates via UpdateService (PyPI pin mdescriptor==0.2.5 as of 2026-08-29, ADR-2).
 """
 
 from __future__ import annotations
@@ -18,7 +18,8 @@ log = logging.getLogger(__name__)
 _ERROR_MAP = [
     (md.DescriptorConfigError, "DESCRIPTOR_CONFIGURATION_ERROR"),
     (md.ModelLoadError, "MODEL_NOT_FOUND"),
-    (md.DescriptorInputError, "UNSUPPORTED_PERIODICITY"),
+    # DescriptorInputError is split by its structured `code` in _convert
+    # (unsupported_periodicity -> UNSUPPORTED_PERIODICITY, else INVALID_DATASET).
     (md.PackageNotFoundError, "MDESCRIPTOR_INCOMPATIBLE"),
     (md.CancelledError, "JOB_CANCELLED"),
     (md.ClosedDescriptorError, "INTERNAL_ERROR"),
@@ -114,10 +115,12 @@ class EngineAdapter:
     def warmup(self) -> None:
         """Build every registered descriptor once on the calling (main) thread.
 
-        create_descriptor lazily imports native extension modules; resolving
-        those imports while worker threads (or a stdin reader thread) are live
-        deadlocks the import machinery (observed on 0.2.3/win). Running the
-        warmup before any thread exists removes the lazy import entirely.
+        create_descriptor lazily imports native extension modules; on 0.2.3/win
+        resolving those imports while worker threads (or a stdin reader thread)
+        were live deadlocked the import machinery (fixed in 0.2.5, re-verified
+        in scripts/verify_known_issues.py). The warmup stays as defense in
+        depth and to pay each descriptor's first-build cost at startup, before
+        any job thread exists.
         """
         import numpy as np
 
@@ -166,6 +169,15 @@ class EngineAdapter:
     # -- errors ------------------------------------------------------------
     @staticmethod
     def _convert(exc: md.MDescriptorError) -> AppError:
+        # 0.2.5 engine errors carry a structured code (gui-adaptation-baseline.md);
+        # use it to split DescriptorInputError into periodicity vs invalid input.
+        if isinstance(exc, md.DescriptorInputError):
+            code = getattr(exc, "code", "")
+            if code == "unsupported_periodicity":
+                return AppError("UNSUPPORTED_PERIODICITY", str(exc))
+            if code and code != "invalid_input":
+                return AppError("INVALID_DATASET", f"[{code}] {exc}")
+            return AppError("INVALID_DATASET", str(exc))
         for exc_type, code in _ERROR_MAP:
             if isinstance(exc, exc_type):
                 return AppError(code, str(exc))

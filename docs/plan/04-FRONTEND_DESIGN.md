@@ -22,26 +22,31 @@ frontend/src/
 └── pages/  Overview.tsx Explore.tsx Descriptors.tsx Results.tsx Settings.tsx About.tsx
 ```
 
-## 2. 布局骨架（ADR-6：无 Jobs Tab）
+## 2. 布局骨架（2026-08 ADR-18：恢复 mockup 右栏与 Jobs Tab；原 ADR-6 裁决被取代）
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
-│ M Left: Sidebar 240px          Jobs② ⚙        (自定义标题栏区) │
+│ M Left: Sidebar 240px          Jobs② ⚙        (原生标题栏)     │
 ├──────────────┬───────────────────────────────────────────────┤
-│ DATASETS     │ ContextBar（数据集名 · 格式 · N structures ·   │
-│ 搜索 + 列表   │ 元素 · PBC · E/F/V 徽标 · 路径）               │
-│ + Add        ├───────────────────────────────────────────────┤
-│              │ Tabs: Overview | Explore | Descriptors | Results│
-│              ├───────────────────────────────────────────────┤
-│              │ Main Workspace（页面内容 [+ Inspector 280px]）  │
-├──────────────┴───────────────────────────────────────────────┤
-│ StatusBar: ● Ready | MDescriptor 0.2.3 | CPU n threads | Mem  │
+│ DATASETS 〈  │ ContextBar 两行：大标题 + chips（格式 · N ·    │
+│ 搜索 + Add   │ 元素 · PBC · E/F/V ✓chips · 路径 · ⋯菜单）     │
+│ 数据集列表    ├───────────────────────────────────────────────┤
+│              │ Tabs: Overview | Explore | Descriptors |       │
+│ Dataset      │        Results | Jobs                          │
+│ Storage 合计  ├──────────────────────────────┬────────────────┤
+│              │ Main Workspace（页面内容）     │ RightRail 264px │
+│              │ 高度自适应视口，默认零滚动条    │ Quick Actions   │
+│              │ [+ Inspector]                 │ Recent Jobs ×3  │
+├──────────────┴──────────────────────────────┴────────────────┤
+│ StatusBar: ● Ready | MDescriptor 0.3.2 | CPU n threads        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-- Jobs 徽标 + Drawer（M4）：Drawer 展示运行中任务、进度条 4–6px、Cancel。
+- Jobs 徽标 + Drawer（M4）：Drawer 展示运行中任务、进度条 4–6px、Cancel；Jobs Tab 展示 `job.list` 历史 + 会话实时事件合并表。
+- RightRail 264px 常驻（Quick Actions 4 项 + Recent Jobs 最近 3 条，Running/Queued 优先），<1280px 宽自动隐藏。
 - Inspector 280px，可折叠（`>` 按钮），<1280px 宽自动折叠。
-- 窗口 min 1280×760，默认 1440×900。
+- 窗口 min 1280×760，默认 1440×900；内容按视口高度自适应，默认零滚动条，过小窗口回退为面板内滚动。
+- dev 预览：`frontend/preview.html`（mock IPC，浏览器直接验证布局，不入产物）。
 
 ## 3. 状态（Zustand，ADR-17）
 

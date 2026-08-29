@@ -9,7 +9,7 @@ import numpy as np
 
 from ..errors import AppError, INVALID_DATASET, INVALID_PARAMS
 from .base import DatasetAdapter, DatasetFrame, ScanMeta, pbc_summary
-from .deepmd import _SYMBOL_TO_Z
+from .deepmd_symbols import _SYMBOL_TO_Z
 
 _KEY_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"|(\w+)\s*=\s*(\S+)')
 _Z_RE = re.compile(r"^([A-Za-z]{1,3})")

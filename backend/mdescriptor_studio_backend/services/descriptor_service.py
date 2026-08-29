@@ -126,7 +126,7 @@ class DescriptorService:
                 run_id,
                 ds_id,
                 name,
-                info.get("version"),  # no per-descriptor version in 0.2.3 (engine-api-report §5)
+                (schema or {}).get("descriptor_version") or info.get("version"),
                 info.get("version"),
                 canonical,
                 scope,
@@ -275,7 +275,7 @@ class DescriptorService:
             "run_id": run_id,
             "descriptor": name,
             "engine_version": self.engine_version,
-            "descriptor_version": self.engine_version,  # no per-descriptor version in 0.2.3
+            "descriptor_version": (self.adapter.schema(name).get("descriptor_version") or self.engine_version),
             "descriptor_info_schema": self.adapter.runtime_info().get("descriptor_info_schema_version"),
             "configuration": parameters,
             "dataset_id": row["id"],

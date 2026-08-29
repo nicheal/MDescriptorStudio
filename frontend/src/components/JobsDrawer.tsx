@@ -1,18 +1,12 @@
 // Jobs entry: top-right badge + right Drawer with live progress & cancel (ADR-6).
+// Full history lives on the Jobs page (UI.png layout pass); Recent Jobs rail → View All.
 import { useState } from "react";
 import { Badge, Button, Drawer, Empty, Popconfirm, Progress, Typography } from "antd";
 import { Clock16Regular, Dismiss16Regular } from "@fluentui/react-icons";
 import SettingsDrawer from "./SettingsDrawer";
 import { ipc } from "../ipc/client";
-import { useJobs } from "../stores/jobs";
+import { JOB_TYPE_LABEL, useJobs } from "../stores/jobs";
 import { useWorkspace } from "../stores/workspace";
-
-const TYPE_LABEL: Record<string, string> = {
-  "dataset.register": "Dataset scan & statistics",
-  "dataset.statistics": "Dataset statistics",
-  "descriptor.compute": "Descriptor compute",
-  "analysis.pca": "PCA",
-};
 
 export default function JobsDrawer() {
   const { runningJobs } = useWorkspace();
@@ -23,13 +17,11 @@ export default function JobsDrawer() {
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-      <Button type="text" onClick={() => setOpen(true)}>
-        <Badge count={runningJobs} size="small" offset={[2, -2]}>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Clock16Regular /> Jobs
-          </span>
-        </Badge>
-      </Button>
+      <Badge count={runningJobs} size="small" offset={[0, 2]}>
+        <Button icon={<Clock16Regular />} onClick={() => setOpen(true)}>
+          Jobs
+        </Button>
+      </Badge>
       <SettingsDrawer />
       <Drawer title="JOBS" placement="right" width={380} open={open} onClose={() => setOpen(false)}>
         {listed.length === 0 ? (
@@ -50,7 +42,7 @@ function JobCard({ job }: { job: ReturnType<typeof useJobs.getState>["jobs"][str
     <div style={{ borderBottom: "1px solid #EAECF0", padding: "12px 4px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <Typography.Text strong style={{ fontSize: 13 }}>
-          {TYPE_LABEL[job.job_type] ?? job.job_type}
+          {JOB_TYPE_LABEL[job.job_type] ?? job.job_type}
         </Typography.Text>
         {running ? (
           <Popconfirm

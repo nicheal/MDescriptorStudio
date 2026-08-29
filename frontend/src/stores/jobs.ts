@@ -12,7 +12,15 @@ export interface JobState {
   total: number | null;
   message: string | null;
   error: { code: string; message: string } | null;
+  created_at?: string;
 }
+
+export const JOB_TYPE_LABEL: Record<string, string> = {
+  "dataset.register": "Dataset scan & statistics",
+  "dataset.statistics": "Dataset statistics",
+  "descriptor.compute": "Descriptor compute",
+  "analysis.pca": "PCA",
+};
 
 interface JobsStore {
   jobs: Record<string, JobState>;
@@ -35,6 +43,7 @@ export function trackJob(jobId: string, jobType: string) {
         total: null,
         message: null,
         error: null,
+        created_at: new Date().toISOString(),
       },
     },
     order: [jobId, ...st.order.filter((j) => j !== jobId)],
@@ -106,5 +115,19 @@ export function fromJobRow(row: JobRow): JobState {
     total: row.total,
     message: row.message,
     error: row.error ? { code: row.error, message: row.error } : null,
+    created_at: row.created_at,
   };
+}
+
+// Live session jobs overlay the persisted job.list history (same id wins).
+export function mergeJobRows(rows: JobRow[], live: JobState[]): JobState[] {
+  const byId = new Map<string, JobState>();
+  for (const row of rows) {
+    const j = fromJobRow(row);
+    byId.set(j.id, j);
+  }
+  for (const j of live) byId.set(j.id, { ...byId.get(j.id), ...j });
+  return [...byId.values()].sort((a, b) =>
+    (b.created_at ?? "").localeCompare(a.created_at ?? ""),
+  );
 }

@@ -6,6 +6,7 @@ error frame for unknown method, protocol version mismatch guard.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -63,11 +64,11 @@ def test_handshake_system_info_and_errors(tmp_path: Path) -> None:
     assert ready["event"] == "backend.ready", ready
     assert ready["protocol_version"] == 1
     assert ready["data"]["backend_version"]
-    assert ready["data"]["mdescriptor_version"] == "0.2.3"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", ready["data"]["mdescriptor_version"])
 
     info = bp.request(1, "system.info")
     assert info["result"]["protocol_version"] == 1
-    assert info["result"]["mdescriptor_version"] == "0.2.3"
+    assert info["result"]["mdescriptor_version"] == ready["data"]["mdescriptor_version"]
 
     bad = bp.request(2, "no.such.method")
     assert bad["error"]["code"] == "INVALID_PARAMS"

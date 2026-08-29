@@ -83,10 +83,23 @@ def test_register_statistics_frame_flow(tmp_path: Path) -> None:
         dup = bp.request(16, "dataset.register", {"path": str(xyz)})
         assert dup["error"]["code"] == "INVALID_DATASET"
 
-        # remove
-        rm = bp.request(17, "dataset.remove", {"id": ds_id})
-        assert rm["result"] == {"ok": True}
+        # rename: returns updated meta, trims whitespace, persists to dataset.list
+        rn = bp.request(17, "dataset.rename", {"id": ds_id, "name": "  Renamed XYZ  "})
+        assert rn["result"]["name"] == "Renamed XYZ"
         listing = bp.request(18, "dataset.list")
+        assert next(m for m in listing["result"] if m["id"] == ds_id)["name"] == "Renamed XYZ"
+        # blank name rejected, unknown id rejected
+        blank = bp.request(19, "dataset.rename", {"id": ds_id, "name": "   "})
+        assert blank["error"]["code"] == "INVALID_PARAMS"
+        ghost = bp.request(20, "dataset.rename", {"id": "ds_missing", "name": "x"})
+        assert ghost["error"]["code"] == "DATASET_NOT_FOUND"
+
+        # remove
+        rm = bp.request(21, "dataset.remove", {"id": ds_id})
+        assert rm["result"] == {"ok": True}
+        listing = bp.request(22, "dataset.list")
         assert len(listing["result"]) == 1
+        # the surviving dataset keeps its (renamed) sibling untouched by id
+        assert all(m["id"] != ds_id for m in listing["result"])
     finally:
         assert bp.close() == 0

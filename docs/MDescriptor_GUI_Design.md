@@ -1783,16 +1783,17 @@ GUI Backend：
 python backend/main.py
 ```
 
-Frontend：
+仅启动前端（浏览器开发）：
+
+```bash
+npm run web:dev
+```
+
+启动 Tauri 桌面开发模式（根目录执行）：
 
 ```bash
 npm run dev
-```
-
-Tauri：
-
-```bash
-npm run tauri dev
+# 或：npm run tauri dev
 ```
 
 开发阶段不运行 PyInstaller。

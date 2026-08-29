@@ -1,8 +1,9 @@
-// Overview page (mockup, ADR-7 rulings): summary, element donut, 4 histograms,
-// property availability matrix, quick actions, recent jobs (M4).
+// Overview page (UI.png layout pass): Dataset Statistics + Element Distribution
+// column, 2×2 histograms (E/atom, Force, Volume, Max|Force|), Property
+// Availability. Sized to the viewport — no scrollbar at default window size.
+// Quick Actions / Recent Jobs live in the persistent right rail (RightRail.tsx).
 import { useCallback, useEffect, useState } from "react";
-import { App as AntApp, Button, Card, Descriptions, Space, Table, Tag, Typography } from "antd";
-import { Cube16Regular, Grid16Regular, ArrowSync16Regular } from "@fluentui/react-icons";
+import { Typography } from "antd";
 import ReactECharts from "echarts-for-react";
 import Histogram from "../components/Histogram";
 import { ipc } from "../ipc/client";
@@ -11,10 +12,8 @@ import { elementColor } from "../util/elements";
 import type { Stats } from "../types/protocol";
 
 export default function Overview() {
-  const { message } = AntApp.useApp();
   const st = useWorkspace();
   const d = activeDataset(st);
-  const onGo = st.setPage;
   const [stats, setStats] = useState<Stats | null>(null);
   const [recalculating, setRecalculating] = useState(false);
 
@@ -40,7 +39,7 @@ export default function Overview() {
     } catch (e) {
       console.error(e);
     }
-  }, [d]);
+  }, [d, st.statsTick]);
 
   useEffect(() => {
     setStats(null);
@@ -48,172 +47,237 @@ export default function Overview() {
   }, [loadStats]);
 
   if (!d) {
-    return (
-      <EmptyState />
-    );
+    return <EmptyState />;
   }
 
   return (
-    <div>
+    <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
       {!d.cache_valid && (
         <Typography.Paragraph
           type="warning"
-          style={{ background: "#FFF7E6", border: "1px solid #F0A000", padding: "6px 12px", borderRadius: 6 }}
+          style={{ background: "#FFF7E6", border: "1px solid #F0A000", padding: "4px 12px", borderRadius: 6, marginBottom: 0 }}
         >
           ⚠ Dataset changed on disk since it was scanned. Statistics may be outdated.
         </Typography.Paragraph>
       )}
       {recalculating && (
-        <Typography.Paragraph type="secondary">Recomputing statistics…</Typography.Paragraph>
+        <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+          Recomputing statistics…
+        </Typography.Paragraph>
       )}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 280px", gap: 16 }}>
-        <Section title="Dataset Statistics" span>
-          <Descriptions
-            column={1}
-            size="small"
-            colon={false}
-            labelStyle={{ width: 130, color: "#616161", fontSize: 13 }}
-            contentStyle={{ fontSize: 13, fontVariantNumeric: "tabular-nums" }}
-          >
-            <Item k="Structures">{d.number_of_frames.toLocaleString()}</Item>
-            <Item k="Atoms">{stats ? stats.atoms_total.toLocaleString() : "—"}</Item>
-            <Item k="Elements">
-              <Space size={4}>
-                {(stats?.elements ?? []).map((e) => (
-                  <Tag
-                    key={e.symbol}
-                    style={{ color: "#242424" }}
-                    icon={
-                      <span
-                        style={{
-                          display: "inline-block",
-                          width: 8,
-                          height: 8,
-                          borderRadius: 4,
-                          background: elementColor(e.symbol),
-                          marginRight: 4,
-                        }}
-                      />
-                    }
-                  >
-                    {e.symbol}
-                  </Tag>
-                ))}
-              </Space>
-            </Item>
-            <Item k="Properties">
-              {[
-                d.properties.energy?.per_structure && "Energy",
-                d.properties.forces?.per_atom && "Force",
-                d.properties.virial?.per_structure && "Virial",
-              ]
-                .filter(Boolean)
-                .join(", ") || "—"}
-            </Item>
-            <Item k="Format">{d.format}</Item>
-            <Item k="PBC">{d.periodicity.flags.join("/") || "—"}</Item>
-            <Item k="Created">{new Date(d.created_at).toLocaleString()}</Item>
-            <Item k="File Size">{d.file_size ? formatSize(d.file_size) : "—"}</Item>
-          </Descriptions>
-        </Section>
+      <Typography.Text style={{ fontSize: 14, fontWeight: 600 }}>Overview</Typography.Text>
 
-        <Section title="Distributions">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <Histogram title="Energy / Atom" unit="eV" hist={stats?.energy_per_atom ?? null} />
-            <Histogram title="Force Magnitude" unit="eV/Å" hist={stats?.force_magnitude ?? null} color="#00B8A9" />
-            <Histogram title="Volume" unit="Å³" hist={stats?.volume ?? null} color="#7A5AF8" />
-            <Histogram title="Atoms / structure" hist={stats?.atoms_per_structure ?? null} color="#2ECC71" />
-          </div>
-        </Section>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <Section title="Quick Actions">
-            <Space direction="vertical" style={{ width: "100%" }}>
-              <Button block icon={<Cube16Regular />} onClick={() => onGo("explore")}>
-                Explore Structures
-              </Button>
-              <Button block icon={<Grid16Regular />} onClick={() => onGo("descriptors")}>
-                Compute Descriptors
-              </Button>
-              <Button
-                block
-                icon={<ArrowSync16Regular />}
-                onClick={async () => {
-                  await ipc.request("job.list", {});
-                  void loadStats();
-                  message.info("Statistics refreshed");
-                }}
-              >
-                Dataset Statistics
-              </Button>
-            </Space>
-          </Section>
-          <Section title="Property Availability">
+      <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 12 }}>
+        {/* column 1: statistics, element donut, property availability */}
+        <div style={{ width: "32%", minWidth: 290, display: "flex", flexDirection: "column", gap: 12 }}>
+          <Panel title="Dataset Statistics">
+            <StatsTable d={d} stats={stats} />
+          </Panel>
+          <Panel title="Element Distribution" style={{ flex: 1, minHeight: 110 }}>
+            <ElementDonut stats={stats} />
+          </Panel>
+          <Panel title="Property Availability">
             <PropertyTable stats={stats} />
-          </Section>
+          </Panel>
+        </div>
+
+        {/* columns 2–3: 2×2 histograms (all in the primary series color, per UI.png) */}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+          <Panel style={{ flex: 1, minHeight: 140 }}>
+            <Histogram title="Energy / Atom" unit="eV" hist={stats?.energy_per_atom ?? null} />
+          </Panel>
+          <Panel style={{ flex: 1, minHeight: 140 }}>
+            <Histogram title="Volume" unit="Å³" hist={stats?.volume ?? null} />
+          </Panel>
+        </div>
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+          <Panel style={{ flex: 1, minHeight: 140 }}>
+            <Histogram title="Force Magnitude" unit="eV/Å" hist={stats?.force_magnitude ?? null} />
+          </Panel>
+          <Panel style={{ flex: 1, minHeight: 140 }}>
+            <Histogram title="Max |Force|" unit="eV/Å" hist={stats?.max_force ?? null} />
+          </Panel>
         </div>
       </div>
-      {stats && stats.elements.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <Section title="Element Distribution">
-            <ElementDonut stats={stats} />
-          </Section>
-        </div>
-      )}
     </div>
   );
 }
 
-function Item({ k, children }: { k: string; children: React.ReactNode }) {
+function Panel({
+  title,
+  children,
+  style,
+}: {
+  title?: string;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}) {
   return (
-    <Descriptions.Item label={k} key={k}>
-      {children}
-    </Descriptions.Item>
+    <div
+      style={{
+        background: "#FFFFFF",
+        border: "1px solid #EAECF0",
+        borderRadius: 6,
+        padding: "10px 12px",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+        overflow: "hidden",
+        ...style,
+      }}
+    >
+      {title && (
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#242424", paddingBottom: 6 }}>{title}</div>
+      )}
+      <div style={{ flex: 1, minHeight: 0 }}>{children}</div>
+    </div>
   );
 }
 
-function Section({ title, children, span }: { title: string; children: React.ReactNode; span?: boolean }) {
-  return (
-    <Card
-      size="small"
-      title={title}
-      styles={{ header: { borderBottom: "1px solid #EAECF0", minHeight: 36 } }}
-      style={{ gridColumn: span ? "1 / 2" : undefined }}
+function StatsTable({
+  d,
+  stats,
+}: {
+  d: NonNullable<ReturnType<typeof activeDataset>>;
+  stats: Stats | null;
+}) {
+  const row = (k: string, v: React.ReactNode) => (
+    <div
+      key={k}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: "3.5px 0",
+        borderBottom: "1px solid #F5F6F8",
+        fontSize: 12.5,
+      }}
     >
-      {children}
-    </Card>
+      <span style={{ color: "#616161", flex: "0 0 auto" }}>{k}</span>
+      <span style={{ color: "#242424", fontVariantNumeric: "tabular-nums", textAlign: "right", minWidth: 0 }}>
+        {v}
+      </span>
+  </div>
+  );
+  return (
+    <div>
+      {row("Structures", d.number_of_frames.toLocaleString())}
+      {row("Atoms", stats ? stats.atoms_total.toLocaleString() : "—")}
+      {row(
+        "Elements",
+        <span style={{ display: "inline-flex", gap: 4 }}>
+          {(stats?.elements ?? []).map((e) => (
+            <span
+              key={e.symbol}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                border: "1px solid #EAECF0",
+                borderRadius: 4,
+                padding: "0 6px",
+                fontSize: 12,
+              }}
+            >
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  background: elementColor(e.symbol),
+                  display: "inline-block",
+                }}
+              />
+              {e.symbol}
+            </span>
+          ))}
+          {!stats && "—"}
+        </span>,
+      )}
+      {row(
+        "Properties",
+        [
+          d.properties.energy?.per_structure && "Energy",
+          d.properties.forces?.per_atom && "Force",
+          d.properties.virial?.per_structure && "Virial",
+        ]
+          .filter(Boolean)
+          .join(", ") || "—",
+      )}
+      {row("Format", d.format.charAt(0).toUpperCase() + d.format.slice(1))}
+      {row("PBC", d.periodicity.flags.join("") || "—")}
+      {row("Created", new Date(d.created_at).toLocaleString())}
+      {row("File Size", d.file_size ? formatSize(d.file_size) : "—")}
+    </div>
   );
 }
 
 function PropertyTable({ stats }: { stats: Stats | null }) {
   const rows = [
-    { key: "energy", label: "Energy", perAtom: stats?.properties.energy.per_atom ?? false, perStruct: stats?.properties.energy.per_structure ?? false },
-    { key: "forces", label: "Force", perAtom: stats?.properties.forces.per_atom ?? false, perStruct: false },
-    { key: "virial", label: "Virial", perAtom: false, perStruct: stats?.properties.virial.per_structure ?? false },
+    {
+      key: "energy",
+      label: "Energy",
+      perAtom: stats?.properties.energy.per_atom ?? false,
+      perStruct: stats?.properties.energy.per_structure ?? false,
+    },
+    {
+      key: "forces",
+      label: "Force",
+      perAtom: stats?.properties.forces.per_atom ?? false,
+      perStruct: false,
+    },
+    {
+      key: "virial",
+      label: "Virial",
+      perAtom: false,
+      perStruct: stats?.properties.virial.per_structure ?? false,
+    },
   ];
-  const ok = <span style={{ color: "#107C10" }}>✓</span>;
+  const ok = <span style={{ color: "#107C10", fontWeight: 600 }}>✓</span>;
   const no = <span style={{ color: "#C9CDD4" }}>—</span>;
   return (
-    <Table
-      size="small"
-      pagination={false}
-      dataSource={rows}
-      columns={[
-        { title: "", dataIndex: "label", key: "label", render: (v: string) => <b style={{ fontSize: 12 }}>{v}</b> },
-        { title: "Per-Atom", dataIndex: "perAtom", key: "perAtom", render: (v: boolean) => (v ? ok : no) },
-        { title: "Per-Structure", dataIndex: "perStruct", key: "perStruct", render: (v: boolean) => (v ? ok : no) },
-      ]}
-    />
+    <div style={{ fontSize: 12.5 }}>
+      <div style={{ display: "flex", alignItems: "center", padding: "2px 0 4px", color: "#616161", fontSize: 12 }}>
+        <span style={{ flex: 1.4 }} />
+        <span style={{ flex: 1, textAlign: "center" }}>Per-Atom</span>
+        <span style={{ flex: 1, textAlign: "center" }}>Per-Structure</span>
+      </div>
+      {rows.map((r) => (
+        <div
+          key={r.key}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            padding: "3px 0",
+            borderTop: "1px solid #F5F6F8",
+          }}
+        >
+          <span style={{ flex: 1.4, fontWeight: 600, fontSize: 12 }}>{r.label}</span>
+          <span style={{ flex: 1, textAlign: "center" }}>{r.perAtom ? ok : no}</span>
+          <span style={{ flex: 1, textAlign: "center" }}>{r.perStruct ? ok : no}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
-function ElementDonut({ stats }: { stats: Stats }) {
+function ElementDonut({ stats }: { stats: Stats | null }) {
+  if (!stats || stats.elements.length === 0) {
+    return (
+      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8A8A", fontSize: 12 }}>
+        Statistics pending…
+      </div>
+    );
+  }
+  const total = stats.elements.reduce((s, e) => s + e.count, 0);
   const option = {
     tooltip: { trigger: "item", formatter: "{b}: {c} ({d}%)" },
     series: [
       {
         type: "pie",
-        radius: ["45%", "72%"],
+        radius: ["48%", "74%"],
+        center: ["50%", "50%"],
         label: { show: false },
         data: stats.elements.map((e) => ({
           name: e.symbol,
@@ -224,7 +288,31 @@ function ElementDonut({ stats }: { stats: Stats }) {
       },
     ],
   };
-  return <ReactECharts option={option} style={{ height: 200 }} notMerge />;
+  return (
+    <div style={{ height: "100%", minHeight: 0, display: "flex", alignItems: "center", gap: 8 }}>
+      <ReactECharts option={option} style={{ flex: 1, height: "100%", minWidth: 0 }} notMerge />
+      <div style={{ flex: "0 0 104px", display: "flex", flexDirection: "column", gap: 8 }}>
+        {stats.elements.map((e) => (
+          <div key={e.symbol} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+            <span
+              style={{
+                width: 9,
+                height: 9,
+                borderRadius: 5,
+                background: elementColor(e.symbol),
+                display: "inline-block",
+                flex: "0 0 9px",
+              }}
+            />
+            <span style={{ color: "#242424" }}>{e.symbol}</span>
+            <span style={{ marginLeft: "auto", color: "#616161", fontVariantNumeric: "tabular-nums" }}>
+              {((e.count / total) * 100).toFixed(1)}%
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function EmptyState() {

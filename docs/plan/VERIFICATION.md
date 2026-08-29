@@ -1,7 +1,7 @@
 # 验收证据记录（对照 PROJECT_PLAN v0.3 §5 里程碑验收标准）
 
-> 日期：2026-08-29（同日对抗式审查后更新）
-> 结论：M0–M5 全部实现。对抗审查（红队攻击 + 蓝队审计）发现的 8 个缺陷已修复并有回归测试；标注 [GUI] 的项目经实机窗口操作验证；标注 [TEST] 的由 `pytest tests/`（17 项，全绿）经同一 stdio IPC 层验证；标注 [BUILD] 的为构建产物验证。
+> 日期：2026-08-29（同日对抗式审查后更新；同日引擎 0.2.3→0.2.5 升级复核，见 engine-known-issues.md）
+> 结论：M0–M5 全部实现。对抗审查（红队攻击 + 蓝队审计）发现的 8 个缺陷已修复并有回归测试；标注 [GUI] 的项目经实机窗口操作验证；标注 [TEST] 的由 `pytest tests/`（27 项，全绿，0.2.5 下回归）经同一 stdio IPC 层验证；标注 [BUILD] 的为构建产物验证。
 
 ## M0 走通骨架
 
@@ -90,3 +90,13 @@
 | 附 | engine.update 取消后 pip 孤儿进程；heatmap max_features 无上限 | 取消即 kill pip；硬上限 256 |
 
 蓝队审计确认：产物（59MB setup.exe / 56MB sidecar）、12,480 帧数据集、0.2.3 三处一致、16 错误码逐字对齐、ADR-6/7/17 与 §57 暂缓清单经 grep 证实无违规、无硬性造假声明。
+
+## DeepMD 导入迁移 dpdata（2026-08-29，ADR-19）
+
+`datasets/deepmd.py` 重写为 `dpdata.LabeledSystem/System(fmt="deepmd/npy")` 封装，抛弃自研 set.*/npy 解析；extxyz 自研解析保留。语义变化：仅支持 `type.raw + set.*/coord.npy`（平铺根目录 npy 弃用），box.npy 或 `nopbc` 标记必需，无 energy.npy 走无标注路径，type_map.raw 缺失/非元素名拒绝（描述符需真实 Z）。PyInstaller 增加 `collect_all("dpdata")`（插件经动态 importlib 加载，静态分析不可见）。
+
+| 验证项 | 证据 |
+|---|---|
+| 全量回归 | [TEST] pytest 27 项全绿（含新增 4 项：无标注+nopbc、缺 type_map 拒绝、平铺布局弃用、dpdata 语义下原 multi-set/scan/roundtrip 不回归） |
+| 真实数据集端到端 | [TEST] test_real_deepmd_dataset：C50Cl1（256 帧，51 原子）经后端进程 register→list→frame(128)→statistics 全链路通过 |
+| 边界探针 | 无标注（props 全 False、frame.energy=None）、nopbc 标记（isolated）、float32 帧转 float64、缺 box/缺 type_map 均转 INVALID_DATASET 且信息可读 |

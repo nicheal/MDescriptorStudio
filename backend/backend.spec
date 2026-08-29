@@ -8,7 +8,9 @@
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = [], [], []
-for pkg in ("mdescriptor", "mdescriptor_studio_backend"):
+# dpdata (ADR-19: DeepMD import) registers format plugins via dynamic
+# importlib imports — static analysis alone would miss them.
+for pkg in ("mdescriptor", "mdescriptor_studio_backend", "dpdata"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

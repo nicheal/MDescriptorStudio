@@ -1,25 +1,36 @@
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { App as AntApp, Button, Space } from "antd";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  Clock16Regular,
+  Grid16Regular,
+  Image16Regular,
+  Options16Regular,
+  Sparkle16Regular,
+} from "@fluentui/react-icons";
 import Sidebar from "./components/layout/Sidebar";
 import ContextBar from "./components/layout/ContextBar";
 import StatusBar from "./components/layout/StatusBar";
+import RightRail from "./components/layout/RightRail";
 import JobsDrawer from "./components/JobsDrawer";
 import Overview from "./pages/Overview";
 import Explore from "./pages/Explore";
 import Descriptors from "./pages/Descriptors";
 import Results from "./pages/Results";
+import Jobs from "./pages/Jobs";
 import { ipc } from "./ipc/client";
 import { useWorkspace } from "./stores/workspace";
 import { wireJobEvents } from "./stores/jobs";
 import { useEngineUpdate, wireEngineUpdate } from "./stores/engineUpdate";
 import type { DatasetMeta } from "./types/protocol";
+import { APP_ICON_URL } from "./brand";
 
-const TABS: [string, string][] = [
-  ["overview", "Overview"],
-  ["explore", "Explore"],
-  ["descriptors", "Descriptors"],
-  ["results", "Results"],
+const TABS: { key: "overview" | "explore" | "descriptors" | "results" | "jobs"; label: string; icon: ReactNode }[] = [
+  { key: "overview", label: "Overview", icon: <Grid16Regular /> },
+  { key: "explore", label: "Explore", icon: <Image16Regular /> },
+  { key: "descriptors", label: "Descriptors", icon: <Sparkle16Regular /> },
+  { key: "results", label: "Results", icon: <Options16Regular /> },
+  { key: "jobs", label: "Jobs", icon: <Clock16Regular /> },
 ];
 
 export default function App() {
@@ -132,8 +143,9 @@ export default function App() {
           const info = await ipc.request<{
             mdescriptor_version: string;
             mdescriptor_api_version: number;
+            cpu_threads?: number;
           }>("system.info");
-          setBackendReady(info.mdescriptor_version);
+          setBackendReady(info.mdescriptor_version, info.cpu_threads ?? null);
           await refreshDatasets();
           // engine update check (PyPI) — non-blocking, UI notifies when available
           wireEngineUpdate();
@@ -185,7 +197,16 @@ export default function App() {
           gap: 8,
         }}
       >
-        <div style={{ fontSize: 18, fontWeight: 600 }}>MDescriptor Studio</div>
+        <img
+          src={APP_ICON_URL}
+          alt="MDescriptor Studio"
+          style={{
+            width: 96,
+            height: 96,
+            objectFit: "contain",
+            display: "block",
+          }}
+        />
         <div style={{ color: "#616161" }}>
           {backendStatus === "starting" ? "Starting backend…" : "Backend exited. Restart the app."}
         </div>
@@ -206,22 +227,16 @@ export default function App() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
-          <span
+          <img
+            src={APP_ICON_URL}
+            alt="MDescriptor Studio"
             style={{
-              width: 22,
-              height: 22,
-              borderRadius: 5,
-              background: "#0F6CBD",
-              color: "#fff",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 13,
+              width: 28,
+              height: 28,
+              objectFit: "contain",
+              display: "block",
             }}
-          >
-            M
-          </span>
-          MDescriptor Studio
+          />
         </div>
         <JobsDrawer />
       </div>
@@ -238,30 +253,47 @@ export default function App() {
               gap: 4,
             }}
           >
-            {TABS.map(([key, label]) => (
+            {TABS.map((tab) => (
               <button
-                key={key}
-                onClick={() => setPage(key as typeof page)}
+                key={tab.key}
+                onClick={() => setPage(tab.key)}
                 style={{
-                  padding: "10px 14px",
+                  padding: "9px 14px",
                   border: "none",
                   background: "transparent",
                   cursor: "pointer",
                   fontSize: 14,
-                  color: page === key ? "#0F6CBD" : "#616161",
-                  fontWeight: page === key ? 600 : 400,
-                  borderBottom: page === key ? "2px solid #0F6CBD" : "2px solid transparent",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  color: page === tab.key ? "#0F6CBD" : "#616161",
+                  fontWeight: page === tab.key ? 600 : 400,
+                  borderBottom: page === tab.key ? "2px solid #0F6CBD" : "2px solid transparent",
                 }}
               >
-                {label}
+                {tab.icon}
+                {tab.label}
               </button>
             ))}
           </div>
-          <div style={{ flex: 1, overflow: "auto", padding: "20px 24px" }}>
-            {page === "overview" && <Overview />}
-            {page === "explore" && <Explore />}
-            {page === "descriptors" && <Descriptors />}
-            {page === "results" && <Results />}
+          {/* content + persistent right rail; the pane scrolls only when a
+              page's minimum content exceeds the viewport (default: it fits) */}
+          <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+            <div
+              style={{
+                flex: 1,
+                minWidth: 0,
+                overflow: "auto",
+                padding: "12px 24px 16px",
+              }}
+            >
+              {page === "overview" && <Overview />}
+              {page === "explore" && <Explore />}
+              {page === "descriptors" && <Descriptors />}
+              {page === "results" && <Results />}
+              {page === "jobs" && <Jobs />}
+            </div>
+            <RightRail />
           </div>
         </div>
       </div>

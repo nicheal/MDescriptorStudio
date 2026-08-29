@@ -47,6 +47,7 @@ export default function Explore() {
         const f = await ipc.request<FramePayload>("dataset.frame", { id: d.id, index: idx });
         setFrame(f);
         st.setActiveFrame(idx);
+        setJumpTo(null);
       } catch (e) {
         console.error(e);
       } finally {
@@ -170,10 +171,20 @@ export default function Explore() {
             max={total - 1}
             value={jumpTo ?? idx}
             onChange={(v) => setJumpTo(v)}
-            onPressEnter={() => jumpTo !== null && void fetchFrame(jumpTo)}
+            onStep={(v) => void fetchFrame(v)}
+            onPressEnter={() => {
+              if (jumpTo !== null) void fetchFrame(jumpTo);
+            }}
             style={{ width: 90 }}
           />
-          <Button size="small" icon={<ArrowFit16Regular />} onClick={() => viewerRef.current?.zoomTo()} />
+          <Button
+            size="small"
+            icon={<ArrowFit16Regular />}
+            onClick={() => {
+              viewerRef.current?.zoomTo();
+              viewerRef.current?.render();
+            }}
+          />
         </Space>
         {loading && <Typography.Text type="secondary">loading…</Typography.Text>}
       </div>

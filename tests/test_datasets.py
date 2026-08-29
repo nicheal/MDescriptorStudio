@@ -42,6 +42,54 @@ def test_deepmd_frame_roundtrip(tmp_path: Path) -> None:
     assert abs(float(np.linalg.det(f.cell)) - 9.97**3) < 1.0
 
 
+def test_deepmd_unlabeled_and_nopbc(tmp_path: Path) -> None:
+    """dpdata System path (no energy.npy) + `nopbc` marker (ADR-19 semantics)."""
+    d = tmp_path / "d"
+    write_deepmd(d, 3, 16, seed=21)
+    for name in ("energy.npy", "force.npy", "virial.npy"):
+        (d / "set.000" / name).unlink()
+    a = create_adapter(d)
+    meta = a.scan()
+    assert meta.number_of_frames == 3
+    assert meta.properties == {"energy": False, "forces": False, "virial": False}
+    f = a.get_frame(1)
+    assert f.energy is None and f.forces is None and f.virial is None
+
+    d2 = tmp_path / "gas"
+    write_deepmd(d2, 2, 16, seed=22)
+    (d2 / "set.000" / "box.npy").unlink()
+    (d2 / "nopbc").write_text("", encoding="utf-8")
+    a2 = create_adapter(d2)
+    assert a2.scan().periodicity["isolated"] is True
+    assert a2.get_frame(0).pbc.tolist() == [False, False, False]
+
+
+def test_deepmd_missing_type_map_rejected(tmp_path: Path) -> None:
+    """dpdata would fall back to artificial Type_N names; descriptors need real Z."""
+    d = tmp_path / "d"
+    write_deepmd(d, 2, 16, seed=23)
+    (d / "type_map.raw").unlink()
+    try:
+        create_adapter(d)
+        raise AssertionError("should have raised")
+    except AppError as e:
+        assert e.code == "INVALID_DATASET"
+        assert "type_map.raw" in e.message
+
+
+def test_deepmd_flat_root_layout_unsupported(tmp_path: Path) -> None:
+    """The self-made flat coord.npy-at-root layout was retired with ADR-19."""
+    d = tmp_path / "d"
+    write_deepmd(d, 2, 16, seed=24)
+    for p in (d / "set.000").glob("*.npy"):
+        p.replace(d / p.name)
+    try:
+        detect_format(d)
+        raise AssertionError("should have raised")
+    except AppError as e:
+        assert e.code == "UNSUPPORTED_FORMAT"
+
+
 def test_extxyz_random_access(tmp_path: Path) -> None:
     p = tmp_path / "d.xyz"
     write_extxyz(p, 7, 16, seed=9)

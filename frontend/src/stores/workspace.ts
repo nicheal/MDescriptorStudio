@@ -4,7 +4,7 @@ import { ipc } from "../ipc/client";
 import type { DatasetMeta } from "../types/protocol";
 
 export type BackendStatus = "starting" | "ready" | "error";
-export type Page = "overview" | "explore" | "descriptors" | "results";
+export type Page = "overview" | "explore" | "descriptors" | "results" | "jobs";
 
 interface WorkspaceState {
   backendStatus: BackendStatus;
@@ -16,8 +16,10 @@ interface WorkspaceState {
   datasets: DatasetMeta[];
   runningJobs: number;
   page: Page;
+  // bumped by Quick Actions → Overview refetches dataset statistics
+  statsTick: number;
 
-  setBackendReady: (engineVersion: string | null) => void;
+  setBackendReady: (engineVersion: string | null, cpuThreads?: number | null) => void;
   setBackendStarting: () => void;
   setBackendError: () => void;
   setDatasets: (datasets: DatasetMeta[]) => void;
@@ -26,6 +28,7 @@ interface WorkspaceState {
   setActiveRun: (id: string | null) => void;
   setRunningJobs: (n: number) => void;
   setPage: (p: Page) => void;
+  bumpStatsTick: () => void;
 }
 
 export const useWorkspace = create<WorkspaceState>((set) => ({
@@ -38,8 +41,10 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   datasets: [],
   runningJobs: 0,
   page: "overview",
+  statsTick: 0,
 
-  setBackendReady: (engineVersion) => set({ backendStatus: "ready", engineVersion }),
+  setBackendReady: (engineVersion, cpuThreads) =>
+    set((st) => ({ backendStatus: "ready", engineVersion, cpuThreads: cpuThreads ?? st.cpuThreads })),
   setBackendStarting: () => set({ backendStatus: "starting", engineVersion: null }),
   setBackendError: () => set({ backendStatus: "error" }),
   setDatasets: (datasets) => set({ datasets }),
@@ -57,7 +62,18 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   setActiveRun: (id) => set({ activeDescriptorRunId: id }),
   setRunningJobs: (n) => set({ runningJobs: n }),
   setPage: (p) => set({ page: p }),
+  bumpStatsTick: () => set((st) => ({ statsTick: st.statsTick + 1 })),
 }));
 
 export const activeDataset = (st: WorkspaceState): DatasetMeta | undefined =>
   st.datasets.find((d) => d.id === st.activeDatasetId);
+
+/** Re-pull dataset.list; falls back to the first dataset when the active one is gone. */
+export async function refetchDatasets(): Promise<void> {
+  const list = await ipc.request<DatasetMeta[]>("dataset.list");
+  const st = useWorkspace.getState();
+  st.setDatasets(list);
+  if (st.activeDatasetId && !list.some((d) => d.id === st.activeDatasetId)) {
+    st.setActiveDataset(list[0]?.id ?? null);
+  }
+}

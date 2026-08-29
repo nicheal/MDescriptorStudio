@@ -14,7 +14,7 @@ def test_check_update_snapshot(tmp_path: Path) -> None:
 
         # snapshot immediately: check runs in a background thread
         snap = bp.request(1, "engine.check_update")["result"]
-        assert snap["installed"] == "0.2.3"
+        assert snap["installed"]
         assert snap["status"] in ("checking", "up_to_date", "available", "error")
 
         # wait for the background check to land an event with a final status
@@ -35,7 +35,7 @@ def test_check_update_snapshot(tmp_path: Path) -> None:
 
         # second call returns the cached snapshot without re-blocking
         again = bp.request(2, "engine.check_update")["result"]
-        assert again["installed"] == "0.2.3"
+        assert again["installed"] == snap["installed"]
 
         # engine.update without any version uses latest (docs/plan/02 §5):
         # submit then cancel immediately so pip never completes an install

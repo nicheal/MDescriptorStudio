@@ -43,7 +43,7 @@ export function SchemaField({
     case "integer":
       return wrap(
         <InputNumber
-          style={{ width: 200 }}
+          style={{ width: "100%", maxWidth: 200 }}
           value={value === undefined || value === null ? (schema.default as number | undefined) : (value as number)}
           precision={0}
           min={schema.minimum ?? schema.exclusiveMinimum}
@@ -53,7 +53,7 @@ export function SchemaField({
     case "number":
       return wrap(
         <InputNumber
-          style={{ width: 200 }}
+          style={{ width: "100%", maxWidth: 200 }}
           value={value === undefined || value === null ? (schema.default as number | undefined) : (value as number)}
           step={0.05}
           min={schema.minimum ?? schema.exclusiveMinimum}
@@ -72,7 +72,7 @@ export function SchemaField({
     case "enum":
       return wrap(
         <Select
-          style={{ width: 240 }}
+          style={{ width: "100%", maxWidth: 240 }}
           value={(value ?? schema.default) as string}
           options={(schema.enum ?? []).map((e) => ({ value: e, label: e }))}
           onChange={(v) => onChange(v)}
@@ -82,7 +82,7 @@ export function SchemaField({
       return wrap(
         <Select
           mode="multiple"
-          style={{ width: 240 }}
+          style={{ width: "100%", maxWidth: 240 }}
           placeholder="elements"
           value={(value as string[]) ?? []}
           options={(elementOptions ?? []).map((e) => ({ value: e, label: e }))}
@@ -93,7 +93,7 @@ export function SchemaField({
       return wrap(
         <Select
           mode="tags"
-          style={{ width: 240 }}
+          style={{ width: "100%", maxWidth: 240 }}
           placeholder="numbers, Enter to add"
           value={((value as unknown[]) ?? (schema.default as unknown[]) ?? []).map(String)}
           onChange={(vs) => onChange(vs.map((v) => Number(v)).filter((n) => !Number.isNaN(n)))}
@@ -103,7 +103,7 @@ export function SchemaField({
     case "model":
       return wrap(
         <Input
-          style={{ width: 320 }}
+          style={{ width: "100%", maxWidth: 320 }}
           placeholder="bundled resource used when empty; or local model path"
           value={(value as string) ?? ""}
           onChange={(e) => onChange(e.target.value || undefined)}
@@ -137,7 +137,11 @@ export function SchemaField({
     }
     default:
       return wrap(
-        <Input style={{ width: 260 }} value={(value as string) ?? ""} onChange={(e) => onChange(e.target.value)} />,
+        <Input
+          style={{ width: "100%", maxWidth: 260 }}
+          value={(value as string) ?? ""}
+          onChange={(e) => onChange(e.target.value)}
+        />,
       );
   }
 }

@@ -14,10 +14,10 @@
 **决策**：代码放工作区根目录，与 `docs/` 并列（frontend / backend / src-tauri / scripts / tests / README.md）；不采用独立子目录；如需迁移可整体挪出。
 **后果**：路径最短，`.venv` 与 `docs/` 天然同仓；设计文档 §47 的目录树按此映射。
 
-## ADR-2 引擎依赖：PyPI 安装，pin `mdescriptor==0.2.3`
+## ADR-2 引擎依赖：PyPI 安装，pin `mdescriptor`（当前 0.2.5）
 
 **背景**：设计文档 §48/§50 的开发模式假设本地 editable 引擎仓库；实际无本地引擎仓库，PyPI 可达且 cp312 wheel 存在。
-**决策**：开发与 Release 一律从 PyPI 安装并 pin `==0.2.3`；按已发布 API 对接（实测完整，见 engine-api-report.md）；升级走 05 文档 §2 四步流程（改 pin → 重跑 probe → diff JSON → 回归）。
+**决策**：开发与 Release 一律从 PyPI 安装并 pin（pin 随引擎更新移动，当前 `==0.2.5`，2026-08-29 由 0.2.3 升级）；按已发布 API 对接（实测完整，见 engine-api-report.md）；升级走 05 文档 §2 四步流程（改 pin → 重跑 probe → diff JSON → 回归）。
 **后果**：不再需要「GUI 侧 schema 兜底」与引擎 Phase 0 需求清单；引擎缺陷走上游 issue。
 
 ## ADR-3 桌面壳：Tauri 2，无浏览器过渡态
@@ -118,16 +118,33 @@
 5. Workspace 持久化：重启恢复 `activeDatasetId`（settings 表），`activeFrameIndex` 归零。
 **后果**：写进 00/03 文档与代码评审基线。
 
+## ADR-18 布局调整：恢复 mockup 右栏与 Jobs Tab（2026-08-29，用户裁决）
+
+**背景**：用户要求按 `docs/UI.png` 调整页面布局，且主内容区默认无滚动条。此前 ADR-6 与附录 #1/#3/#4 曾裁决：无 Jobs Tab、Quick Actions 收进 Overview、Dataset Storage 放 Settings。
+**决策**：恢复 mockup 形态——
+1. 一级导航加 **Jobs Tab**（`job.list` 历史 + 会话内实时事件合并展示；右上徽标 + Drawer 保留）；
+2. **右侧常驻栏**（Quick Actions 4 项 + Recent Jobs 最近 3 条，Running/Queued 优先；窗口 <1280px 自动隐藏）；
+3. 左侧栏可折叠（chevron）、Add Dataset 移到列表上方、底部 Dataset Storage 显示已注册数据集体积合计（无磁盘容量 IPC，不伪造容量条）；
+4. Overview 重排为三列（Statistics + Element Distribution + Property Availability｜2 直方图｜2 直方图，第 4 张直方图换 Max|Force|，直方图统一主色），整体按视口高度自适应，默认窗口（≥1440×900）零滚动条，过小窗口回退为面板内滚动；
+5. Export Dataset Info 以「复制摘要到剪贴板」实现（无文件保存 IPC）；Energy/Atom vs Volume 散点仍按附录 #6 暂缓。
+**后果**：附录表 #1/#3/#4 由本条取代；04 布局骨架同步；dev 专用浏览器预览入口 `frontend/preview.html`（mock IPC）用于无 Tauri 壳的布局验证。
+
+## ADR-19 DeepMD 数据导入改用 dpdata 包（2026-08-29，用户裁决）
+
+**背景**：`datasets/deepmd.py` 自研 set.*/npy 解析器（memmap 懒加载 + 自造的根目录平铺 npy 兼容）已能工作，但 DeepMD 布局变体多（`nopbc` 标记、混合精度、set 排序细节等），自研维护成本高于直接采用社区标准实现；环境已有 dpdata 1.0.2。
+**决策**：DeepMD 数据导入改用 `pip install dpdata`（`dpdata.LabeledSystem/System(fmt="deepmd/npy")` 封装），抛弃项目自研 DeepMD 解析接口；**extxyz 导入保留自研字节偏移解析器不动**。语义随 dpdata：仅支持 `type.raw + set.*/coord.npy` 标准布局（根目录平铺 npy 不再支持），`box.npy` 或 `nopbc` 标记文件必需，`energy.npy` 缺失时按无标注 System 处理（energy/forces/virial 全为否），`type_map.raw` 缺失或含非元素名直接拒绝（描述符引擎需要真实原子序数，不接受 dpdata 的 `Type_N` 假名）。
+**后果**：适配器构造时全量载入内存（放弃 memmap 懒加载，大数据集体积 ≈ 帧数×原子数×3×8B×数组数）；dpdata 经动态 importlib 加载格式插件，PyInstaller 改为 `collect_all("dpdata")`（sidecar 体积增大）；fixtures 生成器 `write_deepmd` 改写 set.000 标准布局。回归：27 项 pytest 全绿，含真实 C50Cl1（256 帧）后端进程级端到端。
+
 ---
 
 ## 附录：UI.png ↔ 设计文档 对照表（定稿，ADR-4/7）
 
 | # | Mockup（UI.png） | 设计文档 | 定稿裁决 |
 |---|---|---|---|
-| 1 | 一级导航含 Jobs Tab + 右上 Jobs② 徽标 + 状态栏 | 仅 Drawer（§102） | **无 Tab**（ADR-6）：徽标 + Drawer + 状态栏 |
+| 1 | 一级导航含 Jobs Tab + 右上 Jobs② 徽标 + 状态栏 | 仅 Drawer（§102） | **无 Tab**（ADR-6）：徽标 + Drawer + 状态栏 → **2026-08 起 ADR-18：恢复 Jobs Tab** |
 | 2 | 当前页命名 **Overview** | 称 Dataset Page | 跟随 mockup：Overview |
-| 3 | 右侧 Quick Actions 常驻栏 + Recent Jobs 面板 | 无此设计；Inspector 在右 | Quick Actions 收进 Overview 页顶部（导航快捷方式）；Recent Jobs 面板保留在 Overview；**Export Dataset Info 暂缓 v0.2** |
-| 4 | 左下 Dataset Storage 容量条 | 无此设计 | 放入 Settings（ADR-12，M5） |
+| 3 | 右侧 Quick Actions 常驻栏 + Recent Jobs 面板 | 无此设计；Inspector 在右 | Quick Actions 收进 Overview 页顶部（导航快捷方式）；Recent Jobs 面板保留在 Overview；**Export Dataset Info 暂缓 v0.2** → **2026-08 起 ADR-18：恢复常驻右栏，Export=剪贴板导出** |
+| 4 | 左下 Dataset Storage 容量条 | 无此设计 | 放入 Settings（ADR-12，M5） → **2026-08 起 ADR-18：侧栏底部显示已注册体积合计（无容量条）** |
 | 5 | Element Distribution 环形图 | 统计清单未提及 | 纳入 Overview，分类数据用科学 categorical palette |
 | 6 | Energy/Atom vs Volume 大散点（Max\|F\| 色标） | 无（§88 无散点） | **v0.1 不做**，暂缓至 v0.2 Results 增强 |
 | 7 | Property Availability 矩阵含 Stress、Magnetic Moment | §17 仅 Energy/Force/Virial 存在性 | 保留矩阵形式；**Stress→Virial**；**删 Magnetic Moment 行**；Per-Atom/Per-Structure 列由 DatasetFrame 推导 |

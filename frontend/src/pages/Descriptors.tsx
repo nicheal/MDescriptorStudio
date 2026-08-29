@@ -217,7 +217,7 @@ export default function Descriptors() {
               <div style={{ marginBottom: 12 }}>
                 <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Device</Typography.Text>
                 <div style={{ marginTop: 4 }}>
-                  <Select value="cpu" style={{ width: 200 }} disabled options={[{ value: "cpu", label: "CPU" }]} />
+                  <Select value="cpu" style={{ width: "100%", maxWidth: 200 }} disabled options={[{ value: "cpu", label: "CPU" }]} />
                 </div>
               </div>
               {schema.execution.num_threads && (
@@ -225,7 +225,7 @@ export default function Descriptors() {
                   <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Threads</Typography.Text>
                   <div style={{ marginTop: 4 }}>
                     <Tooltip title="v0.1 uses the engine default thread count">
-                      <InputNumber min={1} max={64} value={threads} disabled onChange={(v) => setThreads(v ?? undefined)} style={{ width: 200 }} placeholder="engine default" />
+                      <InputNumber min={1} max={64} value={threads} disabled onChange={(v) => setThreads(v ?? undefined)} style={{ width: "100%", maxWidth: 200 }} placeholder="engine default" />
                     </Tooltip>
                   </div>
                 </div>
@@ -235,7 +235,7 @@ export default function Descriptors() {
                 <div style={{ marginTop: 4 }}>
                   <Select
                     value={dtype}
-                    style={{ width: 200 }}
+                    style={{ width: "100%", maxWidth: 200 }}
                     options={(schema.output.dtypes ?? ["float64"]).map((t) => ({ value: t, label: t }))}
                     onChange={setDtype}
                   />
@@ -246,7 +246,7 @@ export default function Descriptors() {
                 <div style={{ marginTop: 4 }}>
                   <Select
                     value={scope}
-                    style={{ width: 200 }}
+                    style={{ width: "100%", maxWidth: 200 }}
                     onChange={(v) => setScope(v)}
                     options={[
                       { value: "dataset", label: "Entire dataset" },
@@ -259,7 +259,7 @@ export default function Descriptors() {
                 <div style={{ marginBottom: 12 }}>
                   <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Frame index</Typography.Text>
                   <div style={{ marginTop: 4 }}>
-                    <InputNumber min={0} max={d.number_of_frames - 1} value={frameIndex} onChange={(v) => setFrameIndex(v ?? 0)} style={{ width: 200 }} />
+                    <InputNumber min={0} max={d.number_of_frames - 1} value={frameIndex} onChange={(v) => setFrameIndex(v ?? 0)} style={{ width: "100%", maxWidth: 200 }} />
                   </div>
                 </div>
               )}

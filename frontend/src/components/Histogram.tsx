@@ -1,4 +1,5 @@
 // Shared ECharts histogram renderer (plot style per design doc §97–99).
+// Height follows its flex container so Overview can fit the viewport exactly.
 import ReactECharts from "echarts-for-react";
 import type { Hist } from "../types/protocol";
 
@@ -14,13 +15,7 @@ export default function Histogram({
   color?: string;
 }) {
   const option = {
-    grid: { left: 46, right: 12, top: 26, bottom: 26 },
-    title: {
-      text: unit ? `${title} (${unit})` : title,
-      left: 0,
-      top: 0,
-      textStyle: { fontSize: 12, fontWeight: 600, color: "#242424" },
-    },
+    grid: { left: 46, right: 12, top: 8, bottom: 24 },
     tooltip: {
       trigger: "axis",
       axisPointer: { type: "shadow" },
@@ -60,5 +55,17 @@ export default function Histogram({
     ],
     animation: false,
   };
-  return <ReactECharts option={option} style={{ height: 180 }} notMerge lazyUpdate />;
+  return (
+    <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: "#242424", padding: "0 2px 2px" }}>
+        {unit ? `${title} (${unit})` : title}
+      </div>
+      <ReactECharts
+        option={option}
+        style={{ flex: 1, minHeight: 0, width: "100%" }}
+        notMerge
+        lazyUpdate
+      />
+    </div>
+  );
 }
