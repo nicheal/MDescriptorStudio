@@ -117,3 +117,4 @@ descriptor = md.create_descriptor(cfg)
 | 4 | devices 全为 `["cpu"]` | v0.1 不渲染 GPU 选项 |
 | 5 | asset 多 `bundled_resources / file_extensions`，bundled 自动解析 | Model picker 区分「内置 / 自定义路径」两态 |
 | 6 | **无 per-descriptor version 字段** | `descriptor_runs.descriptor_version` 落库用引擎版本（0.2.3）代替，列保留 |
+| 7 | **DPA4/DPA4C 的 `backend: "numpy"` 标注与实际执行路径不一致**（2026-08-29 实测）：schema 标 numpy，但 bundled 检查点（DPA4-Air-OMat24-v20260704.pt / DPA4C-Air-OMat24-v20260819.pt）为 graph-native 默认架构，内核实例持有 `_native.Dpa4Calculator` / `Dpa4cCalculator`——**实际计算走 C++**；numpy 仅为非默认图结构/缺 native 符号时的 fallback（内核 docstring 自述 "native C++ core and NumPy fallback"）。GUI 按 schema 展示 `numpy` 是遵循 Rule 5 的正确行为；另注意两者 `cooperative_cancel: false`（界面显示 Cancel unavailable，与 NEP 的 true 不同） | 信息面板如实展示 schema；如需修正标注属引擎侧问题，走上游 issue |
