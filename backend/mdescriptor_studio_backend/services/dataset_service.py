@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +54,10 @@ class DatasetService:
         self.adapter = adapter
         self.jobs = jobs
         self._adapters: dict[str, object] = {}
+        # one in-flight scan per dataset: Overview + health rail both call
+        # dataset.statistics on stale caches and must share a single job
+        self._scan_lock = threading.Lock()
+        self._active_scans: dict[str, str] = {}
 
     # -- helpers -----------------------------------------------------------
     def _row(self, dataset_id: str) -> dict:
@@ -75,6 +80,7 @@ class DatasetService:
             "fingerprint": row["fingerprint"],
             "file_size": row["file_size"],
             "created_at": row["created_at"],
+            "last_scan_at": row["last_scan_at"],
             "cache_valid": fingerprint_valid if fingerprint_valid is not None else current == row["fingerprint"],
         }
 
@@ -224,65 +230,94 @@ class DatasetService:
 
     def statistics(self, params: dict) -> dict:
         row = self._row(params.get("id"))
+        cached = self._cached_stats(row)
+        if cached is not None:
+            return {"recalculating": False, "job_id": None, "stats": cached}
+        job_id = self._submit_recompute(row["id"])
+        return {"recalculating": True, "job_id": job_id, "stats": None}
+
+    def rescan(self, params: dict) -> dict:
+        """Force a full rescan (health panel button), even on a valid cache."""
+        row = self._row(params.get("id"))
+        return {"job_id": self._submit_recompute(row["id"])}
+
+    def _cached_stats(self, row: dict) -> dict | None:
         current = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])
         stats_row = self.db.query_one(
             "SELECT fingerprint, stats_json FROM dataset_statistics WHERE dataset_id = ?",
             (row["id"],),
         )
-        if stats_row and stats_row["fingerprint"] == current:
-            return {"recalculating": False, "job_id": None, "stats": json.loads(stats_row["stats_json"])}
-        job_id = self._recompute(row["id"])
-        return {"recalculating": True, "job_id": job_id, "stats": None}
+        if stats_row is None or stats_row["fingerprint"] != current:
+            return None
+        stats = json.loads(stats_row["stats_json"])
+        if "health" not in stats:
+            # pre-health cache (dataset registered before the health pass):
+            # one recompute fills it in
+            return None
+        return stats
 
-    def _recompute(self, ds_id: str) -> str:
-        row = self._row(ds_id)
-        # the on-disk files may have changed since registration: never reuse the
-        # adapter built against the old content
-        self._adapters.pop(ds_id, None)
+    def _submit_recompute(self, ds_id: str) -> str:
+        with self._scan_lock:
+            active = self._active_scans.get(ds_id)
+            if active is not None:
+                return active
+            row = self._row(ds_id)
+            # the on-disk files may have changed since registration: never reuse the
+            # adapter built against the old content
+            self._adapters.pop(ds_id, None)
 
-        def runner(ctx):
-            adapter = create_adapter(Path(row["source_path"]), row["format"])
-            self._adapters[ds_id] = (row["fingerprint"], adapter)
-            total = max(len(adapter), 1)
-            count = 0
+            def runner(ctx):
+                adapter = create_adapter(Path(row["source_path"]), row["format"])
+                self._adapters[ds_id] = (row["fingerprint"], adapter)
+                total = max(len(adapter), 1)
+                count = 0
 
-            def counting_iter():
-                nonlocal count
-                for frame in adapter.iter_frames():
-                    count += 1
-                    if count % 250 == 0 or count == total:
-                        ctx.progress(count, total, "computing statistics")
-                    yield frame
+                def counting_iter():
+                    nonlocal count
+                    for frame in adapter.iter_frames():
+                        count += 1
+                        if count % 250 == 0 or count == total:
+                            ctx.progress(count, total, "computing statistics")
+                        yield frame
 
-            class _CountingAdapter:
-                format_name = adapter.format_name
-                source_path = adapter.source_path
+                class _CountingAdapter:
+                    format_name = adapter.format_name
+                    source_path = adapter.source_path
 
-                def __len__(self):
-                    return len(adapter)
+                    def __len__(self):
+                        return len(adapter)
 
-                def get_frame(self, index):
-                    return adapter.get_frame(index)
+                    def get_frame(self, index):
+                        return adapter.get_frame(index)
 
-                def iter_frames(self):
-                    return counting_iter()
+                    def iter_frames(self):
+                        return counting_iter()
 
-            stats = compute_statistics(_CountingAdapter())
-            fingerprint = compute_fingerprint(Path(row["source_path"]), len(adapter))
-            self.db.execute(
-                "INSERT INTO dataset_statistics (dataset_id, fingerprint, stats_json, created_at)"
-                " VALUES (?, ?, ?, ?)"
-                " ON CONFLICT(dataset_id) DO UPDATE SET fingerprint = excluded.fingerprint,"
-                " stats_json = excluded.stats_json, created_at = excluded.created_at",
-                (ds_id, fingerprint, json.dumps(stats), _NOW()),
-            )
-            self.db.execute(
-                "UPDATE datasets SET number_of_frames = ?, fingerprint = ?, last_scan_at = ? WHERE id = ?",
-                (len(adapter), fingerprint, _NOW(), ds_id),
-            )
-            return {"dataset_id": ds_id}
+                stats = compute_statistics(_CountingAdapter())
+                fingerprint = compute_fingerprint(Path(row["source_path"]), len(adapter))
+                self.db.execute(
+                    "INSERT INTO dataset_statistics (dataset_id, fingerprint, stats_json, created_at)"
+                    " VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT(dataset_id) DO UPDATE SET fingerprint = excluded.fingerprint,"
+                    " stats_json = excluded.stats_json, created_at = excluded.created_at",
+                    (ds_id, fingerprint, json.dumps(stats), _NOW()),
+                )
+                self.db.execute(
+                    "UPDATE datasets SET number_of_frames = ?, fingerprint = ?, last_scan_at = ? WHERE id = ?",
+                    (len(adapter), fingerprint, _NOW(), ds_id),
+                )
+                return {"dataset_id": ds_id}
 
-        return self.jobs.submit("dataset.statistics", runner, dataset_id=ds_id)
+            def guarded(ctx):
+                try:
+                    return runner(ctx)
+                finally:
+                    with self._scan_lock:
+                        self._active_scans.pop(ds_id, None)
+
+            job_id = self.jobs.submit("dataset.statistics", guarded, dataset_id=ds_id)
+            self._active_scans[ds_id] = job_id
+            return job_id
 
     def refresh_if_changed(self, row: dict) -> None:
         current = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])

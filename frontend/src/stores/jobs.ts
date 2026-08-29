@@ -22,6 +22,14 @@ export const JOB_TYPE_LABEL: Record<string, string> = {
   "analysis.pca": "PCA",
 };
 
+export const JOB_STATUS_COLOR: Record<JobState["status"], string> = {
+  QUEUED: "#616161",
+  RUNNING: "#0F6CBD",
+  COMPLETED: "#107C10",
+  FAILED: "#C42B1C",
+  CANCELLED: "#8A8A8A",
+};
+
 interface JobsStore {
   jobs: Record<string, JobState>;
   order: string[]; // newest first

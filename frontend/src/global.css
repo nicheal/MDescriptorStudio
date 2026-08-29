@@ -129,3 +129,16 @@ body {
 .dataset-item .dataset-item-actions.ant-dropdown-open {
   opacity: 1;
 }
+
+/* Right-rail scan indicator / rescan icon while a scan job is in flight. */
+.rail-spin {
+  animation: rail-spin 1.2s linear infinite;
+}
+@keyframes rail-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -28,6 +28,7 @@ export interface DatasetMeta {
   fingerprint: string;
   file_size: number | null;
   created_at: string;
+  last_scan_at: string | null;
   cache_valid: boolean;
 }
 
@@ -61,6 +62,20 @@ export interface Stats {
     mixed: boolean;
     flags: string[];
   };
+  /** present in scans since the data-health pass; undefined on legacy caches */
+  health?: DatasetHealth;
+}
+
+export interface DatasetHealth {
+  /** frames missing at least one property other frames carry */
+  missing_values: number;
+  /** frames claiming periodicity with a non-positive/degenerate cell */
+  invalid_cell: number;
+  /** redundant copies beyond the first, exact content hash */
+  duplicate_structures: number;
+  /** frames with any atom |F| above extreme_force_threshold (eV/Å) */
+  extreme_force: number;
+  extreme_force_threshold: number;
 }
 
 export interface Summary {

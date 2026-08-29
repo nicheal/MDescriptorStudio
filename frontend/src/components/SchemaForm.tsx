@@ -5,6 +5,125 @@ import type { ParamSchema } from "../types/protocol";
 
 export type ParamValues = Record<string, unknown>;
 
+// MDescriptor is the source of truth when it provides a description. Older
+// schemas leave many parameters undocumented, so keep concise GUI fallbacks
+// here to ensure every configuration field has useful context.
+const PARAMETER_DESCRIPTIONS: Record<string, string> = {
+  species: "Chemical species included in the descriptor.",
+  N: "Maximum expansion or basis size.",
+  r0: "Reference radial distance or scale.",
+  trans: "Transformation applied to radial coordinates.",
+  type: "Transformation or function type.",
+  p: "Power or exponent controlling the function.",
+  a: "Scale or shape parameter for the function.",
+  wL: "Weights assigned to angular or radial channels.",
+  maxdeg: "Maximum degree retained for each channel.",
+  D: "Descriptor channel weighting and cutoff settings.",
+  csp: "Chemical species contribution weight.",
+  chc: "Chemical channel contribution weight.",
+  ahc: "Angular channel contribution weight.",
+  bhc: "Basis channel contribution weight.",
+  rcut: "Outer radial cutoff distance.",
+  rin: "Inner radial cutoff distance.",
+  pcut: "Outer cutoff polynomial order.",
+  pin: "Inner cutoff polynomial order.",
+  constants: "Include constant terms in the descriptor.",
+  r_cut: "Neighbor cutoff distance.",
+  g2_params: "Parameters for two-body radial functions.",
+  g3_params: "Parameters for three-body angular functions.",
+  g4_params: "Parameters for four-body angular functions.",
+  g5_params: "Parameters for alternative four-body angular functions.",
+  per_system: "Return one composition vector per system.",
+  n_radial: "Number of radial basis functions.",
+  l_max: "Maximum angular momentum degree.",
+  cutoff_function: "Function used to smoothly truncate neighbors.",
+  radial_sigma: "Width of the radial smoothing function.",
+  include_radial: "Include radial two-body terms.",
+  include_angular: "Include angular many-body terms.",
+  normalize_radial: "Normalize radial components.",
+  normalize_angular: "Normalize angular components.",
+  super_vector: "Combine components into one feature vector.",
+  radial_weight: "Relative weight of radial components.",
+  angular_weight: "Relative weight of angular components.",
+  exclude_self_interaction: "Exclude the central atom from neighbor terms.",
+  n_atoms_max: "Maximum atoms supported per structure.",
+  permutation: "Handling of atom-order permutations.",
+  exponent: "Exponent used in the interaction kernel.",
+  model: "Model resource or local checkpoint path.",
+  calibrate: "Apply calibration to the model output.",
+  parameters: "Descriptor-specific parameter group.",
+  Rc: "Radial cutoff distance.",
+  cutoff: "Neighbor cutoff distance.",
+  accuracy: "Target accuracy for reciprocal-space terms.",
+  w: "Relative weight of the reciprocal-space contribution.",
+  g_cut: "Reciprocal-space cutoff.",
+  twojmax: "Maximum angular expansion index.",
+  diagonal: "Diagonal or channel selection mode.",
+  rfac0: "Radial basis scaling factor.",
+  rmin0: "Minimum radial distance.",
+  rcutfac: "Radial cutoff scaling factor.",
+  element_profile: "Element-specific profile settings.",
+  element_radii: "Element-specific radii.",
+  weights: "Element or channel weighting factors.",
+  normalize_U: "Normalize expansion coefficients.",
+  geometry: "Geometry function used to build the distribution.",
+  grid: "Grid range and resolution for the distribution.",
+  weighting: "Distance-weighting function and parameters.",
+  periodic: "Account for periodic boundary conditions.",
+  normalize_gaussians: "Normalize Gaussian contributions.",
+  normalization: "Final normalization applied to the descriptor.",
+  density_width: "Width of the neighbor density.",
+  max_radial: "Maximum radial basis index.",
+  max_angular: "Maximum angular basis index.",
+  k_cutoff: "Cutoff for radial basis functions.",
+  radial_radius: "Radial extent of the basis.",
+  min_dist: "Minimum interatomic distance.",
+  max_dist: "Maximum interatomic distance.",
+  radial_basis_size: "Number of functions in the radial basis.",
+  radial_funcs_count: "Number of radial function channels.",
+  max_rank: "Maximum tensor rank.",
+  radial_basis_type: "Radial basis function family.",
+  full_neighbor_list: "Include both directions of each neighbor pair.",
+  self_pairs: "Include self-pairs in the neighbor list.",
+  nmax: "Maximum radial basis index.",
+  lmax: "Maximum angular expansion index.",
+  alpha: "Radial weighting exponent.",
+  weight_on: "Enable distance-based atom weighting.",
+  rbf: "Radial basis function family.",
+  n_max: "Maximum radial basis index.",
+  average: "Pooling method for local environments.",
+  compression: "Compression scheme for the descriptor.",
+  alpha_max: "Maximum radial basis order per species.",
+  rcut_hard: "Hard outer cutoff distance.",
+  rcut_soft: "Soft cutoff distance.",
+  nf: "Number of radial feature channels.",
+  radial_enhancement: "Strength of radial feature enhancement.",
+  basis: "Basis function family.",
+  atom_sigma_r: "Radial Gaussian width for each atom type.",
+  atom_sigma_r_scaling: "Radial width scaling for each atom type.",
+  atom_sigma_t: "Tangential Gaussian width for each atom type.",
+  atom_sigma_t_scaling: "Tangential width scaling for each atom type.",
+  amplitude_scaling: "Per-species amplitude scaling.",
+  central_weight: "Weight of the central atom.",
+  central_species: "Species treated as central atoms.",
+  max_neighbors: "Maximum neighbors retained per atom.",
+  separate_neighbor_types: "Keep neighbor species channels separate.",
+  function: "Distribution function used for the descriptor.",
+  n: "Order of the descriptor function.",
+  sigma: "Gaussian smoothing width.",
+};
+
+function humanizeParameterName(name: string): string {
+  return name
+    .replace(/_/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase();
+}
+
+function parameterDescription(name: string, schema: ParamSchema): string {
+  return schema.description?.trim() || PARAMETER_DESCRIPTIONS[name] || `${humanizeParameterName(name)} setting.`;
+}
+
 export function SchemaField({
   name,
   schema,
@@ -20,22 +139,23 @@ export function SchemaField({
   elementOptions?: string[];
   depth?: number;
 }) {
+  const description = parameterDescription(name, schema);
   const label = (
-    <Space size={6}>
-      <Typography.Text style={{ fontSize: 13, fontWeight: depth === 0 ? 600 : 500 }}>{name}</Typography.Text>
-      {schema.required && <span style={{ color: "#C42B1C" }}>*</span>}
-      {schema.unit && <Typography.Text type="secondary" style={{ fontSize: 11 }}>{schema.unit}</Typography.Text>}
-    </Space>
+    <div style={{ display: "flex", alignItems: "baseline", flexWrap: "wrap", gap: "2px 8px", lineHeight: 1.4 }}>
+      <Space size={6}>
+        <Typography.Text style={{ fontSize: 13, fontWeight: depth === 0 ? 600 : 500 }}>{name}</Typography.Text>
+        {schema.required && <span style={{ color: "#C42B1C" }}>*</span>}
+        {schema.unit && <Typography.Text type="secondary" style={{ fontSize: 11 }}>{schema.unit}</Typography.Text>}
+      </Space>
+      <Typography.Text style={{ fontSize: 11, fontWeight: 400, color: "#667085", lineHeight: 1.4 }}>
+        — {description}
+      </Typography.Text>
+    </div>
   );
   const wrap = (control: React.ReactNode) => (
     <div style={{ marginBottom: 12, paddingLeft: depth * 16 }}>
       {label}
       <div style={{ marginTop: 4 }}>{control}</div>
-      {schema.description && depth === 0 && (
-        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-          {schema.description}
-        </Typography.Text>
-      )}
     </div>
   );
 

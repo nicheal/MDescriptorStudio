@@ -79,6 +79,9 @@ MIGRATIONS: dict[int, str] = {
         value TEXT NOT NULL
     );
     """,
+    2: """
+    ALTER TABLE jobs ADD COLUMN analysis_run_id TEXT;
+    """,
 }
 
 

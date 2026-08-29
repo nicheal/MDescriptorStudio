@@ -5,13 +5,18 @@ import {
   App as AntApp,
   Button,
   Empty,
+  Popconfirm,
   Select,
   Space,
   Table,
   Typography,
 } from "antd";
 import ReactECharts from "echarts-for-react";
-import { ArrowRight16Regular, ArrowSync16Regular } from "@fluentui/react-icons";
+import {
+  ArrowRight16Regular,
+  ArrowSync16Regular,
+  Delete16Regular,
+} from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
@@ -97,6 +102,22 @@ export default function Results() {
     setSelectedPoint(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRun, d?.id, pcaMode]);
+
+  // delete one run: backend cascades analyses + linked jobs and removes the
+  // stored result dirs; drop this run's cached PCA payloads so they can never
+  // resurface when the same run id reappears in a later session
+  const deleteRun = async (run: RunRow) => {
+    try {
+      await ipc.request("result.remove", { run_id: run.id });
+      pcaCache.delete(`${run.id}:structure`);
+      pcaCache.delete(`${run.id}:atom`);
+      message.success("Run deleted");
+      await refreshRuns();
+    } catch (e) {
+      const err = e as { code: string; message: string };
+      message.error(`${err.code}: ${err.message}`);
+    }
+  };
 
   const runPca = async (mode: PcaMode) => {
     if (!selectedRun) return;
@@ -275,6 +296,34 @@ export default function Results() {
                   <Typography.Text style={{ color: RUN_STATUS_COLOR[v], fontWeight: 600, fontSize: 12 }}>{v}</Typography.Text>
                 ) },
                 { title: "Created", dataIndex: "created_at", key: "c", width: 170, render: (v: string) => new Date(v).toLocaleString() },
+                {
+                  title: "",
+                  key: "actions",
+                  width: 52,
+                  render: (_: unknown, r: RunRow) => (
+                    // stopPropagation: the delete control must not select the row
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <Popconfirm
+                        title="Delete this run?"
+                        description="Removes the run together with its PCA analyses, job history and stored result files."
+                        okText="Delete"
+                        cancelText="Cancel"
+                        okButtonProps={{ danger: true }}
+                        disabled={r.status === "QUEUED" || r.status === "RUNNING"}
+                        onConfirm={() => void deleteRun(r)}
+                      >
+                        <Button
+                          size="small"
+                          type="text"
+                          aria-label="Delete run"
+                          title={r.status === "QUEUED" || r.status === "RUNNING" ? "Cancel the running job first" : "Delete run"}
+                          icon={<Delete16Regular />}
+                          disabled={r.status === "QUEUED" || r.status === "RUNNING"}
+                        />
+                      </Popconfirm>
+                    </span>
+                  ),
+                },
               ]}
             />
           </div>

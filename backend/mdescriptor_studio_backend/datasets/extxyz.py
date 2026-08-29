@@ -77,15 +77,24 @@ class ExtXYZAdapter(DatasetAdapter):
             comment = f.readline()
             meta = {**_parse_comment(comment), "natoms": natoms}
             cols = meta["columns"]
-            names = [c[0] for c in cols]
-            species_i = names.index("species")
-            pos_i = names.index("pos") if "pos" in names else names.index("positions")
-            forces_i = (
-                names.index("forces")
-                if "forces" in names
-                else names.index("force") if "force" in names else None
-            )
             n_cols = sum(c for _, c in cols)
+            # token offset per column group = sum of the preceding groups' sizes
+            # (a column index is NOT a token offset: forces at group index 2
+            # start at token 4 in the standard species:1:pos:3:forces:3 layout)
+            offsets: dict[str, int] = {}
+            base = 0
+            for name, size in cols:
+                offsets[name] = base
+                base += size
+            species_i = offsets.get("species", 0)
+            pos_i = offsets.get("pos", offsets.get("positions"))
+            if pos_i is None:
+                raise AppError(INVALID_DATASET, f"frame {index}: no pos/positions column")
+            forces_i = (
+                offsets["forces"]
+                if "forces" in offsets
+                else offsets.get("force")
+            )
             species: list[str] = []
             positions = np.empty((natoms, 3), dtype=np.float64)
             forces = np.empty((natoms, 3), dtype=np.float64) if forces_i is not None else None

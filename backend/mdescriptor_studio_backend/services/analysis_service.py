@@ -86,7 +86,9 @@ class AnalysisService:
             ctx.progress(1, 1, "done")
             return {"analysis_id": analysis_id, "n_points": payload["n_points"]}
 
-        job_id = self.jobs.submit("analysis.pca", runner, dataset_id=row["dataset_id"])
+        job_id = self.jobs.submit(
+            "analysis.pca", runner, dataset_id=row["dataset_id"], analysis_run_id=analysis_id
+        )
         return {"job_id": job_id, "analysis_id": analysis_id}
 
     @classmethod

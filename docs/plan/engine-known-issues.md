@@ -83,6 +83,11 @@
 
 > **0.2.5 复核：部分存在。** "错误细分"一项已解决——异常新增结构化 `code`（`unsupported_periodicity` / `invalid_input` 等）、`path`、`details`（见 #5），上游可按 code 映射而无须独立异常类；Studio `_convert` 已按此实现。仍缺：`StructureBatch.from_frames()` 辅助构造器、`list_descriptors()` 仍返回 `tuple`。
 
+### 11. 计算期间无增量进度回调（`ComputeControl.completed()` 恒为 0）
+`ComputeControl` 公开 `completed() / total()`（05 文档 §3 据此设计进度映射），但 0.2.5 内核不增量更新计数器：DPA4C 计算 256×192 原子批次（103.6s，0.25s 轮询）期间 `completed()` 全程为 0、`total()` 正确为 256，仅在计算结束瞬间跳到 256；ACE 计算 256×64 期间 `completed()` 与 `total()` 均恒为 0（内核甚至未 reset）。直接后果：宿主无法展示计算内进度，GUI 进度条在引擎阶段只能保持平直。
+
+> **0.2.6 复核：已修复**（2026-08-29 实测：DPA4C 128×192 计算进行至 2.0s 时 `completed=4, total=128`，逐帧检查点推进；协作取消不受影响——中途 `control.cancel()` 后 0.00s 内抛 `CancelledError`）。Studio 侧已实现 §3 映射：`descriptor_service._report_engine_progress` 轮询计数器并映射到计算相位（占进度条 [_LOAD_BAR_SHARE, 1]）；0.2.5 引擎下计数器恒 0，进度条保持相位基线，行为仍诚实。
+
 ## 已验证无问题（曾怀疑，澄清）
 
 - **ValleOganov 构建失败**：非 bug——其 `input.periodicity = ["fully_periodic"]`，用孤立结构测试被正确拒绝；传 periodic 数据集即正常。

@@ -4,7 +4,7 @@ import { ipc } from "../ipc/client";
 import type { DatasetMeta } from "../types/protocol";
 
 export type BackendStatus = "starting" | "ready" | "error";
-export type Page = "overview" | "explore" | "descriptors" | "results" | "jobs";
+export type Page = "overview" | "explore" | "descriptors" | "results";
 
 interface WorkspaceState {
   backendStatus: BackendStatus;
@@ -16,7 +16,9 @@ interface WorkspaceState {
   datasets: DatasetMeta[];
   runningJobs: number;
   page: Page;
-  // bumped by Quick Actions → Overview refetches dataset statistics
+  // top-right Jobs drawer (the single jobs surface since the Jobs tab was folded into it)
+  jobsDrawerOpen: boolean;
+  // bumped after a health rescan completes → pages refetch dataset statistics
   statsTick: number;
 
   setBackendReady: (engineVersion: string | null, cpuThreads?: number | null) => void;
@@ -28,6 +30,7 @@ interface WorkspaceState {
   setActiveRun: (id: string | null) => void;
   setRunningJobs: (n: number) => void;
   setPage: (p: Page) => void;
+  setJobsDrawerOpen: (open: boolean) => void;
   bumpStatsTick: () => void;
 }
 
@@ -41,6 +44,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   datasets: [],
   runningJobs: 0,
   page: "overview",
+  jobsDrawerOpen: false,
   statsTick: 0,
 
   setBackendReady: (engineVersion, cpuThreads) =>
@@ -62,6 +66,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   setActiveRun: (id) => set({ activeDescriptorRunId: id }),
   setRunningJobs: (n) => set({ runningJobs: n }),
   setPage: (p) => set({ page: p }),
+  setJobsDrawerOpen: (open) => set({ jobsDrawerOpen: open }),
   bumpStatsTick: () => set((st) => ({ statsTick: st.statsTick + 1 })),
 }));
 

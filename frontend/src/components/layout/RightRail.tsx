@@ -1,97 +1,184 @@
-// Persistent right rail (UI.png layout pass): Quick Actions + Recent Jobs.
+// Persistent right rail, page-aware:
+//  • default pages — Data Health panel: missing values / invalid cells /
+//    duplicate structures / extreme forces from the last scan, plus scan
+//    status and a Rescan trigger.
+//  • Descriptors page — Recent Jobs panel: latest descriptor compute jobs
+//    (persisted history merged with the live session) with live progress;
+//    "View all jobs" opens the top-right Jobs drawer (full history).
 // Fits the viewport by design — no scrollbar at default window sizes; below
-// 1280px window width it hides so Explore/Results keep their working area.
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { App as AntApp, Button, Typography } from "antd";
+// 1280px window width it hides so pages keep their working area.
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { App as AntApp, Button, Progress, Tooltip, Typography } from "antd";
 import {
-  ArrowDownload16Regular,
   ArrowSync16Regular,
+  BroadActivityFeed16Regular,
   CheckmarkCircle16Filled,
+  CheckmarkCircle16Regular,
+  Clock16Regular,
+  Copy16Regular,
   Cube16Regular,
-  Grid16Regular,
+  GridDots16Regular,
+  Info16Regular,
+  Warning16Filled,
 } from "@fluentui/react-icons";
 import { ipc } from "../../ipc/client";
-import { JOB_TYPE_LABEL, mergeJobRows, useJobs, type JobState } from "../../stores/jobs";
-import { activeDataset, useWorkspace } from "../../stores/workspace";
-import type { JobRow } from "../../types/protocol";
+import { activeDataset, refetchDatasets, useWorkspace } from "../../stores/workspace";
+import {
+  JOB_STATUS_COLOR as STATUS_COLOR,
+  JOB_TYPE_LABEL,
+  mergeJobRows,
+  useJobs,
+  type JobState,
+} from "../../stores/jobs";
+import type { DatasetHealth, JobRow } from "../../types/protocol";
 
-const STATUS_COLOR: Record<JobState["status"], string> = {
-  QUEUED: "#616161",
-  RUNNING: "#0F6CBD",
-  COMPLETED: "#107C10",
-  FAILED: "#C42B1C",
-  CANCELLED: "#8A8A8A",
-};
+const BLUE = "#0F6CBD";
+const GREEN = "#107C10";
+const ORANGE = "#F0A000";
+const GRAY = "#8A8A8A";
 
-function statusLine(j: JobState): string {
-  switch (j.status) {
-    case "RUNNING":
-      return `Running · ${Math.round(j.progress * 100)}%`;
-    case "QUEUED":
-      return "Queued";
-    case "COMPLETED":
-      return "Completed";
-    default:
-      return j.status.charAt(0) + j.status.slice(1).toLowerCase();
-  }
-}
+const RECENT_JOB_LIMIT = 6;
 
 const subscribeResize = (cb: () => void) => {
   window.addEventListener("resize", cb);
   return () => window.removeEventListener("resize", cb);
 };
 
+type StatisticsResponse = {
+  recalculating: boolean;
+  job_id: string | null;
+  stats: { structures: number; health?: DatasetHealth } | null;
+};
+
+/** Resolves when the backend job finishes; reports progress along the way. */
+function jobDone(jobId: string, onProgress?: (p: number) => void): Promise<void> {
+  return new Promise((resolve) => {
+    const offDone = ipc.on("job.finished", (data) => {
+      const j = data as { job_id: string };
+      if (j.job_id !== jobId) return;
+      offDone();
+      offProgress();
+      resolve();
+    });
+    const offProgress = ipc.on("job.progress", (data) => {
+      const j = data as { job_id: string; progress: number };
+      if (j.job_id !== jobId) return;
+      onProgress?.(j.progress);
+    });
+  });
+}
+
 export default function RightRail() {
+  const page = useWorkspace().page;
+  const wide = useSyncExternalStore(subscribeResize, () => window.innerWidth >= 1280);
+  if (!wide) return null;
+  return page === "descriptors" ? <RecentJobsRail /> : <DataHealthRail />;
+}
+
+function DataHealthRail() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
   const d = activeDataset(st);
-  const { jobs, order } = useJobs();
-  const wide = useSyncExternalStore(subscribeResize, () => window.innerWidth >= 1280);
-  const history = useJobsHistory();
+  const [health, setHealth] = useState<DatasetHealth | null>(null);
+  const [structures, setStructures] = useState<number | null>(null);
+  const [scanning, setScanning] = useState<number | null>(null); // job progress 0..1
 
-  const recent = mergeJobRows(history, order.map((id) => jobs[id]).filter(Boolean)).sort(
-    (a, b) => rank(a) - rank(b),
-  ).slice(0, 3);
+  const applyStats = useCallback((r: StatisticsResponse) => {
+    if (r.stats) {
+      setHealth(r.stats.health ?? null);
+      setStructures(r.stats.structures);
+      setScanning(null);
+    }
+  }, []);
 
-  function rank(j: JobState): number {
-    if (j.status === "RUNNING") return 0;
-    if (j.status === "QUEUED") return 1;
-    return 2;
-  }
-
-  const copySummary = useCallback(async () => {
+  useEffect(() => {
+    let disposed = false;
+    setHealth(null);
+    setScanning(null);
     if (!d) return;
-    const text = JSON.stringify(
-      {
-        name: d.name,
-        format: d.format,
-        structures: d.number_of_frames,
-        elements: d.elements,
-        source_path: d.source_path,
-        file_size: d.file_size,
-        created_at: d.created_at,
-      },
-      null,
-      2,
-    );
-    const ok = await copyText(text);
-    if (ok) message.success("Dataset summary copied to clipboard");
-    else message.error("Could not access the clipboard");
-  }, [d, message]);
+    const dsId = d.id;
+    (async () => {
+      try {
+        const r = await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId });
+        if (disposed) return;
+        if (r.stats) {
+          applyStats(r);
+        } else if (r.job_id) {
+          // stale or pre-health cache: a recompute job is already running
+          setScanning(0);
+          await jobDone(r.job_id, (p) => !disposed && setScanning(p));
+          if (disposed) return;
+          await refetchDatasets();
+          applyStats(await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId }));
+        }
+      } catch (e) {
+        console.error("dataset.statistics failed", e);
+      } finally {
+        if (!disposed) setScanning(null);
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [d?.id, st.statsTick, applyStats]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const refreshStats = useCallback(async () => {
-    if (!d) return;
+  const rescan = useCallback(async () => {
+    if (!d || scanning !== null) return;
+    const dsId = d.id;
     try {
-      await ipc.request("dataset.statistics", { id: d.id });
-      useWorkspace.getState().bumpStatsTick();
-      message.info("Statistics refreshed");
+      setScanning(0);
+      const r = await ipc.request<{ job_id: string }>("dataset.rescan", { id: dsId });
+      await jobDone(r.job_id, (p) => setScanning(p));
+      await refetchDatasets();
+      const fresh = await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId });
+      if (useWorkspace.getState().activeDatasetId !== dsId) return;
+      applyStats(fresh);
+      useWorkspace.getState().bumpStatsTick(); // Overview refetches too
+      message.success("Rescan complete");
     } catch (e) {
       const err = e as { code: string; message: string };
       message.error(`${err.code}: ${err.message}`);
+    } finally {
+      setScanning(null);
     }
-  }, [d, message]);
+  }, [d, scanning, applyStats, message]);
 
-  if (!wide) return null;
+  const rows: {
+    key: string;
+    icon: React.ReactNode;
+    title: string;
+    subtitle: string;
+    count: number | null;
+  }[] = [
+    {
+      key: "missing",
+      icon: <GridDots16Regular />,
+      title: "Missing values",
+      subtitle: "Across all properties",
+      count: health ? health.missing_values : null,
+    },
+    {
+      key: "cell",
+      icon: <Cube16Regular />,
+      title: "Invalid cell",
+      subtitle: "Non-positive or degenerate",
+      count: health ? health.invalid_cell : null,
+    },
+    {
+      key: "dup",
+      icon: <Copy16Regular />,
+      title: "Duplicate structures",
+      subtitle: "Exact duplicates (hash)",
+      count: health ? health.duplicate_structures : null,
+    },
+    {
+      key: "force",
+      icon: <BroadActivityFeed16Regular />,
+      title: "Extreme force",
+      subtitle: `|F| > ${health ? health.extreme_force_threshold : 50} eV/Å`,
+      count: health ? health.extreme_force : null,
+    },
+  ];
 
   return (
     <div
@@ -99,177 +186,345 @@ export default function RightRail() {
         width: 264,
         flex: "0 0 264px",
         borderLeft: "1px solid #E1E4E8",
-        background: "#FFFFFF",
-        padding: "14px 14px",
+        background: "#F9FAFB",
+        padding: 14,
         display: "flex",
         flexDirection: "column",
-        gap: 10,
         overflow: "hidden",
         minWidth: 0,
       }}
     >
-      <Typography.Text strong style={{ fontSize: 14 }}>
-        Quick Actions
-      </Typography.Text>
-      <QuickAction
-        icon={<Cube16Regular />}
-        title="Explore Structures"
-        subtitle="Browse structures in 3D"
-        onClick={() => st.setPage("explore")}
-      />
-      <QuickAction
-        icon={<Grid16Regular />}
-        title="Compute Descriptors"
-        subtitle="Calculate descriptors"
-        onClick={() => st.setPage("descriptors")}
-      />
-      <QuickAction
-        icon={<ArrowSync16Regular />}
-        title="Dataset Statistics"
-        subtitle="View detailed analysis"
-        onClick={() => void refreshStats()}
-      />
-      <QuickAction
-        icon={<ArrowDownload16Regular />}
-        title="Export Dataset Info"
-        subtitle="Copy summary to clipboard"
-        onClick={() => void copySummary()}
-      />
-      <div style={{ borderTop: "1px solid #EAECF0", margin: "4px 0" }} />
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <Typography.Text strong style={{ fontSize: 14 }}>
-          Recent Jobs
-        </Typography.Text>
-        <Button
-          type="link"
-          size="small"
-          style={{ padding: 0, fontSize: 12 }}
-          onClick={() => st.setPage("jobs")}
-        >
-          View All
-        </Button>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 0 }}>
-        {recent.length === 0 ? (
-          <Typography.Text type="secondary" style={{ fontSize: 12, padding: "8px 2px" }}>
-            No jobs yet
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #EAECF0",
+          borderRadius: 10,
+          boxShadow: "0 1px 2px rgba(16,24,40,0.06)",
+          padding: "12px 14px 14px",
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingBottom: 4 }}>
+          <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
+            Data Health
+          </Typography.Text>
+          <Tooltip title="Quality checks from the last full scan: property values missing on some structures, non-positive or degenerate cells, exact duplicate structures (content hash), and any atom force above the threshold.">
+            <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
+              <Info16Regular />
+            </span>
+          </Tooltip>
+        </div>
+
+        {!d ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
+            Register a dataset to see its health.
           </Typography.Text>
         ) : (
-          recent.map((j) => <RecentJob key={j.id} job={j} />)
+          <>
+            {rows.map((row, i) => (
+              <HealthRow
+                key={row.key}
+                icon={row.icon}
+                title={row.title}
+                subtitle={row.subtitle}
+                count={row.count}
+                total={structures}
+                first={i === 0}
+                loading={health === null && scanning === null}
+              />
+            ))}
+            <ScanRow scanning={scanning} lastScanAt={d.last_scan_at} />
+            <Button
+              block
+              disabled={scanning !== null}
+              onClick={() => void rescan()}
+              icon={scanning === null ? <ArrowSync16Regular /> : <ArrowSync16Regular className="rail-spin" />}
+              style={{
+                marginTop: 12,
+                borderRadius: 8,
+                borderColor: BLUE,
+                color: BLUE,
+                background: "#FFFFFF",
+                fontWeight: 600,
+              }}
+            >
+              {scanning === null ? "Rescan" : `Scanning… ${Math.round(scanning * 100)}%`}
+            </Button>
+          </>
         )}
       </div>
     </div>
   );
 }
 
-function useJobsHistory(): JobRow[] {
+function RecentJobsRail() {
+  const setJobsDrawerOpen = useWorkspace().setJobsDrawerOpen;
+  const { jobs, order } = useJobs();
   const [rows, setRows] = useState<JobRow[]>([]);
-  useEffect(() => {
-    let disposed = false;
-    void ipc
-      .request<JobRow[]>("job.list", {})
-      .then((r) => {
-        if (!disposed) setRows(r);
-      })
-      .catch((e) => console.error("job.list failed", e));
-    return () => {
-      disposed = true;
-    };
-  }, []);
-  return rows;
-}
 
-function QuickAction({
-  icon,
-  title,
-  subtitle,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  subtitle: string;
-  onClick: () => void;
-}) {
+  const load = useCallback(() => {
+    ipc.request<JobRow[]>("job.list", {})
+      .then((r) => setRows(r))
+      .catch((e) => console.error("job.list failed", e));
+  }, []);
+
+  useEffect(() => {
+    load();
+    // persisted rows go stale as jobs settle — refetch when any job finishes
+    return ipc.on("job.finished", load);
+  }, [load]);
+
+  const recent = useMemo(
+    () =>
+      mergeJobRows(rows, order.map((id) => jobs[id]).filter(Boolean))
+        .filter((j) => j.job_type === "descriptor.compute")
+        .slice(0, RECENT_JOB_LIMIT),
+    [rows, jobs, order],
+  );
+
   return (
     <div
-      onClick={onClick}
       style={{
+        width: 264,
+        flex: "0 0 264px",
+        borderLeft: "1px solid #E1E4E8",
+        background: "#F9FAFB",
+        padding: 14,
         display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "8px 10px",
-        border: "1px solid #EAECF0",
-        borderRadius: 8,
-        cursor: "pointer",
-        background: "#FFFFFF",
+        flexDirection: "column",
+        overflow: "hidden",
+        minWidth: 0,
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.background = "#F5F8FC")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "#FFFFFF")}
     >
-      <span
+      <div
         style={{
-          width: 30,
-          height: 30,
-          borderRadius: 6,
-          background: "#EBF3FC",
-          color: "#0F6CBD",
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flex: "0 0 30px",
+          background: "#FFFFFF",
+          border: "1px solid #EAECF0",
+          borderRadius: 10,
+          boxShadow: "0 1px 2px rgba(16,24,40,0.06)",
+          padding: "12px 14px 14px",
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
         }}
       >
-        {icon}
-      </span>
-      <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: "#242424" }}>{title}</span>
-        <span style={{ fontSize: 11, color: "#616161", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {subtitle}
-        </span>
-      </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingBottom: 4 }}>
+          <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
+            Recent Jobs
+          </Typography.Text>
+          <Tooltip title="Latest descriptor compute jobs. Live jobs update automatically — the top-right Jobs button has the full history.">
+            <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
+              <Info16Regular />
+            </span>
+          </Tooltip>
+        </div>
+
+        {recent.length === 0 ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
+            No descriptor computes yet — submit one from this page.
+          </Typography.Text>
+        ) : (
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+            {recent.map((j, i) => (
+              <JobRailRow key={j.id} job={j} first={i === 0} />
+            ))}
+          </div>
+        )}
+
+        <Button
+          block
+          onClick={() => setJobsDrawerOpen(true)}
+          icon={<Clock16Regular />}
+          style={{
+            marginTop: 12,
+            flex: "0 0 auto",
+            borderRadius: 8,
+            borderColor: BLUE,
+            color: BLUE,
+            background: "#FFFFFF",
+            fontWeight: 600,
+          }}
+        >
+          View all jobs
+        </Button>
+      </div>
     </div>
   );
 }
 
-function RecentJob({ job }: { job: JobState }) {
-  const done = job.status === "COMPLETED";
-  const color = STATUS_COLOR[job.status];
-  const running = job.status === "RUNNING" || job.status === "QUEUED";
+function JobRailRow({ job, first }: { job: JobState; first: boolean }) {
+  const active = job.status === "RUNNING" || job.status === "QUEUED";
+  const detail =
+    job.completed != null && job.total != null
+      ? `${job.completed.toLocaleString()} / ${job.total.toLocaleString()}`
+      : job.error
+        ? job.error.message
+        : (job.message ?? "—");
   return (
-    <div style={{ border: "1px solid #EAECF0", borderRadius: 8, padding: "8px 10px" }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: "#242424", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {JOB_TYPE_LABEL[job.job_type] ?? job.job_type}
+    <div style={{ padding: "10px 0 9px", borderTop: first ? "none" : "1px solid #EAECF0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLOR[job.status], flex: "0 0 auto" }} />
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: "#242424",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
+          }}
+        >
+          {JOB_TYPE_LABEL[job.job_type] ?? job.job_type}
+        </span>
+        <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: STATUS_COLOR[job.status], flex: "0 0 auto" }}>
+          {job.status}
+        </span>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color, marginTop: 2 }}>
-        {done && <CheckmarkCircle16Filled />}
-        {statusLine(job)}
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 2 }}>
+        <span
+          style={{
+            fontSize: 11,
+            color: "#616161",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            minWidth: 0,
+          }}
+        >
+          {detail}
+        </span>
+        <span style={{ fontSize: 11, color: "#616161", fontVariantNumeric: "tabular-nums", flex: "0 0 auto" }}>
+          {job.created_at ? formatRailTime(job.created_at) : "—"}
+        </span>
       </div>
-      {running && (
-        <div style={{ height: 4, background: "#EAECF0", borderRadius: 2, marginTop: 8, overflow: "hidden" }}>
-          <div style={{ height: 4, width: `${Math.round(job.progress * 100)}%`, background: color, borderRadius: 2 }} />
-        </div>
+      {active && (
+        <Progress percent={Math.round(job.progress * 100)} size="small" strokeColor={STATUS_COLOR[job.status]} style={{ margin: "6px 0 0" }} />
       )}
     </div>
   );
 }
 
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    try {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand("copy");
-      ta.remove();
-      return ok;
-    } catch {
-      return false;
-    }
-  }
+function HealthRow({
+  icon,
+  title,
+  subtitle,
+  count,
+  total,
+  first,
+  loading,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  count: number | null;
+  total: number | null;
+  first: boolean;
+  loading: boolean;
+}) {
+  const pct = count !== null && total ? (count / total) * 100 : 0;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "11px 0",
+        borderTop: first ? "none" : "1px solid #EAECF0",
+      }}
+    >
+      <span style={{ color: BLUE, display: "inline-flex", flex: "0 0 auto" }}>{icon}</span>
+      <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "#242424" }}>{title}</span>
+        <span
+          style={{
+            fontSize: 11,
+            color: "#616161",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {subtitle}
+        </span>
+      </span>
+      <span
+        style={{
+          marginLeft: "auto",
+          fontSize: 12.5,
+          color: "#242424",
+          fontVariantNumeric: "tabular-nums",
+          whiteSpace: "nowrap",
+          flex: "0 0 auto",
+        }}
+      >
+        {loading ? "—" : `${(count ?? 0).toLocaleString()} (${pct.toFixed(2)}%)`}
+      </span>
+      <span
+        style={{
+          color: loading ? "#C9CDD4" : (count ?? 0) > 0 ? ORANGE : GREEN,
+          display: "inline-flex",
+          flex: "0 0 auto",
+        }}
+      >
+        {loading ? <CheckmarkCircle16Regular /> : (count ?? 0) > 0 ? <Warning16Filled /> : <CheckmarkCircle16Filled />}
+      </span>
+    </div>
+  );
+}
+
+function ScanRow({ scanning, lastScanAt }: { scanning: number | null; lastScanAt: string | null }) {
+  const done = scanning === null && lastScanAt;
+  const icon = scanning !== null ? (
+    <span className="rail-spin" style={{ display: "inline-flex" }}>
+      <ArrowSync16Regular />
+    </span>
+  ) : done ? (
+    <CheckmarkCircle16Regular />
+  ) : (
+    <Clock16Regular />
+  );
+  const iconColor = scanning !== null ? BLUE : done ? GREEN : GRAY;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 0", borderTop: "1px solid #EAECF0" }}>
+      <span style={{ color: iconColor, display: "inline-flex", flex: "0 0 auto" }}>{icon}</span>
+      <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "#242424" }}>Scan status</span>
+        <span style={{ fontSize: 11, color: "#616161" }}>
+          {scanning !== null ? "Scanning…" : done ? "Completed" : "Pending"}
+        </span>
+      </span>
+      <span
+        style={{
+          marginLeft: "auto",
+          fontSize: 12.5,
+          color: "#242424",
+          whiteSpace: "nowrap",
+          flex: "0 0 auto",
+        }}
+      >
+        {scanning !== null
+          ? `${Math.round(scanning * 100)}%`
+          : done
+            ? formatRailTime(lastScanAt!)
+            : "—"}
+      </span>
+    </div>
+  );
+}
+
+/** "Today 10:24 AM" style, from a UTC ISO timestamp. */
+function formatRailTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const now = new Date();
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const diffDays = Math.round((day(now) - day(date)) / 86_400_000);
+  if (diffDays === 0) return `Today ${time}`;
+  if (diffDays === 1) return `Yesterday ${time}`;
+  return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${time}`;
 }

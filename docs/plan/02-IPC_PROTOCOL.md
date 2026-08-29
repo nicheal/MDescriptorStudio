@@ -52,18 +52,20 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | method | params → result | 异步 |
 |---|---|---|
 | `system.info` | {} → {backend_version, mdescriptor_version, mdescriptor_api_version, protocol_version, platform, data_dir, cpu_threads} | 否 |
-| `dataset.list` | {} → [{id,name,format,source_path,number_of_frames,elements,properties,periodicity,fingerprint,file_size,created_at,cache_valid}] | 否 |
-| `dataset.register` | {path, format?: "deepmd"\|"extxyz", name?} → {job_id}（扫描+统计入 cache） | 是 |
+| `dataset.list` | {} → [{id,name,format,source_path,number_of_frames,elements,properties,periodicity,fingerprint,file_size,created_at,last_scan_at,cache_valid}] | 否 |
+| `dataset.register` | {path, format?: "deepmd"\|"extxyz", name?} → {job_id}（扫描+统计入 cache，统计含 health 数据健康指标） | 是 |
 | `dataset.remove` | {id} → {ok}；级联删除统计缓存与 descriptor runs/results，不碰源文件 | 否 |
 | `dataset.rename` | {id, name} → DatasetMeta（仅改显示名，name 首尾空白被裁剪） | 否 |
 | `dataset.get` | {id} → Dataset + {fingerprint_valid, stats} | 否 |
-| `dataset.statistics` | {id} → stats（直方图 bins + 摘要 + property availability）；缓存失效时自动触发重算 job | 否/是 |
+| `dataset.statistics` | {id} → stats（直方图 bins + 摘要 + property availability + health：missing_values/invalid_cell/duplicate_structures/extreme_force 帧；百分比前端按 structures 计算）；缓存失效**或缓存缺 health**（旧版缓存）时自动触发重算 job；同数据集进行中的扫描 job 会被复用（Overview/健康栏并发调用共享一个 job） | 否/是 |
+| `dataset.rescan` | {id} → {job_id}；无视缓存有效性强制全量重扫（右侧 Data Health 面板 Rescan 按钮）；与进行中的扫描 job 去重 | 是 |
 | `dataset.frame` | {id, index} → {index,natoms,formula,xyz,atom_rows,energy,energy_per_atom,force_max,volume,pbc} | 否 |
 | `descriptor.list` | {} → [{name,display_name,level,backend,category,capabilities}] | 否 |
 | `descriptor.describe` | {name} → schema 全文（含 input/execution/asset/parameters） | 否 |
 | `descriptor.submit` | {dataset_id, descriptor_name, parameters, scope: "frame"\|"dataset", frame_index?, output_dtype?} → {job_id, cache?: {existing_run_id, cache_key}} | 是 |
 | `result.list` | {dataset_id?, descriptor_name?} → [runs] | 否 |
 | `result.get` | {run_id} → metadata + 摘要（不含大数组） | 否 |
+| `result.remove` | {run_id} → {ok}；级联删除该 run 的 analysis_runs 与关联 jobs 行，并尽力删除磁盘结果/分析目录；run 处于 QUEUED/RUNNING 时拒绝（`RESULT_INCOMPATIBLE`，先取消 job） | 否 |
 | `analysis.pca` | {run_id, mode?: "structure"\|"atom"} → {job_id}；mode 缺省 structure（每帧一点，原子/配对行均值池化）；atom 模式每个原子/配对行一点并带 frame/atom 索引，超大结果均匀降采样至 ≤20k 点 | 是 |
 | `result.get_pca` | {analysis_id} → pca.json 全文（points/explained_variance/x_label/y_label/mode，点数=帧数或原子行数，非大数组） | 否 |
 | `result.heatmap` | {run_id, frame_index, max_features?} → {atoms, features, values, atomOffset}；max_features 硬上限 256（§25） | 否 |

@@ -63,10 +63,20 @@ class DeepMDAdapter(DatasetAdapter):
         self.numbers = np.asarray([z_by_type[t] for t in type_raw], dtype=np.int64)
 
         self._coords = data["coords"]
-        self._cells = data["cells"]
+        raw_cells = data.get("cells")
+        if raw_cells is None:
+            raw_cells = np.zeros((self._coords.shape[0], 3, 3))
+        self._cells = np.asarray(raw_cells, dtype=np.float64)
         self._energies = data.get("energies")
         self._forces = data.get("forces")
         self._virials = data.get("virials")
+
+        dets = np.linalg.det(self._cells) if self._cells.size else np.array([])
+        finite = np.isfinite(dets)
+        # a nopbc set (zero boxes throughout, optional marker file) is fine as
+        # isolated; a degenerate box inside an otherwise periodic system is
+        # corrupt data and must stay visible (health panel), not be masked
+        self._periodic_system = bool((finite & (np.abs(dets) > 1e-8)).any())
 
         if self._coords.ndim != 3 or self._coords.shape[1] != self.natoms:
             raise AppError(
@@ -80,14 +90,9 @@ class DeepMDAdapter(DatasetAdapter):
     def scan(self) -> ScanMeta:
         file_size = sum(f.stat().st_size for f in self.source_path.rglob("*") if f.is_file())
         symbols = sorted({_Z_TO_SYMBOL[z] for z in self.numbers.tolist()})
-        dets = np.abs(np.linalg.det(np.asarray(self._cells, dtype=np.float64))).reshape(-1)
-        periodic_mask = dets > 1e-8
-        if periodic_mask.all():
-            pbc_set = {(True, True, True)}
-        elif periodic_mask.any():
-            pbc_set = {(True, True, True), (False, False, False)}
-        else:
-            pbc_set = {(False, False, False)}
+        # frames report uniform pbc: periodic iff the system has any valid box
+        # (degenerate boxes in a periodic system keep the claim — see get_frame)
+        pbc_set = {(True, True, True)} if self._periodic_system else {(False, False, False)}
         props = {
             "energy": self._energies is not None,
             "forces": self._forces is not None,
@@ -108,7 +113,20 @@ class DeepMDAdapter(DatasetAdapter):
         if index < 0 or index >= self.number_of_frames:
             raise AppError(INVALID_PARAMS, f"frame index out of range: {index}")
         box = np.asarray(self._cells[index], dtype=np.float64).reshape(3, 3)
-        periodic = abs(float(np.linalg.det(box))) > 1e-8
+        finite = bool(np.isfinite(box).all())
+        det = abs(float(np.linalg.det(box))) if finite else 0.0
+        if det > 1e-8:
+            periodic = True
+        elif self._periodic_system:
+            # degenerate box in a periodic system: keep the periodic claim (and
+            # the raw box, so statistics flags the invalid cell). Nonfinite
+            # entries are zeroed so NaN never reaches statistics/JSON.
+            periodic = True
+            if not finite:
+                box = np.zeros((3, 3))
+        else:
+            periodic = False
+            box = np.zeros((3, 3))
         energy = None
         if self._energies is not None:
             energy = float(np.asarray(self._energies[index]).reshape(-1)[0])

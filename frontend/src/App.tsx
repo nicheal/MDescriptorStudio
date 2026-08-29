@@ -2,7 +2,6 @@ import { useCallback, useEffect, type ReactNode } from "react";
 import { App as AntApp, Button, Space } from "antd";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Clock16Regular,
   Grid16Regular,
   Image16Regular,
   Options16Regular,
@@ -17,7 +16,6 @@ import Overview from "./pages/Overview";
 import Explore from "./pages/Explore";
 import Descriptors from "./pages/Descriptors";
 import Results from "./pages/Results";
-import Jobs from "./pages/Jobs";
 import { ipc } from "./ipc/client";
 import { useWorkspace } from "./stores/workspace";
 import { wireJobEvents } from "./stores/jobs";
@@ -25,12 +23,13 @@ import { useEngineUpdate, wireEngineUpdate } from "./stores/engineUpdate";
 import type { DatasetMeta } from "./types/protocol";
 import { APP_ICON_URL } from "./brand";
 
-const TABS: { key: "overview" | "explore" | "descriptors" | "results" | "jobs"; label: string; icon: ReactNode }[] = [
+// Jobs is not a tab — the top-right Jobs button/drawer is the single jobs
+// surface, and the Descriptors rail shows recent descriptor computes.
+const TABS: { key: "overview" | "explore" | "descriptors" | "results"; label: string; icon: ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <Grid16Regular /> },
   { key: "explore", label: "Explore", icon: <Image16Regular /> },
   { key: "descriptors", label: "Descriptors", icon: <Sparkle16Regular /> },
   { key: "results", label: "Results", icon: <Options16Regular /> },
-  { key: "jobs", label: "Jobs", icon: <Clock16Regular /> },
 ];
 
 export default function App() {
@@ -278,7 +277,6 @@ export default function App() {
               {page === "explore" && <Explore />}
               {page === "descriptors" && <Descriptors />}
               {page === "results" && <Results />}
-              {page === "jobs" && <Jobs />}
             </div>
             <RightRail />
           </div>

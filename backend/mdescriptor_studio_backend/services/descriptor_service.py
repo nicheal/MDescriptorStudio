@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,11 @@ log = logging.getLogger(__name__)
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 
 _VALIDATE_TYPES = {"integer", "number", "boolean", "string", "enum", "array", "object", "model", "species"}
+
+# Loading frames occupies [0, 0.1) of the job bar; engine compute owns the rest
+# (mapped from ComputeControl counters by _report_engine_progress). Without
+# this split the load phase drives the bar to 100% before compute even starts.
+_LOAD_BAR_SHARE = 0.1
 
 
 class DescriptorService:
@@ -251,16 +257,31 @@ class DescriptorService:
                 ctx.check_cancelled()
                 frames.append(frame)
                 if (i + 1) % 500 == 0 or (i + 1) == total:
-                    ctx.progress(i + 1, total, "loading frames")
+                    ctx.progress(
+                        i + 1, total, "loading frames", fraction=(i + 1) / total * _LOAD_BAR_SHARE
+                    )
         batch = self.adapter.to_structure_batch(frames)
         log.info("compute %s: batch ready (%d frames)", run_id, len(frames))
         control = self.adapter.make_control()
         ctx.attach_control(control)
-        ctx.progress(0, total, "computing descriptor")
+        # the poller owns completed/total during compute; the reset event clears
+        # the loading phase's frame counters so the UI shows only the message
+        # until the engine reports its first checkpoint
+        ctx.progress(None, None, "computing descriptor", fraction=_LOAD_BAR_SHARE)
+        stop_poll = threading.Event()
+        poller = threading.Thread(
+            target=self._report_engine_progress, args=(ctx, control, stop_poll), daemon=True
+        )
+        poller.start()
         try:
             result = self.adapter.compute(descriptor, batch, control)
         except Exception as exc:
             raise engine_exception_to_app_error(exc) from exc
+        finally:
+            # settle the poller before any later emit so no stale fraction can
+            # land after "done"
+            stop_poll.set()
+            poller.join(timeout=1.0)
         ctx.check_cancelled()
 
         values = np.asarray(result.values)
@@ -296,7 +317,7 @@ class DescriptorService:
             "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ? WHERE id = ?",
             (_NOW(), str(run_dir), run_id),
         )
-        ctx.progress(total, total, "done")
+        ctx.progress(None, None, "done", fraction=1.0)
         return {
             "run_id": run_id,
             "shape": metadata["shape"],
@@ -304,3 +325,24 @@ class DescriptorService:
             "level": metadata["level"],
             "feature_count": metadata["feature_count"],
         }
+
+    @staticmethod
+    def _report_engine_progress(ctx, control, stop: threading.Event) -> None:
+        """Poll engine ComputeControl counters onto the compute phase's slice of
+        the job bar ([_LOAD_BAR_SHARE, 1], 05 文档 §3 进度映射).
+
+        0.2.5 kernels never advance completed() — the bar then just holds at
+        the phase base; 0.2.6 feeds per-frame checkpoints. Runs on a daemon
+        thread stopped/joined by the compute caller.
+        """
+        while not stop.wait(0.2):
+            total = control.total()
+            if total <= 0:
+                continue
+            completed = min(int(control.completed()), total)
+            ctx.progress(
+                completed,
+                total,
+                "computing descriptor",
+                fraction=_LOAD_BAR_SHARE + (1 - _LOAD_BAR_SHARE) * completed / total,
+            )

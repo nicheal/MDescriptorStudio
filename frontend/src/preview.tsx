@@ -38,6 +38,7 @@ function hist(lo: number, hi: number, bins: number, mu: number, sigma: number) {
 }
 
 // ---------- mock datasets ----------
+const NOW = Date.now();
 const DS = [
   {
     id: "ds-gaas",
@@ -55,6 +56,7 @@ const DS = [
     fingerprint: "mock-gaas",
     file_size: 152 * 1024 ** 3,
     created_at: "2024-05-18T14:32:21Z",
+    last_scan_at: new Date(NOW - 24 * 60000).toISOString(),
     cache_valid: true,
   },
   {
@@ -69,6 +71,7 @@ const DS = [
     fingerprint: "mock-si",
     file_size: 41 * 1024 ** 3,
     created_at: "2024-04-02T09:11:45Z",
+    last_scan_at: new Date(NOW - 26 * 3600_000).toISOString(),
     cache_valid: true,
   },
   {
@@ -83,6 +86,7 @@ const DS = [
     fingerprint: "mock-mos2",
     file_size: 3.2 * 1024 ** 3,
     created_at: "2024-06-11T18:03:10Z",
+    last_scan_at: new Date(NOW - 3 * 24 * 3600_000).toISOString(),
     cache_valid: true,
   },
   {
@@ -101,6 +105,7 @@ const DS = [
     fingerprint: "mock-al2o3",
     file_size: 128 * 1024 ** 3,
     created_at: "2024-03-21T11:47:00Z",
+    last_scan_at: null,
     cache_valid: false,
   },
 ];
@@ -125,10 +130,16 @@ const STATS: Record<string, unknown> = {
     volume_summary: { min: 405, max: 995, mean: 651, median: 648 },
     properties: { energy: { per_structure: true, per_atom: true }, forces: { per_atom: true }, virial: { per_structure: true } },
     periodicity: { fully_periodic: true, isolated: false, mixed: false, flags: ["X", "Y", "Z"] },
+    health: {
+      missing_values: 0,
+      invalid_cell: 0,
+      duplicate_structures: 2,
+      extreme_force: 3,
+      extreme_force_threshold: 50,
+    },
   },
 };
 
-const NOW = Date.now();
 const JOB_ROWS = [
   {
     id: "job-dpa2",
@@ -243,6 +254,50 @@ function mockFramePayload(index: number) {
   };
 }
 
+// representative engine values so sidebar badges/tooltip render all variants
+const MOCK_DESCRIPTORS = [
+  {
+    name: "dpa2",
+    display_name: "DPA4",
+    level: "atom",
+    backend: "numpy",
+    category: "model_backed",
+    capabilities: ["periodic", "charged"],
+  },
+  {
+    name: "soap",
+    display_name: "SOAP",
+    level: "structure",
+    backend: "cpp",
+    category: "local",
+    capabilities: ["periodic", "isolated"],
+  },
+  {
+    name: "coulomb_matrix",
+    display_name: "Coulomb Matrix",
+    level: "structure",
+    backend: "cpp",
+    category: "matrix",
+    capabilities: ["periodic"],
+  },
+  {
+    name: "neighbor_list",
+    display_name: "Neighbor List",
+    level: "pair",
+    backend: "cpp",
+    category: "local",
+    capabilities: ["periodic"],
+  },
+  {
+    name: "so3",
+    display_name: "SO3",
+    level: "atom",
+    backend: "cpp",
+    category: "rotational",
+    capabilities: ["periodic", "num_threads"],
+  },
+];
+
 const METHODS: Record<string, Handler> = {
   "system.info": () => ({
     backend_version: "0.3.2",
@@ -259,6 +314,12 @@ const METHODS: Record<string, Handler> = {
     job_id: null,
     stats: STATS[p.id as string] ?? null,
   }),
+  "dataset.rescan": () => {
+    window.setTimeout(() => {
+      mockEmit("job.finished", { job_id: "job-rescan", status: "COMPLETED", result: null, error: null });
+    }, 1500);
+    return { job_id: "job-rescan" };
+  },
   "dataset.frame": (p) => mockFramePayload(Number(p.index ?? 0)),
   "job.list": () => JOB_ROWS,
   "settings.get": () => ({ value: "ds-gaas" }),
@@ -270,58 +331,44 @@ const METHODS: Record<string, Handler> = {
     status: "up_to_date",
     error: null,
   }),
-  "descriptor.list": () => [
-    {
-      name: "dpa2",
-      display_name: "DPA-2",
-      level: "atom",
-      backend: "DPA4/DPA4C",
-      category: "MLIP",
-      capabilities: ["periodic", "charged"],
-    },
-    {
-      name: "soap",
-      display_name: "SOAP",
-      level: "atom",
-      backend: "dscribe",
-      category: "analytic",
-      capabilities: ["periodic", "isolated"],
-    },
-  ],
-  "descriptor.describe": (p) => ({
-    schema_version: 1,
-    name: p.name ?? "dpa2",
-    display_name: p.name === "soap" ? "SOAP" : "DPA-2",
-    description: p.name === "soap" ? "Smooth overlap of atomic positions" : "DPA-2 atom-level descriptor",
-    category: p.name === "soap" ? "analytic" : "MLIP",
-    level: "atom",
-    backend: p.name === "soap" ? "dscribe" : "DPA4/DPA4C",
-    capabilities: ["periodic", "isolated"],
-    parameters:
-      p.name === "soap"
-        ? {
-            r_cut: { type: "number", default: 6.0, minimum: 1, maximum: 20, description: "Cutoff radius (Å)" },
-            n_max: { type: "integer", default: 8, minimum: 1, maximum: 16, description: "Radial basis size" },
-            l_max: { type: "integer", default: 8, minimum: 1, maximum: 16, description: "Angular basis size" },
-            sigma: { type: "number", default: 0.5, exclusiveMinimum: 0, description: "Gaussian width (Å)" },
-          }
-        : {
-            cutoff: { type: "number", default: 6.0, minimum: 1, maximum: 20, description: "Neighbor cutoff (Å)" },
-            sel: { type: "integer", default: 128, minimum: 1, description: "Max neighbors per atom" },
-            species: { type: "array", items: { type: "string" }, default: [], description: "Species filter (symbols)" },
-            precision: { type: "string", enum: ["float32", "float64"], default: "float32" },
-          },
-    execution: { devices: ["cpu"], num_threads: true, cooperative_cancel: false },
-    input: { periodicity: ["isolated", "fully_periodic"], mixed_periodicity: false, spin: false, charge_spin: false },
-    output: { dtypes: ["float32"], sparse: false },
-    asset: {
-      policy: p.name === "soap" ? "none" : "required",
-      parameter: p.name === "soap" ? null : "model",
-      allow_external: true,
-      bundled_resources: [],
-      file_extensions: [".pt"],
-    },
-  }),
+  "descriptor.list": () => MOCK_DESCRIPTORS,
+  "descriptor.describe": (p) => {
+    const meta = MOCK_DESCRIPTORS.find((x) => x.name === (p.name ?? "dpa2")) ?? MOCK_DESCRIPTORS[0];
+    return {
+      schema_version: 1,
+      name: meta.name,
+      display_name: meta.display_name,
+      description: "Mock descriptor for the browser preview.",
+      category: meta.category,
+      level: meta.level,
+      backend: meta.backend,
+      capabilities: meta.capabilities,
+      parameters:
+        meta.name === "soap"
+          ? {
+              r_cut: { type: "number", default: 6.0, minimum: 1, maximum: 20, description: "Cutoff radius (Å)" },
+              n_max: { type: "integer", default: 8, minimum: 1, maximum: 16, description: "Radial basis size" },
+              l_max: { type: "integer", default: 8, minimum: 1, maximum: 16, description: "Angular basis size" },
+              sigma: { type: "number", default: 0.5, exclusiveMinimum: 0, description: "Gaussian width (Å)" },
+            }
+          : {
+              cutoff: { type: "number", default: 6.0, minimum: 1, maximum: 20, description: "Neighbor cutoff (Å)" },
+              sel: { type: "integer", default: 128, minimum: 1, description: "Max neighbors per atom" },
+              species: { type: "array", items: { type: "string" }, default: [], description: "Species filter (symbols)" },
+              precision: { type: "string", enum: ["float32", "float64"], default: "float32" },
+            },
+      execution: { devices: ["cpu"], num_threads: true, cooperative_cancel: false },
+      input: { periodicity: ["isolated", "fully_periodic"], mixed_periodicity: false, spin: false, charge_spin: false },
+      output: { dtypes: ["float32"], sparse: false },
+      asset: {
+        policy: meta.name === "soap" ? "none" : "required",
+        parameter: meta.name === "soap" ? null : "model",
+        allow_external: true,
+        bundled_resources: [],
+        file_extensions: [".pt"],
+      },
+    };
+  },
   "run.list": () => [
     {
       id: "run-dpa2",
@@ -440,6 +487,10 @@ function startJobPlaybook() {
 }
 
 // surface preview-only bootstrap errors on screen (dev aid)
+(window as unknown as { __TAURI_EVENT_PLUGIN_INTERNALS__: unknown }).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+  // @tauri-apps/api v2 event._unlisten calls this; nothing to clean up in the mock
+  unregisterListener: () => {},
+};
 window.addEventListener("error", (e) => showPreviewError(e.message ?? String(e.error)));
 window.addEventListener("unhandledrejection", (e) =>
   showPreviewError(String((e.reason as Error)?.stack ?? e.reason)),
@@ -474,6 +525,12 @@ function showPreviewError(text: string) {
 }
 
 (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+  // TitleBar calls getCurrentWindow() — give it a label so the Window handle
+  // resolves; window commands (minimize/maximize/close) fall through to no-op.
+  metadata: {
+    currentWindow: { label: "main" },
+    currentWebview: { windowLabel: "main", label: "main" },
+  },
   transformCallback: (cb: (e: unknown) => void) => {
     // the event API wraps callbacks; we hand back the function for direct use
     return cb;

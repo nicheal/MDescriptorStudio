@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from ..errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
@@ -47,6 +48,42 @@ class ResultService:
         row = self.get({"run_id": run_id})
         path = Path(row["result_path"])
         return np.load(path / "values.npy"), row
+
+    def remove(self, params: dict) -> dict:
+        """Delete ONE run: DB rows (runs, analyses, linked jobs) + result dirs."""
+        run_id = params.get("run_id")
+        row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (run_id,))
+        if row is None:
+            raise AppError(INVALID_PARAMS, f"run {run_id} does not exist")
+        if row["status"] in ("QUEUED", "RUNNING"):
+            raise AppError(
+                RESULT_INCOMPATIBLE,
+                f"run {run_id} is {row['status']} — cancel its job first",
+            )
+
+        analyses = self.db.query(
+            "SELECT id, result_path FROM analysis_runs WHERE descriptor_run_id = ?", (run_id,)
+        )
+        # linked jobs first: they reference runs/analyses being deleted below
+        self.db.execute(
+            "DELETE FROM jobs WHERE descriptor_run_id = ? OR analysis_run_id IN"
+            " (SELECT id FROM analysis_runs WHERE descriptor_run_id = ?)",
+            (run_id, run_id),
+        )
+        self.db.execute("DELETE FROM analysis_runs WHERE descriptor_run_id = ?", (run_id,))
+        self.db.execute("DELETE FROM descriptor_runs WHERE id = ?", (run_id,))
+
+        # disk cleanup is best-effort: the DB rows are the source of truth, and
+        # dataset.remove already tolerates orphaned dirs on disk
+        self._rmtree_quiet(row["result_path"])
+        for ana in analyses:
+            self._rmtree_quiet(ana["result_path"])
+        return {"ok": True}
+
+    @staticmethod
+    def _rmtree_quiet(path: str | None) -> None:
+        if path:
+            shutil.rmtree(path, ignore_errors=True)
 
     # -- M5 helpers ------------------------------------------------------------
     def get_pca(self, params: dict) -> dict:

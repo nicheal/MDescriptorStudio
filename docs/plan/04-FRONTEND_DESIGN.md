@@ -35,15 +35,15 @@ frontend/src/
 │ Dataset      │        Results | Jobs                          │
 │ Storage 合计  ├──────────────────────────────┬────────────────┤
 │              │ Main Workspace（页面内容）     │ RightRail 264px │
-│              │ 高度自适应视口，默认零滚动条    │ Quick Actions   │
-│              │ [+ Inspector]                 │ Recent Jobs ×3  │
+│              │ 高度自适应视口，默认零滚动条    │ Data Health     │
+│              │ [+ Inspector]                 │ + Rescan        │
 ├──────────────┴──────────────────────────────┴────────────────┤
 │ StatusBar: ● Ready | MDescriptor 0.3.2 | CPU n threads        │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 - Jobs 徽标 + Drawer（M4）：Drawer 展示运行中任务、进度条 4–6px、Cancel；Jobs Tab 展示 `job.list` 历史 + 会话实时事件合并表。
-- RightRail 264px 常驻（Quick Actions 4 项 + Recent Jobs 最近 3 条，Running/Queued 优先），<1280px 宽自动隐藏。
+- RightRail 264px 常驻（**Data Health 面板**：Missing values / Invalid cell / Duplicate structures / Extreme force 四项检查（0=绿勾，>0=橙警告，计数+占 structures 百分比）+ Scan status（Completed/Scanning…/Pending + 时间）+ Rescan 按钮，`dataset.statistics` 缓存读取、`dataset.rescan` 强制重扫），<1280px 宽自动隐藏。2026-08 起取代原 Quick Actions + Recent Jobs（任务历史归 Jobs Tab）。
 - Inspector 280px，可折叠（`>` 按钮），<1280px 宽自动折叠。
 - 窗口 min 1280×760，默认 1440×900；内容按视口高度自适应，默认零滚动条，过小窗口回退为面板内滚动。
 - dev 预览：`frontend/preview.html`（mock IPC，浏览器直接验证布局，不入产物）。
@@ -100,7 +100,7 @@ class IpcClient {
 
 | 页面 | 内容 | 填充里程碑 |
 |---|---|---|
-| Overview | Summary 键值区（Structures/Atoms/Elements/Properties/Format/PBC/Created/File Size）+ Element Distribution 环形图 + 4 张直方图（E/atom、Force、Volume、Atoms/structure）+ Property Availability 矩阵（Virial 行，无 Magnetic Moment）+ Quick Actions（Explore/Compute/Statistics 快捷导航）+ Recent Jobs | M1（统计/直方图）、M4（Recent Jobs） |
+| Overview | Summary 键值区（Structures/Atoms/Elements/Properties/Format/PBC/Created/File Size）+ Element Distribution 环形图 + 4 张直方图（E/atom、Force、Volume、Atoms/structure）+ Property Availability 矩阵（Virial 行，无 Magnetic Moment）；右侧常驻栏为 Data Health 面板（四项数据健康检查 + Scan status + Rescan） | M1（统计/直方图） |
 | Explore | 帧导航条（i/N、prev/next/random/index）+ 3Dmol Viewer（70%）+ Structure Inspector（30%）+ Atom Table | M2 |
 | Descriptors | registry 列表 + describe 信息 Inspector + schema 动态表单（8 类型 + 一层嵌套 object + model 两态）+ Execution（Device=CPU/Threads/Output/Scope）+ [Calculate] + input 兼容预检禁用 | M3（提交在 M4 走通计算） |
 | Results | run 列表 + PCA plot-first（75–80%）+ Heatmap（atom 级当前结构）+ Selected Sample Inspector + Open Explore | M5 |
