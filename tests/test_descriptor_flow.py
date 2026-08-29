@@ -50,7 +50,7 @@ def test_descriptor_registry_and_compute(tmp_path: Path) -> None:
         done = wait_job(bp, sub["result"]["job_id"], timeout=300)
         assert done["status"] == "COMPLETED", done
         run_id = done["result"]["run_id"]
-        assert done["result"]["shape"] == [12, done["result"]["feature_count"]]
+        assert done["result"]["shape"] == [12 * 64, done["result"]["feature_count"]]  # atom level
         assert done["result"]["level"] == "DescriptorLevel.ATOM"
 
         # second submit hits the cache
@@ -72,7 +72,7 @@ def test_descriptor_registry_and_compute(tmp_path: Path) -> None:
         meta = got["result"]["metadata"]
         assert meta["descriptor"] == "ACE"
         assert meta["dataset_fingerprint"]
-        assert meta["shape"] == [12, done["result"]["feature_count"]]
+        assert meta["shape"] == [12 * 64, done["result"]["feature_count"]]
         assert Path(got["result"]["result_path"], "values.npy").exists()
 
         # validation errors

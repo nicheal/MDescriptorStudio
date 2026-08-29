@@ -77,6 +77,10 @@ def main() -> int:
     adapter = EngineAdapter()
     info = adapter.runtime_info()
     log.info("engine %s (api v%s)", info.get("version"), info.get("api_version"))
+    # resolve every lazy native import on the main thread BEFORE any worker /
+    # stdin reader thread exists (engine lazy-import deadlock, see adapter.warmup)
+    adapter.warmup()
+    log.info("engine warmup complete")
 
     server = Server(methods={}, on_stop=db.close)
     jobs = JobService(db, server.emit)

@@ -78,6 +78,7 @@ convert errors            → 引擎异常 → GUI 错误码
 
 ## 6. 约束
 
+- **启动预热（关键，0.2.3 实测）**：`create_descriptor` 会懒加载原生扩展模块；若在存在工作线程/stdin 读取线程时触发该 import，会与 import 机制死锁（构建永久阻塞直到 stdin EOF）。因此 main() 在启动任何线程之前，于主线程调用 `adapter.warmup()`——逐个构建全部 28 个描述符并做一次微计算，`backend.ready` 在预热完成后才发出。新增描述符注册路径（如有）不得绕过该预热。
 - 只写 canonical 字段（schema 的 `name` 键），不使用历史 Python aliases（§8.2）。
 - 大数组不经过本模块进 IPC（Rule 6）：`compute` 返回的 `DescriptorResult` 由 ResultService 直接落盘 values.npy。
 - 本模块的任何行为变化都必须先反映在 `engine-api-report.json` 的 diff 里，不允许「代码先行、文档后补」。

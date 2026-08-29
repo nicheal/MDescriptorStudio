@@ -110,6 +110,59 @@ class EngineAdapter:
                 f"engine rejected StructureBatch: {exc}",
             ) from exc
 
+    # -- warmup --------------------------------------------------------------
+    def warmup(self) -> None:
+        """Build every registered descriptor once on the calling (main) thread.
+
+        create_descriptor lazily imports native extension modules; resolving
+        those imports while worker threads (or a stdin reader thread) are live
+        deadlocks the import machinery (observed on 0.2.3/win). Running the
+        warmup before any thread exists removes the lazy import entirely.
+        """
+        import numpy as np
+
+        numbers = np.array([1], dtype=np.int64)
+        batch = md.StructureBatch(
+            numbers=numbers,
+            positions=np.array([[0.0, 0.0, 0.0]]),
+            cells=np.zeros((1, 3, 3)),
+            pbc=np.zeros((1, 3), dtype=bool),
+            offsets=np.array([0, 1]),
+            ids=("warmup",),
+        )
+        for name in self.list_names():
+            schema = self.schema(name)
+            params: dict = {}
+            for key, meta in schema.get("parameters", {}).items():
+                if not meta.get("required"):
+                    continue
+                ptype = meta.get("type")
+                if ptype == "species":
+                    params[key] = [1]
+                elif ptype == "integer":
+                    params[key] = int(meta.get("default") or 1)
+                elif ptype == "number":
+                    params[key] = float(meta.get("default") if meta.get("default") is not None else 1.0)
+                elif ptype == "boolean":
+                    params[key] = bool(meta.get("default", False))
+                elif ptype == "enum":
+                    params[key] = (meta.get("enum") or [""])[0]
+                elif ptype in ("array",):
+                    params[key] = meta.get("default") or []
+                elif ptype == "model":
+                    continue  # bundled resource resolves automatically
+                else:
+                    default = meta.get("default")
+                    if default is not None:
+                        params[key] = default
+            try:
+                descriptor = self.build(name, params)
+                self.compute(descriptor, batch)
+            except Exception as exc:  # noqa: BLE001 - warmup is best-effort per descriptor
+                log.info("warmup skipped %s: %s", name, exc)
+            else:
+                log.info("warmup ok: %s", name)
+
     # -- errors ------------------------------------------------------------
     @staticmethod
     def _convert(exc: md.MDescriptorError) -> AppError:

@@ -236,7 +236,9 @@ class DescriptorService:
             (_NOW(), run_id),
         )
         ctx.check_cancelled()
+        log.info("compute %s: building descriptor %s", run_id, name)
         descriptor = self.adapter.build(name, parameters)
+        log.info("compute %s: built, loading frames", run_id)
         if scope == "frame":
             frames = [self.datasets._adapter_for(row).get_frame(frame_index)]
             total = 1
@@ -250,6 +252,7 @@ class DescriptorService:
                 if (i + 1) % 500 == 0 or (i + 1) == total:
                     ctx.progress(i + 1, total, "loading frames")
         batch = self.adapter.to_structure_batch(frames)
+        log.info("compute %s: batch ready (%d frames)", run_id, len(frames))
         control = self.adapter.make_control()
         ctx.attach_control(control)
         ctx.progress(0, total, "computing descriptor")
