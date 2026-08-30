@@ -103,3 +103,25 @@ def test_wide_correlation_keeps_heatmap_bounded(samples: SampleMatrix) -> None:
     assert matrix.shape == (32, 32)
     assert result["arrays"]["pairs"].shape == (12, 2)
     assert any("limited" in warning for warning in result["warnings"])
+
+
+def test_feature_correlation_is_bounded_and_keeps_unit_diagonal() -> None:
+    values = np.array([[0.0, 0.0, 1.0], [1.0, 1.0, 1.0], [2.0, 2.0, 1.0]])
+    result = AnalysisEngine.feature_correlation(SampleMatrix(values, np.arange(3)), {})
+    matrix = result["arrays"]["correlation_matrix"]
+    assert np.allclose(np.diag(matrix), 1.0)
+    assert np.all(np.abs(matrix) <= 1.0 + 1e-12)
+    assert np.isclose(result["arrays"]["correlations"][0], 1.0)
+
+
+def test_effective_dimension_reports_zero_thresholds_for_constant_input() -> None:
+    values = np.ones((4, 2), dtype=np.float64)
+    result = AnalysisEngine.effective_dimension(SampleMatrix(values, np.arange(4)), {})
+    assert result["preview"]["participation_ratio"] == 0.0
+    assert result["preview"]["components_for_threshold"] == {"0.9": 0, "0.95": 0, "0.99": 0}
+
+
+def test_tsne_adapts_default_perplexity_for_small_inputs() -> None:
+    values = np.arange(8, dtype=np.float64).reshape(4, 2)
+    result = AnalysisEngine.tsne(SampleMatrix(values, np.arange(4)), {"max_iter": 250})
+    assert result["preview"]["parameters"]["perplexity"] == 3.0

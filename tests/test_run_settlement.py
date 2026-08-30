@@ -10,6 +10,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 from mdescriptor_studio_backend.services.analysis_service import AnalysisService  # noqa: E402
@@ -17,6 +19,7 @@ from mdescriptor_studio_backend.services.descriptor_service import DescriptorSer
 from mdescriptor_studio_backend.services.job_service import JobService  # noqa: E402
 from mdescriptor_studio_backend.services.result_service import ResultService  # noqa: E402
 from mdescriptor_studio_backend.storage.database import Database  # noqa: E402
+from mdescriptor_studio_backend.errors import RESULT_INCOMPATIBLE, AppError  # noqa: E402
 
 _TERMINAL = ("COMPLETED", "FAILED", "CANCELLED")
 
@@ -135,12 +138,9 @@ def test_failed_analysis_settles_analysis_run(tmp_path: Path) -> None:
         " VALUES ('run_1', 'ds_1', 'ACE', 'test', '{}', 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00')"
     )
     analysis = AnalysisService(db, jobs, ResultService(db), datasets=None, data_dir=tmp_path)
-    resp = analysis.pca({"run_id": "run_1"})  # run has no result files -> fails inside the job
-    done = _wait_terminal(jobs, resp["job_id"])
-    assert done["status"] == "FAILED", done
-
-    row = db.query_one("SELECT status FROM analysis_runs WHERE id = ?", (resp["analysis_id"],))
-    assert row["status"] == "FAILED", row  # stays QUEUED without the fix
+    with pytest.raises(AppError) as exc:
+        analysis.pca({"run_id": "run_1"})
+    assert exc.value.code == RESULT_INCOMPATIBLE
     jobs.shutdown()
 
 

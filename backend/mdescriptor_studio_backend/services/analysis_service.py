@@ -52,28 +52,27 @@ class AnalysisService:
         self._pca_submit_lock = threading.Lock()
 
     def pca(self, params: dict) -> dict:
+        params = dict(params or {})
         run_id = params.get("run_id")
         if not run_id:
             raise AppError(INVALID_PARAMS, "'run_id' is required")
         mode = params.get("mode") or "structure"
         if mode not in ("structure", "atom"):
             raise AppError(INVALID_PARAMS, f"mode must be 'structure' or 'atom', got {mode!r}")
-        row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (run_id,))
-        if row is None:
-            raise AppError(INVALID_PARAMS, f"run {run_id} does not exist")
-        if row["status"] == "STALE":
-            raise AppError(ANALYSIS_STALE, f"run {run_id} is STALE and cannot feed new analysis")
-        self._assert_dataset_current(row)
+        row = self._usable_run(run_id)
+        preprocess = str(params.get("preprocess") or "center")
+        if preprocess not in ("raw", "center", "standardized"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
         # Keep the compatibility PCA entry point deterministic with the same
         # explicit defaults as the generic Analysis API. Older rows with only
         # ``mode`` (or an empty object) remain reusable through the matcher.
-        analysis_params = {"mode": mode, "seed": 42, "preprocess": "center"}
+        analysis_params = {"mode": mode, "seed": 42, "preprocess": preprocess}
         params_json = json.dumps(
             analysis_params, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
 
         with self._pca_submit_lock:
-            cached = self._find_cached_pca(run_id, mode)
+            cached = self._find_cached_pca(run_id, mode, preprocess)
             if cached is not None:
                 return {
                     "job_id": None,
@@ -81,7 +80,7 @@ class AnalysisService:
                     "cache": {"existing_analysis_id": cached["id"]},
                 }
 
-            active = self._find_active_pca(run_id, mode)
+            active = self._find_active_pca(run_id, mode, preprocess)
             if active is not None and active["job_id"]:
                 return {
                     "job_id": active["job_id"],
@@ -107,7 +106,7 @@ class AnalysisService:
                 ctx.progress(0, 1, "loading values")
                 values, run_row = self.results.load_values(run_id)
                 ctx.check_cancelled()
-                coords, explained, frames, atoms = self._pca_points(values, run_row, mode)
+                coords, explained, frames, atoms = self._pca_points(values, run_row, mode, preprocess)
                 n_points = coords.shape[0]
                 ctx.progress(0.7, 1, "assembling points")
                 frame_props = self._frame_properties(
@@ -120,6 +119,7 @@ class AnalysisService:
                     "analysis_id": analysis_id,
                     "run_id": run_id,
                     "mode": mode,
+                    "preprocess": preprocess,
                     "n_points": int(n_points),
                     "points": [
                         {
@@ -133,8 +133,8 @@ class AnalysisService:
                         for i in range(n_points)
                     ],
                     "explained_variance": [round(float(v), 6) for v in explained[:2]],
-                    "x_label": f"PC1 ({explained[0] * 100:.1f}%)",
-                    "y_label": f"PC2 ({explained[1] * 100:.1f}%)",
+                    "x_label": f"PC1 ({explained[0] * 100:.1f}%)" if explained.size else "PC1",
+                    "y_label": f"PC2 ({explained[1] * 100:.1f}%)" if explained.size > 1 else "PC2",
                 }
                 (out_dir / "pca.json").write_text(
                     json.dumps(payload, ensure_ascii=False), encoding="utf-8"
@@ -151,7 +151,7 @@ class AnalysisService:
             )
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
-    def _find_cached_pca(self, run_id: str, mode: str) -> dict | None:
+    def _find_cached_pca(self, run_id: str, mode: str, preprocess: str = "center") -> dict | None:
         """Find the newest usable completed PCA for this run and mode.
 
         Parameters are normalized in Python so cache entries written by older
@@ -165,11 +165,11 @@ class AnalysisService:
             (run_id,),
         )
         for row in rows:
-            if self._pca_params_match(row["params_json"], mode) and self._pca_artifact_exists(row):
+            if self._pca_params_match(row["params_json"], mode, preprocess) and self._pca_artifact_exists(row):
                 return row
         return None
 
-    def _find_active_pca(self, run_id: str, mode: str) -> dict | None:
+    def _find_active_pca(self, run_id: str, mode: str, preprocess: str = "center") -> dict | None:
         rows = self.db.query(
             "SELECT id, params_json, status FROM analysis_runs"
             " WHERE descriptor_run_id = ? AND analysis_type = 'pca'"
@@ -178,7 +178,7 @@ class AnalysisService:
             (run_id,),
         )
         for row in rows:
-            if not self._pca_params_match(row["params_json"], mode):
+            if not self._pca_params_match(row["params_json"], mode, preprocess):
                 continue
             job = self.db.query_one(
                 "SELECT id FROM jobs WHERE analysis_run_id = ?"
@@ -189,7 +189,7 @@ class AnalysisService:
         return None
 
     @staticmethod
-    def _pca_params_match(raw: str | None, mode: str) -> bool:
+    def _pca_params_match(raw: str | None, mode: str, preprocess: str = "center") -> bool:
         try:
             saved = json.loads(raw or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -199,7 +199,7 @@ class AnalysisService:
             saved_seed = int(saved.get("seed", 42))
         except (AttributeError, TypeError, ValueError):
             return False
-        return saved_mode == mode and saved_seed == 42 and str(saved.get("preprocess") or "center") == "center"
+        return saved_mode == mode and saved_seed == 42 and str(saved.get("preprocess") or "center") == preprocess
 
     @staticmethod
     def _pca_artifact_exists(row: dict) -> bool:
@@ -207,7 +207,7 @@ class AnalysisService:
         return bool(result_path and (Path(result_path) / "pca.json").is_file())
 
     @classmethod
-    def _pca_points(cls, values: np.ndarray, run_row: dict, mode: str):
+    def _pca_points(cls, values: np.ndarray, run_row: dict, mode: str, preprocess: str = "center"):
         """Return (coords, explained, frames, atoms|None).
 
         Structure mode: one point per frame (atom/pair rows mean-pooled).
@@ -217,36 +217,41 @@ class AnalysisService:
         """
         path = Path(run_row["result_path"])
         offsets_file = path / "row_offsets.npy"
-        atom_level = values.ndim == 2 and offsets_file.exists()
+        offsets = np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64) if offsets_file.exists() else None
+        atom_level = values.ndim == 2 and cls._valid_offsets(offsets, values.shape[0])
+        if mode == "atom" and not atom_level:
+            raise AppError(ANALYSIS_INPUT_INVALID, "atom/local-environment PCA requires verified row_offsets")
         if mode == "structure" or not atom_level:
             pooled = cls._pool_per_structure(values, run_row)
-            frames = np.arange(pooled.shape[0])
+            frames = cls._run_frame_values(run_row, pooled.shape[0])
             atoms = None
         else:
-            offsets = np.load(offsets_file)
-            if offsets.size <= 2 or int(offsets[-1]) != values.shape[0]:
-                pooled = cls._pool_per_structure(values, run_row)
-                frames = np.arange(pooled.shape[0])
-                atoms = None
-            else:
-                counts = np.diff(offsets).astype(int)
-                frames = np.repeat(np.arange(counts.size), counts)
-                atoms = np.arange(values.shape[0]) - offsets[frames]
-                pooled = values
-                max_points = 20000
-                if pooled.shape[0] > max_points:
-                    keep = np.unique(np.linspace(0, pooled.shape[0] - 1, max_points).astype(int))
-                    pooled, frames, atoms = pooled[keep], frames[keep], atoms[keep]
-        coords, explained = cls._pca(pooled)
+            counts = np.diff(offsets).astype(int)
+            local_frames = np.repeat(np.arange(counts.size, dtype=np.int64), counts)
+            frame_values = cls._run_frame_values(run_row, counts.size)
+            frames = frame_values[local_frames]
+            atoms = np.arange(values.shape[0], dtype=np.int64) - offsets[local_frames]
+            pooled = values
+            max_points = 20000
+            if pooled.shape[0] > max_points:
+                keep = np.unique(np.linspace(0, pooled.shape[0] - 1, max_points).astype(int))
+                pooled, frames, atoms = pooled[keep], frames[keep], atoms[keep]
+        coords, explained = cls._pca(pooled, preprocess)
         return coords, explained, frames, atoms
+
+    @staticmethod
+    def _run_frame_values(run_row: dict, count: int) -> np.ndarray:
+        if run_row.get("scope") == "frame":
+            return np.full(count, int(run_row.get("frame_index") or 0), dtype=np.int64)
+        return np.arange(count, dtype=np.int64)
 
     @staticmethod
     def _pool_per_structure(values: np.ndarray, run_row: dict) -> np.ndarray:
         path = Path(run_row["result_path"])
         offsets_file = path / "row_offsets.npy"
         if values.ndim == 2 and offsets_file.exists():
-            offsets = np.load(offsets_file)
-            if offsets.size > 2:  # atom/pair level: one row per atom
+            offsets = np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64)
+            if AnalysisService._valid_offsets(offsets, values.shape[0]):
                 n_struct = offsets.size - 1
                 dim = values.shape[1]
                 pooled = np.empty((n_struct, dim), dtype=np.float64)
@@ -260,15 +265,35 @@ class AnalysisService:
         return values.reshape(values.shape[0], -1)
 
     @staticmethod
-    def _pca(x: np.ndarray):
-        mean = x.mean(axis=0)
-        xc = x - mean
+    def _pca(x: np.ndarray, preprocess: str = "center"):
+        x = np.asarray(x, dtype=np.float64)
+        if x.ndim != 2 or x.shape[0] == 0 or x.shape[1] == 0 or not np.isfinite(x).all():
+            raise AppError(ANALYSIS_INPUT_INVALID, "analysis input must be a finite, non-empty 2D matrix")
+        if preprocess not in ("raw", "center", "standardized"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
+        if preprocess == "raw":
+            prepared = x
+        else:
+            centered = x - x.mean(axis=0)
+            if preprocess == "center":
+                prepared = centered
+            else:
+                scale = centered.std(axis=0)
+                keep = scale > np.finfo(np.float64).eps
+                if not bool(keep.any()):
+                    keep = np.ones(centered.shape[1], dtype=bool)
+                    scale = np.ones(centered.shape[1], dtype=np.float64)
+                prepared = centered[:, keep] / np.where(scale[keep] > 0, scale[keep], 1.0)
+        xc = prepared
         # SVD on up to ~12k x few-hundred matrix is fast and stable
-        u, s, vt = np.linalg.svd(xc, full_matrices=False)
+        _u, s, vt = np.linalg.svd(xc, full_matrices=False)
         var = (s**2) / max(x.shape[0] - 1, 1)
         total = float(var.sum()) or 1.0
         explained = var / total
-        coords = xc @ vt[:2].T
+        components = min(2, vt.shape[0])
+        coords = xc @ vt[:components].T
+        if components < 2:
+            coords = np.pad(coords, ((0, 0), (0, 2 - components)))
         return coords, explained
 
     def _frame_properties(self, run_row: dict, n_points: int) -> list[dict]:
@@ -534,7 +559,8 @@ class AnalysisService:
                 ctx.check_cancelled()
                 result = self._run_engine(analysis_type, params, run_rows, samples, ctx)
                 ctx.check_cancelled()
-                preview = self._build_preview(result, samples[0], analysis_type)
+                preview_samples = samples[1] if analysis_type in ("coverage", "drift") else samples[0]
+                preview = self._build_preview(result, preview_samples, analysis_type)
                 out_dir, manifest = self._commit_artifact(
                     analysis_id,
                     analysis_type,
@@ -558,7 +584,8 @@ class AnalysisService:
                     ),
                 )
                 ctx.progress(1, 1, "analysis complete")
-                return {"analysis_id": analysis_id, "n_points": samples[0].n_samples, "analysis_type": analysis_type, "warnings": result.get("warnings", [])}
+                n_points = preview_samples.n_samples if analysis_type in ("coverage", "drift") else samples[0].n_samples
+                return {"analysis_id": analysis_id, "n_points": n_points, "analysis_type": analysis_type, "warnings": result.get("warnings", [])}
 
             job_id = self.jobs.submit(
                 f"analysis.{analysis_type}",
@@ -588,38 +615,53 @@ class AnalysisService:
         target = str(params.get("output_path") or "")
         if not target:
             raise AppError(ANALYSIS_INPUT_INVALID, "output_path is required for export")
+        target = str(Path(target).expanduser())
         canonical = self._canonical_params({"format": export_format, "indices": sorted(set(selected)), "output_path": target, "mode": mode})
         cache_key = hashlib.sha256(json.dumps({"analysis_type": "export", "inputs": input_ids, "params": canonical, "algorithm_version": _ALGORITHM_VERSION}, sort_keys=True).encode()).hexdigest()
-        cached = self.db.query_one("SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED'", (cache_key,))
-        if cached and self._artifact_is_complete(cached):
-            return {"job_id": None, "analysis_id": cached["id"], "cache": {"existing_analysis_id": cached["id"], "cache_key": cache_key}}
-        analysis_id = f"ana_{uuid.uuid4().hex[:12]}"
-        self.db.execute(
-            "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at, input_run_ids_json, dataset_ids_json, cache_key, schema_version, algorithm_version, updated_at) VALUES (?, ?, 'export', ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)",
-            (analysis_id, run["id"], json.dumps(canonical, ensure_ascii=False, sort_keys=True), _NOW(), json.dumps(input_ids), json.dumps([run["dataset_id"]]), cache_key, _ANALYSIS_SCHEMA_VERSION, _ALGORITHM_VERSION, _NOW()),
-        )
 
-        def runner(ctx):
-            ctx.progress(0, 1, "writing export")
-            path = self._write_export(run, selected, export_format, mode, Path(target), ctx)
-            out_dir, manifest = self._commit_artifact(
-                analysis_id,
-                "export",
-                input_ids,
-                canonical,
-                {"arrays": {}, "warnings": [], "export_path": str(path)},
-                {"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)},
-                ctx,
+        with self._pca_submit_lock:
+            cached = self.db.query_one("SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED'", (cache_key,))
+            if cached and self._artifact_is_complete(cached):
+                return {"job_id": None, "analysis_id": cached["id"], "cache": {"existing_analysis_id": cached["id"], "cache_key": cache_key}}
+            active = self.db.query_one(
+                "SELECT * FROM analysis_runs WHERE cache_key = ? AND status IN ('QUEUED', 'RUNNING') ORDER BY created_at DESC LIMIT 1",
+                (cache_key,),
             )
-            self.db.execute(
-                "UPDATE analysis_runs SET status = 'COMPLETED', result_path = ?, finished_at = ?, artifact_manifest_json = ?, preview_json = ?, updated_at = ? WHERE id = ?",
-                (str(out_dir), _NOW(), json.dumps(manifest), json.dumps({"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)}), _NOW(), analysis_id),
-            )
-            ctx.progress(1, 1, "export complete")
-            return {"analysis_id": analysis_id, "output_path": str(path), "selected_count": len(selected)}
+            if active:
+                job = self.db.query_one(
+                    "SELECT id FROM jobs WHERE analysis_run_id = ? AND status IN ('QUEUED', 'RUNNING') ORDER BY created_at DESC LIMIT 1",
+                    (active["id"],),
+                )
+                if job:
+                    return {"job_id": job["id"], "analysis_id": active["id"], "cache": {"existing_analysis_id": active["id"], "status": active["status"], "cache_key": cache_key}}
+            analysis_id = active["id"] if active else f"ana_{uuid.uuid4().hex[:12]}"
+            if not active:
+                self.db.execute(
+                    "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at, input_run_ids_json, dataset_ids_json, cache_key, schema_version, algorithm_version, updated_at) VALUES (?, ?, 'export', ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)",
+                    (analysis_id, run["id"], json.dumps(canonical, ensure_ascii=False, sort_keys=True), _NOW(), json.dumps(input_ids), json.dumps([run["dataset_id"]]), cache_key, _ANALYSIS_SCHEMA_VERSION, _ALGORITHM_VERSION, _NOW()),
+                )
 
-        job_id = self.jobs.submit("analysis.export", runner, dataset_id=run["dataset_id"], analysis_run_id=analysis_id)
-        return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
+            def runner(ctx):
+                ctx.progress(0, 1, "writing export")
+                path = self._write_export(run, selected, export_format, mode, Path(target), ctx)
+                out_dir, manifest = self._commit_artifact(
+                    analysis_id,
+                    "export",
+                    input_ids,
+                    canonical,
+                    {"arrays": {}, "warnings": [], "export_path": str(path)},
+                    {"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)},
+                    ctx,
+                )
+                self.db.execute(
+                    "UPDATE analysis_runs SET status = 'COMPLETED', result_path = ?, finished_at = ?, artifact_manifest_json = ?, preview_json = ?, updated_at = ? WHERE id = ?",
+                    (str(out_dir), _NOW(), json.dumps(manifest), json.dumps({"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)}), _NOW(), analysis_id),
+                )
+                ctx.progress(1, 1, "export complete")
+                return {"analysis_id": analysis_id, "output_path": str(path), "selected_count": len(selected)}
+
+            job_id = self.jobs.submit("analysis.export", runner, dataset_id=run["dataset_id"], analysis_run_id=analysis_id)
+            return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
     def _run_engine(self, analysis_type: str, params: dict, rows: list[dict], samples: list[SampleMatrix], ctx) -> dict:
         progress = lambda fraction, message: (ctx.check_cancelled(), ctx.progress(None, None, message, fraction=0.1 + 0.85 * float(fraction)))
@@ -727,11 +769,13 @@ class AnalysisService:
                 raise AppError(ANALYSIS_INPUT_INVALID, "atom/local-environment analysis requires verified row_offsets")
             if not declared_atom:
                 raise AppError(ANALYSIS_INPUT_INVALID, "descriptor metadata does not declare atom/local-environment rows")
-            frames = np.repeat(np.arange(len(offsets) - 1, dtype=np.int64), np.diff(offsets).astype(np.int64))
-            rows = np.arange(values.shape[0], dtype=np.int64) - offsets[frames]
+            local_frames = np.repeat(np.arange(len(offsets) - 1, dtype=np.int64), np.diff(offsets).astype(np.int64))
+            frame_values = self._run_frame_values(row, len(offsets) - 1)
+            frames = frame_values[local_frames]
+            rows = np.arange(values.shape[0], dtype=np.int64) - offsets[local_frames]
             sample_ids = [f"frame:{int(f)}:row:{int(r)}" for f, r in zip(frames, rows)]
             used = values
-            elements = self._atom_elements(row, offsets, frames)
+            elements = self._atom_elements(row, offsets, local_frames)
             mode = "atom"
         elif valid_offsets and declared_atom:
             n_frames = len(offsets) - 1
@@ -764,7 +808,7 @@ class AnalysisService:
         except (TypeError, ValueError):
             return False
 
-    def _atom_elements(self, run_row: dict, offsets, frames: np.ndarray) -> object:
+    def _atom_elements(self, run_row: dict, offsets, local_frames: np.ndarray) -> object:
         """Load element labels only when a dataset adapter can verify them."""
         import numpy as np
 
@@ -776,11 +820,12 @@ class AnalysisService:
         try:
             adapter = self.datasets._adapter_for(dataset)
             labels = []
-            for i in range(len(offsets) - 1):
-                labels.extend([int(z) for z in adapter.get_frame(i).numbers.tolist()])
-            if len(labels) != len(frames):
+            frame_values = self._run_frame_values(run_row, len(offsets) - 1)
+            for frame_index in frame_values.tolist():
+                labels.extend([int(z) for z in adapter.get_frame(int(frame_index)).numbers.tolist()])
+            if len(labels) != len(local_frames):
                 return None
-            return np.asarray(labels)
+            return np.asarray(labels, dtype=np.int64)
         except Exception:  # element labels are optional metadata, not a reason to corrupt a run
             return None
 
@@ -794,15 +839,25 @@ class AnalysisService:
     def _build_preview(self, result: dict, samples: SampleMatrix, analysis_type: str) -> dict:
         arrays = result.get("arrays", {})
         preview = dict(result.get("preview") or {})
+
+        def sample_identity(index: int) -> dict | None:
+            if index < 0 or index >= samples.n_samples:
+                return None
+            item = {"i": index, "frame": int(samples.frame[index]), "sample_id": samples.sample_ids[index]}
+            if samples.row is not None:
+                item["row"] = int(samples.row[index])
+            return item
+
         if "coords" in arrays:
             coords = np.asarray(arrays["coords"])
-            count = min(coords.shape[0], _MAX_PREVIEW_POINTS)
+            count = min(coords.shape[0], samples.n_samples, _MAX_PREVIEW_POINTS)
             indices = np.linspace(0, coords.shape[0] - 1, count, dtype=np.int64) if coords.shape[0] > count else np.arange(coords.shape[0])
             points = []
             for i in indices.tolist():
-                point = {"i": int(i), "frame": int(samples.frame[i]), "sample_id": samples.sample_ids[i], "x": float(coords[i, 0]), "y": float(coords[i, 1])}
-                if samples.row is not None:
-                    point["row"] = int(samples.row[i])
+                point = sample_identity(int(i))
+                if point is None:
+                    continue
+                point.update({"x": float(coords[i, 0]), "y": float(coords[i, 1])})
                 for key in ("labels", "scores", "distances"):
                     if key in arrays and np.asarray(arrays[key]).ndim == 1 and i < len(arrays[key]):
                         point[key[:-1] if key == "labels" else key] = float(arrays[key][i]) if key != "labels" else int(arrays[key][i])
@@ -811,15 +866,49 @@ class AnalysisService:
             preview["total_points"] = int(coords.shape[0])
         elif "selected_indices" in arrays:
             selected = np.asarray(arrays["selected_indices"], dtype=np.int64)
-            preview["selected"] = [{"i": int(i), "frame": int(samples.frame[i]), "sample_id": samples.sample_ids[i]} for i in selected[:_MAX_PREVIEW_POINTS] if i < len(samples.frame)]
+            preview["selected"] = [item for i in selected[:_MAX_PREVIEW_POINTS].tolist() if (item := sample_identity(int(i))) is not None]
+        elif analysis_type in ("similarity", "neighbors") and "indices" in arrays:
+            indices = np.asarray(arrays["indices"], dtype=np.int64)
+            distances = np.asarray(arrays.get("distances", []))
+            similarities = np.asarray(arrays.get("similarity", []))
+            rows = []
+            if indices.ndim == 1:
+                for rank, neighbor in enumerate(indices.tolist()):
+                    item = sample_identity(int(neighbor))
+                    if item is None:
+                        continue
+                    item["rank"] = rank + 1
+                    if rank < distances.size:
+                        item["distance"] = float(distances[rank])
+                    if rank < similarities.size:
+                        item["similarity"] = float(similarities[rank])
+                    rows.append(item)
+            elif indices.ndim == 2:
+                for source_index in range(indices.shape[0]):
+                    for rank, neighbor in enumerate(indices[source_index].tolist()):
+                        if len(rows) >= _MAX_PREVIEW_POINTS:
+                            break
+                        item = sample_identity(int(neighbor))
+                        source = sample_identity(source_index)
+                        if item is None or source is None:
+                            continue
+                        item.update({"source_i": source_index, "source_frame": source["frame"], "rank": rank + 1})
+                        if distances.ndim == 2 and rank < distances.shape[1]:
+                            item["distance"] = float(distances[source_index, rank])
+                        rows.append(item)
+                    if len(rows) >= _MAX_PREVIEW_POINTS:
+                        break
+            preview["rows"] = rows
+            preview["total_rows"] = int(indices.size if indices.ndim == 1 else indices.shape[0] * indices.shape[1])
         elif "labels" in arrays or "scores" in arrays or "distances" in arrays:
-            n = len(samples.frame)
+            lengths = [len(np.asarray(arrays[key])) for key in ("labels", "scores", "distances") if key in arrays and np.asarray(arrays[key]).ndim == 1]
+            n = min([samples.n_samples, *lengths]) if lengths else samples.n_samples
             count = min(n, _MAX_PREVIEW_POINTS)
             rows = []
             for i in range(count):
-                item = {"i": i, "frame": int(samples.frame[i]), "sample_id": samples.sample_ids[i]}
-                if samples.row is not None:
-                    item["row"] = int(samples.row[i])
+                item = sample_identity(i)
+                if item is None:
+                    continue
                 for key in ("labels", "scores", "distances"):
                     if key in arrays and i < len(arrays[key]):
                         value = np.asarray(arrays[key])[i]
@@ -890,14 +979,13 @@ class AnalysisService:
             raise AppError(EXPORT_FAILED, f"dataset {run['dataset_id']} does not exist")
         adapter = self.datasets._adapter_for(dataset)
         count = len(adapter)
-        if mode == "atom":
-            # Analysis selections are sample indices. In atom mode they refer
-            # to atom/local-environment rows, while file export is frame based.
-            samples = self._load_samples(run, {"mode": "atom"}, "export")
-            frames = sorted({int(samples.frame[i]) for i in selected if 0 <= i < samples.n_samples}) if selected else sorted({int(frame) for frame in samples.frame})
-            frames = [frame for frame in frames if 0 <= frame < count]
-        else:
-            frames = sorted({i for i in selected if 0 <= i < count}) if selected else list(range(count))
+        # Analysis selections are sample indices, not dataset frame indices.
+        # Resolve them through the same identity table used to build previews;
+        # this is essential for frame-scoped runs whose only sample may be
+        # dataset frame 7 (or any other non-zero frame).
+        samples = self._load_samples(run, {"mode": mode}, "export")
+        frames = sorted({int(samples.frame[i]) for i in selected if 0 <= i < samples.n_samples}) if selected else sorted({int(frame) for frame in samples.frame})
+        frames = [frame for frame in frames if 0 <= frame < count]
         if not frames:
             raise AppError(EXPORT_FAILED, "export selection is empty")
         target = target.expanduser()
@@ -1010,6 +1098,7 @@ class AnalysisService:
         output["parameters"] = self._json_load(row.get("params_json"), {})
         if include_preview:
             output["preview"] = self._json_load(row.get("preview_json"), {})
+            output.pop("preview_json", None)
         else:
             output.pop("preview_json", None)
         return output
@@ -1069,12 +1158,24 @@ class AnalysisService:
         manifest = self._json_load(row.get("artifact_manifest_json"), {})
         files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
         arrays = {}
-        for name in ("labels", "scores", "distances", "selected_indices"):
+        for name in ("coords", "indices", "labels", "scores", "distances", "similarity", "selected_indices"):
             meta = files.get(name)
             if isinstance(meta, dict):
                 try:
                     arrays[name] = np.load(Path(row["result_path"]) / meta["path"], mmap_mode="r", allow_pickle=False)
                 except (OSError, ValueError):
+                    pass
+        input_ids = self._json_load(row.get("input_run_ids_json"), [row.get("descriptor_run_id")])
+        if isinstance(input_ids, list) and input_ids:
+            source_index = 1 if row.get("analysis_type") in ("coverage", "drift") and len(input_ids) > 1 else 0
+            source_row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (input_ids[source_index],))
+            if source_row is not None:
+                try:
+                    params = self._json_load(row.get("params_json"), {})
+                    built = self._build_preview({"arrays": arrays}, self._load_samples(source_row, params, row.get("analysis_type") or ""), row.get("analysis_type") or "")
+                    candidate = built.get("rows") or built.get("selected") or built.get("points") or []
+                    return candidate[offset : offset + limit]
+                except (AppError, OSError, TypeError, ValueError, IndexError):
                     pass
         n = max((len(v) for v in arrays.values()), default=0)
         return [{"i": i, **{name: self._json_safe(value[i]) for name, value in arrays.items() if i < len(value)}} for i in range(offset, min(offset + limit, n))]

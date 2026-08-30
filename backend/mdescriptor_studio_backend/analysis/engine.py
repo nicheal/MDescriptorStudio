@@ -300,7 +300,8 @@ class AnalysisEngine:
     def tsne(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
         _check_samples(samples.values, 4)
         x, warnings, keep = _preprocess(samples.values, params, "raw")
-        perplexity = _float_param(params, "perplexity", 30.0, 2.0)
+        default_perplexity = min(30.0, max(2.0, float(x.shape[0] - 1)))
+        perplexity = _float_param(params, "perplexity", default_perplexity, 2.0)
         if perplexity >= x.shape[0]:
             raise AppError(ANALYSIS_INPUT_INVALID, "t-SNE perplexity must be smaller than sample count")
         max_iter = _int_param(params, "max_iter", 1000, 250)
@@ -626,13 +627,12 @@ class AnalysisEngine:
             # highest-variance features are a deterministic, useful subset.
             candidate = np.argsort(-variance[valid], kind="stable")[:max_heatmap]
             corr_input = standardized[:, candidate]
-            bounded_matrix = (corr_input.T @ corr_input) / max(xv.shape[0] - 1, 1)
+            bounded_matrix = (corr_input.T @ corr_input) / max(xv.shape[0], 1)
             feature_indices = np.flatnonzero(valid)[candidate]
             warnings.append(f"correlation heatmap limited to {max_heatmap} highest-variance features")
         else:
-            bounded_matrix = (standardized.T @ standardized) / max(xv.shape[0] - 1, 1)
+            bounded_matrix = (standardized.T @ standardized) / max(xv.shape[0], 1)
             feature_indices = np.flatnonzero(valid)
-        np.fill_diagonal(bounded_matrix, 0.0)
         tri = np.triu_indices(bounded_matrix.shape[0], 1)
         order = np.argsort(-np.abs(bounded_matrix[tri]), kind="stable")[:top_k]
         pairs = np.column_stack([feature_indices[tri[0][order]], feature_indices[tri[1][order]]]).astype(np.int64)
@@ -653,7 +653,11 @@ class AnalysisEngine:
         normalized = eigen / total if total > 0 else np.zeros_like(eigen)
         participation = float(1.0 / np.sum(normalized * normalized)) if total > 0 else 0.0
         cumulative = np.cumsum(normalized)
-        thresholds = {str(t): int(np.searchsorted(cumulative, t) + 1) for t in (0.9, 0.95, 0.99)}
+        thresholds = (
+            {str(t): int(np.searchsorted(cumulative, t) + 1) for t in (0.9, 0.95, 0.99)}
+            if total > 0
+            else {str(t): 0 for t in (0.9, 0.95, 0.99)}
+        )
         if progress:
             progress(1.0, "effective dimension complete")
         return {"arrays": {"eigenvalues": eigen.astype(np.float64), "explained_variance": normalized.astype(np.float64)}, "preview": {"kind": "effective_dimension", "participation_ratio": participation, "components_for_threshold": thresholds}, "warnings": warnings, "feature_indices": np.flatnonzero(keep).astype(np.int64)}

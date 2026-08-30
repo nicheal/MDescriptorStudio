@@ -1,10 +1,10 @@
 /*
  * Analysis is the successor to the old Results page.  It owns one shared run
- * selector, one compact inspector, and a set of real backend-backed modules.
+ * history/selector, one compact inspector, and a set of real backend-backed modules.
  * Plotly is deliberately scoped to this page; Overview remains ECharts and
  * Explore remains 3Dmol.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import {
@@ -13,6 +13,7 @@ import {
   Empty,
   Input,
   InputNumber,
+  Popconfirm,
   Progress,
   Select,
   Space,
@@ -32,7 +33,7 @@ import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace, type PcaMode } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
 import StructurePreview from "../components/StructurePreview";
-import { normalizePoints, type AnalysisPoint } from "./analysisPreview";
+import { displayableDescriptorRuns, normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
 import type {
   AnalysisJobResponse,
   AnalysisChunk,
@@ -76,6 +77,15 @@ const OVERVIEW_KIND_LABELS: Record<string, string> = {
   sensitivity: "PARAMETER SENSITIVITY",
 };
 
+const RUN_STATUS_COLOR: Record<string, string> = {
+  QUEUED: "#616161",
+  RUNNING: "#0F6CBD",
+  COMPLETED: "#107C10",
+  STALE: "#F0A000",
+  FAILED: "#C42B1C",
+  CANCELLED: "#8A8A8A",
+};
+
 export default function Analysis() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
@@ -109,8 +119,11 @@ export default function Analysis() {
   const [queryIndex, setQueryIndex] = useState(0);
   const [overviewAnalysis, setOverviewAnalysis] = useState<OverviewAnalysis>("feature_variance");
   const [trajectoryStep, setTrajectoryStep] = useState(1);
+  const [tsnePerplexity, setTsnePerplexity] = useState(30);
   const [overviewArrays, setOverviewArrays] = useState<NumericArrays>({});
   const [overviewArraysBusy, setOverviewArraysBusy] = useState(false);
+  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const operationRef = useRef(0);
 
   const selectedRun = st.activeDescriptorRunId;
   const setSelectedRun = st.setActiveRun;
@@ -131,7 +144,7 @@ export default function Analysis() {
       setAnalyses(analysisRows.filter((row) => (row.dataset_ids ?? []).includes(dataset.id) || row.descriptor_run_id && resultRows.some((run) => run.id === row.descriptor_run_id)));
       const current = useWorkspace.getState().activeDescriptorRunId;
       const usable = resultRows.filter((row) => row.status === "COMPLETED");
-      setSelectedRun(current && resultRows.some((row) => row.id === current) ? current : usable[0]?.id ?? resultRows[0]?.id ?? null);
+      setSelectedRun(current && usable.some((row) => row.id === current) ? current : usable[0]?.id ?? null);
     } catch (error) {
       const err = error as { code?: string; message?: string };
       message.error(`${err.code ?? "ANALYSIS"}: ${err.message ?? "Could not load analysis runs"}`);
@@ -141,6 +154,26 @@ export default function Analysis() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    operationRef.current += 1;
+    setBusy(false);
+    setLastJobProgress(null);
+    setPoints([]);
+    setPreview(null);
+    setAnalysisId(null);
+    setSelectedIndices([]);
+    setInspectedPoint(null);
+    setSelectedFrame(null);
+    setSecondRun(null);
+    setOverviewArrays({});
+  }, [dataset?.id, selectedRun]);
+
+  useEffect(() => {
+    if (secondRun && (secondRun === selectedRun || !runs.some((run) => run.id === secondRun && run.status === "COMPLETED"))) {
+      setSecondRun(null);
+    }
+  }, [runs, secondRun, selectedRun]);
 
   useEffect(() => {
     const offFinished = ipc.on("job.finished", () => void refresh());
@@ -203,12 +236,23 @@ export default function Analysis() {
       message.warning("Select a completed descriptor run first");
       return null;
     }
+    const requestRunId = selectedRun;
+    const requestDatasetId = dataset?.id;
+    const operation = ++operationRef.current;
+    const isCurrent = () => operationRef.current === operation
+      && useWorkspace.getState().activeDescriptorRunId === requestRunId
+      && useWorkspace.getState().activeDatasetId === requestDatasetId;
     setBusy(true);
     setLastJobProgress(0);
+    setPoints([]);
+    setPreview(null);
+    setAnalysisId(null);
+    setOverviewArrays({});
     setSelectedIndices([]);
     setInspectedPoint(null);
+    useWorkspace.getState().setSelectedSample(null);
     try {
-      const response = await ipc.request<AnalysisJobResponse>(method, { ...params, run_id: selectedRun, seed: params.seed ?? 42 });
+      const response = await ipc.request<AnalysisJobResponse>(method, { ...params, run_id: requestRunId, seed: params.seed ?? 42 });
       let id = response.analysis_id;
       if (response.job_id) {
         trackJob(response.job_id, method);
@@ -219,14 +263,17 @@ export default function Analysis() {
         const done = await watchJob(response.job_id);
         offProgress();
         if (done.status !== "COMPLETED") {
+          if (!isCurrent()) return null;
           message.error(`${label} ${done.status}: ${done.error?.message ?? ""}`);
           return null;
         }
         if (typeof done.result?.analysis_id === "string") id = done.result.analysis_id;
       }
       if (!id) throw new Error(`${method} returned no analysis_id`);
-      setAnalysisId(id);
+      if (!isCurrent()) return null;
       const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: id, limit: 20_000 });
+      if (!isCurrent()) return null;
+      setAnalysisId(id);
       setPreview(result);
       setPoints(normalizePoints(result));
       const selected = (Array.isArray(result.selected) ? result.selected : [])
@@ -238,22 +285,33 @@ export default function Analysis() {
       return id;
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? label}: ${err.message ?? "analysis failed"}`);
+      if (isCurrent()) message.error(`${err.code ?? label}: ${err.message ?? "analysis failed"}`);
       return null;
     } finally {
-      setBusy(false);
+      if (operationRef.current === operation) setBusy(false);
     }
-  }, [message, selectedRun]);
+  }, [dataset?.id, message, selectedRun]);
 
   const runProjection = useCallback(async () => {
     if (!selectedRun) return;
+    const requestRunId = selectedRun;
+    const requestDatasetId = dataset?.id;
     if (projection === "pca") {
+      const operation = ++operationRef.current;
+      const isCurrent = () => operationRef.current === operation
+        && useWorkspace.getState().activeDescriptorRunId === requestRunId
+        && useWorkspace.getState().activeDatasetId === requestDatasetId;
       setBusy(true);
       setLastJobProgress(0);
+      setPoints([]);
+      setPreview(null);
+      setAnalysisId(null);
+      setOverviewArrays({});
       setSelectedIndices([]);
       setInspectedPoint(null);
+      useWorkspace.getState().setSelectedSample(null);
       try {
-        const response = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: selectedRun, mode, seed: 42, preprocess: "center" });
+        const response = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: requestRunId, mode, seed: 42, preprocess });
         let id = response.analysis_id;
         if (response.job_id) {
           trackJob(response.job_id, "analysis.pca");
@@ -264,12 +322,15 @@ export default function Analysis() {
           const done = await watchJob(response.job_id);
           offProgress();
           if (done.status !== "COMPLETED") {
+            if (!isCurrent()) return;
             message.error(`PCA ${done.status}: ${done.error?.message ?? ""}`);
             return;
           }
           if (typeof done.result?.analysis_id === "string") id = done.result.analysis_id;
         }
+        if (!isCurrent()) return;
         const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: id });
+        if (!isCurrent()) return;
         setAnalysisId(id);
         setPreview(null);
         setPoints(payload.points.map((point) => ({ i: point.i, frame: point.frame, row: point.atom, x: point.pc1, y: point.pc2, energy: point.energy, force_max: point.force_max, volume: point.volume })));
@@ -278,14 +339,17 @@ export default function Analysis() {
         message.success(response.job_id ? "PCA complete" : "PCA loaded from cache");
       } catch (error) {
         const err = error as { code?: string; message?: string };
-        message.error(`${err.code ?? "PCA"}: ${err.message ?? "analysis failed"}`);
+        if (isCurrent()) message.error(`${err.code ?? "PCA"}: ${err.message ?? "analysis failed"}`);
       } finally {
-        setBusy(false);
+        if (operationRef.current === operation) setBusy(false);
       }
       return;
     }
-    await runRequest(`analysis.${projection}`, { mode, preprocess, n_neighbors: 15, min_dist: 0.1, perplexity: 30, max_iter: 1000 }, projection.toUpperCase());
-  }, [message, mode, preprocess, projection, runRequest, selectedRun]);
+    const projectionParams = projection === "umap"
+      ? { mode, preprocess, n_neighbors: 15, min_dist: 0.1 }
+      : { mode, preprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000 };
+    await runRequest(`analysis.${projection}`, projectionParams, projection.toUpperCase());
+  }, [dataset?.id, message, mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity]);
 
   const runTabAnalysis = useCallback(async () => {
     if (tab === "projection") return runProjection();
@@ -325,19 +389,24 @@ export default function Analysis() {
     }
   }, [clusterAlgorithm, contamination, k, mode, nClusters, nSamples, overviewAnalysis, queryIndex, runProjection, runRequest, samplingAlgorithm, secondRun, selectedRun, tab, trajectoryStep, message]);
 
-  const handlePoint = useCallback((point: Point) => {
+  const inspectPoint = useCallback((point: Point) => {
     setInspectedPoint(point);
-    setSelectedIndices([point.i]);
     if (dataset && selectedRun) {
       useWorkspace.getState().setSelectedSample({ datasetId: dataset.id, runId: selectedRun, mode, frame: point.frame, atom: point.row });
       useWorkspace.getState().setActiveFrame(point.frame);
     }
   }, [dataset, mode, selectedRun]);
 
+  const handlePoint = useCallback((point: Point) => {
+    setSelectedIndices([point.i]);
+    inspectPoint(point);
+  }, [inspectPoint]);
+
   const plot = useMemo(() => {
     if (!points.length) return null;
     const values = points.map((point) => colorBy === "energy" ? point.energy : colorBy === "force_max" ? point.force_max : colorBy === "volume" ? point.volume : undefined);
     const hasColor = values.some((value) => value != null && Number.isFinite(value));
+    const displayedSelected = selectedDisplayIndices(points, selectedIndices);
     return (
       <Plot
         data={[{
@@ -348,7 +417,7 @@ export default function Analysis() {
           text: points.map((point) => `frame ${point.frame}${point.row == null ? "" : ` · row ${point.row}`}`),
           customdata: points.map((point) => [point.i, point.frame, point.row ?? -1]),
           marker: hasColor ? { size: 7, color: values as number[], colorscale: "Viridis", showscale: true, colorbar: { title: { text: colorBy } } } : { size: 7, color: "#0F6CBD" },
-          selectedpoints: selectedIndices,
+           selectedpoints: displayedSelected,
           hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>",
         }]}
         layout={{ autosize: true, margin: { l: 56, r: 24, t: 16, b: 48 }, paper_bgcolor: "#FFFFFF", plot_bgcolor: "#FFFFFF", dragmode: "lasso", hovermode: "closest", xaxis: { title: projection === "pca" ? "PC1" : `${projection.toUpperCase()}-1`, gridcolor: "#F0F1F3" }, yaxis: { title: projection === "pca" ? "PC2" : `${projection.toUpperCase()}-2`, gridcolor: "#F0F1F3" }, showlegend: false }}
@@ -359,14 +428,19 @@ export default function Analysis() {
           if (typeof index === "number" && points[index]) handlePoint(points[index]);
         }}
         onSelected={(event) => {
-          const indices = (event?.points ?? []).map((point) => point.pointIndex).filter((index): index is number => typeof index === "number");
+          const displayIndices = (event?.points ?? []).map((point) => point.pointIndex).filter((index): index is number => typeof index === "number");
+          const indices = displayIndices.map((index) => points[index]?.i).filter((index): index is number => typeof index === "number");
           setSelectedIndices(indices);
-          const first = indices[0];
-          if (first != null && points[first]) handlePoint(points[first]);
+          const first = displayIndices[0];
+          if (first != null && points[first]) inspectPoint(points[first]);
+          else {
+            setInspectedPoint(null);
+            useWorkspace.getState().setSelectedSample(null);
+          }
         }}
       />
     );
-  }, [colorBy, handlePoint, points, projection, selectedIndices]);
+  }, [colorBy, handlePoint, inspectPoint, points, projection, selectedIndices]);
 
   const exportSelection = async () => {
     if (!selectedRun || !exportPath.trim()) {
@@ -405,9 +479,32 @@ export default function Analysis() {
     }
   };
 
+  const deleteRun = async (run: RunRow) => {
+    if (deletingRunId) return;
+    setDeletingRunId(run.id);
+    try {
+      await ipc.request("result.remove", { run_id: run.id });
+      message.success("Descriptor result deleted");
+      await refresh();
+    } catch (error) {
+      const err = error as { code?: string; message?: string };
+      message.error(`${err.code ?? "RESULT"}: ${err.message ?? "delete failed"}`);
+    } finally {
+      setDeletingRunId(null);
+    }
+  };
+
   if (!dataset) return <Empty description="Register a dataset first" style={{ marginTop: 120 }} />;
   const selectedRunRow = runs.find((run) => run.id === selectedRun);
-  const completedRuns = runs.filter((run) => run.status === "COMPLETED");
+  const resultRuns = displayableDescriptorRuns(runs);
+  const completedRuns = resultRuns.filter((run) => run.status === "COMPLETED");
+  const descriptorColumnWidth = Math.max(
+    112,
+    resultRuns.reduce(
+      (max, run) => Math.max(max, run.descriptor_name.length * 8 + 24),
+      "Descriptor".length * 8 + 24,
+    ),
+  );
 
   return (
     <div className="analysis-page">
@@ -419,13 +516,88 @@ export default function Analysis() {
             value={selectedRun ?? undefined}
             placeholder="Select completed run"
             style={{ width: 250 }}
+            disabled={busy}
             onChange={setSelectedRun}
-            options={runs.map((run) => ({ value: run.id, label: `${run.descriptor_name} · ${run.shape ?? "unknown shape"} · ${run.status}`, disabled: run.status !== "COMPLETED" }))}
+            options={completedRuns.map((run) => ({ value: run.id, label: `${run.descriptor_name} · ${run.shape ?? "unknown shape"}` }))}
           />
           <Tag color={selectedRunRow?.status === "COMPLETED" ? "green" : "orange"}>{selectedRunRow?.status ?? "No run"}</Tag>
           <Button size="small" icon={<ArrowSync16Regular />} onClick={() => void refresh()}>Refresh</Button>
         </Space>
         {busy && <Progress percent={Math.round((lastJobProgress ?? 0) * 100)} size="small" style={{ width: 180, marginLeft: "auto" }} />}
+      </section>
+
+      <section className="analysis-card analysis-runs-card">
+        <SectionHeading title="RUN" meta={`${resultRuns.length} result${resultRuns.length === 1 ? "" : "s"}`} />
+        {resultRuns.length ? (
+          <Table
+            className="analysis-runs-table"
+            size="small"
+            tableLayout="fixed"
+            pagination={resultRuns.length > 5 ? { pageSize: 5 } : false}
+            rowKey="id"
+            dataSource={resultRuns}
+            onRow={(run) => ({
+              onClick: () => { if (run.status === "COMPLETED") setSelectedRun(run.id); },
+              style: {
+                cursor: run.status === "COMPLETED" ? "pointer" : "default",
+                background: run.id === selectedRun ? "#EBF3FC" : undefined,
+              },
+            })}
+            columns={[
+              { title: "Descriptor", dataIndex: "descriptor_name", key: "descriptor", width: descriptorColumnWidth },
+              { title: "Scope", dataIndex: "scope", key: "scope", width: 84 },
+              {
+                title: "Shape",
+                dataIndex: "shape",
+                key: "shape",
+                width: 130,
+                align: "center" as const,
+                render: (value: string | null | undefined) => value ? <Typography.Text code style={{ fontSize: 11 }} title={value}>{value}</Typography.Text> : <Typography.Text type="secondary">—</Typography.Text>,
+              },
+              {
+                title: "Status",
+                dataIndex: "status",
+                key: "status",
+                width: 100,
+                render: (value: string) => <Typography.Text style={{ color: RUN_STATUS_COLOR[value] ?? "#616161", fontWeight: 600, fontSize: 12 }}>{value}</Typography.Text>,
+              },
+              { title: "Created", dataIndex: "created_at", key: "created", width: 168, render: (value: string) => new Date(value).toLocaleString() },
+              {
+                title: "操作",
+                key: "actions",
+                width: 52,
+                render: (_value: unknown, run: RunRow) => {
+                  const active = run.status === "QUEUED" || run.status === "RUNNING";
+                  return (
+                    <span onClick={(event) => event.stopPropagation()}>
+                      <Popconfirm
+                        title="Delete this descriptor result?"
+                        description="This also removes linked analysis history and stored files."
+                        okText="Delete"
+                        cancelText="Cancel"
+                        okButtonProps={{ danger: true }}
+                        disabled={active}
+                        onConfirm={() => void deleteRun(run)}
+                      >
+                        <Button
+                          size="small"
+                          type="text"
+                          aria-label={`Delete ${run.descriptor_name} result`}
+                          title={active ? "Cancel the running job first" : "Delete descriptor result"}
+                          icon={<Delete16Regular />}
+                          loading={deletingRunId === run.id}
+                          disabled={active || deletingRunId !== null}
+                        />
+                      </Popconfirm>
+                    </span>
+                  );
+                },
+              },
+            ]}
+          />
+        ) : (
+          <Empty description="No descriptor results yet — compute a descriptor first" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        )}
       </section>
 
       <Tabs
@@ -437,12 +609,12 @@ export default function Analysis() {
       <div className="analysis-workspace">
         <main className="analysis-main">
           <section className="analysis-card analysis-controls">
-            {tab === "projection" && <ProjectionControls projection={projection} setProjection={setProjection} mode={mode} setMode={setMode} preprocess={preprocess} setPreprocess={setPreprocess} />}
+            {tab === "projection" && <ProjectionControls projection={projection} setProjection={setProjection} mode={mode} setMode={setMode} preprocess={preprocess} setPreprocess={setPreprocess} tsnePerplexity={tsnePerplexity} setTsnePerplexity={setTsnePerplexity} />}
             {tab === "similarity" && <Typography.Text type="secondary">Find the nearest descriptor points to a selected query index.</Typography.Text>}
             {tab === "clusters" && <Space wrap><Typography.Text>Algorithm</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Clusters</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /></Space>}
             {tab === "outliers" && <Space wrap><Typography.Text>Algorithm</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Contamination</Typography.Text><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /></Space>}
             {tab === "sampling" && <Space wrap><Typography.Text>Method</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={["fps", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: value.replaceAll("_", " ") }))} /><Typography.Text>Target</Typography.Text><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom" }]} /></Space>}
-            {(tab === "coverage" || tab === "compare" || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? "Left" : "Reference"}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? "Right" : "Query"}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} options={completedRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
+            {(tab === "coverage" || tab === "compare" || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? "Left" : "Reference"}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? "Right" : "Query"}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
             {tab === "similarity" && <Space wrap><Typography.Text>Query index</Typography.Text><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /><Typography.Text>k</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
             {tab === "overview" && <Space wrap><Typography.Text>Module</Typography.Text><Select value={overviewAnalysis} onChange={setOverviewAnalysis} options={[{ value: "feature_variance", label: "Feature variance" }, { value: "feature_correlation", label: "Feature correlation" }, { value: "effective_dimension", label: "Effective dimension" }, { value: "trajectory", label: "Trajectory" }, { value: "drift", label: "Dataset drift" }, { value: "sensitivity", label: "Parameter sensitivity" }]} /><Typography.Text type="secondary">All results stay on the backend as bounded artifacts.</Typography.Text></Space>}
             {tab === "overview" && overviewAnalysis === "trajectory" && <Space wrap><Typography.Text>Frame step</Typography.Text><InputNumber min={1} value={trajectoryStep} onChange={(value) => setTrajectoryStep(value ?? 1)} /></Space>}
@@ -801,8 +973,8 @@ function parameterLabel(value: unknown, index: number): string {
   return `Run ${index + 1}`;
 }
 
-function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, setPreprocess }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; setPreprocess: (value: string) => void }) {
-  return <Space wrap><Typography.Text>Method</Typography.Text><Select value={projection} onChange={setProjection} options={[{ value: "pca", label: "PCA" }, { value: "umap", label: "UMAP" }, { value: "tsne", label: "t-SNE" }]} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /><Typography.Text>Preprocess</Typography.Text><Select value={preprocess} onChange={setPreprocess} options={[{ value: "raw", label: "Raw scale" }, { value: "center", label: "Centered" }, { value: "standardized", label: "Standardized" }]} /></Space>;
+function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, setPreprocess, tsnePerplexity, setTsnePerplexity }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; setPreprocess: (value: string) => void; tsnePerplexity: number; setTsnePerplexity: (value: number) => void }) {
+  return <Space wrap><Typography.Text>Method</Typography.Text><Select value={projection} onChange={setProjection} options={[{ value: "pca", label: "PCA" }, { value: "umap", label: "UMAP" }, { value: "tsne", label: "t-SNE" }]} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /><Typography.Text>Preprocess</Typography.Text><Select value={preprocess} onChange={setPreprocess} options={[{ value: "raw", label: "Raw scale" }, { value: "center", label: "Centered" }, { value: "standardized", label: "Standardized" }]} />{projection === "tsne" && <><Typography.Text>Perplexity</Typography.Text><InputNumber min={2} step={1} value={tsnePerplexity} onChange={(value) => setTsnePerplexity(value ?? 30)} /></>}</Space>;
 }
 
 function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPreview | null; points: Point[]; onSelect?: (row: Record<string, unknown>) => void }) {
@@ -818,7 +990,7 @@ function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPreview |
           : Array.isArray(preview?.top_indices)
             ? (preview.top_indices as unknown[]).map((index, position) => ({ rank: position + 1, feature: index, variance: (preview.top_values as unknown[] | undefined)?.[position] }))
             : [];
-  if (rows.length) return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} meta={`${rows.length.toLocaleString()} rows`} /><Table size="small" pagination={{ pageSize: 12 }} rowKey={(row, index) => String(row.i ?? row.sample_id ?? row.run_id ?? index)} dataSource={rows} onRow={(row) => ({ onClick: () => onSelect?.(row) })} columns={Object.keys(rows[0]).slice(0, 7).map((key) => ({ title: key, dataIndex: key, key, render: (value: unknown) => typeof value === "number" ? value.toPrecision(6) : String(value ?? "—") }))} /></section>;
+  if (rows.length) return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} meta={`${rows.length.toLocaleString()} rows`} /><Table size="small" pagination={{ pageSize: 12 }} rowKey={(row, index) => `${String(row.i ?? row.sample_id ?? row.run_id ?? index)}:${String(row.source_i ?? row.rank ?? index)}`} dataSource={rows} onRow={(row) => ({ onClick: () => onSelect?.(row) })} columns={Object.keys(rows[0]).slice(0, 7).map((key) => ({ title: key, dataIndex: key, key, render: (value: unknown) => typeof value === "number" ? value.toPrecision(6) : String(value ?? "—") }))} /></section>;
   return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} /><pre className="analysis-json-preview">{JSON.stringify(preview, null, 2)}</pre></section>;
 }
 

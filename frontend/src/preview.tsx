@@ -469,6 +469,14 @@ const METHODS: Record<string, Handler> = {
     startJobPlaybook();
     return RUNS;
   },
+  "result.remove": (p) => {
+    const runId = String(p.run_id ?? "");
+    const index = RUNS.findIndex((run) => run.id === runId);
+    if (index >= 0 && RUNS[index].status !== "QUEUED" && RUNS[index].status !== "RUNNING") {
+      RUNS.splice(index, 1);
+    }
+    return { ok: true };
+  },
   "analysis.pca": (_p) => {
     mockLatestAnalysisId = "ana-mock-pca";
     mockLatestAnalysisKind = "projection";

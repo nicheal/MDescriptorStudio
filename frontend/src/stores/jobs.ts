@@ -74,12 +74,50 @@ export function watchJob(jobId: string): Promise<{
   error: JobState["error"];
 }> {
   return new Promise((resolve) => {
-    const off = ipc.on("job.finished", (data) => {
+    let settled = false;
+    let off = () => {};
+    let poller: ReturnType<typeof setInterval> | undefined;
+    const finish = (data: {
+      status: string;
+      result: Record<string, unknown> | null;
+      error: JobState["error"];
+    }) => {
+      if (settled) return;
+      settled = true;
+      off();
+      if (poller) clearInterval(poller);
+      resolve(data);
+    };
+    const terminal = (status: string) => status === "COMPLETED" || status === "FAILED" || status === "CANCELLED";
+    const inspect = async () => {
+      try {
+        const row = await ipc.request<JobRow>("job.get", { id: jobId });
+        if (!terminal(row.status)) return;
+        finish({
+          status: row.status,
+          result: null,
+          error: row.error ? { code: row.error, message: row.message ?? row.error } : null,
+        });
+      } catch (error) {
+        const err = error as { code?: string; message?: string };
+        finish({
+          status: "FAILED",
+          result: null,
+          error: { code: err.code ?? "BACKEND_DOWN", message: err.message ?? "backend unavailable" },
+        });
+      }
+    };
+
+    // Attach the event listener before querying persisted state. A fast job can
+    // finish between the submit response and this function call; the query
+    // closes that race while the event handles the normal live path.
+    off = ipc.on("job.finished", (data) => {
       const d = data as { job_id: string; status: string; result: Record<string, unknown> | null; error: JobState["error"] };
       if (d.job_id !== jobId) return;
-      off();
-      resolve(d);
+      finish({ status: d.status, result: d.result ?? null, error: d.error ?? null });
     });
+    void inspect();
+    if (!settled) poller = setInterval(() => void inspect(), 500);
   });
 }
 

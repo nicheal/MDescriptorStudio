@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { normalizePoints } from "./analysisPreview";
+import { displayableDescriptorRuns, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
+import type { RunRow } from "../types/protocol";
 
 describe("Analysis preview mapping", () => {
   it("normalizes PCA and generic projection points while dropping invalid coordinates", () => {
@@ -21,5 +22,23 @@ describe("Analysis preview mapping", () => {
     expect(normalizePoints({ analysis_id: "ana-test", points: [{ x: 1, y: 2 }] })).toEqual([
       { i: 0, frame: 0, row: undefined, sample_id: undefined, x: 1, y: 2, label: undefined, score: undefined, distance: undefined },
     ]);
+  });
+
+  it("maps logical sample selections to displayed positions after preview sampling", () => {
+    const points = normalizePoints({
+      analysis_id: "ana-test",
+      points: [{ i: 10, frame: 10, x: 1, y: 1 }, { i: 42, frame: 42, x: 2, y: 2 }],
+    });
+    expect(selectedDisplayIndices(points, [42])).toEqual([1]);
+  });
+
+  it("keeps failed descriptor calculations out of the RUN panel", () => {
+    const rows = [
+      { id: "completed", status: "COMPLETED" },
+      { id: "running", status: "RUNNING" },
+      { id: "failed", status: "FAILED" },
+    ] as unknown as RunRow[];
+
+    expect(displayableDescriptorRuns(rows).map((row) => row.id)).toEqual(["completed", "running"]);
   });
 });

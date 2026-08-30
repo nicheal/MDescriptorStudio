@@ -380,6 +380,23 @@ body {
   margin: 0;
 }
 
+.analysis-runs-card {
+  padding-bottom: 0;
+}
+
+.analysis-runs-card .analysis-section-heading {
+  margin-bottom: 6px;
+}
+
+.analysis-runs-table {
+  margin: 0 -12px;
+  width: calc(100% + 24px);
+}
+
+.analysis-runs-table .ant-table-container {
+  border-radius: 0 0 6px 6px;
+}
+
 .analysis-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
