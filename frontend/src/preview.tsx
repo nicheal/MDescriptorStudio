@@ -203,11 +203,83 @@ const JOB_ROWS = [
   },
 ];
 
-function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis") {
+let mockLatestAnalysisId = "ana-mock-analysis";
+let mockLatestAnalysisKind = "projection";
+let mockAnalysisArrays: Record<string, number[]> = {};
+
+function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kind = "projection") {
+  mockLatestAnalysisId = analysisId;
+  mockLatestAnalysisKind = kind;
+  mockAnalysisArrays = {};
   window.setTimeout(() => {
     mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { analysis_id: analysisId }, error: null });
   }, 800);
   return { job_id: jobId, analysis_id: analysisId, cache: null };
+}
+
+function mockOverviewPreview() {
+  if (mockLatestAnalysisKind === "feature_variance") {
+    return { analysis_id: mockLatestAnalysisId, kind: "feature_variance", top_k: 12, top_indices: [12, 3, 41, 7, 28, 16, 55, 2, 36, 19, 64, 8], top_values: [2.84, 2.17, 1.92, 1.68, 1.51, 1.34, 1.18, 1.04, 0.92, 0.81, 0.74, 0.68] };
+  }
+  if (mockLatestAnalysisKind === "feature_correlation") {
+    return {
+      analysis_id: mockLatestAnalysisId,
+      kind: "feature_correlation",
+      feature_count: 256,
+      pairs: [
+        { feature_a: 12, feature_b: 41, correlation: 0.94 },
+        { feature_a: 3, feature_b: 7, correlation: -0.91 },
+        { feature_a: 28, feature_b: 55, correlation: 0.87 },
+        { feature_a: 16, feature_b: 64, correlation: -0.82 },
+        { feature_a: 2, feature_b: 36, correlation: 0.77 },
+        { feature_a: 19, feature_b: 31, correlation: -0.71 },
+        { feature_a: 8, feature_b: 44, correlation: 0.66 },
+      ],
+    };
+  }
+  if (mockLatestAnalysisKind === "effective_dimension") {
+    const explained = [0.24, 0.17, 0.12, 0.1, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.012, 0.008, 0.004];
+    mockAnalysisArrays = { explained_variance: explained };
+    return { analysis_id: mockLatestAnalysisId, kind: "effective_dimension", participation_ratio: 6.8, components_for_threshold: { "0.9": 8, "0.95": 10, "0.99": 13 } };
+  }
+  if (mockLatestAnalysisKind === "trajectory") {
+    const time = Array.from({ length: 180 }, (_, index) => index);
+    const stepDistance = time.map((index) => Number((0.08 + Math.abs(Math.sin(index / 13)) * 0.24 + (index > 118 && index < 132 ? 0.52 : 0)).toFixed(5)));
+    mockAnalysisArrays = { time, frames: time, step_distance: stepDistance };
+    return { analysis_id: mockLatestAnalysisId, kind: "trajectory", frame_start: 0, frame_end: 179, frame_step: 1, time_unit: "frame", total_distance: Number(stepDistance.reduce((sum, value) => sum + value, 0).toFixed(4)) };
+  }
+  if (mockLatestAnalysisKind === "drift") {
+    const rows = Array.from({ length: 240 }, (_, index) => {
+      const label = index < 174 ? 0 : index < 222 ? 1 : 2;
+      const distance = 0.18 + index / 800 + (label === 1 ? 0.38 : label === 2 ? 0.76 : 0) + Math.abs(Math.sin(index / 11)) * 0.08;
+      return { i: index, frame: index, sample_id: `frame:${index}`, labels: label, distances: Number(distance.toFixed(5)) };
+    });
+    return { analysis_id: mockLatestAnalysisId, kind: "drift", categories: ["covered", "marginal", "out_of_coverage"], q95: 0.62, q99: 0.98, metric: "euclidean", covered: 174, marginal: 48, out_of_coverage: 18, mean_distance: 0.534, median_distance: 0.348, max_distance: 1.136, rows, total_rows: rows.length };
+  }
+  if (mockLatestAnalysisKind === "sensitivity") {
+    return {
+      analysis_id: mockLatestAnalysisId,
+      kind: "sensitivity",
+      baseline_run_id: "run-dpa2",
+      runs: [
+        { run_id: "run-dpa2", parameters: { cutoff: 5, sel: 96 }, mean_delta_norm: 0 },
+        { run_id: "run-dpa2-cut6", parameters: { cutoff: 6, sel: 96 }, mean_delta_norm: 0.42 },
+        { run_id: "run-dpa2-cut7", parameters: { cutoff: 7, sel: 128 }, mean_delta_norm: 0.89 },
+        { run_id: "run-dpa2-cut8", parameters: { cutoff: 8, sel: 128 }, mean_delta_norm: 1.24 },
+      ],
+    };
+  }
+  return {
+    analysis_id: mockLatestAnalysisId,
+    kind: "projection",
+    points: Array.from({ length: 250 }, (_, i) => ({
+      i,
+      frame: i % 6320,
+      x: Math.sin(i / 17) * 3 + gauss(0, 0.25),
+      y: Math.cos(i / 23) * 2 + gauss(0, 0.25),
+      sample_id: `frame:${i}`,
+    })),
+  };
 }
 
 function mockFramePayload(index: number) {
@@ -398,6 +470,9 @@ const METHODS: Record<string, Handler> = {
     return RUNS;
   },
   "analysis.pca": (_p) => {
+    mockLatestAnalysisId = "ana-mock-pca";
+    mockLatestAnalysisKind = "projection";
+    mockAnalysisArrays = {};
     window.setTimeout(() => {
       mockEmit("job.finished", { job_id: "job-pca-live", status: "COMPLETED", result: { analysis_id: "ana-mock-pca" }, error: null });
     }, 800);
@@ -414,18 +489,19 @@ const METHODS: Record<string, Handler> = {
       created_at: new Date(NOW - 58 * 60000).toISOString(),
     },
   ],
-  "analysis.preview": () => ({
-    analysis_id: "ana-mock-analysis",
-    kind: "projection",
-    points: Array.from({ length: 250 }, (_, i) => ({
-      i,
-      frame: i % 6320,
-      x: Math.sin(i / 17) * 3 + gauss(0, 0.25),
-      y: Math.cos(i / 23) * 2 + gauss(0, 0.25),
-      sample_id: `frame:${i}`,
-    })),
-  }),
+  "analysis.preview": () => mockOverviewPreview(),
+  "analysis.chunk": (p) => {
+    const array = String(p.array ?? "");
+    const values = mockAnalysisArrays[array] ?? [];
+    const offset = Math.max(0, Math.floor(Number(p.offset ?? 0) || 0));
+    const limit = Math.min(20_000, Math.max(1, Math.floor(Number(p.limit ?? 2000) || 2000)));
+    const data = values.slice(offset, offset + limit);
+    return { analysis_id: mockLatestAnalysisId, array, offset, next_offset: offset + data.length, shape: [values.length], dtype: "float64", data };
+  },
   "analysis.umap": (_p) => {
+    mockLatestAnalysisId = "ana-mock-analysis";
+    mockLatestAnalysisKind = "projection";
+    mockAnalysisArrays = {};
     window.setTimeout(() => mockEmit("job.finished", { job_id: "job-umap-live", status: "COMPLETED", result: { analysis_id: "ana-mock-analysis" }, error: null }), 800);
     return { job_id: "job-umap-live", analysis_id: "ana-mock-analysis", cache: null };
   },
@@ -433,19 +509,19 @@ const METHODS: Record<string, Handler> = {
     return mockAnalysisSubmit("job-tsne-live");
   },
   "analysis.neighbors": (_p) => mockAnalysisSubmit("job-neighbors-live"),
-  "analysis.similarity": (_p) => mockAnalysisSubmit("job-similarity-live"),
-  "analysis.cluster": (_p) => mockAnalysisSubmit("job-cluster-live"),
-  "analysis.outlier": (_p) => mockAnalysisSubmit("job-outlier-live"),
-  "analysis.sampling": (_p) => mockAnalysisSubmit("job-sampling-live"),
-  "analysis.fps": (_p) => mockAnalysisSubmit("job-fps-live"),
-  "analysis.coverage": (_p) => mockAnalysisSubmit("job-coverage-live"),
-  "analysis.compare": (_p) => mockAnalysisSubmit("job-compare-live"),
-  "analysis.feature_variance": (_p) => mockAnalysisSubmit("job-feature-variance-live"),
-  "analysis.feature_correlation": (_p) => mockAnalysisSubmit("job-feature-correlation-live"),
-  "analysis.effective_dimension": (_p) => mockAnalysisSubmit("job-effective-dimension-live"),
-  "analysis.trajectory": (_p) => mockAnalysisSubmit("job-trajectory-live"),
-  "analysis.drift": (_p) => mockAnalysisSubmit("job-drift-live"),
-  "analysis.sensitivity": (_p) => mockAnalysisSubmit("job-sensitivity-live"),
+  "analysis.similarity": (_p) => mockAnalysisSubmit("job-similarity-live", "ana-mock-similarity", "similarity"),
+  "analysis.cluster": (_p) => mockAnalysisSubmit("job-cluster-live", "ana-mock-clusters", "clusters"),
+  "analysis.outlier": (_p) => mockAnalysisSubmit("job-outlier-live", "ana-mock-outliers", "outliers"),
+  "analysis.sampling": (_p) => mockAnalysisSubmit("job-sampling-live", "ana-mock-sampling", "sampling"),
+  "analysis.fps": (_p) => mockAnalysisSubmit("job-fps-live", "ana-mock-sampling", "sampling"),
+  "analysis.coverage": (_p) => mockAnalysisSubmit("job-coverage-live", "ana-mock-coverage", "coverage"),
+  "analysis.compare": (_p) => mockAnalysisSubmit("job-compare-live", "ana-mock-compare", "compare"),
+  "analysis.feature_variance": (_p) => mockAnalysisSubmit("job-feature-variance-live", "ana-mock-feature-variance", "feature_variance"),
+  "analysis.feature_correlation": (_p) => mockAnalysisSubmit("job-feature-correlation-live", "ana-mock-feature-correlation", "feature_correlation"),
+  "analysis.effective_dimension": (_p) => mockAnalysisSubmit("job-effective-dimension-live", "ana-mock-effective-dimension", "effective_dimension"),
+  "analysis.trajectory": (_p) => mockAnalysisSubmit("job-trajectory-live", "ana-mock-trajectory", "trajectory"),
+  "analysis.drift": (_p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift"),
+  "analysis.sensitivity": (_p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity"),
   "analysis.export": (_p) => mockAnalysisSubmit("job-export-live", "ana-mock-export"),
   "result.get_pca": (p) => {
     const gauss2 = (mu: number, sigma: number) => {

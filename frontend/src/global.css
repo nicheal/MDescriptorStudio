@@ -449,6 +449,72 @@ body {
   height: 100% !important;
 }
 
+.analysis-visual-card {
+  min-height: 480px;
+}
+
+.analysis-overview-chart-frame {
+  width: 100%;
+  height: min(50vh, 430px);
+  min-height: 320px;
+}
+
+.analysis-overview-chart-frame .js-plotly-plot,
+.analysis-overview-chart-frame .plot-container,
+.analysis-overview-chart-frame .svg-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.analysis-metric-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.analysis-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  border: 1px solid #eaecf0;
+  border-radius: 5px;
+  padding: 7px 9px;
+  background: #f7f8fa;
+}
+
+.analysis-metric .ant-typography:first-child {
+  overflow: hidden;
+  color: #616161;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-metric .ant-typography + .ant-typography {
+  overflow: hidden;
+  color: #242424;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-chart-caption {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.analysis-overview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+}
+
 .analysis-inspector-row {
   display: flex;
   align-items: baseline;
@@ -532,5 +598,10 @@ body {
   .analysis-plot-frame {
     min-height: 300px;
     height: 56vh;
+  }
+
+  .analysis-overview-chart-frame {
+    min-height: 260px;
+    height: 48vh;
   }
 }

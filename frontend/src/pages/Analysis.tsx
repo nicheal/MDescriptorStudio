@@ -4,8 +4,9 @@
  * Plotly is deliberately scoped to this page; Overview remains ECharts and
  * Explore remains 3Dmol.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import Plot from "react-plotly.js";
+import type { Data, Layout } from "plotly.js";
 import {
   App as AntApp,
   Button,
@@ -34,6 +35,7 @@ import StructurePreview from "../components/StructurePreview";
 import { normalizePoints, type AnalysisPoint } from "./analysisPreview";
 import type {
   AnalysisJobResponse,
+  AnalysisChunk,
   AnalysisPreview,
   AnalysisRow,
   FramePayload,
@@ -47,6 +49,12 @@ type ProjectionName = "pca" | "umap" | "tsne";
 type OverviewAnalysis = "feature_variance" | "feature_correlation" | "effective_dimension" | "trajectory" | "drift" | "sensitivity";
 
 type Point = AnalysisPoint;
+type NumericArrays = Record<string, number[]>;
+
+type Metric = {
+  label: string;
+  value: string;
+};
 
 const TAB_LABELS: Record<TabKey, string> = {
   overview: "Overview",
@@ -57,6 +65,15 @@ const TAB_LABELS: Record<TabKey, string> = {
   sampling: "Sampling",
   coverage: "Coverage",
   compare: "Compare",
+};
+
+const OVERVIEW_KIND_LABELS: Record<string, string> = {
+  feature_variance: "FEATURE VARIANCE",
+  feature_correlation: "FEATURE CORRELATION",
+  effective_dimension: "EFFECTIVE DIMENSION",
+  trajectory: "TRAJECTORY",
+  drift: "DATASET DRIFT",
+  sensitivity: "PARAMETER SENSITIVITY",
 };
 
 export default function Analysis() {
@@ -92,6 +109,8 @@ export default function Analysis() {
   const [queryIndex, setQueryIndex] = useState(0);
   const [overviewAnalysis, setOverviewAnalysis] = useState<OverviewAnalysis>("feature_variance");
   const [trajectoryStep, setTrajectoryStep] = useState(1);
+  const [overviewArrays, setOverviewArrays] = useState<NumericArrays>({});
+  const [overviewArraysBusy, setOverviewArraysBusy] = useState(false);
 
   const selectedRun = st.activeDescriptorRunId;
   const setSelectedRun = st.setActiveRun;
@@ -141,6 +160,43 @@ export default function Analysis() {
       .finally(() => { if (!disposed) setSelectedFrameBusy(false); });
     return () => { disposed = true; };
   }, [dataset, selectedPoint]);
+
+  useEffect(() => {
+    const kind = String(preview?.kind ?? "");
+    const arrayNames = kind === "effective_dimension"
+      ? ["explained_variance"]
+      : kind === "trajectory"
+        ? ["time", "frames", "step_distance"]
+        : [];
+    if (tab !== "overview" || !analysisId || !arrayNames.length) {
+      setOverviewArrays({});
+      setOverviewArraysBusy(false);
+      return;
+    }
+
+    let disposed = false;
+    setOverviewArraysBusy(true);
+    void Promise.all(arrayNames.map(async (name) => {
+      try {
+        const chunk = await ipc.request<AnalysisChunk>("analysis.chunk", {
+          analysis_id: analysisId,
+          array: name,
+          offset: 0,
+          limit: 20_000,
+        });
+        return [name, numericArray(chunk.data)] as const;
+      } catch {
+        return [name, []] as const;
+      }
+    })).then((entries) => {
+      if (disposed) return;
+      setOverviewArrays(Object.fromEntries(entries));
+    }).finally(() => {
+      if (!disposed) setOverviewArraysBusy(false);
+    });
+
+    return () => { disposed = true; };
+  }, [analysisId, preview, tab]);
 
   const runRequest = useCallback(async (method: string, params: Record<string, unknown>, label: string) => {
     if (!selectedRun) {
@@ -397,7 +453,9 @@ export default function Analysis() {
           </section>
 
           {tab === "projection" && <section className="analysis-card analysis-plot-card"><SectionHeading title="DESCRIPTOR SPACE" meta={`${points.length.toLocaleString()} preview points${selectedIndices.length ? ` · ${selectedIndices.length} selected` : ""}`} />{points.length ? <div className="analysis-plot-frame">{plot}</div> : <Empty description="Run PCA, UMAP, or t-SNE to populate the Plotly canvas." />}</section>}
+          {tab === "overview" && <OverviewResultVisualization preview={preview} arrays={overviewArrays} loading={overviewArraysBusy} />}
           {tab !== "projection" && <ResultPanel preview={preview} points={points} onSelect={(row) => {
+            if (row.i == null && row.sample_index == null && row.frame == null) return;
             const index = Number(row.i ?? row.sample_index ?? 0);
             const frame = Number(row.frame ?? index);
             handlePoint({ i: index, frame, row: row.row == null ? undefined : Number(row.row), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, label: row.labels == null ? undefined : Number(row.labels), score: row.scores == null ? undefined : Number(row.scores), distance: row.distances == null ? undefined : Number(row.distances) });
@@ -414,6 +472,333 @@ export default function Analysis() {
       </div>
     </div>
   );
+}
+
+function OverviewResultVisualization({ preview, arrays, loading }: { preview: AnalysisPreview | null; arrays: NumericArrays; loading: boolean }) {
+  if (!preview) return null;
+  const kind = String(preview.kind ?? "");
+  const title = OVERVIEW_KIND_LABELS[kind] ?? "ANALYSIS RESULT";
+  if (loading) {
+    return <section className="analysis-card analysis-visual-card"><SectionHeading title={title} meta="Loading chart data" /><div className="analysis-overview-empty"><Empty description="Loading the result arrays…" /></div></section>;
+  }
+
+  let content: ReactNode;
+  if (kind === "feature_variance") content = <FeatureVarianceChart preview={preview} />;
+  else if (kind === "feature_correlation") content = <FeatureCorrelationChart preview={preview} />;
+  else if (kind === "effective_dimension") content = <EffectiveDimensionChart preview={preview} arrays={arrays} />;
+  else if (kind === "trajectory") content = <TrajectoryChart preview={preview} arrays={arrays} />;
+  else if (kind === "drift") content = <DriftChart preview={preview} />;
+  else if (kind === "sensitivity") content = <SensitivityChart preview={preview} />;
+  else return null;
+
+  return <section className="analysis-card analysis-visual-card"><SectionHeading title={title} meta="Visual summary" />{content}</section>;
+}
+
+function FeatureVarianceChart({ preview }: { preview: AnalysisPreview }) {
+  const indices = numericArray(preview.top_indices);
+  const values = numericArray(preview.top_values);
+  const count = Math.min(indices.length, values.length);
+  if (!count) return <OverviewNoData message="No feature variance values were returned." />;
+  const rows = Array.from({ length: count }, (_, index) => ({ feature: `Feature ${indices[index]}`, value: values[index] })).reverse();
+  return <>
+    <MetricStrip metrics={[{ label: "Features shown", value: String(count) }, { label: "Highest variance", value: formatNumber(values[0]) }]} />
+    <OverviewPlot
+      ariaLabel="Top descriptor feature variance"
+      data={[{
+        type: "bar",
+        orientation: "h",
+        x: rows.map((row) => row.value),
+        y: rows.map((row) => row.feature),
+        marker: { color: "#0F6CBD" },
+        hovertemplate: "%{y}<br>variance=%{x:.5g}<extra></extra>",
+      }]}
+      layout={overviewLayout({ xaxis: { title: "Variance", zeroline: true }, yaxis: { automargin: true } })}
+    />
+    <ChartCaption>显示方差最大的 descriptor 维度；数值越大，跨样本变化越明显。</ChartCaption>
+  </>;
+}
+
+function FeatureCorrelationChart({ preview }: { preview: AnalysisPreview }) {
+  const pairs = recordArray(preview.pairs)
+    .map((pair) => ({
+      feature: `F${formatIndex(pair.feature_a)} ↔ F${formatIndex(pair.feature_b)}`,
+      value: finiteNumber(pair.correlation),
+    }))
+    .filter((pair): pair is { feature: string; value: number } => pair.value !== null);
+  if (!pairs.length) return <OverviewNoData message="No feature correlation pairs were returned." />;
+  const rows = pairs.slice().reverse();
+  const strongest = pairs.reduce((best, row) => Math.max(best, Math.abs(row.value)), 0);
+  return <>
+    <MetricStrip metrics={[{ label: "Pairs shown", value: String(pairs.length) }, { label: "Strongest |r|", value: strongest.toFixed(3) }]} />
+    <OverviewPlot
+      ariaLabel="Top descriptor feature correlations"
+      data={[{
+        type: "bar",
+        orientation: "h",
+        x: rows.map((row) => row.value),
+        y: rows.map((row) => row.feature),
+        marker: { color: rows.map((row) => row.value >= 0 ? "#0F6CBD" : "#D13438") },
+        hovertemplate: "%{y}<br>correlation=%{x:.4f}<extra></extra>",
+      }]}
+      layout={overviewLayout({ xaxis: { title: "Pearson correlation", range: [-1, 1], zeroline: true }, yaxis: { automargin: true } })}
+    />
+    <ChartCaption>蓝色表示正相关，红色表示负相关；相关性绝对值越大，特征冗余越明显。</ChartCaption>
+  </>;
+}
+
+function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview; arrays: NumericArrays }) {
+  const explained = arrays.explained_variance ?? [];
+  if (!explained.length) return <OverviewNoData message="The explained-variance array is not available for visualization." />;
+  const cumulative: number[] = [];
+  let total = 0;
+  for (const value of explained) {
+    total += value;
+    cumulative.push(total);
+  }
+  const indices = sampledIndices(explained.length, 320);
+  const metrics: Metric[] = [
+    { label: "Participation ratio", value: formatNumber(preview.participation_ratio) },
+    { label: "90% components", value: formatCount(componentThreshold(preview, "0.9")) },
+    { label: "95% components", value: formatCount(componentThreshold(preview, "0.95")) },
+    { label: "99% components", value: formatCount(componentThreshold(preview, "0.99")) },
+  ];
+  return <>
+    <MetricStrip metrics={metrics} />
+    <OverviewPlot
+      ariaLabel="Explained and cumulative descriptor variance by component"
+      data={[
+        {
+          type: "bar",
+          x: indices.map((index) => index + 1),
+          y: indices.map((index) => explained[index] * 100),
+          name: "Explained variance",
+          marker: { color: "#0F6CBD" },
+          hovertemplate: "PC %{x}<br>explained=%{y:.2f}%<extra></extra>",
+        },
+        {
+          type: "scatter",
+          mode: "lines",
+          x: indices.map((index) => index + 1),
+          y: indices.map((index) => cumulative[index] * 100),
+          name: "Cumulative",
+          line: { color: "#F7630C", width: 2 },
+          hovertemplate: "PC %{x}<br>cumulative=%{y:.2f}%<extra></extra>",
+        },
+      ]}
+      layout={overviewLayout({
+        xaxis: { title: "Component", type: "linear" },
+        yaxis: { title: "Variance (%)", range: [0, 100] },
+        legend: { orientation: "h", y: 1.12, x: 0 },
+      })}
+    />
+    <ChartCaption>柱状图是单个主成分贡献率，橙线是累计贡献率；横轴过长时会进行等距抽样显示。</ChartCaption>
+  </>;
+}
+
+function TrajectoryChart({ preview, arrays }: { preview: AnalysisPreview; arrays: NumericArrays }) {
+  const xValues = arrays.time?.length ? arrays.time : arrays.frames ?? [];
+  const distances = arrays.step_distance ?? [];
+  const count = Math.min(xValues.length, distances.length);
+  if (count < 2) return <OverviewNoData message="At least two trajectory points are needed for visualization." />;
+  const cumulative: number[] = [];
+  let total = 0;
+  for (let index = 0; index < count; index += 1) {
+    total += distances[index];
+    cumulative.push(total);
+  }
+  const indices = sampledIndices(count, 1000);
+  return <>
+    <MetricStrip metrics={[{ label: "Samples", value: formatCount(count) }, { label: "Total descriptor distance", value: formatNumber(preview.total_distance) }, { label: "Largest step", value: formatNumber(Math.max(...distances.slice(0, count))) }]} />
+    <OverviewPlot
+      ariaLabel="Descriptor trajectory step and cumulative distance"
+      data={[
+        {
+          type: "scatter",
+          mode: "lines",
+          x: indices.map((index) => xValues[index]),
+          y: indices.map((index) => distances[index]),
+          name: "Step distance",
+          line: { color: "#0F6CBD", width: 1.5 },
+          hovertemplate: "t=%{x}<br>step=%{y:.5g}<extra></extra>",
+        },
+        {
+          type: "scatter",
+          mode: "lines",
+          x: indices.map((index) => xValues[index]),
+          y: indices.map((index) => cumulative[index]),
+          name: "Cumulative distance",
+          yaxis: "y2",
+          line: { color: "#F7630C", width: 2 },
+          hovertemplate: "t=%{x}<br>cumulative=%{y:.5g}<extra></extra>",
+        },
+      ]}
+      layout={overviewLayout({
+        xaxis: { title: String(preview.time_unit ?? "Frame") },
+        yaxis: { title: "Step distance" },
+        yaxis2: { title: "Cumulative distance", overlaying: "y", side: "right", showgrid: false },
+        legend: { orientation: "h", y: 1.12, x: 0 },
+      })}
+    />
+    <ChartCaption>蓝线显示相邻帧的 descriptor 变化，橙线显示从轨迹起点累计的变化距离。</ChartCaption>
+  </>;
+}
+
+function DriftChart({ preview }: { preview: AnalysisPreview }) {
+  const rows = recordArray(preview.rows)
+    .map((row) => ({ label: finiteNumber(row.labels), distance: finiteNumber(row.distances) }))
+    .filter((row): row is { label: number; distance: number } => row.label !== null && row.distance !== null);
+  const categoryLabels = ["Covered", "Marginal", "Out of coverage"];
+  const categoryColors = ["#107C10", "#F7630C", "#D13438"];
+  const grouped = categoryLabels.map((_, category) => rows.filter((row) => row.label === category).map((row) => row.distance));
+  const counts = [
+    numberOr(preview.covered, grouped[0].length),
+    numberOr(preview.marginal, grouped[1].length),
+    numberOr(preview.out_of_coverage, grouped[2].length),
+  ];
+  const q95 = finiteNumber(preview.q95);
+  const q99 = finiteNumber(preview.q99);
+  const thresholdShapes = [q95, q99]
+    .filter((value): value is number => value !== null)
+    .map((value, index) => ({ type: "line" as const, x0: value, x1: value, y0: 0, y1: 1, yref: "paper" as const, line: { color: index === 0 ? "#F7630C" : "#D13438", dash: "dash" as const, width: 1.5 } }));
+  const data: Data[] = rows.length
+    ? grouped.map((values, index) => ({ type: "histogram" as const, x: values, name: categoryLabels[index], opacity: 0.78, marker: { color: categoryColors[index] }, nbinsx: 28, hovertemplate: `${categoryLabels[index]}<br>distance=%{x:.5g}<br>count=%{y}<extra></extra>` }))
+    : [{ type: "bar", x: categoryLabels, y: counts, marker: { color: categoryColors }, hovertemplate: "%{x}<br>count=%{y}<extra></extra>" }];
+  return <>
+    <MetricStrip metrics={[{ label: "Mean distance", value: formatNumber(preview.mean_distance) }, { label: "Median distance", value: formatNumber(preview.median_distance) }, { label: "Max distance", value: formatNumber(preview.max_distance) }, { label: "Out of coverage", value: formatCount(preview.out_of_coverage) }]} />
+    <OverviewPlot
+      ariaLabel="Distribution of distances from query samples to the reference descriptor set"
+      data={data}
+      layout={overviewLayout({
+        barmode: rows.length ? "stack" : "group",
+        xaxis: { title: rows.length ? "Nearest-reference distance" : "Coverage category" },
+        yaxis: { title: "Samples" },
+        shapes: thresholdShapes,
+        legend: { orientation: "h", y: 1.12, x: 0 },
+      })}
+    />
+    <ChartCaption>分布越靠右表示 query 样本离 reference descriptor space 越远；虚线分别对应 q95 和 q99 阈值。</ChartCaption>
+  </>;
+}
+
+function SensitivityChart({ preview }: { preview: AnalysisPreview }) {
+  const runs = recordArray(preview.runs)
+    .map((run, index) => ({
+      label: parameterLabel(run.parameters, index),
+      value: finiteNumber(run.mean_delta_norm),
+      detail: parameterText(run.parameters),
+    }))
+    .filter((run): run is { label: string; value: number; detail: string } => run.value !== null);
+  if (!runs.length) return <OverviewNoData message="No completed runs were returned for sensitivity analysis." />;
+  const rows = runs.slice().reverse();
+  return <>
+    <MetricStrip metrics={[{ label: "Runs compared", value: String(runs.length) }, { label: "Largest mean delta", value: formatNumber(Math.max(...runs.map((run) => run.value))) }]} />
+    <OverviewPlot
+      ariaLabel="Descriptor parameter sensitivity across completed runs"
+      data={[{
+        type: "bar",
+        orientation: "h",
+        x: rows.map((run) => run.value),
+        y: rows.map((run) => run.label),
+        customdata: rows.map((run) => run.detail),
+        marker: { color: rows.map((_, index) => index === rows.length - 1 ? "#107C10" : "#0F6CBD") },
+        hovertemplate: "%{y}<br>mean delta norm=%{x:.5g}<br>%{customdata}<extra></extra>",
+      }]}
+      layout={overviewLayout({ xaxis: { title: "Mean descriptor delta norm", zeroline: true }, yaxis: { automargin: true } })}
+    />
+    <ChartCaption>以第一个 Completed Run 为基准；柱越长，descriptor 参数变化带来的整体结果差异越大。</ChartCaption>
+  </>;
+}
+
+function OverviewPlot({ data, layout, ariaLabel }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string }) {
+  return <div className="analysis-overview-chart-frame" aria-label={ariaLabel}><Plot data={data} layout={layout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} /></div>;
+}
+
+function MetricStrip({ metrics }: { metrics: Metric[] }) {
+  return <div className="analysis-metric-strip">{metrics.map((metric) => <div className="analysis-metric" key={metric.label}><Typography.Text type="secondary">{metric.label}</Typography.Text><Typography.Text strong>{metric.value}</Typography.Text></div>)}</div>;
+}
+
+function ChartCaption({ children }: { children: ReactNode }) {
+  return <Typography.Text type="secondary" className="analysis-chart-caption">{children}</Typography.Text>;
+}
+
+function OverviewNoData({ message }: { message: string }) {
+  return <div className="analysis-overview-empty"><Empty description={message} /></div>;
+}
+
+function overviewLayout(overrides: Partial<Layout> = {}): Partial<Layout> {
+  return {
+    autosize: true,
+    margin: { l: 64, r: 28, t: 18, b: 52 },
+    paper_bgcolor: "#FFFFFF",
+    plot_bgcolor: "#FFFFFF",
+    font: { family: "Segoe UI, sans-serif", size: 12, color: "#424242" },
+    ...overrides,
+  };
+}
+
+function numericArray(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(finiteNumber).filter((item): item is number => item !== null);
+}
+
+function recordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item));
+}
+
+function finiteNumber(value: unknown): number | null {
+  if (typeof value !== "number" && typeof value !== "string") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function sampledIndices(length: number, maxPoints: number): number[] {
+  if (length <= 0) return [];
+  if (length <= maxPoints) return Array.from({ length }, (_, index) => index);
+  return Array.from({ length: maxPoints }, (_, index) => Math.round(index * (length - 1) / (maxPoints - 1)));
+}
+
+function formatNumber(value: unknown): string {
+  const number = finiteNumber(value);
+  if (number === null) return "—";
+  return Math.abs(number) >= 1000 ? number.toLocaleString(undefined, { maximumFractionDigits: 2 }) : number.toPrecision(5);
+}
+
+function formatCount(value: unknown): string {
+  const number = finiteNumber(value);
+  return number === null ? "—" : Math.round(number).toLocaleString();
+}
+
+function formatIndex(value: unknown): string {
+  const number = finiteNumber(value);
+  return number === null ? "?" : String(Math.round(number));
+}
+
+function componentThreshold(preview: AnalysisPreview, key: string): number | null {
+  const thresholds = preview.components_for_threshold;
+  if (typeof thresholds !== "object" || thresholds === null || Array.isArray(thresholds)) return null;
+  return finiteNumber((thresholds as Record<string, unknown>)[key]);
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  return finiteNumber(value) ?? fallback;
+}
+
+function parameterText(value: unknown): string {
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function parameterLabel(value: unknown, index: number): string {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, 2);
+    if (entries.length) return entries.map(([key, item]) => `${key}=${String(item)}`).join(", ");
+  }
+  return `Run ${index + 1}`;
 }
 
 function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, setPreprocess }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; setPreprocess: (value: string) => void }) {
