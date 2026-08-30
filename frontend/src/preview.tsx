@@ -203,6 +203,13 @@ const JOB_ROWS = [
   },
 ];
 
+function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis") {
+  window.setTimeout(() => {
+    mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { analysis_id: analysisId }, error: null });
+  }, 800);
+  return { job_id: jobId, analysis_id: analysisId, cache: null };
+}
+
 function mockFramePayload(index: number) {
   // 8-atom zincblende GaAs cell, a=5.65 Å, 2×1×1 supercell
   const a = 5.65;
@@ -384,7 +391,7 @@ const METHODS: Record<string, Handler> = {
       shape: "[12480, 256]",
     },
   ],
-  // mutable run rows + a scripted job lifecycle so the Results tab can be
+  // mutable run rows + a scripted job lifecycle so the Analysis tab can be
   // watched flipping QUEUED -> RUNNING -> COMPLETED without the real backend
   "result.list": () => {
     startJobPlaybook();
@@ -396,6 +403,50 @@ const METHODS: Record<string, Handler> = {
     }, 800);
     return { job_id: "job-pca-live", analysis_id: "ana-mock-pca" };
   },
+  "analysis.list": () => [
+    {
+      id: "ana-mock-pca",
+      descriptor_run_id: "run-dpa2",
+      analysis_type: "pca",
+      status: "COMPLETED",
+      dataset_ids: ["ds-gaas"],
+      input_run_ids: ["run-dpa2"],
+      created_at: new Date(NOW - 58 * 60000).toISOString(),
+    },
+  ],
+  "analysis.preview": () => ({
+    analysis_id: "ana-mock-analysis",
+    kind: "projection",
+    points: Array.from({ length: 250 }, (_, i) => ({
+      i,
+      frame: i % 6320,
+      x: Math.sin(i / 17) * 3 + gauss(0, 0.25),
+      y: Math.cos(i / 23) * 2 + gauss(0, 0.25),
+      sample_id: `frame:${i}`,
+    })),
+  }),
+  "analysis.umap": (_p) => {
+    window.setTimeout(() => mockEmit("job.finished", { job_id: "job-umap-live", status: "COMPLETED", result: { analysis_id: "ana-mock-analysis" }, error: null }), 800);
+    return { job_id: "job-umap-live", analysis_id: "ana-mock-analysis", cache: null };
+  },
+  "analysis.tsne": (_p) => {
+    return mockAnalysisSubmit("job-tsne-live");
+  },
+  "analysis.neighbors": (_p) => mockAnalysisSubmit("job-neighbors-live"),
+  "analysis.similarity": (_p) => mockAnalysisSubmit("job-similarity-live"),
+  "analysis.cluster": (_p) => mockAnalysisSubmit("job-cluster-live"),
+  "analysis.outlier": (_p) => mockAnalysisSubmit("job-outlier-live"),
+  "analysis.sampling": (_p) => mockAnalysisSubmit("job-sampling-live"),
+  "analysis.fps": (_p) => mockAnalysisSubmit("job-fps-live"),
+  "analysis.coverage": (_p) => mockAnalysisSubmit("job-coverage-live"),
+  "analysis.compare": (_p) => mockAnalysisSubmit("job-compare-live"),
+  "analysis.feature_variance": (_p) => mockAnalysisSubmit("job-feature-variance-live"),
+  "analysis.feature_correlation": (_p) => mockAnalysisSubmit("job-feature-correlation-live"),
+  "analysis.effective_dimension": (_p) => mockAnalysisSubmit("job-effective-dimension-live"),
+  "analysis.trajectory": (_p) => mockAnalysisSubmit("job-trajectory-live"),
+  "analysis.drift": (_p) => mockAnalysisSubmit("job-drift-live"),
+  "analysis.sensitivity": (_p) => mockAnalysisSubmit("job-sensitivity-live"),
+  "analysis.export": (_p) => mockAnalysisSubmit("job-export-live", "ana-mock-export"),
   "result.get_pca": (p) => {
     const gauss2 = (mu: number, sigma: number) => {
       let u = 0, v = 0;
@@ -477,7 +528,7 @@ const RUNS = [
   },
 ];
 
-// one-shot timeline for job-soap: the Results table should show QUEUED on
+// one-shot timeline for job-soap: the Analysis table should show QUEUED on
 // mount, RUNNING within ~1.5s of the first job.progress, COMPLETED at ~4.5s
 let jobPlaybookStarted = false;
 function startJobPlaybook() {

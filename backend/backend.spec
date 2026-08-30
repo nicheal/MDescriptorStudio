@@ -8,14 +8,36 @@
 from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = [], [], []
-# dpdata (ADR-19: DeepMD import) registers format plugins via dynamic
-# importlib imports — static analysis alone would miss them.
-for pkg in ("mdescriptor", "mdescriptor_studio_backend", "dpdata"):
-    d, b, h = collect_all(pkg)
+
+
+def collect_runtime(package):
+    """Collect package resources without shipping its test suite."""
+    data, binary, hidden = collect_all(package)
+    hidden = [
+        module
+        for module in hidden
+        if module != f"{package}.tests" and ".tests" not in module
+    ]
+    return data, binary, hidden
+
+
+# dpdata and the analysis stack register modules dynamically — static analysis
+# alone would otherwise produce a sidecar that works for descriptors but fails
+# only when the user first opens Analysis.
+for pkg in (
+    "mdescriptor",
+    "mdescriptor_studio_backend",
+    "dpdata",
+    "sklearn",
+    "scipy",
+    "umap",
+    "hdbscan",
+):
+    d, b, h = collect_runtime(pkg)
     datas += d
     binaries += b
     hiddenimports += h
-hiddenimports += ["numpy"]
+hiddenimports += ["numpy", "joblib", "numba", "llvmlite"]
 
 a = Analysis(
     ["run_backend.py"],
@@ -44,4 +66,3 @@ exe = EXE(
     console=True,  # stdio protocol transport
     icon="../src-tauri/icons/icon.ico",
 )
-

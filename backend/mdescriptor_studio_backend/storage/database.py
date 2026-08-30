@@ -82,6 +82,21 @@ MIGRATIONS: dict[int, str] = {
     2: """
     ALTER TABLE jobs ADD COLUMN analysis_run_id TEXT;
     """,
+    3: """
+    ALTER TABLE analysis_runs ADD COLUMN input_run_ids_json TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN dataset_ids_json TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN cache_key TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE analysis_runs ADD COLUMN algorithm_version TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN preprocessing_json TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN warnings_json TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN artifact_manifest_json TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN preview_json TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN stale_reason TEXT;
+    ALTER TABLE analysis_runs ADD COLUMN updated_at TEXT;
+    CREATE INDEX IF NOT EXISTS idx_analysis_cache_key ON analysis_runs(cache_key);
+    CREATE INDEX IF NOT EXISTS idx_analysis_input_run ON analysis_runs(descriptor_run_id, analysis_type, status);
+    """,
 }
 
 

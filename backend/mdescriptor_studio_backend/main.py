@@ -7,6 +7,7 @@ import platform
 import sys
 
 from . import __version__
+from .analysis import AnalysisEngine
 from .config import data_dir
 from .errors import AppError, INVALID_PARAMS, JOB_NOT_FOUND
 from .logging_setup import setup_logging
@@ -42,6 +43,13 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
             "mdescriptor_api_version": engine_info.get("api_version"),
             "mdescriptor_baseline_version": engine_info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": engine_info.get("descriptor_info_schema_version"),
+            "analysis_api_version": 1,
+            "analysis_algorithm_version": "studio-analysis-1",
+            "analysis_dependencies": {
+                "scikit-learn": "1.9.0",
+                "umap-learn": "0.5.12",
+                "hdbscan": "0.8.44",
+            },
             "data_dir": str(root),
             "cpu_threads": platform.os.cpu_count(),
         }
@@ -100,6 +108,32 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         "result.get_pca": results.get_pca,
         "result.heatmap": results.heatmap,
         "analysis.pca": analysis.pca,
+        "analysis.list": analysis.list,
+        "analysis.get": analysis.get,
+        "analysis.delete": analysis.delete,
+        "analysis.preview": analysis.preview,
+        "analysis.chunk": analysis.chunk,
+        "analysis.umap": analysis.umap,
+        "analysis.tsne": analysis.tsne,
+        "analysis.neighbors": analysis.neighbors,
+        "analysis.similarity": analysis.similarity,
+        "analysis.cluster": analysis.cluster,
+        "analysis.outlier": analysis.outlier,
+        "analysis.fps": analysis.fps,
+        "analysis.sampling": analysis.sampling,
+        "analysis.random": lambda params: analysis.submit_generic("random", params),
+        "analysis.stratified": lambda params: analysis.submit_generic("stratified", params),
+        "analysis.cluster_representative": lambda params: analysis.submit_generic("cluster_representative", params),
+        "analysis.per_element": lambda params: analysis.submit_generic("per_element", params),
+        "analysis.coverage": analysis.coverage,
+        "analysis.compare": analysis.compare,
+        "analysis.feature_variance": analysis.feature_variance,
+        "analysis.feature_correlation": analysis.feature_correlation,
+        "analysis.effective_dimension": analysis.effective_dimension,
+        "analysis.trajectory": analysis.trajectory,
+        "analysis.drift": analysis.drift,
+        "analysis.sensitivity": analysis.sensitivity,
+        "analysis.export": analysis.export,
         "engine.check_update": engine_check_update,
         "engine.update": engine_update,
     }
@@ -119,6 +153,8 @@ def main() -> int:
     # stdin reader thread exists (engine lazy-import deadlock, see adapter.warmup)
     adapter.warmup()
     log.info("engine warmup complete")
+    analysis_dependencies = AnalysisEngine.warmup()
+    log.info("analysis dependencies: %s", analysis_dependencies)
 
     # note: no on_stop here — the db must outlive the job pool; main() closes it
     server = Server(methods={})
@@ -143,6 +179,8 @@ def main() -> int:
             "mdescriptor_api_version": info.get("api_version"),
             "mdescriptor_baseline_version": info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": info.get("descriptor_info_schema_version"),
+            "analysis_api_version": 1,
+            "analysis_algorithm_version": "studio-analysis-1",
         },
     )
     # non-blocking PyPI check so the UI can offer an engine update (ADR-2)

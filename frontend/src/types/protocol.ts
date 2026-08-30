@@ -184,6 +184,7 @@ export interface JobRow {
   job_type: string;
   dataset_id: string | null;
   descriptor_run_id: string | null;
+  analysis_run_id?: string | null;
   status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
   progress: number;
   completed: number | null;
@@ -223,6 +224,58 @@ export interface RunRow {
   result_path: string | null;
   shape?: string | null;
   metadata?: Record<string, unknown>;
+}
+
+export type AnalysisStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "STALE";
+
+export interface AnalysisRow {
+  id: string;
+  descriptor_run_id: string;
+  analysis_type: string;
+  status: AnalysisStatus | string;
+  parameters?: Record<string, unknown>;
+  input_run_ids?: string[];
+  dataset_ids?: string[];
+  cache_key?: string | null;
+  schema_version?: number;
+  algorithm_version?: string | null;
+  preprocessing?: Record<string, unknown>;
+  warnings?: string[];
+  artifact_manifest?: Record<string, unknown>;
+  stale_reason?: string | null;
+  result_path?: string | null;
+  created_at: string;
+  finished_at?: string | null;
+  preview?: Record<string, unknown>;
+}
+
+export interface AnalysisJobResponse {
+  job_id: string | null;
+  analysis_id: string;
+  cache: {
+    existing_analysis_id: string;
+    status?: AnalysisStatus;
+    cache_key?: string;
+  } | null;
+}
+
+export interface AnalysisPreview {
+  analysis_id: string;
+  kind?: string;
+  points?: Record<string, unknown>[];
+  rows?: Record<string, unknown>[];
+  selected?: Record<string, unknown>[];
+  [key: string]: unknown;
+}
+
+export interface AnalysisChunk {
+  analysis_id: string;
+  array: string;
+  offset: number;
+  next_offset: number;
+  shape: number[];
+  dtype: string;
+  data: unknown[];
 }
 
 export interface PcaPayload {

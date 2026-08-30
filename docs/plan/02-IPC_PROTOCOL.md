@@ -75,7 +75,33 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `engine.update` | {version?}（缺省用 latest）→ {job_id, target_version}；pip 升级 job，终态后需重启后端生效；frozen 构建报 `ENGINE_UPDATE_UNSUPPORTED` | 是 |
 | `job.list` / `job.get` / `job.cancel` | 见 §4 | 否 |
 
-## 6. 错误码全集（16）
+### 5.1 Analysis extension
+
+Analysis API 统一使用同一结果模型：计算型方法立即返回
+{job_id, analysis_id, cache}；缓存命中时 job_id=null。analysis.list/get
+只返回元数据和 preview，不加载大数组；analysis.preview 上限为 20,000
+点；analysis.chunk 通过数组名、offset、limit 和可选列范围分页读取。
+
+| method | 关键参数与结果 |
+|---|---|
+| analysis.list/get/delete/preview/chunk | 通用 artifact 生命周期；结果目录必须有 completed manifest |
+| analysis.umap / analysis.tsne | run_id、mode、seed=42；UMAP 默认 n_neighbors=15/min_dist=0.1，t-SNE 默认 perplexity=30 |
+| analysis.neighbors / analysis.similarity | k 默认 10；Euclidean/Cosine；返回 n×k 邻居/距离，不返回 n×n 矩阵 |
+| analysis.cluster | algorithm=kmeans/dbscan/hdbscan/agglomerative；cluster 数默认 6；返回 labels 及可选 centers/probabilities |
+| analysis.outlier | algorithm=knn/lof/isolation_forest/mahalanobis；contamination 默认 0.01；返回 labels/scores |
+| analysis.fps / analysis.sampling | FPS、random、stratified、cluster_representative、per_element；FPS 目标默认 1000 |
+| analysis.coverage / analysis.drift | reference_run_id/query_run_id；参考集自覆盖 q95/q99 默认阈值；返回分块 nearest distance 和 Covered/Marginal/Out-of-coverage |
+| analysis.compare | 相同 feature count 做 feature-level；不同 descriptor 仅在 sample IDs 对齐时做 distance/ranking correlation |
+| analysis.feature_variance / analysis.feature_correlation | variance、Top-K correlation pairs；不默认传完整 D×D heatmap |
+| analysis.effective_dimension | eigenvalues、explained variance、participation ratio 和 90/95/99% 阈值 |
+| analysis.trajectory / analysis.sensitivity | 显式 frame range/timestep；sensitivity 只比较已有 Completed Run |
+| analysis.export | JSON/CSV identity/meta，DeepMD/extxyz 子集；禁止修改 source_path |
+
+新分析输入必须是当前 fingerprint 对应的 Completed Descriptor Run。NaN/Inf、
+空输入、样本不足、未声明且未验证的 atom row_offsets 返回结构化错误；
+zero-variance 特征可确定性忽略并记录 warnings。完整数组以 float64 落盘。
+
+## 6. 错误码全集（24）
 
 ```text
 DATASET_NOT_FOUND        DATASET_CHANGED         INVALID_DATASET
@@ -84,6 +110,10 @@ DESCRIPTOR_CONFIGURATION_ERROR                   MODEL_NOT_FOUND
 OUT_OF_MEMORY            JOB_CANCELLED           RESULT_INCOMPATIBLE
 INTERNAL_ERROR           PROTOCOL_VERSION_MISMATCH       JOB_NOT_FOUND
 INVALID_PARAMS           ENGINE_UPDATE_UNSUPPORTED
+ANALYSIS_NOT_FOUND       ANALYSIS_DEPENDENCY_MISSING
+ANALYSIS_INPUT_INVALID   ANALYSIS_INSUFFICIENT_SAMPLES
+ANALYSIS_STALE           ARTIFACT_INVALID
+EXPORT_FAILED
 ```
 
 （`JOB_CANCEL_UNSUPPORTED` 由 job.cancel 以 `INVALID_PARAMS` 携带 details 表达，不单列。）

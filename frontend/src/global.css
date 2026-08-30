@@ -356,3 +356,181 @@ body {
     min-height: 280px;
   }
 }
+
+/* Analysis workspace: visualization gets the flexible main column; the
+   inspector/history stays deliberately compact. */
+.analysis-page {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.analysis-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+}
+
+.analysis-toolbar .ant-progress {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.analysis-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.analysis-main,
+.analysis-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.analysis-card {
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #eaecf0;
+  border-radius: 7px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.analysis-controls {
+  padding-bottom: 11px;
+}
+
+.analysis-section-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 20px;
+  margin-bottom: 10px;
+}
+
+.analysis-section-heading > .ant-typography:first-child {
+  color: #242424;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.analysis-section-heading > .ant-typography + .ant-typography {
+  min-width: 0;
+  overflow: hidden;
+  color: #616161;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-plot-card {
+  min-height: 500px;
+}
+
+.analysis-plot-frame {
+  width: 100%;
+  height: min(62vh, 620px);
+  min-height: 380px;
+}
+
+.analysis-plot-frame .js-plotly-plot,
+.analysis-plot-frame .plot-container,
+.analysis-plot-frame .svg-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.analysis-inspector-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.analysis-inspector-row > span {
+  color: #616161;
+}
+
+.analysis-inspector-row .ant-typography {
+  max-width: 68%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-empty-small {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 116px;
+  color: #8a8a8a;
+  font-size: 12px;
+  text-align: center;
+}
+
+.analysis-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.analysis-history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid #eaecf0;
+  padding: 8px 0;
+}
+
+.analysis-history-row:first-child {
+  border-top: 0;
+}
+
+.analysis-json-preview {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  border-radius: 5px;
+  padding: 10px;
+  background: #f7f8fa;
+  color: #424242;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 1100px) {
+  .analysis-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-inspector {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
+  }
+}
+
+@media (max-width: 720px) {
+  .analysis-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-plot-frame {
+    min-height: 300px;
+    height: 56vh;
+  }
+}

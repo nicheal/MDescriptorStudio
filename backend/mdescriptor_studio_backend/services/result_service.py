@@ -59,7 +59,10 @@ class ResultService:
         row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (run_id,))
         if row is None:
             raise AppError(INVALID_PARAMS, f"run {run_id} does not exist")
-        if row["status"] != "COMPLETED" or not row["result_path"]:
+        # STALE runs remain readable for audit/reproducibility.  AnalysisService
+        # separately rejects them as new inputs, so historical artifacts cannot
+        # accidentally participate in a fresh calculation.
+        if row["status"] not in ("COMPLETED", "STALE") or not row["result_path"]:
             raise AppError(RESULT_INCOMPATIBLE, f"run {run_id} is {row['status']}")
         meta = json.loads((Path(row["result_path"]) / "metadata.json").read_text(encoding="utf-8"))
         dataset = self.db.query_one("SELECT name FROM datasets WHERE id = ?", (row["dataset_id"],))

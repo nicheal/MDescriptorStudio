@@ -4,7 +4,7 @@ import { ipc } from "../ipc/client";
 import type { DatasetMeta } from "../types/protocol";
 
 export type BackendStatus = "starting" | "ready" | "error";
-export type Page = "overview" | "explore" | "descriptors" | "results";
+export type Page = "overview" | "explore" | "descriptors" | "analysis";
 export type PcaMode = "structure" | "atom";
 
 export interface SelectedSample {

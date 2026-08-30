@@ -94,6 +94,14 @@ class DescriptorService:
         row = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (ds_id,))
         if row is None:
             raise AppError(DATASET_NOT_FOUND, f"dataset {ds_id} does not exist")
+        # A changed source must be explicitly rescanned before a new run can
+        # be created.  Existing runs remain auditable but are marked STALE by
+        # DatasetService.refresh_if_changed.
+        # A few pre-migration/imported rows may carry a legacy sentinel rather
+        # than a SHA-256 fingerprint; keep those rows diagnosable for the job
+        # lifecycle path and let the normal compute error settle them.
+        if isinstance(row.get("fingerprint"), str) and len(row["fingerprint"]) == 64:
+            self.datasets.refresh_if_changed(row)
         schema = self.adapter.schema(name) if name else None
         if schema is None:
             raise AppError(INVALID_PARAMS, "'descriptor_name' is required")
@@ -310,6 +318,15 @@ class DescriptorService:
             "shape": list(values.shape),
             "dtype": str(values.dtype),
             "level": str(getattr(result, "level", "")),
+            # Analysis may only attach atom/local-environment identities when
+            # the producer declares the row semantics.  Keep this explicit in
+            # the result metadata instead of inferring it from array shape.
+            "row_semantics": (
+                "atom"
+                if any(token in str(getattr(result, "level", "")).lower() for token in ("atom", "local", "pair"))
+                else "structure"
+            ),
+            "row_offsets_verified": result.row_offsets is not None,
             "feature_count": int(getattr(result, "feature_count", values.shape[-1] if values.ndim > 1 else 0)),
             "structure_ids": list(getattr(result, "structure_ids", []) or []),
             "created_at": _NOW(),

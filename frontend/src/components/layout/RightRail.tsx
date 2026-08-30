@@ -2,7 +2,7 @@
 //  • Overview/Explore — Data Health panel: missing values / invalid cells /
 //    duplicate structures / extreme forces from the last scan, plus scan
 //    status and a Rescan trigger.
-//  • Results page — no right rail, so the analysis workspace stays focused.
+//  • Analysis page — no right rail, so the analysis workspace stays focused.
 //  • Descriptors page — Recent Jobs panel: latest descriptor compute jobs
 //    (persisted history merged with the live session) with live progress;
 //    "View all jobs" opens the top-right Jobs drawer (full history).
@@ -72,7 +72,7 @@ function jobDone(jobId: string, onProgress?: (p: number) => void): Promise<void>
 export default function RightRail() {
   const page = useWorkspace().page;
   const wide = useSyncExternalStore(subscribeResize, () => window.innerWidth >= 1280);
-  if (!wide || page === "results") return null;
+  if (!wide || page === "analysis") return null;
   return page === "descriptors" ? <RecentJobsRail /> : <DataHealthRail />;
 }
 

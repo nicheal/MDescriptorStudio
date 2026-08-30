@@ -5,7 +5,7 @@
 
 ## 1. 技术与目录
 
-React 18 + TypeScript + Vite + AntD 5 + Zustand + ECharts + 3Dmol.js。
+React 18 + TypeScript + Vite + AntD 5 + Zustand + ECharts + Plotly + 3Dmol.js。
 
 ```text
 frontend/src/
@@ -19,7 +19,7 @@ frontend/src/
 ├── components/
 │   ├── layout/  Sidebar.tsx ContextBar.tsx StatusBar.tsx JobsBadge.tsx
 │   └── ...
-└── pages/  Overview.tsx Explore.tsx Descriptors.tsx Results.tsx Settings.tsx About.tsx
+└── pages/  Overview.tsx Explore.tsx Descriptors.tsx Analysis.tsx Results.tsx Settings.tsx About.tsx
 ```
 
 ## 2. 布局骨架（2026-08 ADR-18：恢复 mockup 右栏与 Jobs Tab；原 ADR-6 裁决被取代）
@@ -32,7 +32,7 @@ frontend/src/
 │ 搜索 + Add   │ 元素 · PBC · E/F/V ✓chips · 路径 · ⋯菜单）     │
 │ 数据集列表    ├───────────────────────────────────────────────┤
 │              │ Tabs: Overview | Explore | Descriptors |       │
-│ Dataset      │        Results | Jobs                          │
+│ Dataset      │        Analysis | Jobs                         │
 │ Storage 合计  ├──────────────────────────────┬────────────────┤
 │              │ Main Workspace（页面内容）     │ RightRail 264px │
 │              │ 高度自适应视口，默认零滚动条    │ Data Health     │
@@ -62,7 +62,7 @@ interface WorkspaceState {
 ```
 
 - 持久化：`activeDatasetId` 存 backend `settings` 表（`workspace.activeDatasetId`），启动恢复；`activeFrameIndex` 不恢复。
-- 切换数据集 → 全部页面刷新（Overview 重新拉统计、Explore 重置帧、Descriptors 重算预检、Results 过滤）。
+- 切换数据集 → 全部页面刷新（Overview 重新拉统计、Explore 重置帧、Descriptors 重算预检、Analysis 过滤）。
 
 ## 4. AntD tokens（logos.png 色板，融合 §124）
 
@@ -103,7 +103,7 @@ class IpcClient {
 | Overview | Summary 键值区（Structures/Atoms/Elements/Properties/Format/PBC/Created/File Size）+ Element Distribution 环形图 + 4 张直方图（E/atom、Force、Volume、Atoms/structure）+ Property Availability 矩阵（Virial 行，无 Magnetic Moment）；右侧常驻栏为 Data Health 面板（四项数据健康检查 + Scan status + Rescan） | M1（统计/直方图） |
 | Explore | 帧导航条（i/N、prev/next/random/index）+ 3Dmol Viewer（70%）+ Structure Inspector（30%）+ Atom Table | M2 |
 | Descriptors | registry 列表 + describe 信息 Inspector + schema 动态表单（8 类型 + 一层嵌套 object + model 两态）+ Execution（Device=CPU/Threads/Output/Scope）+ [Calculate] + input 兼容预检禁用 | M3（提交在 M4 走通计算） |
-| Results | run 列表 + PCA plot-first（75–80%）+ Heatmap（atom 级当前结构）+ Selected Sample Inspector + Open Explore | M5 |
+| Analysis | Run selector + Plotly Projection/Similarity/Clusters/Outliers/Sampling/Coverage/Compare tabs + shared Inspector + Open Explore | M5+ |
 
 ## 7. 视觉验收（§132 摘要）
 

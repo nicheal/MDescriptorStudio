@@ -1,0 +1,105 @@
+"""Numerical contract tests for the generic Analysis engine.
+
+These tests use a small deterministic matrix and never require a descriptor
+calculation.  They protect the public algorithm vocabulary, float64 outputs,
+bounded sampling, and structured validation errors.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from mdescriptor_studio_backend.analysis import AnalysisEngine, SampleMatrix
+from mdescriptor_studio_backend.errors import (
+    ANALYSIS_INPUT_INVALID,
+    ANALYSIS_INSUFFICIENT_SAMPLES,
+    AppError,
+)
+
+
+@pytest.fixture()
+def samples() -> SampleMatrix:
+    rng = np.random.default_rng(42)
+    values = rng.normal(size=(48, 12)).astype(np.float32)
+    return SampleMatrix(
+        values=values,
+        frame=np.arange(values.shape[0], dtype=np.int64),
+        sample_ids=[f"frame:{i}" for i in range(values.shape[0])],
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "runner"),
+    [
+        ("pca", lambda s: AnalysisEngine.pca(s, {})),
+        ("umap", lambda s: AnalysisEngine.umap(s, {"n_neighbors": 8})),
+        ("tsne", lambda s: AnalysisEngine.tsne(s, {"perplexity": 8, "max_iter": 250})),
+        ("neighbors", lambda s: AnalysisEngine.neighbors(s, {"k": 5})),
+        ("similarity", lambda s: AnalysisEngine.similarity(s, {"k": 5})),
+        ("kmeans", lambda s: AnalysisEngine.cluster(s, {"n_clusters": 4}, "kmeans")),
+        ("dbscan", lambda s: AnalysisEngine.cluster(s, {"min_samples": 3}, "dbscan")),
+        ("hdbscan", lambda s: AnalysisEngine.cluster(s, {"min_cluster_size": 3}, "hdbscan")),
+        ("agglomerative", lambda s: AnalysisEngine.cluster(s, {"n_clusters": 4}, "agglomerative")),
+        ("outlier-knn", lambda s: AnalysisEngine.outlier(s, {"k": 5}, "knn")),
+        ("outlier-lof", lambda s: AnalysisEngine.outlier(s, {"k": 5}, "lof")),
+        ("outlier-iforest", lambda s: AnalysisEngine.outlier(s, {}, "isolation_forest")),
+        ("outlier-mahalanobis", lambda s: AnalysisEngine.outlier(s, {}, "mahalanobis")),
+        ("fps", lambda s: AnalysisEngine.sampling(s, {"n_samples": 8}, "fps")),
+        ("random", lambda s: AnalysisEngine.sampling(s, {"n_samples": 8}, "random")),
+        ("stratified", lambda s: AnalysisEngine.sampling(s, {"n_samples": 8}, "stratified")),
+        ("cluster-representative", lambda s: AnalysisEngine.sampling(s, {"n_samples": 8}, "cluster_representative")),
+        ("per-element", lambda s: AnalysisEngine.sampling(SampleMatrix(s.values, s.frame, elements=np.where(s.frame % 2, 31, 33)), {"n_samples": 8}, "per_element")),
+        ("coverage", lambda s: AnalysisEngine.coverage(s, s, {})),
+        ("compare", lambda s: AnalysisEngine.compare(s, s, {})),
+        ("feature-variance", lambda s: AnalysisEngine.feature_variance(s, {})),
+        ("feature-correlation", lambda s: AnalysisEngine.feature_correlation(s, {})),
+        ("effective-dimension", lambda s: AnalysisEngine.effective_dimension(s, {})),
+        ("trajectory", lambda s: AnalysisEngine.trajectory(s, {"frame_start": 0, "frame_end": 47})),
+        ("drift", lambda s: AnalysisEngine.drift(s, s, {})),
+        (
+            "sensitivity",
+            lambda s: AnalysisEngine.sensitivity(
+                [({"id": "r1", "parameters_json": "{}"}, s), ({"id": "r2", "parameters_json": "{}"}, s)],
+                {},
+            ),
+        ),
+    ],
+)
+def test_analysis_algorithms_return_artifacts(name: str, runner, samples: SampleMatrix) -> None:
+    result = runner(samples)
+    assert result["arrays"], name
+    for array in result["arrays"].values():
+        assert np.asarray(array).dtype in (np.float64, np.int64), name
+    assert isinstance(result["preview"], dict)
+
+
+def test_sampling_is_deterministic_and_bounded(samples: SampleMatrix) -> None:
+    a = AnalysisEngine.sampling(samples, {"n_samples": 10, "seed": 42}, "fps")
+    b = AnalysisEngine.sampling(samples, {"n_samples": 10, "seed": 42}, "fps")
+    assert np.array_equal(a["arrays"]["selected_indices"], b["arrays"]["selected_indices"])
+    assert len(a["arrays"]["selected_indices"]) == 10
+
+
+def test_invalid_numeric_inputs_are_structured(samples: SampleMatrix) -> None:
+    with pytest.raises(AppError) as exc:
+        AnalysisEngine.pca(SampleMatrix(np.array([[np.nan, 1.0], [2.0, 3.0]]), np.array([0, 1])), {})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+
+    with pytest.raises(AppError) as exc:
+        AnalysisEngine.tsne(samples, {"perplexity": 100})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+
+    with pytest.raises(AppError) as exc:
+        AnalysisEngine.trajectory(samples, {"frame_start": 0, "frame_end": 0})
+    assert exc.value.code == ANALYSIS_INSUFFICIENT_SAMPLES
+
+
+def test_wide_correlation_keeps_heatmap_bounded(samples: SampleMatrix) -> None:
+    rng = np.random.default_rng(7)
+    wide = SampleMatrix(rng.normal(size=(48, 1_000)), samples.frame)
+    result = AnalysisEngine.feature_correlation(wide, {"top_k": 12, "heatmap_features": 32})
+    matrix = result["arrays"]["correlation_matrix"]
+    assert matrix.shape == (32, 32)
+    assert result["arrays"]["pairs"].shape == (12, 2)
+    assert any("limited" in warning for warning in result["warnings"])

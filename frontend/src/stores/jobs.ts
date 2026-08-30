@@ -20,6 +20,16 @@ export const JOB_TYPE_LABEL: Record<string, string> = {
   "dataset.statistics": "Dataset statistics",
   "descriptor.compute": "Descriptor compute",
   "analysis.pca": "PCA",
+  "analysis.umap": "UMAP",
+  "analysis.tsne": "t-SNE",
+  "analysis.neighbors": "Nearest neighbors",
+  "analysis.similarity": "Similarity",
+  "analysis.kmeans": "K-Means",
+  "analysis.dbscan": "DBSCAN",
+  "analysis.hdbscan": "HDBSCAN",
+  "analysis.agglomerative": "Agglomerative",
+  "analysis.analysis": "Analysis",
+  "analysis.export": "Analysis export",
 };
 
 export const JOB_STATUS_COLOR: Record<JobState["status"], string> = {

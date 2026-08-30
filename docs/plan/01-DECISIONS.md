@@ -1,6 +1,6 @@
 # 01 · 决策记录（ADR-1～17）
 
-> 状态：全部「已接受」，2026-08-28 定稿
+> 状态：ADR-1～25 已接受；Analysis 全文基线于 2026-08-30 定稿
 > 产生方式：ADR-1～4 为 v0.1 规划访谈；ADR-5～14 为 grilling 第一轮（10 问）；ADR-15～17 为 grilling 第二轮（3 问）+ 共识确认
 > 关联：`PROJECT_PLAN.md` v0.2 §3 为索引；mockup 对照表定稿见本文附录
 
@@ -42,7 +42,7 @@
 
 **背景**：mockup 有 Jobs Tab + 右上 `Jobs ②` 徽标 + 状态栏三种形态；设计文档 §102 只定义 Drawer；v0.1 标注「Tab 是否保留待定」。
 **决策**：v0.1 无 Jobs 一级 Tab——右上徽标 + Drawer（运行中任务/进度/取消）+ 底部状态栏摘要；完整历史检索页留 v0.2 再评估。
-**后果**：一级导航固定为 Overview / Explore / Descriptors / Results 四页；M4 范围收窄。
+**后果**：一级导航固定为 Overview / Explore / Descriptors / Analysis 四页；旧 Results 页面迁移为 Analysis，M4 的 PCA/heatmap 入口作为兼容层保留。
 
 ## ADR-7 mockup 对照表补漏五项裁决
 
@@ -127,7 +127,7 @@
 3. 左侧栏可折叠（chevron）、Add Dataset 移到列表上方、底部 Dataset Storage 显示已注册数据集体积合计（无磁盘容量 IPC，不伪造容量条）；
 4. Overview 重排为三列（Statistics + Element Distribution + Property Availability｜2 直方图｜2 直方图，第 4 张直方图换 Max|Force|，直方图统一主色），整体按视口高度自适应，默认窗口（≥1440×900）零滚动条，过小窗口回退为面板内滚动；
 5. Export Dataset Info 以「复制摘要到剪贴板」实现（无文件保存 IPC）；Energy/Atom vs Volume 散点仍按附录 #6 暂缓。
-**后果**：附录表 #1/#3/#4 由本条取代；04 布局骨架同步；dev 专用浏览器预览入口 `frontend/preview.html`（mock IPC）用于无 Tauri 壳的布局验证。
+**后果**：右栏与侧栏布局仍保留；其中一级 Jobs Tab 的历史取舍已由 ADR-20 supersede，当前 Jobs 继续使用右上 Drawer。dev 专用浏览器预览入口 `frontend/preview.html`（mock IPC）用于无 Tauri 壳的布局验证。
 
 ## ADR-19 DeepMD 数据导入改用 dpdata 包（2026-08-29，用户裁决）
 
@@ -141,13 +141,44 @@
 
 | # | Mockup（UI.png） | 设计文档 | 定稿裁决 |
 |---|---|---|---|
-| 1 | 一级导航含 Jobs Tab + 右上 Jobs② 徽标 + 状态栏 | 仅 Drawer（§102） | **无 Tab**（ADR-6）：徽标 + Drawer + 状态栏 → **2026-08 起 ADR-18：恢复 Jobs Tab** |
+| 1 | 一级导航含 Jobs Tab + 右上 Jobs② 徽标 + 状态栏 | 仅 Drawer（§102） | **当前：无 Jobs 一级 Tab**（ADR-20）；Analysis 作为第四页，Jobs 仍由 Drawer 提供 |
 | 2 | 当前页命名 **Overview** | 称 Dataset Page | 跟随 mockup：Overview |
 | 3 | 右侧 Quick Actions 常驻栏 + Recent Jobs 面板 | 无此设计；Inspector 在右 | Quick Actions 收进 Overview 页顶部（导航快捷方式）；Recent Jobs 面板保留在 Overview；**Export Dataset Info 暂缓 v0.2** → **2026-08 起 ADR-18：恢复常驻右栏，Export=剪贴板导出** |
 | 4 | 左下 Dataset Storage 容量条 | 无此设计 | 放入 Settings（ADR-12，M5） → **2026-08 起 ADR-18：侧栏底部显示已注册体积合计（无容量条）** |
 | 5 | Element Distribution 环形图 | 统计清单未提及 | 纳入 Overview，分类数据用科学 categorical palette |
-| 6 | Energy/Atom vs Volume 大散点（Max\|F\| 色标） | 无（§88 无散点） | **v0.1 不做**，暂缓至 v0.2 Results 增强 |
+| 6 | Energy/Atom vs Volume 大散点（Max\|F\| 色标） | 无（§88 无散点） | Analysis 的 Plotly Projection 取代旧 Results；该 Overview 专用散点仍不在当前范围 |
 | 7 | Property Availability 矩阵含 Stress、Magnetic Moment | §17 仅 Energy/Force/Virial 存在性 | 保留矩阵形式；**Stress→Virial**；**删 Magnetic Moment 行**；Per-Atom/Per-Structure 列由 DatasetFrame 推导 |
 | 8 | Created / File Size 字段 | §17 Summary 无 | **两者都加**：Created=注册时间，File Size=scan 汇总 |
 | 9 | （反向）Overview 无 Structure List 表 | §88 含 Structure List | 跟随 mockup：**不放**，结构浏览统一走 Explore |
 | 10 | 状态栏含 Memory 32 GB | §104 仅版本 + CPU 线程 | 采纳（低成本，随状态栏实现） |
+
+## ADR-20 全文 Analysis 取代 Results
+
+**背景**：下载的全文开发文档把描述符空间分析作为产品主线，但现有代码仍以 Results 一级页承载 PCA/heatmap；同时产品所有者明确要求保留 Overview 一级数据集概览。
+**决策**：一级导航固定为 Overview / Explore / Descriptors / Analysis。Results 改名为 Analysis；旧 PCA/heatmap 进入 Analysis 的 Projection，并保留 result.get_pca/result.heatmap 兼容入口。
+**后果**：旧客户端和历史 artifact 不被破坏，新的分析模块拥有统一页面和结果模型。
+
+## ADR-21 Analysis 数值与传输边界
+
+**决策**：Analysis 后端以 float64 计算并完整落盘；IPC 只返回最多 20,000 点的 preview 或受限 chunk；任何算法都不得默认生成完整 N×N 距离矩阵。计算采用 CPU-first 分块策略。
+**后果**：浏览器负载和内存增长有上限，用户仍可通过分页查看完整数组。
+
+## ADR-22 统一结果 artifact 与缓存
+
+**决策**：每个 AnalysisResult 由 SQLite 元数据、metadata.json、manifest.json 和 named .npy 数组组成。先写随机临时目录，manifest 完整后原子改名；缓存键由输入 Run IDs、规范化参数和 algorithm version 组成。
+**后果**：崩溃留下的临时目录不能成为完成结果，算法升级会自然失效旧缓存。
+
+## ADR-23 源数据变化与 STALE
+
+**决策**：dataset fingerprint 变化时旧 Descriptor/Analysis Run 保留并标记 STALE。STALE 结果可读、可审计、可删除，但不能作为新分析输入；完成 rescan/recompute 后才允许新 Run。
+**后果**：结果历史不会被静默删除，也不会混入新数据。
+
+## ADR-24 分析依赖与离线发布
+
+**决策**：scikit-learn、umap-learn、hdbscan 固定在 backend/requirements.txt，并通过 PyInstaller spec 进入 sidecar；Plotly 作为前端本地依赖，仅 Analysis 使用。
+**后果**：安装后的 Analysis 不依赖联网下载包，Overview/Explore 的现有图形技术保持不变。
+
+## ADR-25 选择、导出与跨 Run 比较
+
+**决策**：Plotly 支持 click 单点与 box/lasso 框选；Sampling 导出 JSON/CSV 身份文件和 DeepMD/extxyz 子集，源文件只读。Compare 在 feature count 相同时做 feature-level 指标；不同描述符只有 sample IDs 对齐时才做 distance/ranking correlation。Parameter Sensitivity 只比较已有 Completed Run。
+**后果**：用户可从散点选择直接回到 Explore，跨描述符不会通过补零/截断伪造 feature-level 可比性。

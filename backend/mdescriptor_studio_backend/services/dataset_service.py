@@ -89,6 +89,11 @@ class DatasetService:
 
     def _meta(self, row: dict, fingerprint_valid: bool | None = None) -> dict:
         current = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])
+        if current != row["fingerprint"]:
+            # Make the invalidation visible as soon as the registry is read;
+            # rescan/recompute later updates the dataset fingerprint but never
+            # silently resurrects results calculated from the old bytes.
+            self._mark_runs_stale(row["id"], f"source fingerprint changed ({row['fingerprint']} -> {current})")
         return {
             "id": row["id"],
             "name": row["name"],
@@ -343,11 +348,29 @@ class DatasetService:
     def refresh_if_changed(self, row: dict) -> None:
         current = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])
         if current != row["fingerprint"]:
+            self._mark_runs_stale(row["id"], f"source fingerprint changed ({row['fingerprint']} -> {current})")
             raise AppError(
                 DATASET_CHANGED,
                 f"dataset changed on disk: {row['source_path']}",
                 {"dataset_id": row["id"]},
             )
+
+    def _mark_runs_stale(self, dataset_id: str, reason: str) -> None:
+        """Invalidate old descriptor/analysis runs without deleting history."""
+        now = _NOW()
+        self.db.execute(
+            "UPDATE descriptor_runs SET status = 'STALE', error_message = ?, finished_at = ?"
+            " WHERE dataset_id = ? AND status = 'COMPLETED'",
+            (reason, now, dataset_id),
+        )
+        # The JSON column is available after migration 3; the descriptor_run
+        # fallback keeps legacy PCA rows visible and stale as well.
+        self.db.execute(
+            "UPDATE analysis_runs SET status = 'STALE', stale_reason = ?, finished_at = ?, updated_at = ?"
+            " WHERE status = 'COMPLETED' AND (descriptor_run_id IN"
+            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?) OR dataset_ids_json LIKE ?)",
+            (reason, now, now, dataset_id, f'%"{dataset_id}"%'),
+        )
 
     # -- frame access (M2) --------------------------------------------------
     def frame(self, params: dict) -> dict:
