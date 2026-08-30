@@ -7,7 +7,9 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
+import { jobStatusLabel } from "../stores/jobs";
 import { displayableDescriptorRuns } from "./analysisPreview";
+import { useT } from "../i18n";
 import type { RunRow } from "../types/protocol";
 
 const RUN_STATUS_COLOR: Record<string, string> = {
@@ -31,6 +33,7 @@ function SectionHeading({ title, meta }: { title: string; meta?: string }) {
 export default function DescriptorResults() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
+  const { t, tr } = useT();
   const dataset = activeDataset(st);
   const datasetId = dataset?.id;
   const selectedRun = st.activeDescriptorRunId;
@@ -59,7 +62,6 @@ export default function DescriptorResults() {
       setRefreshing(false);
     }
   }, [datasetId, message]);
-
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -80,7 +82,7 @@ export default function DescriptorResults() {
     setDeletingRunId(run.id);
     try {
       await ipc.request("result.remove", { run_id: run.id });
-      message.success("Descriptor result deleted");
+      message.success(t("Descriptor result deleted"));
       await refresh();
     } catch (error) {
       const err = error as { code?: string; message?: string };
@@ -90,7 +92,7 @@ export default function DescriptorResults() {
     }
   };
 
-  if (!dataset) return <Empty description="Register a dataset first" style={{ marginTop: 120 }} />;
+  if (!dataset) return <Empty description={t("Register a dataset first")} style={{ marginTop: 120 }} />;
 
   return (
     <div className="descriptor-results-page">
@@ -98,25 +100,25 @@ export default function DescriptorResults() {
         <div className="descriptor-results-card-header">
           <div>
             <SectionHeading
-              title="DESCRIPTOR RESULTS"
-              meta={`${completedRuns.length} ready · ${resultRuns.length} total`}
+              title={t("DESCRIPTOR RESULTS")}
+              meta={t("{ready} ready · {total} total", { ready: completedRuns.length, total: resultRuns.length })}
             />
             <Typography.Text type="secondary" className="descriptor-results-description">
-              Saved descriptor runs for the active dataset. Failed calculations remain in Jobs and are not listed here.
+              {t("Saved descriptor runs for the active dataset. Failed calculations remain in Jobs and are not listed here.")}
             </Typography.Text>
           </div>
           <Space wrap>
-            {selectedRunRow && <Tag color="blue">Selected: {selectedRunRow.descriptor_name}</Tag>}
+            {selectedRunRow && <Tag color="blue">{t("Selected: {name}", { name: selectedRunRow.descriptor_name })}</Tag>}
             <Button
               size="small"
               icon={<ArrowRight16Regular />}
               disabled={selectedRunRow?.status !== "COMPLETED"}
               onClick={() => st.setPage("analysis")}
             >
-              Open Analysis
+              {t("Open Analysis")}
             </Button>
             <Button size="small" icon={<ArrowSync16Regular />} loading={refreshing} onClick={() => void refresh()}>
-              Refresh
+              {t("Refresh")}
             </Button>
           </Space>
         </div>
@@ -137,10 +139,10 @@ export default function DescriptorResults() {
               },
             })}
             columns={[
-              { title: "Descriptor", dataIndex: "descriptor_name", key: "descriptor", width: descriptorColumnWidth },
-              { title: "Scope", dataIndex: "scope", key: "scope", width: 84 },
+              { title: t("Descriptor"), dataIndex: "descriptor_name", key: "descriptor", width: descriptorColumnWidth },
+              { title: t("Scope"), dataIndex: "scope", key: "scope", width: 84 },
               {
-                title: "Shape",
+                title: t("Shape"),
                 dataIndex: "shape",
                 key: "shape",
                 width: 130,
@@ -150,19 +152,19 @@ export default function DescriptorResults() {
                   : <Typography.Text type="secondary">—</Typography.Text>,
               },
               {
-                title: "Status",
+                title: t("Status"),
                 dataIndex: "status",
                 key: "status",
                 width: 100,
                 render: (value: string) => (
                   <Typography.Text style={{ color: RUN_STATUS_COLOR[value] ?? "#616161", fontWeight: 600, fontSize: 12 }}>
-                    {value}
+                    {jobStatusLabel(tr, value)}
                   </Typography.Text>
                 ),
               },
-              { title: "Created", dataIndex: "created_at", key: "created", width: 168, render: (value: string) => new Date(value).toLocaleString() },
+              { title: t("Created"), dataIndex: "created_at", key: "created", width: 168, render: (value: string) => new Date(value).toLocaleString() },
               {
-                title: "操作",
+                title: t("Actions"),
                 key: "actions",
                 width: 104,
                 render: (_value: unknown, run: RunRow) => {
@@ -173,17 +175,17 @@ export default function DescriptorResults() {
                         <Button
                           size="small"
                           type="text"
-                          aria-label={`Analyze ${run.descriptor_name} result`}
-                          title="Open in Analysis"
+                          aria-label={t("Analyze {name} result", { name: run.descriptor_name })}
+                          title={t("Open in Analysis")}
                           icon={<ArrowRight16Regular />}
                           disabled={run.status !== "COMPLETED"}
                           onClick={() => { st.setActiveRun(run.id); st.setPage("analysis"); }}
                         />
                         <Popconfirm
-                          title="Delete this descriptor result?"
-                          description="This also removes linked analysis history and stored files."
-                          okText="Delete"
-                          cancelText="Cancel"
+                          title={t("Delete this descriptor result?")}
+                          description={t("This also removes linked analysis history and stored files.")}
+                          okText={t("Delete")}
+                          cancelText={t("Cancel")}
                           okButtonProps={{ danger: true }}
                           disabled={active}
                           onConfirm={() => void deleteRun(run)}
@@ -191,8 +193,8 @@ export default function DescriptorResults() {
                           <Button
                             size="small"
                             type="text"
-                            aria-label={`Delete ${run.descriptor_name} result`}
-                            title={active ? "Cancel the running job first" : "Delete descriptor result"}
+                            aria-label={t("Delete {name} result", { name: run.descriptor_name })}
+                            title={active ? t("Cancel the running job first") : t("Delete descriptor result")}
                             icon={<Delete16Regular />}
                             loading={deletingRunId === run.id}
                             disabled={active || deletingRunId !== null}
@@ -206,7 +208,7 @@ export default function DescriptorResults() {
             ]}
           />
         ) : (
-          <Empty description="No descriptor results yet — compute a descriptor first" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description={t("No descriptor results yet — compute a descriptor first")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         )}
       </section>
     </div>

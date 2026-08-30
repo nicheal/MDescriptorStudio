@@ -39,6 +39,12 @@ class SampleMatrix:
     mode: str = "structure"
     warnings: list[str] = field(default_factory=list)
     properties: dict[str, np.ndarray] = field(default_factory=dict)
+    # Optional atom geometry used only by local-environment analyses.  These
+    # fields stay aligned with ``values`` and are absent for structure-level
+    # descriptor results.
+    positions: np.ndarray | None = None
+    cells: np.ndarray | None = None
+    pbc: np.ndarray | None = None
 
     @property
     def n_samples(self) -> int:
@@ -456,9 +462,7 @@ def _local_neighbor_graph(samples: SampleMatrix, cutoff: float, max_neighbors: i
     for index in range(1, offsets.size):
         if offsets[index] < offsets[index - 1]:
             offsets[index] = offsets[index - 1]
-    return coordination, offsets, np.asarray(graph_indices, dtype=np.int64), np.asarray(graph_distances, dtype=np.float64), warnings + [
-        "neighbor distances are stored in the companion neighbor_distances artifact"
-    ]
+    return coordination, offsets, np.asarray(graph_indices, dtype=np.int64), np.asarray(graph_distances, dtype=np.float64), warnings
 
 
 def _joint_projection(reference: np.ndarray, query: np.ndarray, max_each: int) -> dict[str, np.ndarray]:
@@ -972,25 +976,55 @@ class AnalysisEngine:
 
     @staticmethod
     def acquisition(reference: SampleMatrix, query: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
-        """Select a novel and diverse query batch without entering model inference."""
+        """Select a novel/uncertain and diverse query batch.
+
+        ``novelty_fps`` keeps the original nearest-reference acquisition.  The
+        ``uncertainty_diversity`` variant estimates descriptor-space epistemic
+        uncertainty from the distance to the k-th reference neighbor and its
+        local spread.  It is deliberately model-free: the Studio remains a
+        descriptor-analysis application and does not silently run a force or
+        energy model during acquisition.
+        """
         ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params, "standardized")
         metric = str(params.get("metric") or "euclidean")
-        nearest, novelty = _cross_nearest(
-            ref,
-            qry,
-            metric,
-            _int_param(params, "chunk_size", 2048, 1),
-            _int_param(params, "reference_chunk_size", 2048, 1),
-            progress,
-        )
+        acquisition_method = str(params.get("acquisition_method") or params.get("algorithm") or "novelty_fps").lower()
+        if acquisition_method in ("uncertainty", "uncertainty_diversity", "knn_uncertainty"):
+            uncertainty_k = min(_int_param(params, "uncertainty_k", 8, 2), ref.shape[0])
+            neighbor_indices, neighbor_distances = _cross_k_nearest(
+                ref,
+                qry,
+                metric,
+                _int_param(params, "chunk_size", 2048, 1),
+                _int_param(params, "reference_chunk_size", 2048, 1),
+                uncertainty_k,
+                progress,
+            )
+            nearest = neighbor_indices[:, 0]
+            novelty = neighbor_distances[:, 0]
+            uncertainty = neighbor_distances[:, -1] + neighbor_distances.std(axis=1)
+            acquisition_method = "uncertainty_diversity"
+            warnings.append("uncertainty is a descriptor-space kNN extrapolation proxy, not model prediction variance")
+        else:
+            nearest, novelty = _cross_nearest(
+                ref,
+                qry,
+                metric,
+                _int_param(params, "chunk_size", 2048, 1),
+                _int_param(params, "reference_chunk_size", 2048, 1),
+                progress,
+            )
+            uncertainty = novelty.copy()
+            acquisition_method = "novelty_fps"
         target = min(_int_param(params, "n_samples", 100, 1), qry.shape[0])
         pool_factor = _float_param(params, "pool_factor", 5.0, 1.0)
         pool_size = min(qry.shape[0], max(target, int(round(target * pool_factor))))
-        pool = np.argsort(-novelty, kind="stable")[:pool_size]
-        novelty_scale = np.ptp(novelty[pool])
-        normalized_novelty = (novelty[pool] - novelty[pool].min()) / max(float(novelty_scale), 1e-15)
-        novelty_weight = _float_param(params, "novelty_weight", 0.65, 0.0, 1.0)
-        selected_local = [int(np.argmax(normalized_novelty))]
+        base_score = uncertainty if acquisition_method == "uncertainty_diversity" else novelty
+        pool = np.argsort(-base_score, kind="stable")[:pool_size]
+        base_scale = np.ptp(base_score[pool])
+        normalized_base = (base_score[pool] - base_score[pool].min()) / max(float(base_scale), 1e-15)
+        base_weight_name = "uncertainty_weight" if acquisition_method == "uncertainty_diversity" else "novelty_weight"
+        base_weight = _float_param(params, base_weight_name, 0.65, 0.0, 1.0)
+        selected_local = [int(np.argmax(normalized_base))]
         min_diversity = np.full(pool_size, np.inf, dtype=np.float64)
         acquisition_score = np.zeros(pool_size, dtype=np.float64)
         for step in range(1, target):
@@ -999,22 +1033,29 @@ class AnalysisEngine:
             min_diversity = np.minimum(min_diversity, distances)
             diversity_scale = np.ptp(min_diversity[np.isfinite(min_diversity)]) if np.isfinite(min_diversity).any() else 0.0
             normalized_diversity = (min_diversity - np.nanmin(min_diversity)) / max(float(diversity_scale), 1e-15)
-            acquisition_score = novelty_weight * normalized_novelty + (1.0 - novelty_weight) * normalized_diversity
+            acquisition_score = base_weight * normalized_base + (1.0 - base_weight) * normalized_diversity
             acquisition_score[selected_local] = -1.0
             selected_local.append(int(np.argmax(acquisition_score)))
             if progress and (step % 50 == 0 or step == target - 1):
-                progress(step / max(target, 1), "novelty-diversity acquisition")
+                progress(step / max(target, 1), f"{acquisition_method} acquisition")
         selected = pool[np.asarray(selected_local, dtype=np.int64)]
         full_scores = np.zeros(qry.shape[0], dtype=np.float64)
+        full_uncertainty = np.zeros(qry.shape[0], dtype=np.float64)
+        full_diversity = np.zeros(qry.shape[0], dtype=np.float64)
         if np.isfinite(min_diversity).any():
             diversity_component = np.nan_to_num(min_diversity / max(float(np.nanmax(min_diversity[np.isfinite(min_diversity)])), 1e-15), posinf=0.0)
         else:
             diversity_component = np.zeros(pool_size, dtype=np.float64)
-        full_scores[pool] = novelty_weight * normalized_novelty + (1.0 - novelty_weight) * diversity_component
+        full_uncertainty[pool] = uncertainty[pool]
+        full_diversity[pool] = diversity_component
+        full_scores[pool] = base_weight * normalized_base + (1.0 - base_weight) * diversity_component
         arrays = {
             "selected_indices": selected.astype(np.int64),
             "nearest_indices": nearest,
             "distances": novelty,
+            "novelty": novelty,
+            "uncertainty": full_uncertainty,
+            "diversity": full_diversity,
             "scores": full_scores,
             "coords": _visual_pca(qry),
         }
@@ -1022,11 +1063,195 @@ class AnalysisEngine:
             "arrays": arrays,
             "preview": {
                 "kind": "acquisition",
-                "algorithm": "novelty_fps",
+                "algorithm": acquisition_method,
+                "uncertainty_method": "knn_extrapolation" if acquisition_method == "uncertainty_diversity" else None,
                 "selected_count": int(selected.size),
                 "candidate_pool": int(pool_size),
-                "novelty_weight": novelty_weight,
+                "base_weight": base_weight,
+                "novelty_weight": base_weight if acquisition_method == "novelty_fps" else None,
+                "uncertainty_weight": base_weight if acquisition_method == "uncertainty_diversity" else None,
                 "mean_selected_novelty": float(novelty[selected].mean()),
+                "mean_selected_uncertainty": float(uncertainty[selected].mean()),
+            },
+            "warnings": warnings,
+            "feature_indices": np.flatnonzero(keep).astype(np.int64),
+        }
+
+    @staticmethod
+    def mantel(left: SampleMatrix, right: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
+        """Run a two-sided Mantel permutation test on two aligned descriptor spaces."""
+        a, left_warnings, _left_keep = _preprocess(left.values, params, "standardized")
+        b, right_warnings, _right_keep = _preprocess(right.values, params, "standardized")
+        _check_samples(a, 3)
+        _check_samples(b, 3)
+        if left.n_samples != right.n_samples or left.sample_ids != right.sample_ids:
+            raise AppError(
+                ANALYSIS_INPUT_INVALID,
+                "Mantel comparison requires aligned sample IDs",
+                {"left_samples": left.n_samples, "right_samples": right.n_samples},
+            )
+        metric = str(params.get("metric") or "euclidean")
+        if metric not in ("euclidean", "cosine", "manhattan"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "Mantel metric must be euclidean, cosine, or manhattan")
+        method = str(params.get("method") or "pearson").lower()
+        if method not in ("pearson", "spearman"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "Mantel method must be pearson or spearman")
+        alternative = str(params.get("alternative") or "two-sided").lower()
+        if alternative not in ("two-sided", "greater", "less"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "Mantel alternative must be two-sided, greater, or less")
+        limit = min(_int_param(params, "max_samples", 600, 3), 2_000)
+        sample_indices = _bounded_indices(a.shape[0], limit)
+        a = a[sample_indices]
+        b = b[sample_indices]
+        left_matrix = _pairwise_matrix(a, metric)
+        right_matrix = _pairwise_matrix(b, metric)
+        triangle = np.triu_indices(sample_indices.size, 1)
+        left_pairs = left_matrix[triangle]
+        right_pairs = right_matrix[triangle]
+        statistic_fn = _safe_correlation if method == "pearson" else _rank_correlation
+        observed = float(statistic_fn(left_pairs, right_pairs))
+        permutations = min(_int_param(params, "permutations", 999, 1), 5_000)
+        rng = np.random.default_rng(_seed(params))
+        null = np.empty(permutations, dtype=np.float64)
+        if progress:
+            progress(0.05, "computing Mantel statistic")
+        for index in range(permutations):
+            permutation = rng.permutation(b.shape[0])
+            permuted_pairs = _pairwise_matrix(b[permutation], metric)[triangle]
+            null[index] = statistic_fn(left_pairs, permuted_pairs)
+            if progress and (index % 25 == 0 or index == permutations - 1):
+                progress(0.05 + 0.9 * (index + 1) / permutations, "running Mantel permutations")
+        if alternative == "greater":
+            exceed = int((null >= observed).sum())
+        elif alternative == "less":
+            exceed = int((null <= observed).sum())
+        else:
+            exceed = int((np.abs(null) >= abs(observed)).sum())
+        p_value = float((exceed + 1) / (permutations + 1))
+        if progress:
+            progress(1.0, "Mantel test complete")
+        warnings = [*left_warnings, *right_warnings]
+        if a.shape[0] < left.n_samples:
+            warnings.append(f"Mantel permutations limited to {a.shape[0]} deterministic aligned samples")
+        return {
+            "arrays": {
+                "sample_indices": sample_indices,
+                "left_pair_distances": left_pairs.astype(np.float64),
+                "right_pair_distances": right_pairs.astype(np.float64),
+                "null_distribution": null,
+            },
+            "preview": {
+                "kind": "mantel",
+                "method": method,
+                "metric": metric,
+                "alternative": alternative,
+                "statistic": observed,
+                "p_value": p_value,
+                "permutations": permutations,
+                "sample_count": int(a.shape[0]),
+                "pair_count": int(left_pairs.size),
+                "significant_at_05": bool(p_value < 0.05),
+            },
+            "warnings": warnings,
+        }
+
+    @staticmethod
+    def perturbation_sensitivity(
+        baseline: SampleMatrix,
+        perturbations: list[tuple[float, SampleMatrix]],
+        params: dict,
+        progress: Callable[[float, str], None] | None = None,
+    ) -> dict:
+        """Summarize descriptor response to physically perturbed structures.
+
+        The service owns structure generation and descriptor recomputation.  At
+        this layer the response is deliberately independent of any particular
+        descriptor: it compares each recomputed matrix with the stored baseline
+        using the baseline feature scaling and keeps a per-sample response curve.
+        """
+        if not perturbations:
+            raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "at least one structural perturbation is required")
+        base = _as_float64(baseline.values)
+        mode = params.get("preprocess", "standardized")
+        if mode not in ("raw", "center", "standardized"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
+        means = base.mean(axis=0)
+        scales = base.std(axis=0)
+        keep = scales > np.finfo(np.float64).eps
+        warnings = list(baseline.warnings)
+        if not bool(keep.all()):
+            warnings.append(f"ignored {int((~keep).sum())} zero-variance baseline feature(s)")
+        if not bool(keep.any()):
+            keep = np.ones(base.shape[1], dtype=bool)
+            scales = np.ones(base.shape[1], dtype=np.float64)
+
+        def transform(values: np.ndarray) -> np.ndarray:
+            values = _as_float64(values)
+            if values.shape != base.shape:
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    "perturbed descriptor shape does not match the baseline",
+                    {"baseline": list(base.shape), "perturbed": list(values.shape)},
+                )
+            used = values[:, keep]
+            if mode == "raw":
+                return used
+            centered = used - means[keep]
+            if mode == "center":
+                return centered
+            return centered / np.where(scales[keep] > 0, scales[keep], 1.0)
+
+        base_used = transform(base)
+        metric = str(params.get("metric") or "euclidean")
+        if metric not in ("euclidean", "cosine", "manhattan"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "perturbation metric must be euclidean, cosine, or manhattan")
+        amplitudes: list[float] = []
+        response_rows: list[np.ndarray] = []
+        for index, (amplitude, perturbed) in enumerate(perturbations):
+            if perturbed.n_samples != baseline.n_samples or perturbed.sample_ids != baseline.sample_ids:
+                raise AppError(ANALYSIS_INPUT_INVALID, "perturbed structures must preserve baseline sample IDs")
+            amplitude = float(amplitude)
+            if not np.isfinite(amplitude) or amplitude < 0:
+                raise AppError(ANALYSIS_INPUT_INVALID, "perturbation amplitudes must be finite and non-negative")
+            target = transform(perturbed.values)
+            delta = target - base_used
+            if metric == "euclidean":
+                response = np.linalg.norm(delta, axis=1)
+            elif metric == "manhattan":
+                response = np.abs(delta).sum(axis=1)
+            else:
+                base_norm = np.linalg.norm(base_used, axis=1)
+                target_norm = np.linalg.norm(target, axis=1)
+                cosine = np.sum(base_used * target, axis=1) / np.maximum(base_norm * target_norm, 1e-15)
+                response = np.maximum(1.0 - cosine, 0.0)
+            amplitudes.append(amplitude)
+            response_rows.append(response.astype(np.float64))
+            if progress:
+                progress((index + 1) / len(perturbations), "summarizing perturbation response")
+        order = np.argsort(np.asarray(amplitudes), kind="stable")
+        amplitude_array = np.asarray(amplitudes, dtype=np.float64)[order]
+        response_matrix = np.vstack(response_rows).astype(np.float64)[order]
+        mean_response = response_matrix.mean(axis=1)
+        return {
+            "arrays": {
+                "amplitudes": amplitude_array,
+                "mean_response": mean_response,
+                "median_response": np.median(response_matrix, axis=1),
+                "p95_response": np.quantile(response_matrix, 0.95, axis=1),
+                "max_response": response_matrix.max(axis=1),
+                "response_matrix": response_matrix,
+                "sample_indices": np.arange(base.shape[0], dtype=np.int64),
+            },
+            "preview": {
+                "kind": "perturbation_sensitivity",
+                "perturbation": str(params.get("perturbation") or "jitter"),
+                "metric": metric,
+                "preprocess": mode,
+                "amplitudes": amplitude_array.tolist(),
+                "sample_count": int(base.shape[0]),
+                "curve_count": int(amplitude_array.size),
+                "response_unit": "scaled descriptor distance" if mode == "standardized" else "descriptor distance",
+                "baseline_included": bool(np.any(np.isclose(amplitude_array, 0.0))),
             },
             "warnings": warnings,
             "feature_indices": np.flatnonzero(keep).astype(np.int64),
@@ -1223,6 +1448,10 @@ class AnalysisEngine:
         x, warnings, keep = _preprocess(samples.values, params, "standardized")
         _check_samples(x, 3)
         elements = np.asarray(samples.elements if samples.elements is not None else np.zeros(x.shape[0]), dtype=np.int64)
+        cutoff = _float_param(params, "cutoff", 3.0, 0.1)
+        max_neighbors = _int_param(params, "max_neighbors", 128, 1)
+        coordination_all, neighbor_offsets_all, neighbor_indices_all, neighbor_distances_all, graph_warnings = _local_neighbor_graph(samples, cutoff, max_neighbors)
+        warnings.extend(graph_warnings)
         selected_element = params.get("element")
         if selected_element is not None:
             selected_element = int(selected_element)
@@ -1234,6 +1463,15 @@ class AnalysisEngine:
             sample_indices = np.flatnonzero(mask).astype(np.int64)
         else:
             sample_indices = np.arange(x.shape[0], dtype=np.int64)
+        selected_coordination = coordination_all[sample_indices]
+        selected_neighbor_indices: list[int] = []
+        selected_neighbor_distances: list[float] = []
+        selected_neighbor_offsets = np.zeros(sample_indices.size + 1, dtype=np.int64)
+        for output_index, original_index in enumerate(sample_indices.tolist()):
+            lo, hi = int(neighbor_offsets_all[original_index]), int(neighbor_offsets_all[original_index + 1])
+            selected_neighbor_indices.extend(int(value) for value in neighbor_indices_all[lo:hi].tolist())
+            selected_neighbor_distances.extend(float(value) for value in neighbor_distances_all[lo:hi].tolist())
+            selected_neighbor_offsets[output_index + 1] = len(selected_neighbor_indices)
         coords = _visual_pca(x)
         categories = np.zeros(x.shape[0], dtype=np.int64)
         scores = np.zeros(x.shape[0], dtype=np.float64)
@@ -1275,6 +1513,8 @@ class AnalysisEngine:
                 "distorted": int((group_categories == 1).sum()),
                 "outliers": int((group_categories == 2).sum()),
                 "median_neighbor_distance": float(np.median(group_scores)),
+                "median_coordination": float(np.median(coordination_all[sample_indices[members]])) if members.size else 0.0,
+                "max_coordination": int(coordination_all[sample_indices[members]].max()) if members.size else 0,
                 "effective_dimension": effective_dimension,
             })
             if progress:
@@ -1287,12 +1527,23 @@ class AnalysisEngine:
                 "scores": scores,
                 "cluster_labels": cluster_labels,
                 "elements": elements,
+                "coordination": selected_coordination,
+                "neighbor_offsets": selected_neighbor_offsets,
+                "neighbor_indices": np.asarray(selected_neighbor_indices, dtype=np.int64),
+                "neighbor_distances": np.asarray(selected_neighbor_distances, dtype=np.float64),
             },
             "preview": {
                 "kind": "local_diversity",
                 "categories": ["main", "distorted", "outlier"],
                 "element_summary": summaries,
                 "sample_count": int(x.shape[0]),
+                "cutoff": cutoff,
+                "max_neighbors": max_neighbors,
+                "mean_coordination": float(selected_coordination.mean()) if selected_coordination.size else 0.0,
+                "max_coordination": int(selected_coordination.max()) if selected_coordination.size else 0,
+                "neighbor_count": int(len(selected_neighbor_indices)),
+                "neighbor_graph_available": bool(samples.positions is not None),
+                "selected_element": selected_element,
             },
             "warnings": warnings,
             "feature_indices": np.flatnonzero(keep).astype(np.int64),
@@ -1439,6 +1690,11 @@ class AnalysisEngine:
         rows = []
         baseline_run, baseline_sample = runs[0]
         baseline_values, baseline_warnings, _baseline_keep = _preprocess(baseline_sample.values, params, "standardized")
+        baseline_memory = baseline_run.get("memory_peak_bytes")
+        try:
+            baseline_memory = int(baseline_memory) if baseline_memory is not None else None
+        except (TypeError, ValueError):
+            baseline_memory = None
         for i, (run, sample) in enumerate(runs):
             if sample.n_samples != baseline_sample.n_samples or sample.sample_ids != baseline_sample.sample_ids:
                 raise AppError(ANALYSIS_INPUT_INVALID, "parameter sensitivity requires aligned sample IDs")
@@ -1466,6 +1722,12 @@ class AnalysisEngine:
                     runtime = (datetime.fromisoformat(run["finished_at"]) - datetime.fromisoformat(run["started_at"])).total_seconds()
             except (TypeError, ValueError):
                 runtime = None
+            memory_peak = run.get("memory_peak_bytes")
+            try:
+                memory_peak = int(memory_peak) if memory_peak is not None else None
+            except (TypeError, ValueError):
+                memory_peak = None
+            memory_delta = memory_peak - baseline_memory if memory_peak is not None and baseline_memory is not None else None
             rows.append({
                 "run_id": run["id"],
                 "parameters": parameter_value,
@@ -1473,6 +1735,8 @@ class AnalysisEngine:
                 "effective_dimension": effective_dimension,
                 "components_95": thresholds["0.95"],
                 "runtime_seconds": runtime,
+                "memory_peak_bytes": memory_peak,
+                "memory_delta_bytes": memory_delta,
                 "mean_delta_norm": mean_delta_norm,
                 **geometry,
                 "warnings": run_warnings,
@@ -1484,7 +1748,14 @@ class AnalysisEngine:
                 "pairwise_distance_pearson": np.asarray([row["pairwise_distance_pearson"] for row in rows], dtype=np.float64),
                 "neighbor_overlap": np.asarray([row["neighbor_overlap"] for row in rows], dtype=np.float64),
                 "effective_dimension": np.asarray([row["effective_dimension"] for row in rows], dtype=np.float64),
+                "memory_peak_bytes": np.asarray([row["memory_peak_bytes"] if row["memory_peak_bytes"] is not None else np.nan for row in rows], dtype=np.float64),
             },
-            "preview": {"kind": "sensitivity", "runs": rows, "baseline_run_id": baseline_run["id"]},
+            "preview": {
+                "kind": "sensitivity",
+                "runs": rows,
+                "baseline_run_id": baseline_run["id"],
+                "memory_metric": "peak process RSS during descriptor compute",
+                "memory_available": any(row["memory_peak_bytes"] is not None for row in rows),
+            },
             "warnings": baseline_warnings,
         }

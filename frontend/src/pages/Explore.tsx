@@ -10,6 +10,7 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
+import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import type { FramePayload } from "../types/protocol";
 
@@ -90,19 +91,32 @@ function clampBondCutoff(value: number): number {
   return Math.max(MIN_BOND_CUTOFF, Math.min(MAX_BOND_CUTOFF, value));
 }
 
+function neighborsWithinCutoff(atoms: ViewerAtom[], selectedAtom: number, cutoff: number): { index: number; distance: number }[] {
+  const center = atoms[selectedAtom];
+  if (!center) return [];
+  return atoms
+    .map((atom, index) => ({ index, distance: Math.sqrt((atom.x - center.x) ** 2 + (atom.y - center.y) ** 2 + (atom.z - center.z) ** 2) }))
+    .filter(({ index, distance }) => index !== selectedAtom && distance > 1e-6 && distance <= cutoff)
+    .sort((left, right) => left.distance - right.distance);
+}
+
 export default function Explore() {
   const st = useWorkspace();
   const d = activeDataset(st);
+  const { t } = useT();
   const [frame, setFrame] = useState<FramePayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [jumpTo, setJumpTo] = useState<number | null>(null);
   const [bondCutoff, setBondCutoff] = useState(DEFAULT_BOND_CUTOFF);
+  const [localCutoff, setLocalCutoff] = useState(3.0);
+  const [showLocalEnvironment, setShowLocalEnvironment] = useState(true);
   const viewerDiv = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<
     {
       clear: () => void;
       addModel: () => ViewerModel;
       addLine: (spec: object) => void;
+      addSphere?: (spec: object) => void;
       setStyle: (sel: object, style: object) => void;
       addStyle: (sel: object, style: object) => void;
       getView: () => number[];
@@ -123,6 +137,10 @@ export default function Explore() {
     && selectedSample.frame === frame?.index
     ? selectedSample.atom
     : undefined;
+  const selectedLocalNeighbors = frame && selectedAtom != null
+    ? neighborsWithinCutoff(parseViewerAtoms(frame.xyz, Math.max(bondCutoff, localCutoff)), selectedAtom, localCutoff)
+    : [];
+  const selectedLocalNeighborSet = new Set(showLocalEnvironment ? selectedLocalNeighbors.filter(({ index }) => index < (frame?.natoms ?? 0)).map(({ index }) => index) : []);
 
   const fetchFrame = useCallback(
     async (index: number, requestedBondCutoff = bondCutoff) => {
@@ -191,7 +209,10 @@ export default function Explore() {
     if (!viewerReady || !v || !frame) return;
     const previousView = renderedFrameRef.current === frame.index ? v.getView() : null;
     v.clear();
-    const atoms = parseViewerAtoms(frame.xyz, clampBondCutoff(frame.bond_cutoff));
+    const displayCutoff = showLocalEnvironment && selectedAtom != null
+      ? Math.max(clampBondCutoff(frame.bond_cutoff), localCutoff)
+      : clampBondCutoff(frame.bond_cutoff);
+    const atoms = parseViewerAtoms(frame.xyz, displayCutoff);
     const model = v.addModel();
     model.addAtoms(atoms);
     for (const el of new Set(atoms.map((atom) => atom.elem))) {
@@ -200,6 +221,15 @@ export default function Explore() {
     }
     if (selectedAtom != null && selectedAtom >= 0 && selectedAtom < atoms.length) {
       v.addStyle({ index: selectedAtom }, { sphere: { scale: 0.5, color: "#D13438" }, stick: { radius: 0.17, color: "#D13438" } });
+      if (showLocalEnvironment) {
+        const neighbors = neighborsWithinCutoff(atoms, selectedAtom, localCutoff);
+        const center = atoms[selectedAtom];
+        for (const neighbor of neighbors) {
+          v.addStyle({ index: neighbor.index }, { sphere: { scale: 0.34, color: "#F7630C" }, stick: { radius: 0.13, color: "#F7630C" } });
+          v.addLine({ start: center, end: atoms[neighbor.index], color: "#F7630C", opacity: 0.7, linewidth: 2 });
+        }
+        v.addSphere?.({ center, radius: localCutoff, color: "#F7630C", opacity: 0.12, wireframe: true });
+      }
     }
     // unit cell wireframe (12 edges) for periodic frames; cell is row-major a1,a2,a3
     if (frame.cell && frame.cell.length === 9) {
@@ -233,9 +263,9 @@ export default function Explore() {
     if (frame.ghost_count) console.info(`frame ${frame.index}: +${frame.ghost_count} periodic image atoms`);
     const ms = performance.now() - loadStart.current;
     console.info(`frame ${frame.index} fetched+rendered in ${ms.toFixed(0)}ms`);
-  }, [viewerReady, frame, selectedAtom]);
+  }, [viewerReady, frame, localCutoff, selectedAtom, showLocalEnvironment]);
 
-  if (!d) return <Empty description="Register a dataset first" style={{ marginTop: 120 }} />;
+  if (!d) return <Empty description={t("Register a dataset first")} style={{ marginTop: 120 }} />;
 
   const idx = frame?.index ?? st.activeFrameIndex;
   return (
@@ -254,7 +284,7 @@ export default function Explore() {
         }}
       >
         <Typography.Text strong>
-          Frame {idx} / {total - 1}
+          {t("Frame {index} / {total}", { index: idx, total: total - 1 })}
         </Typography.Text>
         <Space size={4}>
           <Button size="small" icon={<ArrowLeft16Regular />} onClick={() => void fetchFrame(idx - 1)} disabled={loading || idx <= 0} />
@@ -265,7 +295,7 @@ export default function Explore() {
             onClick={() => void fetchFrame(Math.floor(Math.random() * total))}
             disabled={loading}
           >
-            Random
+            {t("Random")}
           </Button>
           <InputNumber
             size="small"
@@ -289,9 +319,9 @@ export default function Explore() {
           />
         </Space>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
-          <Tooltip title="Show bonds for atom pairs no farther apart than this distance.">
+          <Tooltip title={t("Show bonds for atom pairs no farther apart than this distance.")}>
             <Typography.Text type="secondary" style={{ fontSize: 12, cursor: "help" }}>
-              Bond length ≤
+              {t("Bond length ≤")}
             </Typography.Text>
           </Tooltip>
           <InputNumber
@@ -302,7 +332,7 @@ export default function Explore() {
             precision={2}
             value={bondCutoff}
             disabled={loading}
-            aria-label="Bond length display threshold"
+            aria-label={t("Bond length display threshold")}
             addonAfter="Å"
             onChange={(value) => {
               if (value == null || !Number.isFinite(value)) return;
@@ -314,9 +344,33 @@ export default function Explore() {
             style={{ width: 122 }}
           />
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Button
+            size="small"
+            type={showLocalEnvironment ? "primary" : "default"}
+            disabled={selectedAtom == null}
+            onClick={() => setShowLocalEnvironment((visible) => !visible)}
+          >
+            {showLocalEnvironment ? t("Hide local shell") : t("Show local shell")}
+          </Button>
+          {showLocalEnvironment && selectedAtom != null && <InputNumber
+            size="small"
+            min={0.1}
+            max={MAX_BOND_CUTOFF}
+            step={0.1}
+            precision={2}
+            value={localCutoff}
+            aria-label={t("Local environment cutoff")}
+            addonAfter="Å"
+            onChange={(value) => {
+              if (value != null && Number.isFinite(value)) setLocalCutoff(clampBondCutoff(value));
+            }}
+            style={{ width: 122 }}
+          />}
+        </div>
         <div style={{ width: 56, flexShrink: 0, textAlign: "right" }} aria-live="polite">
           <Typography.Text type="secondary" style={{ visibility: loading ? "visible" : "hidden" }}>
-            loading…
+            {t("loading…")}
           </Typography.Text>
         </div>
       </div>
@@ -345,7 +399,7 @@ export default function Explore() {
                 fontFamily: "monospace",
               }}
             >
-              viewer error: {viewerError}
+              {t("viewer error: {message}", { message: viewerError })}
             </div>
           )}
         </div>
@@ -360,19 +414,25 @@ export default function Explore() {
           }}
         >
           <Typography.Text strong style={{ fontSize: 12, color: "#616161", letterSpacing: 1 }}>
-            STRUCTURE
+            {t("STRUCTURE")}
           </Typography.Text>
           <InspectorRows
             rows={[
-              ["Frame", String(idx)],
-              ["Formula", frame?.formula ?? "—"],
-              ["Atoms", String(frame?.natoms ?? "—")],
-              ["E / atom", frame?.energy_per_atom != null ? `${frame.energy_per_atom.toFixed(4)} eV` : "—"],
-              ["Max |F|", frame?.force_max != null ? `${frame.force_max.toFixed(4)} eV/Å` : "—"],
-              ["Volume", frame?.volume != null ? `${frame.volume.toFixed(2)} Å³` : "—"],
+              [t("Frame"), String(idx)],
+              [t("Formula"), frame?.formula ?? "—"],
+              [t("Atoms"), String(frame?.natoms ?? "—")],
+              [t("E / atom"), frame?.energy_per_atom != null ? `${frame.energy_per_atom.toFixed(4)} eV` : "—"],
+              [t("Max |F|"), frame?.force_max != null ? `${frame.force_max.toFixed(4)} eV/Å` : "—"],
+              [t("Volume"), frame?.volume != null ? `${frame.volume.toFixed(2)} Å³` : "—"],
               ["PBC", frame?.pbc ?? "—"],
+              [t("Selected atom"), selectedAtom != null ? `#${selectedAtom}` : "—"],
+              [t("Local coordination"), selectedAtom != null && showLocalEnvironment ? String(selectedLocalNeighbors.length) : "—"],
+              [t("Neighbor shell"), selectedAtom != null && showLocalEnvironment ? `${localCutoff.toFixed(2)} Å` : "—"],
             ]}
           />
+          {selectedAtom != null && showLocalEnvironment && <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginTop: 10, marginBottom: 0 }}>
+            {t("Neighbors: {list}", { list: selectedLocalNeighbors.length ? selectedLocalNeighbors.map(({ index, distance }) => `#${index} (${distance.toFixed(2)} Å)`).join(", ") : t("none within cutoff") })}
+          </Typography.Paragraph>}
         </div>
       </div>
 
@@ -383,10 +443,16 @@ export default function Explore() {
           pagination={false}
           dataSource={frame?.atom_rows ?? []}
           rowKey="i"
-          rowClassName={(row) => row.i === selectedAtom ? "explore-atom-row-selected" : ""}
+          rowClassName={(row) => row.i === selectedAtom ? "explore-atom-row-selected" : selectedLocalNeighborSet.has(row.i) ? "explore-atom-row-neighbor" : ""}
+          onRow={(row) => ({
+            onClick: () => {
+              if (!st.activeDescriptorRunId || !d) return;
+              st.setSelectedSample({ datasetId: d.id, runId: st.activeDescriptorRunId, mode: "atom", frame: idx, atom: row.i });
+            },
+          })}
           columns={[
             { title: "#", dataIndex: "i", key: "i", width: 60 },
-            { title: "Element", dataIndex: "el", key: "el", width: 80 },
+            { title: t("Element"), dataIndex: "el", key: "el", width: 80 },
             { title: "x (Å)", dataIndex: "x", key: "x", align: "right" },
             { title: "y (Å)", dataIndex: "y", key: "y", align: "right" },
             { title: "z (Å)", dataIndex: "z", key: "z", align: "right" },

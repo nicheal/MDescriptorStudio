@@ -48,7 +48,8 @@ import type {
 
 type TabKey = "overview" | "projection" | "similarity" | "clusters" | "outliers" | "sampling" | "coverage" | "compare" | "local" | "kernel";
 type ProjectionName = "pca" | "umap" | "tsne";
-type OverviewAnalysis = "feature_variance" | "feature_correlation" | "effective_dimension" | "property_correlation" | "trajectory" | "drift" | "sensitivity";
+type OverviewAnalysis = "feature_variance" | "feature_correlation" | "effective_dimension" | "property_correlation" | "trajectory" | "drift" | "sensitivity" | "perturbation_sensitivity";
+type CompareMode = "geometry" | "mantel";
 
 type Point = AnalysisPoint;
 type NumericArrays = AnalysisArrays;
@@ -90,11 +91,13 @@ const OVERVIEW_KIND_LABELS: Record<string, string> = {
   trajectory: "TRAJECTORY",
   drift: "DATASET DRIFT",
   sensitivity: "PARAMETER SENSITIVITY",
+  perturbation_sensitivity: "STRUCTURAL PERTURBATION SENSITIVITY",
 };
 
 const ARTIFACT_ARRAYS: Record<string, string[]> = {
   pairwise_similarity: ["similarity_matrix", "distance_matrix", "sample_indices"],
   compare: ["left_coords", "right_coords", "left_pair_distances", "right_pair_distances", "neighbor_overlap", "sample_indices"],
+  mantel: ["left_pair_distances", "right_pair_distances", "null_distribution", "sample_indices"],
   feature_correlation: ["correlation_matrix", "correlation_feature_indices"],
   effective_dimension: ["explained_variance"],
   property_correlation: ["targets", "predictions", "residuals", "pair_distance", "pair_property_delta"],
@@ -102,6 +105,8 @@ const ARTIFACT_ARRAYS: Record<string, string[]> = {
   overlap: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
   drift: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
   trajectory: ["time", "frames", "step_distance", "reference_distance", "cumulative_distance", "event_indices"],
+  perturbation_sensitivity: ["amplitudes", "mean_response", "median_response", "p95_response", "max_response", "response_matrix", "sample_indices"],
+  local_diversity: ["coords", "sample_indices", "labels", "scores", "cluster_labels", "elements", "coordination", "neighbor_offsets", "neighbor_indices", "neighbor_distances"],
   kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
 };
 
@@ -126,13 +131,13 @@ function selectedIndicesFromPreview(result: AnalysisPreview): number[] {
 
 function tabForAnalysisType(analysisType: string): TabKey {
   if (["pca", "umap", "tsne"].includes(analysisType)) return "projection";
-  if (["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity"].includes(analysisType)) return "overview";
+  if (["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"].includes(analysisType)) return "overview";
   if (["similarity", "neighbors", "pairwise", "pairwise_similarity"].includes(analysisType)) return "similarity";
   if (["kmeans", "dbscan", "hdbscan", "agglomerative", "hierarchical"].includes(analysisType)) return "clusters";
   if (["lof", "knn", "isolation_forest", "isolation-forest", "iforest", "mahalanobis", "mahalanobis_distance"].includes(analysisType)) return "outliers";
   if (["fps", "random", "stratified", "cluster_representative", "per_element", "acquisition", "novelty_fps"].includes(analysisType)) return "sampling";
   if (["coverage", "overlap"].includes(analysisType)) return "coverage";
-  if (analysisType === "compare") return "compare";
+  if (["compare", "mantel"].includes(analysisType)) return "compare";
   if (analysisType === "local_diversity") return "local";
   if (analysisType === "kernel") return "kernel";
   return "overview";
@@ -162,19 +167,28 @@ export default function Analysis() {
   const [outlierAlgorithm, setOutlierAlgorithm] = useState("lof");
   const [samplingAlgorithm, setSamplingAlgorithm] = useState("fps");
   const [similarityMode, setSimilarityMode] = useState<"query" | "all_neighbors" | "pairwise">("query");
+  const [compareMode, setCompareMode] = useState<CompareMode>("geometry");
+  const [mantelMethod, setMantelMethod] = useState<"pearson" | "spearman">("pearson");
+  const [mantelPermutations, setMantelPermutations] = useState(999);
   const [coverageMode, setCoverageMode] = useState<"coverage" | "overlap">("coverage");
   const [propertyName, setPropertyName] = useState("energy_per_atom");
   const [kernelName, setKernelName] = useState("rbf");
+  const [localCutoff, setLocalCutoff] = useState(3.0);
   const [secondRun, setSecondRun] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState("csv");
   const [exportPath, setExportPath] = useState("");
   const [k, setK] = useState(10);
   const [nClusters, setNClusters] = useState(6);
   const [nSamples, setNSamples] = useState(1000);
+  const [uncertaintyK, setUncertaintyK] = useState(8);
   const [contamination, setContamination] = useState(0.01);
   const [queryIndex, setQueryIndex] = useState(0);
   const [overviewAnalysis, setOverviewAnalysis] = useState<OverviewAnalysis>("feature_variance");
   const [trajectoryStep, setTrajectoryStep] = useState(1);
+  const [perturbationType, setPerturbationType] = useState<"jitter" | "strain">("jitter");
+  const [perturbationCount, setPerturbationCount] = useState(8);
+  const [perturbationMaximum, setPerturbationMaximum] = useState(0.2);
+  const [perturbationMetric, setPerturbationMetric] = useState("euclidean");
   const [tsnePerplexity, setTsnePerplexity] = useState(30);
   const [overviewArrays, setOverviewArrays] = useState<NumericArrays>({});
   const [overviewArraysBusy, setOverviewArraysBusy] = useState(false);
@@ -494,7 +508,7 @@ export default function Analysis() {
     const analysisType = row.analysis_type.toLowerCase();
     const analysisTab = tabForAnalysisType(analysisType);
     setTab(analysisTab);
-    if (analysisTab === "overview" && ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity"].includes(analysisType)) {
+    if (analysisTab === "overview" && ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"].includes(analysisType)) {
       setOverviewAnalysis(analysisType as OverviewAnalysis);
     }
     if (analysisTab === "projection") {
@@ -509,7 +523,8 @@ export default function Analysis() {
     }
     if (analysisType === "pairwise" || analysisType === "pairwise_similarity") setSimilarityMode("pairwise");
     if (analysisType === "overlap") setCoverageMode("overlap");
-    if (analysisType === "acquisition") setSamplingAlgorithm("novelty_fps");
+    if (analysisType === "acquisition") setSamplingAlgorithm(row.parameters?.acquisition_method === "uncertainty_diversity" ? "uncertainty_diversity" : "novelty_fps");
+    if (analysisType === "mantel") setCompareMode("mantel");
 
     setLoadingAnalysisId(row.id);
     setBusy(true);
@@ -587,25 +602,34 @@ export default function Analysis() {
     } else if (tab === "outliers") {
       await runRequest("analysis.outlier", { algorithm: outlierAlgorithm, k, contamination, preprocess: "standardized", mode }, outlierAlgorithm.toUpperCase());
     } else if (tab === "sampling") {
-      if (samplingAlgorithm === "novelty_fps") {
+      if (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity") {
         if (!secondRun || !selectedRun) {
-          message.warning("Select a reference run for novelty acquisition");
+          message.warning("Select a reference run for acquisition");
           return;
         }
-        await runRequest("analysis.acquisition", { reference_run_id: secondRun, query_run_id: selectedRun, n_samples: nSamples, mode, novelty_weight: 0.65 }, "Novelty acquisition");
+        const uncertainty = samplingAlgorithm === "uncertainty_diversity";
+        await runRequest("analysis.acquisition", { reference_run_id: secondRun, query_run_id: selectedRun, n_samples: nSamples, mode, acquisition_method: samplingAlgorithm, novelty_weight: 0.65, uncertainty_weight: 0.65, uncertainty_k: uncertaintyK }, uncertainty ? "Uncertainty acquisition" : "Novelty acquisition");
       } else {
         await runRequest("analysis.sampling", { algorithm: samplingAlgorithm, n_samples: nSamples, mode }, "Sampling");
       }
-    } else if (tab === "coverage" || tab === "compare") {
+    } else if (tab === "coverage") {
       if (!secondRun || !selectedRun) {
         message.warning("Select a reference/query run pair");
         return;
       }
-      const method = tab === "coverage" ? `analysis.${coverageMode}` : "analysis.compare";
-      const parameters = tab === "coverage" ? { reference_run_id: selectedRun, query_run_id: secondRun, metric: "euclidean", mode } : { left_run_id: selectedRun, right_run_id: secondRun, mode };
-      await runRequest(method, parameters, tab === "coverage" ? (coverageMode === "coverage" ? "Coverage" : "Overlap") : "Compare");
+      await runRequest(`analysis.${coverageMode}`, { reference_run_id: selectedRun, query_run_id: secondRun, metric: "euclidean", mode }, coverageMode === "coverage" ? "Coverage" : "Overlap");
+    } else if (tab === "compare") {
+      if (!secondRun || !selectedRun) {
+        message.warning("Select a descriptor run pair");
+        return;
+      }
+      const method = compareMode === "mantel" ? "analysis.mantel" : "analysis.compare";
+      const parameters = compareMode === "mantel"
+        ? { left_run_id: selectedRun, right_run_id: secondRun, mode, method: mantelMethod, permutations: mantelPermutations, max_samples: 600 }
+        : { left_run_id: selectedRun, right_run_id: secondRun, mode };
+      await runRequest(method, parameters, compareMode === "mantel" ? "Mantel test" : "Compare");
     } else if (tab === "local") {
-      await runRequest("analysis.local_diversity", { mode: "atom", n_clusters: nClusters, k }, "Local diversity");
+      await runRequest("analysis.local_diversity", { mode: "atom", n_clusters: nClusters, k, cutoff: localCutoff, max_neighbors: 128 }, "Local diversity");
     } else if (tab === "kernel") {
       await runRequest("analysis.kernel", { kernel: kernelName, mode, max_samples: 400 }, "Kernel diagnostics");
     } else if (tab === "overview") {
@@ -625,6 +649,8 @@ export default function Analysis() {
         ? { reference_run_id: selectedRun, query_run_id: secondRun, metric: "euclidean" }
         : overviewAnalysis === "sensitivity"
           ? { run_ids: [selectedRun, secondRun] }
+          : overviewAnalysis === "perturbation_sensitivity"
+            ? { perturbation: perturbationType, n_amplitudes: perturbationCount, max_amplitude: perturbationMaximum, metric: perturbationMetric, max_structures: 64, preprocess: "standardized" }
           : overviewAnalysis === "trajectory"
             ? { frame_step: trajectoryStep }
             : overviewAnalysis === "property_correlation"
@@ -636,7 +662,7 @@ export default function Analysis() {
                 : { top_k: 20 };
       await runRequest(`analysis.${overviewAnalysis}`, overviewParams, overviewAnalysis.replaceAll("_", " "));
     }
-  }, [clusterAlgorithm, contamination, coverageMode, k, kernelName, mode, nClusters, nSamples, overviewAnalysis, propertyName, queryIndex, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, similarityMode, tab, trajectoryStep, message]);
+  }, [clusterAlgorithm, contamination, coverageMode, k, kernelName, localCutoff, mantelMethod, mantelPermutations, mode, nClusters, nSamples, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationType, propertyName, queryIndex, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, similarityMode, tab, trajectoryStep, uncertaintyK, message, compareMode]);
 
   const inspectPoint = useCallback((point: Point) => {
     setInspectedPoint(point);
@@ -742,7 +768,7 @@ export default function Analysis() {
     const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
     return !selectedRun || inputRunIds.includes(selectedRun);
   });
-  const overviewModuleControl = <Space wrap><Typography.Text>Module</Typography.Text><Select value={overviewAnalysis} onChange={setOverviewAnalysis} options={[{ value: "feature_variance", label: "Feature variance" }, { value: "feature_correlation", label: "Feature correlation" }, { value: "effective_dimension", label: "Effective dimension" }, { value: "property_correlation", label: "Property correlation" }, { value: "trajectory", label: "Trajectory" }, { value: "drift", label: "Dataset drift" }, { value: "sensitivity", label: "Parameter sensitivity" }]} /><Typography.Text type="secondary">{overviewAnalysis === "sensitivity" ? "Compare parameter variants of the same descriptor; use Compare for different descriptors." : "All results stay on the backend as bounded artifacts."}</Typography.Text></Space>;
+  const overviewModuleControl = <Space wrap><Typography.Text>Module</Typography.Text><Select value={overviewAnalysis} onChange={setOverviewAnalysis} options={[{ value: "feature_variance", label: "Feature variance" }, { value: "feature_correlation", label: "Feature correlation" }, { value: "effective_dimension", label: "Effective dimension" }, { value: "property_correlation", label: "Property correlation" }, { value: "trajectory", label: "Trajectory" }, { value: "drift", label: "Dataset drift" }, { value: "sensitivity", label: "Parameter sensitivity" }, { value: "perturbation_sensitivity", label: "Structural perturbation" }]} /><Typography.Text type="secondary">{overviewAnalysis === "sensitivity" ? "Compare parameter variants of the same descriptor; use Compare for different descriptors." : overviewAnalysis === "perturbation_sensitivity" ? "Recompute the selected descriptor after controlled atomic jitter or strain." : "All results stay on the backend as bounded artifacts."}</Typography.Text></Space>;
   const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension");
 
   return (
@@ -778,12 +804,14 @@ export default function Analysis() {
             {tab === "similarity" && <Space wrap><Typography.Text>View</Typography.Text><Select value={similarityMode} onChange={setSimilarityMode} options={[{ value: "query", label: "Query neighbors" }, { value: "all_neighbors", label: "All-neighbor graph" }, { value: "pairwise", label: "Pairwise matrix" }]} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
             {tab === "clusters" && <Space wrap><Typography.Text>Algorithm</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Clusters</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
             {tab === "outliers" && <Space wrap><Typography.Text>Algorithm</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Contamination</Typography.Text><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
-            {tab === "sampling" && <Space wrap><Typography.Text>Method</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={["fps", "novelty_fps", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: value.replaceAll("_", " ") }))} /><Typography.Text>Target</Typography.Text><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom" }]} /></Space>}
+            {tab === "sampling" && <Space wrap><Typography.Text>Method</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: value === "uncertainty_diversity" ? "uncertainty + diversity" : value.replaceAll("_", " ") }))} /><Typography.Text>Target</Typography.Text><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom" }]} />{samplingAlgorithm === "uncertainty_diversity" && <><Typography.Text>kNN</Typography.Text><InputNumber min={2} value={uncertaintyK} onChange={(value) => setUncertaintyK(value ?? 8)} /></>}</Space>}
             {tab === "coverage" && <Space wrap><Typography.Text>Analysis</Typography.Text><Select value={coverageMode} onChange={setCoverageMode} options={[{ value: "coverage", label: "Coverage" }, { value: "overlap", label: "Train / test overlap" }]} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
-            {tab === "local" && <Space wrap><Typography.Text>Clusters / element</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Typography.Text>Neighbors</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><Typography.Text type="secondary">Atom-level descriptor rows are analyzed per element.</Typography.Text></Space>}
+            {tab === "local" && <Space wrap><Typography.Text>Clusters / element</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Typography.Text>Descriptor kNN</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><Typography.Text>Neighbor cutoff</Typography.Text><InputNumber min={0.1} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value ?? 3)} addonAfter="Å" /><Typography.Text type="secondary">Coordinates and periodic images determine coordination.</Typography.Text></Space>}
             {tab === "kernel" && <Space wrap><Typography.Text>Kernel</Typography.Text><Select value={kernelName} onChange={setKernelName} options={["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
             {tab === "overview" && overviewAnalysis === "sensitivity" && overviewModuleControl}
-            {(tab === "coverage" || tab === "compare" || (tab === "sampling" && samplingAlgorithm === "novelty_fps") || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? "Left" : tab === "sampling" ? "Query" : "Reference"}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? "Right" : tab === "sampling" ? "Reference" : "Query"}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} notFoundContent={sensitivityPair ? "No other completed run for this descriptor" : undefined} options={pairRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
+            {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap><Typography.Text>Perturbation</Typography.Text><Select value={perturbationType} onChange={setPerturbationType} options={[{ value: "jitter", label: "Atomic jitter (Å)" }, { value: "strain", label: "Isotropic strain" }]} /><Typography.Text>Steps</Typography.Text><InputNumber min={2} max={32} value={perturbationCount} onChange={(value) => setPerturbationCount(value ?? 8)} /><Typography.Text>Maximum</Typography.Text><InputNumber min={0.001} step={0.01} precision={3} value={perturbationMaximum} onChange={(value) => setPerturbationMaximum(value ?? 0.2)} /><Typography.Text>Metric</Typography.Text><Select value={perturbationMetric} onChange={setPerturbationMetric} options={["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value }))} /></Space>}
+            {(tab === "coverage" || tab === "compare" || (tab === "sampling" && (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity")) || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? "Left" : tab === "sampling" ? "Query" : "Reference"}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? "Right" : tab === "sampling" ? "Reference" : "Query"}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} notFoundContent={sensitivityPair ? "No other completed run for this descriptor" : undefined} options={pairRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
+            {tab === "compare" && <Space wrap><Typography.Text>Test</Typography.Text><Select value={compareMode} onChange={setCompareMode} options={[{ value: "geometry", label: "Geometry comparison" }, { value: "mantel", label: "Mantel permutation test" }]} />{compareMode === "mantel" && <><Typography.Text>Statistic</Typography.Text><Select value={mantelMethod} onChange={setMantelMethod} options={[{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }]} /><Typography.Text>Permutations</Typography.Text><InputNumber min={1} max={5000} value={mantelPermutations} onChange={(value) => setMantelPermutations(value ?? 999)} /></>}</Space>}
             {tab === "similarity" && similarityMode !== "pairwise" && <Space wrap>{similarityMode === "query" && <><Typography.Text>Query index</Typography.Text><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /></>}<Typography.Text>k</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
             {tab === "overview" && overviewAnalysis !== "sensitivity" && overviewModuleControl}
             {tab === "overview" && overviewAnalysis === "trajectory" && <Space wrap><Typography.Text>Frame step</Typography.Text><InputNumber min={1} value={trajectoryStep} onChange={(value) => setTrajectoryStep(value ?? 1)} /></Space>}
@@ -801,7 +829,7 @@ export default function Analysis() {
             if (row.i == null && row.sample_index == null && row.frame == null) return;
             const index = Number(row.i ?? row.sample_index ?? 0);
             const frame = Number(row.frame ?? index);
-            handlePoint({ i: index, frame, row: row.row == null ? undefined : Number(row.row), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, label: row.labels == null ? undefined : Number(row.labels), score: row.scores == null ? undefined : Number(row.scores), distance: row.distances == null ? undefined : Number(row.distances), element: row.element == null ? undefined : Number(row.element), cluster: row.cluster_labels == null ? undefined : Number(row.cluster_labels) });
+            handlePoint({ i: index, frame, row: row.row == null ? undefined : Number(row.row), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, label: row.labels == null ? undefined : Number(row.labels), score: row.scores == null ? undefined : Number(row.scores), distance: row.distances == null ? undefined : Number(row.distances), element: row.element == null ? undefined : Number(row.element), cluster: row.cluster_labels == null ? undefined : Number(row.cluster_labels), coordination: row.coordination == null ? undefined : Number(row.coordination), novelty: row.novelty == null ? undefined : Number(row.novelty), uncertainty: row.uncertainty == null ? undefined : Number(row.uncertainty), diversity: row.diversity == null ? undefined : Number(row.diversity) });
           }} />}
 
           {tab === "sampling" && <section className="analysis-card"><SectionHeading title="EXPORT SELECTED SET" meta="Source data is never modified" /><Space.Compact style={{ width: "100%" }}><Select value={exportFormat} onChange={setExportFormat} options={["json", "csv", "extxyz", "deepmd"].map((value) => ({ value, label: value.toUpperCase() }))} style={{ width: 120 }} /><Input placeholder="D:\\exports\\analysis_subset.csv" value={exportPath} onChange={(event) => setExportPath(event.target.value)} /><Button icon={<ArrowDownload16Regular />} onClick={() => void exportSelection()}>Export</Button></Space.Compact></section>}
@@ -809,7 +837,7 @@ export default function Analysis() {
 
         <aside className="analysis-inspector">
           <section className="analysis-card"><SectionHeading title="INSPECTOR" meta={selectedPoint ? `Frame ${selectedPoint.frame}` : undefined} />{selectedPoint ? <><Row k="Sample" v={selectedPoint.sample_id ?? String(selectedPoint.i)} /><Row k="Frame" v={String(selectedPoint.frame)} />{selectedPoint.row != null && <Row k="Row" v={String(selectedPoint.row)} />}<Button size="small" icon={<ArrowRight16Regular />} onClick={() => { st.setActiveFrame(selectedPoint.frame); st.setPage("explore"); }}>Open in Explore</Button></> : <Typography.Text type="secondary">Click a point, or use box/lasso selection, to inspect a structure.</Typography.Text>}</section>
-          <section className="analysis-card"><SectionHeading title="STRUCTURE PREVIEW" meta={selectedFrame ? `Frame ${selectedFrame.index}` : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} selectedAtom={selectedPoint?.row} onOpen={() => { st.setActiveFrame(selectedFrame.index); st.setPage("explore"); }} /> : <div className="analysis-empty-small">{selectedFrameBusy ? "Loading structure…" : "Select a sample to preview it."}</div>}</section>
+          <section className="analysis-card"><SectionHeading title="STRUCTURE PREVIEW" meta={selectedFrame ? `Frame ${selectedFrame.index}` : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} selectedAtom={selectedPoint?.row} localCutoff={preview?.kind === "local_diversity" && selectedPoint?.row != null ? Number(preview.cutoff ?? 3) : undefined} onOpen={() => { st.setActiveFrame(selectedFrame.index); st.setPage("explore"); }} /> : <div className="analysis-empty-small">{selectedFrameBusy ? "Loading structure…" : "Select a sample to preview it."}</div>}</section>
           <section className="analysis-card"><SectionHeading title="ANALYSIS HISTORY" meta={`${visibleAnalyses.length}`} />{visibleAnalyses.length ? <div className="analysis-history-list">{visibleAnalyses.slice(0, 10).map((row) => <div className="analysis-history-row" key={row.id}><div><Typography.Text strong>{row.analysis_type}</Typography.Text><Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>{new Date(row.created_at).toLocaleString()}</Typography.Text></div><Space size={4}><Tag color={row.status === "COMPLETED" ? "green" : row.status === "STALE" ? "orange" : undefined}>{row.status}</Tag><Button size="small" type="text" icon={<ArrowRight16Regular />} aria-label={`Load ${row.analysis_type} analysis`} title="Load cached analysis" loading={loadingAnalysisId === row.id} disabled={row.status !== "COMPLETED" || (loadingAnalysisId !== null && loadingAnalysisId !== row.id)} onClick={() => void loadAnalysis(row)} /><Button size="small" type="text" icon={<Delete16Regular />} aria-label={`Delete ${row.analysis_type} analysis`} disabled={row.status === "RUNNING" || row.status === "QUEUED"} onClick={() => void deleteAnalysis(row)} /></Space></div>)}</div> : <Typography.Text type="secondary">No analysis artifacts for this descriptor run yet.</Typography.Text>}</section>
         </aside>
       </div>

@@ -8,9 +8,11 @@ import {
 } from "@fluentui/react-icons";
 import JobsDrawer from "../JobsDrawer";
 import { APP_ICON_URL } from "../../brand";
+import { useT } from "../../i18n";
 
 export default function TitleBar() {
   const [maximized, setMaximized] = useState(false);
+  const { t } = useT();
 
   const syncMaximized = useCallback(async () => {
     try {
@@ -92,8 +94,8 @@ export default function TitleBar() {
           <button
             type="button"
             className="app-window-control"
-            aria-label="Minimize"
-            title="Minimize"
+            aria-label={t("Minimize")}
+            title={t("Minimize")}
             onClick={() => runWindowCommand(() => getCurrentWindow().minimize())}
           >
             <Subtract16Regular />
@@ -101,8 +103,8 @@ export default function TitleBar() {
           <button
             type="button"
             className="app-window-control"
-            aria-label={maximized ? "Restore" : "Maximize"}
-            title={maximized ? "Restore" : "Maximize"}
+            aria-label={maximized ? t("Restore") : t("Maximize")}
+            title={maximized ? t("Restore") : t("Maximize")}
             onClick={toggleMaximize}
           >
             {maximized ? <SquareMultiple16Regular /> : <Maximize16Regular />}
@@ -110,8 +112,8 @@ export default function TitleBar() {
           <button
             type="button"
             className="app-window-control app-window-control-close"
-            aria-label="Close"
-            title="Close"
+            aria-label={t("Close")}
+            title={t("Close")}
             onClick={() => runWindowCommand(() => getCurrentWindow().close())}
           >
             <Dismiss16Regular />

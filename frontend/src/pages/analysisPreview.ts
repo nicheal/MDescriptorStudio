@@ -24,6 +24,10 @@ export interface AnalysisPoint {
   energy?: number | null;
   force_max?: number | null;
   volume?: number | null;
+  coordination?: number | null;
+  novelty?: number | null;
+  uncertainty?: number | null;
+  diversity?: number | null;
 }
 
 export function normalizePoints(preview: AnalysisPreview): AnalysisPoint[] {
@@ -33,7 +37,7 @@ export function normalizePoints(preview: AnalysisPreview): AnalysisPoint[] {
     const y = Number(value.y ?? value.pc2);
     const frame = Number(value.frame ?? 0);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
-    return [{ i: Number(value.i ?? 0), frame, row: value.row == null ? undefined : Number(value.row), sample_id: value.sample_id == null ? undefined : String(value.sample_id), x, y, label: value.label == null ? undefined : Number(value.label), score: value.score == null ? undefined : Number(value.score), distance: value.distance == null ? undefined : Number(value.distance), element: value.element == null ? undefined : Number(value.element), cluster: value.cluster == null ? undefined : Number(value.cluster) }];
+    return [{ i: Number(value.i ?? 0), frame, row: value.row == null ? undefined : Number(value.row), sample_id: value.sample_id == null ? undefined : String(value.sample_id), x, y, label: value.label == null ? undefined : Number(value.label), score: value.score == null ? undefined : Number(value.score), distance: value.distance == null ? undefined : Number(value.distance), element: value.element == null ? undefined : Number(value.element), cluster: value.cluster == null ? undefined : Number(value.cluster), coordination: value.coordination == null ? undefined : Number(value.coordination), novelty: value.novelty == null ? undefined : Number(value.novelty), uncertainty: value.uncertainty == null ? undefined : Number(value.uncertainty), diversity: value.diversity == null ? undefined : Number(value.diversity) }];
   });
 }
 

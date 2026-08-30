@@ -82,3 +82,29 @@ test("atom-level local selection stays highlighted when opened in Explore", asyn
   await page.getByRole("button", { name: "Open in Explore" }).click();
   await expect(page.locator(".explore-atom-row-selected")).toHaveCount(1, { timeout: 30_000 });
 });
+
+test("browser preview renders structural perturbation response curves", async ({ page }) => {
+  await page.goto("/preview.html");
+  await page.getByRole("button", { name: "Analysis" }).click();
+  const controls = page.locator(".analysis-controls");
+  await controls.locator(":scope > .ant-space").first().locator(".ant-select").click();
+  await page.getByText("Structural perturbation", { exact: true }).last().click();
+  await page.getByRole("button", { name: "Run perturbation sensitivity" }).click();
+  await expect(page.getByText("STRUCTURAL PERTURBATION SENSITIVITY", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Per-structure perturbation response heatmap")).toBeVisible({ timeout: 30_000 });
+});
+
+test("browser preview exposes the Mantel permutation visualization", async ({ page }) => {
+  await page.goto("/preview.html");
+  await page.getByRole("button", { name: "Analysis" }).click();
+  await page.getByRole("tab", { name: "Compare" }).click();
+  const controls = page.locator(".analysis-controls");
+  const selects = controls.locator(".ant-select");
+  await selects.nth(1).click();
+  await page.getByText("ACE · [12480, 96]", { exact: true }).last().click();
+  await selects.nth(2).click();
+  await page.getByText("Mantel permutation test", { exact: true }).last().click();
+  await page.getByRole("button", { name: "Run Compare" }).click();
+  await expect(page.getByText("MANTEL PERMUTATION TEST", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Mantel permutation null distribution")).toBeVisible({ timeout: 30_000 });
+});

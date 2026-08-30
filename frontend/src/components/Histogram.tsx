@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 import type { Hist } from "../types/protocol";
 import { createCartesianDataZoom } from "./chartInteraction";
+import { useT } from "../i18n";
 
 export default function Histogram({
   title,
@@ -16,6 +17,7 @@ export default function Histogram({
   hist: Hist | null;
   color?: string;
 }) {
+  const { t } = useT();
   const option = useMemo(
     () => ({
       grid: { left: 46, right: 12, top: 8, bottom: 24 },
@@ -27,7 +29,7 @@ export default function Histogram({
           if (!hist) return "";
           const lo = hist.edges[p.dataIndex];
           const hi = hist.edges[p.dataIndex + 1];
-          return `${lo.toFixed(2)} – ${hi.toFixed(2)}<br/>count: <b>${p.data}</b>`;
+          return `${lo.toFixed(2)} – ${hi.toFixed(2)}<br/>${t("count")}: <b>${p.data}</b>`;
         },
       },
       xAxis: {
@@ -59,7 +61,7 @@ export default function Histogram({
       ],
       animation: false,
     }),
-    [color, hist, title, unit],
+    [color, hist, t, title, unit],
   );
 
   return (

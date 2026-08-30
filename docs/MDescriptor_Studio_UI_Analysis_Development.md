@@ -1674,7 +1674,7 @@ Back to physical structure
 
 ---
 
-## 36. 实现状态（2026-08-30）
+## 36. 实现状态（2026-08-31）
 
 本轮已将本文规划的分析能力接入统一的 `AnalysisResult / Job / Cache / Preview / Chunk` 管线。这里的“完成”指算法、IPC、持久化结果和对应专用可视化均已实现；仍不包含势函数训练或能量/力推理。
 
@@ -1685,15 +1685,16 @@ Back to physical structure
 | Clustering | K-Means、DBSCAN、HDBSCAN、Agglomerative | descriptor-space cluster map、cluster-size bars |
 | Outlier | kNN、LOF、Isolation Forest、Mahalanobis | score-colored map、score histogram |
 | Sampling | FPS、Random、Stratified、Cluster Representative、Per-element | selected-set map、分布图、导出 |
-| Acquisition | reference novelty + query diversity (`novelty_fps`) | novelty-colored map、selected-set highlight、novelty distribution |
+| Acquisition | reference novelty + query diversity (`novelty_fps`); uncertainty + diversity (`uncertainty_diversity`) based on bounded descriptor-space kNN extrapolation | novelty / uncertainty-colored map、selected-set highlight、novelty or uncertainty distribution |
 | Coverage / Overlap | nearest-reference coverage、near-duplicate / similar / independent overlap | joint PCA overlay、nearest-distance distribution、category table |
-| Descriptor Compare | pair-distance Pearson / Spearman、kNN overlap、PCA topology、ARI、effective dimension | pair-distance scatter、双 descriptor PCA overlay、KPI strip |
+| Descriptor Compare | pair-distance Pearson / Spearman、kNN overlap、PCA topology、ARI、effective dimension；formal Mantel permutation test（Pearson / Spearman、alternative、+1 corrected p-value） | pair-distance scatter、双 descriptor PCA overlay、Mantel null-distribution histogram、observed-statistic marker、KPI strip |
 | Feature Quality | variance、zero-variance、correlation、redundancy、effective dimension | variance bars、correlation heatmap、eigenspectrum / cumulative variance |
 | Property Correlation | descriptor-feature correlation、cross-validated Ridge、distance-property relation | target-prediction scatter、residual histogram、distance-property scatter、feature bars |
-| Local Environment | per-element clustering、neighbor-distance diversity、distorted / outlier environment | atom-level map、per-element category bars、summary table |
+| Local Environment | per-element clustering、neighbor-distance diversity、distorted / outlier environment；coordinate-aware cutoff neighbor graph、coordination number、periodic neighbor shell | atom-level map、per-element category bars、coordination histogram、neighbor-distance histogram、summary table、Structure Preview / Explore cutoff sphere and neighbor links |
 | Trajectory | step / reference / cumulative distance、speed、event detection、PCA path | synchronized distance curves、PCA trajectory path |
 | Dataset Drift | coverage shift、RBF MMD、centroid shift、covariance shift | reference/query overlay、distance distribution、drift KPI strip |
-| Parameter Sensitivity | geometry agreement、neighbor consistency、cluster stability、effective dimension、runtime | grouped agreement bars、run comparison table |
+| Parameter Sensitivity | geometry agreement、neighbor consistency、cluster stability、effective dimension、runtime、peak process RSS 与 baseline delta | grouped agreement bars、peak RSS chart、run comparison table |
+| Structural Perturbation Sensitivity | 对同一批结构执行 seeded atomic jitter 或 isotropic strain，重算所选 descriptor，统计 mean / median / P95 / max response 曲线 | response-versus-amplitude curve、per-structure response heatmap、response KPI strip |
 | Kernel | linear、cosine、polynomial、RBF kernel diagnostics | bounded kernel heatmap、centered eigenspectrum |
 
-所有带样本身份的图表和表格都保留 `frame`；atom-level 结果额外保留 `row / element`。选择局域环境后，Structure Preview 和 Explore 会高亮对应原子。矩阵类可视化采用确定性有界抽样，完整结果仍保存在后端 artifact 中，前端通过 `analysis.chunk` 按需读取。
+所有带样本身份的图表和表格都保留 `frame`；atom-level 结果额外保留 `row / element`。选择局域环境后，Structure Preview 和 Explore 会高亮对应原子、邻居连线和 cutoff sphere。矩阵类可视化采用确定性有界抽样，完整结果仍保存在后端 artifact 中，前端通过 `analysis.chunk` 按需读取。Uncertainty acquisition 明确是 descriptor-space kNN 外推代理，不冒充模型预测方差；structural perturbation 也只做描述符响应分析，不引入势函数训练或能量/力推理。

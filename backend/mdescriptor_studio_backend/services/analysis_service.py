@@ -13,6 +13,7 @@ import os
 import csv
 import threading
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -523,6 +524,12 @@ class AnalysisService:
     def sensitivity(self, params: dict) -> dict:
         return self.submit_generic("sensitivity", params)
 
+    def mantel(self, params: dict) -> dict:
+        return self.submit_generic("mantel", params)
+
+    def perturbation_sensitivity(self, params: dict) -> dict:
+        return self.submit_generic("perturbation_sensitivity", params)
+
     def sampling(self, params: dict) -> dict:
         algorithm = str(params.get("algorithm") or params.get("method") or "random").lower()
         return self.submit_generic(algorithm, params)
@@ -738,6 +745,8 @@ class AnalysisService:
             return AnalysisEngine.acquisition(samples[0], samples[1], params, progress)
         if analysis_type == "compare":
             return AnalysisEngine.compare(samples[0], samples[1], params, progress)
+        if analysis_type == "mantel":
+            return AnalysisEngine.mantel(samples[0], samples[1], params, progress)
         if analysis_type == "feature_variance":
             return AnalysisEngine.feature_variance(samples[0], params, progress)
         if analysis_type == "feature_correlation":
@@ -756,12 +765,155 @@ class AnalysisService:
             return AnalysisEngine.drift(samples[0], samples[1], params, progress)
         if analysis_type == "sensitivity":
             return AnalysisEngine.sensitivity(list(zip(rows, samples)), params, progress)
+        if analysis_type == "perturbation_sensitivity":
+            return self._run_perturbation_sensitivity(params, rows[0], samples[0], ctx)
         raise AppError(ANALYSIS_INPUT_INVALID, f"unsupported analysis type: {analysis_type}")
+
+    def _run_perturbation_sensitivity(self, params: dict, run_row: dict, samples: SampleMatrix, ctx) -> dict:
+        """Recompute one descriptor on deterministic structure perturbations."""
+        if self.datasets is None:
+            raise AppError(ANALYSIS_INPUT_INVALID, "structural perturbation requires the dataset service")
+        if samples.mode != "structure":
+            raise AppError(ANALYSIS_INPUT_INVALID, "structural perturbation sensitivity is structure-level only")
+        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
+        if dataset is None:
+            raise AppError(ANALYSIS_INPUT_INVALID, f"dataset {run_row['dataset_id']} does not exist")
+        source_adapter = self.datasets._adapter_for(dataset)
+        frame_count = samples.n_samples
+        if frame_count < 1:
+            raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "at least one structure is required")
+        max_structures = params.get("max_structures", 64)
+        try:
+            max_structures = int(max_structures)
+        except (TypeError, ValueError) as exc:
+            raise AppError(ANALYSIS_INPUT_INVALID, "max_structures must be an integer") from exc
+        if max_structures < 1:
+            raise AppError(ANALYSIS_INPUT_INVALID, "max_structures must be >= 1")
+        selected_indices = np.linspace(0, frame_count - 1, min(frame_count, max_structures), dtype=np.int64)
+        selected_frames = np.asarray(samples.frame, dtype=np.int64)[selected_indices]
+        baseline = SampleMatrix(
+            values=np.asarray(samples.values, dtype=np.float64)[selected_indices],
+            frame=selected_frames,
+            sample_ids=[samples.sample_ids[int(index)] for index in selected_indices.tolist()],
+            mode="structure",
+        )
+
+        perturbation = str(params.get("perturbation") or "jitter").lower()
+        if perturbation not in ("jitter", "strain"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "perturbation must be jitter or strain")
+        raw_amplitudes = params.get("amplitudes")
+        if raw_amplitudes is None:
+            try:
+                count = int(params.get("n_amplitudes", 8))
+                maximum = float(params.get("max_amplitude", 0.2 if perturbation == "jitter" else 0.1))
+            except (TypeError, ValueError) as exc:
+                raise AppError(ANALYSIS_INPUT_INVALID, "n_amplitudes and max_amplitude must be numeric") from exc
+            if count < 2:
+                raise AppError(ANALYSIS_INPUT_INVALID, "n_amplitudes must be >= 2")
+            raw_amplitudes = np.linspace(0.0, maximum, count).tolist()
+        if not isinstance(raw_amplitudes, (list, tuple)):
+            raise AppError(ANALYSIS_INPUT_INVALID, "amplitudes must be a list of numbers")
+        if len(raw_amplitudes) < 2 or len(raw_amplitudes) > 32:
+            raise AppError(ANALYSIS_INPUT_INVALID, "amplitudes must contain between 2 and 32 values")
+        try:
+            amplitudes = [float(value) for value in raw_amplitudes]
+        except (TypeError, ValueError) as exc:
+            raise AppError(ANALYSIS_INPUT_INVALID, "amplitudes must be a list of numbers") from exc
+        if not all(np.isfinite(value) and value >= 0 for value in amplitudes):
+            raise AppError(ANALYSIS_INPUT_INVALID, "amplitudes must be finite and non-negative")
+        if perturbation == "strain" and any(value >= 1.0 for value in amplitudes):
+            raise AppError(ANALYSIS_INPUT_INVALID, "strain amplitudes must be smaller than 1")
+        if not any(np.isclose(value, 0.0) for value in amplitudes):
+            amplitudes = [0.0, *amplitudes]
+
+        try:
+            seed = int(params.get("seed", 42))
+        except (TypeError, ValueError) as exc:
+            raise AppError(ANALYSIS_INPUT_INVALID, "seed must be an integer") from exc
+        rng = np.random.default_rng(seed)
+        source_frames = [source_adapter.get_frame(int(frame)) for frame in selected_frames.tolist()]
+        jitter_vectors = []
+        for frame in source_frames:
+            vector = rng.normal(size=np.asarray(frame.positions).shape)
+            scale = float(np.sqrt(np.mean(vector * vector)))
+            jitter_vectors.append(vector / max(scale, 1e-15))
+
+        try:
+            descriptor_parameters = json.loads(run_row.get("parameters_json") or "{}")
+        except (TypeError, ValueError):
+            descriptor_parameters = {}
+        descriptor = self.datasets.adapter.build(run_row["descriptor_name"], descriptor_parameters)
+        perturbation_results: list[tuple[float, SampleMatrix]] = []
+        for amplitude_index, amplitude in enumerate(amplitudes):
+            ctx.check_cancelled()
+            perturbed_frames = [
+                self._perturb_frame(frame, amplitude, perturbation, jitter_vectors[index])
+                for index, frame in enumerate(source_frames)
+            ]
+            batch = self.datasets.adapter.to_structure_batch(perturbed_frames)
+            computed = self.datasets.adapter.compute(descriptor, batch)
+            values = self._computed_structure_values(computed, len(perturbed_frames))
+            perturbation_results.append((
+                amplitude,
+                SampleMatrix(
+                    values=values,
+                    frame=selected_frames.copy(),
+                    sample_ids=list(baseline.sample_ids),
+                    mode="structure",
+                ),
+            ))
+            ctx.progress(
+                amplitude_index + 1,
+                len(amplitudes),
+                "computing structural perturbations",
+                fraction=0.1 + 0.65 * (amplitude_index + 1) / len(amplitudes),
+            )
+
+        def report(fraction: float, message: str) -> None:
+            ctx.check_cancelled()
+            ctx.progress(None, None, message, fraction=0.75 + 0.25 * float(fraction))
+
+        return AnalysisEngine.perturbation_sensitivity(baseline, perturbation_results, params, report)
+
+    @staticmethod
+    def _perturb_frame(frame, amplitude: float, perturbation: str, jitter_vector: np.ndarray):
+        positions = np.asarray(frame.positions, dtype=np.float64)
+        if perturbation == "jitter":
+            return replace(frame, positions=positions + amplitude * jitter_vector)
+        center = positions.mean(axis=0, keepdims=True) if positions.size else np.zeros((1, 3), dtype=np.float64)
+        scale = 1.0 + amplitude
+        cell = np.asarray(frame.cell, dtype=np.float64)
+        if cell.shape == (3, 3) and abs(float(np.linalg.det(cell))) > 1e-10:
+            cell = cell * scale
+        return replace(frame, positions=center + (positions - center) * scale, cell=cell)
+
+    def _computed_structure_values(self, computed, frame_count: int) -> np.ndarray:
+        values = np.asarray(computed.values, dtype=np.float64)
+        if values.ndim > 2:
+            values = values.reshape(values.shape[0], -1)
+        if values.ndim == 1:
+            values = values.reshape(-1, 1)
+        if values.ndim != 2 or not np.isfinite(values).all():
+            raise AppError(ANALYSIS_INPUT_INVALID, "perturbed descriptor result is not a finite 2D matrix")
+        offsets = np.asarray(getattr(computed, "row_offsets", None), dtype=np.int64) if getattr(computed, "row_offsets", None) is not None else None
+        if self._valid_offsets(offsets, values.shape[0]) and offsets.size == frame_count + 1:
+            pooled = np.empty((frame_count, values.shape[1]), dtype=np.float64)
+            for index in range(frame_count):
+                lo, hi = int(offsets[index]), int(offsets[index + 1])
+                pooled[index] = values[lo:hi].mean(axis=0) if hi > lo else 0.0
+            return pooled
+        if values.shape[0] == frame_count:
+            return values
+        raise AppError(
+            ANALYSIS_INPUT_INVALID,
+            "perturbed descriptor result cannot be aligned to structures",
+            {"rows": int(values.shape[0]), "structures": frame_count},
+        )
 
     def _input_ids(self, analysis_type: str, params: dict) -> list[str]:
         if analysis_type in ("coverage", "overlap", "acquisition", "drift"):
             ids = [params.get("reference_run_id"), params.get("query_run_id")]
-        elif analysis_type == "compare":
+        elif analysis_type in ("compare", "mantel"):
             ids = [params.get("left_run_id") or params.get("reference_run_id"), params.get("right_run_id") or params.get("query_run_id")]
         elif analysis_type == "sensitivity":
             ids = params.get("run_ids") or []
@@ -772,7 +924,7 @@ class AnalysisService:
         ids = [str(v) for v in ids if v]
         if not ids:
             raise AppError(INVALID_PARAMS, "at least one descriptor run id is required")
-        if analysis_type in ("coverage", "overlap", "acquisition", "drift", "compare") and len(ids) != 2:
+        if analysis_type in ("coverage", "overlap", "acquisition", "drift", "compare", "mantel") and len(ids) != 2:
             raise AppError(ANALYSIS_INPUT_INVALID, f"{analysis_type} requires reference and query run IDs")
         return ids
 
@@ -821,6 +973,9 @@ class AnalysisService:
         if requested_mode not in ("structure", "atom"):
             raise AppError(ANALYSIS_INPUT_INVALID, "mode must be structure or atom")
         valid_offsets = self._valid_offsets(offsets, values.shape[0])
+        positions = None
+        cells = None
+        pbc = None
         level = str(meta.get("level") or "").lower()
         declared_atom = bool(meta.get("row_semantics") in ("atom", "local_environment", "pair") or any(token in level for token in ("atom", "local", "pair")))
         if requested_mode == "atom":
@@ -835,6 +990,7 @@ class AnalysisService:
             sample_ids = [f"frame:{int(f)}:row:{int(r)}" for f, r in zip(frames, rows)]
             used = values
             elements = self._atom_elements(row, offsets, local_frames)
+            positions, cells, pbc = self._atom_geometry(row, offsets, local_frames)
             mode = "atom"
         elif valid_offsets and declared_atom:
             n_frames = len(offsets) - 1
@@ -867,6 +1023,9 @@ class AnalysisService:
             elements=elements,
             mode=mode,
             properties=properties,
+            positions=positions,
+            cells=cells,
+            pbc=pbc,
         )
 
     @staticmethod
@@ -896,6 +1055,39 @@ class AnalysisService:
             return np.asarray(labels, dtype=np.int64)
         except Exception:  # element labels are optional metadata, not a reason to corrupt a run
             return None
+
+    def _atom_geometry(self, run_row: dict, offsets, local_frames: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+        """Load atom coordinates/cells for local-environment neighbor analysis."""
+        if self.datasets is None:
+            return None, None, None
+        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
+        if dataset is None:
+            return None, None, None
+        try:
+            adapter = self.datasets._adapter_for(dataset)
+            frame_values = self._run_frame_values(run_row, len(offsets) - 1)
+            position_rows: list[np.ndarray] = []
+            cell_rows: list[np.ndarray] = []
+            pbc_rows: list[np.ndarray] = []
+            for offset_index, frame_index in enumerate(frame_values.tolist()):
+                frame = adapter.get_frame(int(frame_index))
+                expected = int(offsets[offset_index + 1] - offsets[offset_index])
+                frame_positions = np.asarray(frame.positions, dtype=np.float64)
+                if frame_positions.shape != (expected, 3):
+                    return None, None, None
+                position_rows.append(frame_positions)
+                cell = np.asarray(frame.cell, dtype=np.float64)
+                if cell.shape != (3, 3):
+                    cell = np.zeros((3, 3), dtype=np.float64)
+                cell_rows.append(np.repeat(cell[None, :, :], expected, axis=0))
+                pbc_rows.append(np.repeat(np.asarray(frame.pbc, dtype=bool)[None, :], expected, axis=0))
+            return (
+                np.concatenate(position_rows, axis=0) if position_rows else np.zeros((0, 3), dtype=np.float64),
+                np.concatenate(cell_rows, axis=0) if cell_rows else np.zeros((0, 3, 3), dtype=np.float64),
+                np.concatenate(pbc_rows, axis=0) if pbc_rows else np.zeros((0, 3), dtype=bool),
+            )
+        except Exception:  # geometry is optional metadata; preserve descriptor analysis if unavailable
+            return None, None, None
 
     def _sample_properties(self, run_row: dict, frames: np.ndarray, rows: np.ndarray | None, mode: str) -> dict[str, np.ndarray]:
         """Load only the physical targets requested by property analysis."""
@@ -979,14 +1171,14 @@ class AnalysisService:
                 if point is None:
                     continue
                 point.update({"x": float(coords[i, 0]), "y": float(coords[i, 1])})
-                for key in ("labels", "scores", "distances", "cluster_labels"):
+                for key in ("labels", "scores", "distances", "cluster_labels", "elements", "coordination", "novelty", "uncertainty", "diversity"):
                     if key in arrays and np.asarray(arrays[key]).ndim == 1 and i < len(arrays[key]):
-                        output_key = "label" if key == "labels" else "cluster" if key == "cluster_labels" else key
-                        point[output_key] = int(arrays[key][i]) if key in ("labels", "cluster_labels") else float(arrays[key][i])
+                        output_key = "label" if key == "labels" else "cluster" if key == "cluster_labels" else "element" if key == "elements" else key
+                        point[output_key] = int(arrays[key][i]) if key in ("labels", "cluster_labels", "elements", "coordination") else float(arrays[key][i])
                 points.append(point)
             preview["points"] = points
             preview["total_points"] = int(coords.shape[0])
-            row_keys = [key for key in ("labels", "scores", "distances", "cluster_labels") if key in arrays and np.asarray(arrays[key]).ndim == 1]
+            row_keys = [key for key in ("labels", "scores", "distances", "cluster_labels", "elements", "coordination", "novelty", "uncertainty", "diversity") if key in arrays and np.asarray(arrays[key]).ndim == 1]
             if row_keys:
                 rows = []
                 for i in range(min(coords.shape[0], _MAX_PREVIEW_POINTS)):
@@ -998,8 +1190,8 @@ class AnalysisService:
                         if i >= len(arrays[key]):
                             continue
                         value = np.asarray(arrays[key])[i]
-                        output_key = "labels" if key == "labels" else "cluster_labels" if key == "cluster_labels" else key
-                        item[output_key] = int(value) if key in ("labels", "cluster_labels") else float(value)
+                        output_key = "labels" if key == "labels" else "cluster_labels" if key == "cluster_labels" else "element" if key == "elements" else key
+                        item[output_key] = int(value) if key in ("labels", "cluster_labels", "elements", "coordination") else float(value)
                     rows.append(item)
                 preview["rows"] = rows
                 preview["total_rows"] = int(coords.shape[0])
@@ -1045,8 +1237,8 @@ class AnalysisService:
                         break
             preview["rows"] = rows
             preview["total_rows"] = int(indices.size if indices.ndim == 1 else indices.shape[0] * indices.shape[1])
-        elif "labels" in arrays or "scores" in arrays or "distances" in arrays:
-            lengths = [len(np.asarray(arrays[key])) for key in ("labels", "scores", "distances") if key in arrays and np.asarray(arrays[key]).ndim == 1]
+        elif "labels" in arrays or "scores" in arrays or "distances" in arrays or "coordination" in arrays or "uncertainty" in arrays:
+            lengths = [len(np.asarray(arrays[key])) for key in ("labels", "scores", "distances", "elements", "coordination", "novelty", "uncertainty", "diversity") if key in arrays and np.asarray(arrays[key]).ndim == 1]
             n = min([samples.n_samples, *lengths]) if lengths else samples.n_samples
             count = min(n, _MAX_PREVIEW_POINTS)
             rows = []
@@ -1054,11 +1246,12 @@ class AnalysisService:
                 item = sample_identity(i)
                 if item is None:
                     continue
-                for key in ("labels", "scores", "distances"):
+                for key in ("labels", "scores", "distances", "elements", "coordination", "novelty", "uncertainty", "diversity"):
                     if key in arrays and i < len(arrays[key]):
                         value = np.asarray(arrays[key])[i]
                         if np.asarray(value).ndim == 0:
-                            item[key] = int(value) if key == "labels" else float(value)
+                            output_key = "element" if key == "elements" else key
+                            item[output_key] = int(value) if key in ("labels", "elements", "coordination") else float(value)
                         else:
                             item[key] = self._json_safe(value)
                 if "nearest_indices" in arrays and i < len(arrays["nearest_indices"]):

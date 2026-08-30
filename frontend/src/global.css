@@ -295,6 +295,19 @@ body {
   white-space: nowrap;
 }
 
+.results-structure-local-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 7px;
+  border: 1px solid rgba(247, 99, 12, 0.28);
+  border-radius: 4px;
+  background: rgba(255, 248, 243, 0.94);
+  color: #a94308;
+  font-size: 11px;
+  box-shadow: 0 1px 4px rgba(36, 36, 36, 0.1);
+}
+
 .results-structure-open {
   position: absolute;
   right: 8px;
@@ -572,6 +585,10 @@ body {
   background: #fde7e9 !important;
   color: #a4262c;
   font-weight: 600;
+}
+
+.explore-atom-row-neighbor > td {
+  background: #fff4e9 !important;
 }
 
 .analysis-metric-strip {

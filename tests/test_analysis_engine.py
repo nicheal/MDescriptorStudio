@@ -209,3 +209,105 @@ def test_trajectory_includes_reference_distance_and_projection(samples: SampleMa
     assert result["arrays"]["reference_distance"][0] == 0
     assert result["arrays"]["coords"].shape == (48, 2)
     assert result["arrays"]["cumulative_distance"][-1] >= result["arrays"]["step_distance"][-1]
+
+
+def test_uncertainty_acquisition_exposes_knn_uncertainty_and_diversity(samples: SampleMatrix) -> None:
+    query = SampleMatrix(
+        samples.values + np.linspace(0.0, 0.25, samples.n_samples)[:, None],
+        samples.frame,
+        sample_ids=samples.sample_ids,
+    )
+    result = AnalysisEngine.acquisition(
+        samples,
+        query,
+        {"n_samples": 8, "uncertainty_k": 4, "acquisition_method": "uncertainty_diversity", "seed": 42},
+    )
+
+    assert result["preview"]["algorithm"] == "uncertainty_diversity"
+    assert result["preview"]["uncertainty_method"] == "knn_extrapolation"
+    assert result["arrays"]["uncertainty"].shape == (samples.n_samples,)
+    assert result["arrays"]["diversity"].shape == (samples.n_samples,)
+    assert len(result["arrays"]["selected_indices"]) == 8
+    assert np.isfinite(result["preview"]["mean_selected_uncertainty"])
+    assert any("not model prediction variance" in warning for warning in result["warnings"])
+
+
+def test_mantel_reports_observed_statistic_and_permutation_p_value(samples: SampleMatrix) -> None:
+    right = SampleMatrix(
+        samples.values.copy(),
+        samples.frame,
+        sample_ids=samples.sample_ids,
+    )
+    result = AnalysisEngine.mantel(
+        samples,
+        right,
+        {"method": "spearman", "permutations": 31, "max_samples": 24, "seed": 42},
+    )
+
+    assert result["preview"]["kind"] == "mantel"
+    assert result["preview"]["statistic"] > 0.99
+    assert 0.0 <= result["preview"]["p_value"] <= 1.0
+    assert result["arrays"]["null_distribution"].shape == (31,)
+    assert result["arrays"]["left_pair_distances"].shape == result["arrays"]["right_pair_distances"].shape
+
+
+def test_structural_perturbation_sensitivity_returns_sorted_response_curves(samples: SampleMatrix) -> None:
+    direction = np.linspace(0.1, 1.2, samples.n_samples * samples.n_features).reshape(samples.values.shape)
+    perturbations = [
+        (0.2, SampleMatrix(samples.values + 0.2 * direction, samples.frame, sample_ids=samples.sample_ids)),
+        (0.0, SampleMatrix(samples.values.copy(), samples.frame, sample_ids=samples.sample_ids)),
+        (0.1, SampleMatrix(samples.values + 0.1 * direction, samples.frame, sample_ids=samples.sample_ids)),
+    ]
+    result = AnalysisEngine.perturbation_sensitivity(samples, perturbations, {"metric": "euclidean"})
+
+    assert np.array_equal(result["arrays"]["amplitudes"], np.array([0.0, 0.1, 0.2]))
+    assert result["preview"]["baseline_included"] is True
+    assert result["arrays"]["response_matrix"].shape == (3, samples.n_samples)
+    assert np.allclose(result["arrays"]["mean_response"][0], 0.0)
+    assert np.all(np.diff(result["arrays"]["mean_response"]) >= -1e-12)
+
+
+def test_local_diversity_reports_periodic_coordination_and_neighbor_shell() -> None:
+    values = np.array(
+        [[0.0, 1.0, 2.0], [1.0, 0.0, 2.0], [2.0, 1.0, 0.0], [1.5, 2.0, 0.5]],
+        dtype=np.float64,
+    )
+    positions = np.array(
+        [[0.05, 0.05, 0.05], [0.95, 0.05, 0.05], [0.50, 0.50, 0.50], [0.50, 0.50, 0.60]],
+        dtype=np.float64,
+    )
+    result = AnalysisEngine.local_diversity(
+        SampleMatrix(
+            values,
+            np.zeros(4, dtype=np.int64),
+            row=np.arange(4, dtype=np.int64),
+            sample_ids=[f"frame:0:row:{i}" for i in range(4)],
+            elements=np.full(4, 14, dtype=np.int64),
+            mode="atom",
+            positions=positions,
+            cells=np.repeat(np.eye(3, dtype=np.float64)[None, :, :], 4, axis=0),
+            pbc=np.ones((4, 3), dtype=bool),
+        ),
+        {"cutoff": 0.2, "max_neighbors": 8, "n_clusters": 2, "k": 1},
+    )
+
+    assert result["preview"]["neighbor_graph_available"] is True
+    assert result["preview"]["neighbor_count"] == 4
+    assert np.all(result["arrays"]["coordination"] == 1)
+    assert result["arrays"]["neighbor_offsets"].tolist() == [0, 1, 2, 3, 4]
+    assert np.allclose(result["arrays"]["neighbor_distances"], 0.1)
+
+
+def test_sensitivity_reports_peak_memory_and_delta(samples: SampleMatrix) -> None:
+    result = AnalysisEngine.sensitivity(
+        [
+            ({"id": "r1", "descriptor_name": "ACE", "parameters_json": "{}", "memory_peak_bytes": 100}, samples),
+            ({"id": "r2", "descriptor_name": "ACE", "parameters_json": "{}", "memory_peak_bytes": 160}, samples),
+        ],
+        {},
+    )
+
+    rows = result["preview"]["runs"]
+    assert rows[1]["memory_delta_bytes"] == 60
+    assert np.array_equal(result["arrays"]["memory_peak_bytes"], np.array([100.0, 160.0]))
+    assert result["preview"]["memory_available"] is True

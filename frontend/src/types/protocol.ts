@@ -224,6 +224,7 @@ export interface RunRow {
   result_path: string | null;
   shape?: string | null;
   metadata?: Record<string, unknown>;
+  memory_peak_bytes?: number | null;
 }
 
 export type AnalysisStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "STALE";

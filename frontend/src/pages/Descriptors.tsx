@@ -20,6 +20,7 @@ import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
 import { collectDefaults, SchemaField, speciesToNumbers, type ParamValues } from "../components/SchemaForm";
+import { useT } from "../i18n";
 import type { DescriptorInfo, DescriptorSchema } from "../types/protocol";
 
 // Single-letter badge coding for the sidebar (soft tinted block + letter per
@@ -112,6 +113,7 @@ export default function Descriptors() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
   const d = activeDataset(st);
+  const { t } = useT();
   const [list, setList] = useState<DescriptorInfo[]>([]);
   const [schemas, setSchemas] = useState<Record<string, DescriptorSchema>>({});
   const [selected, setSelected] = useState<string | null>(null);
@@ -159,17 +161,17 @@ export default function Descriptors() {
       if (!input) continue;
       const allowed = input.periodicity ?? ["isolated", "fully_periodic"];
       if (p.mixed && input.mixed_periodicity === false) {
-        out.set(info.name, "Rejects mixed periodicity");
+        out.set(info.name, t("Rejects mixed periodicity"));
       } else if (p.fully_periodic && !p.isolated && !allowed.includes("fully_periodic")) {
-        out.set(info.name, `Supports only: ${allowed.join(", ")}`);
+        out.set(info.name, t("Supports only: {list}", { list: allowed.join(", ") }));
       } else if (p.isolated && !p.fully_periodic && !allowed.includes("isolated")) {
-        out.set(info.name, `Supports only: ${allowed.join(", ")}`);
+        out.set(info.name, t("Supports only: {list}", { list: allowed.join(", ") }));
       }
     }
     return out;
-  }, [d, list]);
+  }, [d, list, t]);
 
-  if (!d) return <Empty description="Register a dataset first" style={{ marginTop: 120 }} />;
+  if (!d) return <Empty description={t("Register a dataset first")} style={{ marginTop: 120 }} />;
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -205,10 +207,10 @@ export default function Descriptors() {
       );
       if (r.cache) {
         Modal.confirm({
-          title: "Existing compatible result found",
-          content: `A completed run with identical configuration exists (${r.cache.existing_run_id}). Recalculate anyway?`,
-          okText: "Recalculate",
-          cancelText: "Use existing",
+          title: t("Existing compatible result found"),
+          content: t("A completed run with identical configuration exists ({id}). Recalculate anyway?", { id: r.cache.existing_run_id }),
+          okText: t("Recalculate"),
+          cancelText: t("Use existing"),
           onOk: async () => {
             const r2 = await ipc.request<{ job_id: string | null }>("descriptor.submit", {
               dataset_id: d.id,
@@ -222,21 +224,21 @@ export default function Descriptors() {
             if (r2.job_id) {
               trackJob(r2.job_id, "descriptor.compute");
               void watchJob(r2.job_id).then((done) => {
-                if (done.status === "COMPLETED") message.success(`Run ${done.result?.run_id} completed`);
-                else message.error(`Compute ${done.status}: ${done.error?.message ?? ""}`);
+                if (done.status === "COMPLETED") message.success(t("Run {id} completed", { id: String(done.result?.run_id ?? "") }));
+                else message.error(t("Compute {status}: {message}", { status: done.status, message: done.error?.message ?? "" }));
               });
             }
           },
-          onCancel: () => message.info(`Using existing run ${r.cache!.existing_run_id}`),
+          onCancel: () => message.info(t("Using existing run {id}", { id: r.cache!.existing_run_id })),
         });
         return;
       }
       if (r.job_id) {
         trackJob(r.job_id, "descriptor.compute");
-        message.info("Compute submitted — see Jobs");
+        message.info(t("Compute submitted — see Jobs"));
         void watchJob(r.job_id).then((done) => {
-          if (done.status === "COMPLETED") message.success(`Run ${done.result?.run_id} completed`);
-          else message.error(`Compute ${done.status}: ${done.error?.message ?? ""}`);
+          if (done.status === "COMPLETED") message.success(t("Run {id} completed", { id: String(done.result?.run_id ?? "") }));
+          else message.error(t("Compute {status}: {message}", { status: done.status, message: done.error?.message ?? "" }));
         });
       }
     } catch (e) {
@@ -255,24 +257,24 @@ export default function Descriptors() {
     const description = s?.description || info.description;
     const rows: [string, string][] = s
       ? ([
-          ["Descriptor version", s.descriptor_version],
-          ["Schema version", String(s.schema_version)],
-          ["Level", s.level],
-          ["Backend", s.backend],
-          ["Execution engine", s.execution_engine],
-          ["Category", s.category],
-          ["Devices", s.execution.devices.join(", ")],
-          ["Threads", s.execution.num_threads ? "yes" : "no"],
-          ["Cancelable", s.execution.cooperative_cancel ? "yes" : "no"],
-          ["Sparse", String(s.output.sparse)],
-          ["Model", s.asset.policy === "none" ? "none" : `${s.asset.policy} (${s.asset.bundled_resources[0] ?? "external"})`],
-          ["Input periodicity", s.input.periodicity.join(", ")],
-          ["Spin", s.input.spin ? "yes" : "no"],
+          [t("Descriptor version"), s.descriptor_version],
+          [t("Schema version"), String(s.schema_version)],
+          [t("Level"), s.level],
+          [t("Backend"), s.backend],
+          [t("Execution engine"), s.execution_engine],
+          [t("Category"), s.category],
+          [t("Devices"), s.execution.devices.join(", ")],
+          [t("Threads"), s.execution.num_threads ? t("yes") : t("no")],
+          [t("Cancelable"), s.execution.cooperative_cancel ? t("yes") : t("no")],
+          [t("Sparse"), String(s.output.sparse)],
+          [t("Model"), s.asset.policy === "none" ? t("none") : `${s.asset.policy} (${s.asset.bundled_resources[0] ?? t("external")})`],
+          [t("Input periodicity"), s.input.periodicity.join(", ")],
+          [t("Spin"), s.input.spin ? t("yes") : t("no")],
         ] as [string, string][])
       : ([
-          ["Level", info.level],
-          ["Backend", info.backend],
-          ["Category", info.category],
+          [t("Level"), info.level],
+          [t("Backend"), info.backend],
+          [t("Category"), info.category],
         ] as [string, string][]);
     return (
       <div style={{ maxWidth: 380 }}>
@@ -309,7 +311,7 @@ export default function Descriptors() {
         }}
       >
         <Input.Search
-          placeholder="Filter descriptors"
+          placeholder={t("Filter descriptors")}
           size="small"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -381,8 +383,8 @@ export default function Descriptors() {
               <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 20px 24px" }}>
               <SectionHeading
                 number={1}
-                title="Parameters"
-                description={`Configure the ${schema.display_name} descriptor parameters.`}
+                title={t("Parameters")}
+                description={t("Configure the {name} descriptor parameters.", { name: schema.display_name })}
               />
               <Typography.Paragraph type="secondary" style={{ margin: "-6px 0 18px", fontSize: 12 }}>
                 {schema.description}
@@ -406,13 +408,13 @@ export default function Descriptors() {
                     elementOptions={elementOptions}
                     modelExtensions={schema.asset.file_extensions}
                     allowExternalModel={schema.asset.allow_external}
-                    onModelBrowseError={() => message.error("Could not open the model file dialog")}
+                    onModelBrowseError={() => message.error(t("Could not open the model file dialog"))}
                     onChange={(v) => setValues((prev) => ({ ...prev, [name]: v }))}
                   />
                 ))}
               </div>
               <div style={{ padding: "22px 0 24px", borderBottom: "1px solid #EAECF0" }}>
-                <SectionHeading number={2} title="Execution" description="Choose where and how the descriptor is calculated." />
+                <SectionHeading number={2} title={t("Execution")} description={t("Choose where and how the descriptor is calculated.")} />
                 <div
                   style={{
                     display: "grid",
@@ -423,23 +425,23 @@ export default function Descriptors() {
                   }}
                 >
                   <div style={{ minWidth: 0 }}>
-                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Device</Typography.Text>
+                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{t("Device")}</Typography.Text>
                     <div style={{ marginTop: 7 }}>
                       <Select value="cpu" style={{ width: "100%" }} disabled options={[{ value: "cpu", label: "CPU" }]} />
                     </div>
                   </div>
                   {schema.execution.num_threads && (
                     <div style={{ minWidth: 0 }}>
-                      <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Threads</Typography.Text>
+                      <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{t("Threads")}</Typography.Text>
                       <div style={{ marginTop: 7 }}>
-                        <Tooltip title="v0.1 uses the engine default thread count">
-                          <InputNumber min={1} max={64} value={threads} disabled onChange={(v) => setThreads(v ?? undefined)} style={{ width: "100%" }} placeholder="engine default" />
+                        <Tooltip title={t("v0.1 uses the engine default thread count")}>
+                          <InputNumber min={1} max={64} value={threads} disabled onChange={(v) => setThreads(v ?? undefined)} style={{ width: "100%" }} placeholder={t("engine default")} />
                         </Tooltip>
                       </div>
                     </div>
                   )}
                   <div style={{ minWidth: 0 }}>
-                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Output dtype</Typography.Text>
+                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{t("Output dtype")}</Typography.Text>
                     <div style={{ marginTop: 9 }}>
                       <Radio.Group value={effectiveDtype} onChange={(event) => setDtype(event.target.value)}>
                         <Space size={18} wrap>
@@ -455,20 +457,20 @@ export default function Descriptors() {
                 </div>
               </div>
               <div style={{ paddingTop: 22 }}>
-                <SectionHeading number={3} title="Scope" description="Choose whether to calculate one frame or the entire dataset." />
+                <SectionHeading number={3} title={t("Scope")} description={t("Choose whether to calculate one frame or the entire dataset.")} />
                 <Radio.Group value={scope} onChange={(event) => setScope(event.target.value as "dataset" | "frame")}>
                   <Space size={24} wrap>
                     <Radio value="frame">
-                      Current frame <Typography.Text type="secondary">(Frame {frameIndex})</Typography.Text>
+                      {t("Current frame")} <Typography.Text type="secondary">({t("Frame {index}", { index: frameIndex })})</Typography.Text>
                     </Radio>
                     <Radio value="dataset">
-                      Entire dataset <Typography.Text type="secondary">({d.number_of_frames.toLocaleString()} structures)</Typography.Text>
+                      {t("Entire dataset")} <Typography.Text type="secondary">({t("{n} structures", { n: d.number_of_frames.toLocaleString() })})</Typography.Text>
                     </Radio>
                   </Space>
                 </Radio.Group>
                 {scope === "frame" && (
                   <div style={{ marginTop: 16 }}>
-                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Frame index</Typography.Text>
+                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{t("Frame index")}</Typography.Text>
                     <div style={{ marginTop: 7, maxWidth: 220 }}>
                       <InputNumber min={0} max={d.number_of_frames - 1} value={frameIndex} onChange={(v) => setFrameIndex(v ?? 0)} style={{ width: "100%" }} />
                     </div>
@@ -488,17 +490,17 @@ export default function Descriptors() {
               >
                 <Space size={16} wrap>
                   <Button type="primary" onClick={() => void submit()} loading={submitting}>
-                    Calculate
+                    {t("Calculate")}
                   </Button>
                   <Checkbox checked disabled>
-                    Cache reuse enabled
+                    {t("Cache reuse enabled")}
                   </Checkbox>
                 </Space>
               </div>
             </>
           ) : (
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Empty description="Select a descriptor" />
+              <Empty description={t("Select a descriptor")} />
             </div>
           )}
         </div>

@@ -26,12 +26,14 @@ const TITLES: Record<string, string> = {
   coverage: "DATASET COVERAGE",
   overlap: "TRAIN / TEST OVERLAP",
   compare: "DESCRIPTOR COMPARISON",
+  mantel: "MANTEL PERMUTATION TEST",
   feature_correlation: "FEATURE REDUNDANCY",
   property_correlation: "PROPERTY CORRELATION",
   local_diversity: "LOCAL ENVIRONMENT DIVERSITY",
   trajectory: "DESCRIPTOR TRAJECTORY",
   drift: "DATASET DRIFT",
   sensitivity: "PARAMETER SENSITIVITY",
+  perturbation_sensitivity: "STRUCTURAL PERTURBATION SENSITIVITY",
   kernel: "KERNEL DIAGNOSTICS",
 };
 
@@ -62,11 +64,13 @@ function Visualization({ kind, preview, arrays, points, selectedIndices, onSelec
   if (kind === "sampling" || kind === "acquisition") return <SamplingView preview={preview} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
   if (kind === "coverage" || kind === "overlap" || kind === "drift") return <CoverageView preview={preview} arrays={arrays} />;
   if (kind === "compare") return <CompareView preview={preview} arrays={arrays} />;
+  if (kind === "mantel") return <MantelView preview={preview} arrays={arrays} />;
   if (kind === "feature_correlation") return <FeatureCorrelationView preview={preview} arrays={arrays} />;
   if (kind === "property_correlation") return <PropertyView preview={preview} arrays={arrays} />;
-  if (kind === "local_diversity") return <LocalView preview={preview} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
+  if (kind === "local_diversity") return <LocalView preview={preview} arrays={arrays} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
   if (kind === "trajectory") return <TrajectoryView preview={preview} arrays={arrays} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
   if (kind === "sensitivity") return <SensitivityView preview={preview} />;
+  if (kind === "perturbation_sensitivity") return <PerturbationView preview={preview} arrays={arrays} />;
   if (kind === "kernel") return <KernelView preview={preview} arrays={arrays} />;
   return null;
 }
@@ -120,11 +124,12 @@ function OutlierView({ preview, points, selectedIndices, onSelect }: Pick<Props,
 
 function SamplingView({ preview, points, selectedIndices, onSelect }: Pick<Props, "preview" | "points" | "selectedIndices" | "onSelect">) {
   const kind = String(preview?.kind ?? "sampling");
+  const uncertaintyDriven = preview?.algorithm === "uncertainty_diversity";
   return <>
-    <Metrics values={[{ k: "Selected", v: preview?.selected_count }, { k: "Candidates", v: preview?.candidate_pool ?? points.length }, { k: "Method", v: preview?.algorithm }, { k: "Mean novelty", v: preview?.mean_selected_novelty }]} />
+    <Metrics values={[{ k: "Selected", v: preview?.selected_count }, { k: "Candidates", v: preview?.candidate_pool ?? points.length }, { k: "Method", v: preview?.algorithm }, { k: uncertaintyDriven ? "Mean uncertainty" : "Mean novelty", v: uncertaintyDriven ? preview?.mean_selected_uncertainty : preview?.mean_selected_novelty }]} />
     <div className="analysis-chart-grid">
-      <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color={kind === "acquisition" ? "distance" : "selected"} ariaLabel="Selected representative samples in descriptor space" />
-      <PlotFrame compact ariaLabel="Selection score distribution" data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? point.distance ?? 0 : point.x), marker: { color: "#8764B8" } }]} layout={layout({ xaxis: { title: kind === "acquisition" ? "Novelty distance" : "PC1 distribution" }, yaxis: { title: "Samples" } })} />
+      <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color={kind === "acquisition" ? uncertaintyDriven ? "uncertainty" : "distance" : "selected"} ariaLabel="Selected representative samples in descriptor space" />
+      <PlotFrame compact ariaLabel="Selection score distribution" data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? uncertaintyDriven ? point.uncertainty ?? 0 : point.distance ?? 0 : point.x), marker: { color: uncertaintyDriven ? "#D13438" : "#8764B8" } }]} layout={layout({ xaxis: { title: kind === "acquisition" ? uncertaintyDriven ? "kNN extrapolation uncertainty" : "Novelty distance" : "PC1 distribution" }, yaxis: { title: "Samples" } })} />
     </div>
   </>;
 }
@@ -162,6 +167,22 @@ function CompareView({ preview, arrays }: { preview: AnalysisPreview; arrays: An
   </>;
 }
 
+function MantelView({ preview, arrays }: { preview: AnalysisPreview; arrays: AnalysisArrays }) {
+  const leftPairs = nums(arrays.left_pair_distances);
+  const rightPairs = nums(arrays.right_pair_distances);
+  const nullDistribution = nums(arrays.null_distribution);
+  const count = Math.min(leftPairs.length, rightPairs.length);
+  const statistic = num(preview.statistic) ?? 0;
+  return <>
+    <Metrics values={[{ k: "Mantel r", v: statistic }, { k: "p-value", v: preview.p_value }, { k: "Statistic", v: preview.method }, { k: "Permutations", v: preview.permutations }, { k: "Pairs", v: preview.pair_count }, { k: "Significant (α=.05)", v: preview.significant_at_05 ? "yes" : "no" }]} />
+    <div className="analysis-chart-grid">
+      <PlotFrame compact ariaLabel="Mantel paired descriptor distances" data={[{ type: "scattergl", mode: "markers", x: leftPairs.slice(0, count), y: rightPairs.slice(0, count), marker: { size: 5, color: "#0F6CBD", opacity: 0.45 }, hovertemplate: "left=%{x:.5g}<br>right=%{y:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: "Left pair distance" }, yaxis: { title: "Right pair distance" } })} />
+      <PlotFrame compact ariaLabel="Mantel permutation null distribution" data={[{ type: "histogram", x: nullDistribution, marker: { color: "#8764B8" } }]} layout={layout({ xaxis: { title: `${preview.method ?? "Pearson"} null statistic` }, yaxis: { title: "Permutations" }, shapes: [{ type: "line", x0: statistic, x1: statistic, y0: 0, y1: 1, yref: "paper", line: { color: "#D13438", width: 2, dash: "dash" } }] })} />
+    </div>
+    <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>Two-sided permutation p-value with +1 correction; the red line marks the observed statistic.</Typography.Paragraph>
+  </>;
+}
+
 function FeatureCorrelationView({ preview, arrays }: { preview: AnalysisPreview; arrays: AnalysisArrays }) {
   const values = matrix(arrays.correlation_matrix);
   const featureIndices = nums(arrays.correlation_feature_indices);
@@ -192,14 +213,18 @@ function PropertyView({ preview, arrays }: { preview: AnalysisPreview; arrays: A
   </>;
 }
 
-function LocalView({ preview, points, selectedIndices, onSelect }: Pick<Props, "preview" | "points" | "selectedIndices" | "onSelect">) {
+function LocalView({ preview, arrays, points, selectedIndices, onSelect }: Pick<Props, "preview" | "arrays" | "points" | "selectedIndices" | "onSelect">) {
   const rows = records(preview?.element_summary);
+  const coordination = nums(arrays.coordination);
+  const neighborDistances = nums(arrays.neighbor_distances);
   return <>
-    <Metrics values={[{ k: "Local environments", v: preview?.sample_count }, { k: "Elements", v: rows.length }, { k: "Outliers", v: rows.reduce((sum, row) => sum + (num(row.outliers) ?? 0), 0) }]} />
+    <Metrics values={[{ k: "Local environments", v: preview?.sample_count }, { k: "Elements", v: rows.length }, { k: "Outliers", v: rows.reduce((sum, row) => sum + (num(row.outliers) ?? 0), 0) }, { k: "Cutoff (Å)", v: preview?.cutoff }, { k: "Mean coordination", v: preview?.mean_coordination }, { k: "Max coordination", v: preview?.max_coordination }]} />
     <div className="analysis-chart-grid">
       <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color="element" ariaLabel="Atom-level local environment map" />
       <PlotFrame compact ariaLabel="Local environment categories by element" data={["distorted", "outliers"].map((key, index) => ({ type: "bar", name: key, x: rows.map((row) => `Z=${row.element}`), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index + 1] } })) as Data[]} layout={layout({ barmode: "group", xaxis: { title: "Element" }, yaxis: { title: "Environments" }, legend: { orientation: "h" } })} />
+      <PlotFrame compact ariaLabel="Coordination number distribution" data={[{ type: "histogram", x: coordination, marker: { color: "#107C10" } }]} layout={layout({ xaxis: { title: "Coordination number", dtick: 1 }, yaxis: { title: "Atoms" } })} />
     </div>
+    {neighborDistances.length > 0 && <PlotFrame compact ariaLabel="Local neighbor distance distribution" data={[{ type: "histogram", x: neighborDistances, marker: { color: "#F7630C" } }]} layout={layout({ xaxis: { title: "Neighbor distance (Å)" }, yaxis: { title: "Neighbor pairs" } })} />}
     <DataTable rows={rows} />
   </>;
 }
@@ -223,8 +248,29 @@ function SensitivityView({ preview }: { preview: AnalysisPreview }) {
   const metrics = ["pairwise_distance_pearson", "neighbor_overlap", "clustering_stability"];
   return <>
     <Metrics values={[{ k: "Runs", v: rows.length }, { k: "Baseline", v: preview.baseline_run_id }]} />
-    <PlotFrame ariaLabel="Parameter sensitivity geometry metrics" data={metrics.map((key, index) => ({ type: "bar", name: key.replaceAll("_", " "), x: rows.map((row, runIndex) => runLabel(row, runIndex)), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index] } })) as Data[]} layout={layout({ barmode: "group", yaxis: { title: "Agreement (higher is better)", range: [-0.05, 1.05] }, xaxis: { automargin: true }, legend: { orientation: "h" } })} />
+    <div className="analysis-chart-grid">
+      <PlotFrame compact ariaLabel="Parameter sensitivity geometry metrics" data={metrics.map((key, index) => ({ type: "bar", name: key.replaceAll("_", " "), x: rows.map((row, runIndex) => runLabel(row, runIndex)), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index] } })) as Data[]} layout={layout({ barmode: "group", yaxis: { title: "Agreement (higher is better)", range: [-0.05, 1.05] }, xaxis: { automargin: true }, legend: { orientation: "h" } })} />
+      <PlotFrame compact ariaLabel="Descriptor compute peak memory" data={[{ type: "bar", x: rows.map((row, index) => runLabel(row, index)), y: rows.map((row) => { const bytes = num(row.memory_peak_bytes); return bytes == null ? null : bytes / 1024 / 1024; }), marker: { color: "#D13438" }, hovertemplate: "%{x}<br>peak RSS=%{y:.2f} MB<extra></extra>" }]} layout={layout({ xaxis: { automargin: true }, yaxis: { title: "Peak RSS (MB)" } })} />
+    </div>
     <DataTable rows={rows} />
+  </>;
+}
+
+function PerturbationView({ preview, arrays }: { preview: AnalysisPreview; arrays: AnalysisArrays }) {
+  const amplitudes = nums(arrays.amplitudes);
+  const mean = nums(arrays.mean_response);
+  const median = nums(arrays.median_response);
+  const p95 = nums(arrays.p95_response);
+  const max = nums(arrays.max_response);
+  const responseMatrix = matrix(arrays.response_matrix);
+  if (!amplitudes.length || !mean.length) return <NoData message="No structural perturbation response was returned." />;
+  return <>
+    <Metrics values={[{ k: "Perturbation", v: preview.perturbation }, { k: "Metric", v: preview.metric }, { k: "Structures", v: preview.sample_count }, { k: "Steps", v: preview.curve_count }, { k: "Response", v: preview.response_unit }]} />
+    <div className="analysis-chart-grid">
+      <PlotFrame compact ariaLabel="Descriptor response versus structural perturbation" data={[{ type: "scatter", mode: "lines+markers", name: "Mean", x: amplitudes, y: mean, line: { color: "#0F6CBD", width: 2 } }, { type: "scatter", mode: "lines", name: "Median", x: amplitudes.slice(0, median.length), y: median, line: { color: "#107C10", dash: "dash" } }, { type: "scatter", mode: "lines", name: "P95", x: amplitudes.slice(0, p95.length), y: p95, line: { color: "#D13438", dash: "dot" } }, { type: "scatter", mode: "lines", name: "Max", x: amplitudes.slice(0, max.length), y: max, line: { color: "#F7630C", dash: "dashdot" } }]} layout={layout({ xaxis: { title: preview.perturbation === "strain" ? "Isotropic strain" : "Jitter amplitude (Å)" }, yaxis: { title: String(preview.response_unit ?? "Descriptor response") }, legend: { orientation: "h" } })} />
+      <PlotFrame compact ariaLabel="Per-structure perturbation response heatmap" data={[{ type: "heatmap", z: responseMatrix, x: amplitudes, colorscale: "Viridis", colorbar: { title: { text: "Response" } }, hovertemplate: "amplitude=%{x:.4g}<br>structure=%{y}<br>response=%{z:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: preview.perturbation === "strain" ? "Isotropic strain" : "Jitter amplitude (Å)" }, yaxis: { title: "Structure index", autorange: "reversed" } })} />
+    </div>
+    <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>The curve is generated by recomputing the selected descriptor on the same structures after a seeded perturbation sweep.</Typography.Paragraph>
   </>;
 }
 
@@ -240,10 +286,10 @@ function KernelView({ preview, arrays }: { preview: AnalysisPreview; arrays: Ana
   </>;
 }
 
-function PointPlot({ points, selectedIndices, onSelect, color, ariaLabel, lines = false }: { points: AnalysisPoint[]; selectedIndices: number[]; onSelect: (point: AnalysisPoint) => void; color: "label" | "score" | "selected" | "distance" | "element" | "path"; ariaLabel: string; lines?: boolean }) {
+function PointPlot({ points, selectedIndices, onSelect, color, ariaLabel, lines = false }: { points: AnalysisPoint[]; selectedIndices: number[]; onSelect: (point: AnalysisPoint) => void; color: "label" | "score" | "selected" | "distance" | "uncertainty" | "element" | "path"; ariaLabel: string; lines?: boolean }) {
   if (!points.length) return <NoData message="No projected samples are available." />;
   const selected = new Set(selectedIndices);
-  const colorValues = points.map((point) => color === "label" ? point.label ?? -1 : color === "score" ? point.score ?? 0 : color === "distance" ? point.distance ?? 0 : color === "element" ? point.element ?? 0 : color === "selected" ? selected.has(point.i) ? 1 : 0 : point.i);
+  const colorValues = points.map((point) => color === "label" ? point.label ?? -1 : color === "score" ? point.score ?? 0 : color === "distance" ? point.distance ?? 0 : color === "uncertainty" ? point.uncertainty ?? 0 : color === "element" ? point.element ?? 0 : color === "selected" ? selected.has(point.i) ? 1 : 0 : point.i);
   return <PlotFrame compact ariaLabel={ariaLabel} onClick={(index) => points[index] && onSelect(points[index])} data={[{ type: "scattergl", mode: lines ? "lines+markers" : "markers", x: points.map((point) => point.x), y: points.map((point) => point.y), text: points.map((point) => `${point.sample_id ?? `sample ${point.i}`}${point.row == null ? "" : ` · atom ${point.row}`}`), marker: { size: color === "selected" ? points.map((point) => selected.has(point.i) ? 10 : 5) : 7, color: colorValues, colorscale: color === "selected" ? [[0, "#C8CDD4"], [1, "#D13438"]] : "Viridis", showscale: color !== "selected" && color !== "path", colorbar: { title: { text: color } }, opacity: 0.8 }, line: lines ? { color: "#0F6CBD", width: 1.5 } : undefined, hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: "PC1" }, yaxis: { title: "PC2" }, showlegend: false })} />;
 }
 

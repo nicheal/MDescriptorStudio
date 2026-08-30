@@ -12,11 +12,13 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { ipc } from "../../ipc/client";
 import { RenameDatasetModal, useDatasetDelete } from "../datasetActions";
 import { useWorkspace } from "../../stores/workspace";
+import { useT } from "../../i18n";
 import type { DatasetMeta } from "../../types/protocol";
 
 export default function Sidebar() {
   const { message } = AntApp.useApp();
   const confirmDelete = useDatasetDelete();
+  const { t } = useT();
   const [renameTarget, setRenameTarget] = useState<DatasetMeta | null>(null);
   const { datasets, setActiveDataset } = useWorkspace();
   const [collapsed, setCollapsed] = useState(false);
@@ -51,16 +53,16 @@ export default function Sidebar() {
         setAdding(false);
         setPath("");
         setName("");
-        message.info("Registering dataset…");
+        message.info(t("Registering dataset…"));
         const off = ipc.on("job.finished", (data) => {
           const d = data as { job_id: string; status: string; error: { message: string } | null };
           if (d.job_id !== r.job_id) return;
           off();
           if (d.status === "COMPLETED") {
             void refreshAfterRegister();
-            message.success("Dataset added");
+            message.success(t("Dataset added"));
           } else {
-            message.error(`Register failed: ${d.error?.message ?? d.status}`);
+            message.error(t("Register failed: {message}", { message: d.error?.message ?? d.status }));
           }
         });
       }
@@ -83,17 +85,17 @@ export default function Sidebar() {
     try {
       const selected = await openDialog(
         directory
-          ? { directory: true, multiple: false, title: "Select DeepMD dataset folder" }
+          ? { directory: true, multiple: false, title: t("Select DeepMD dataset folder") }
           : {
               multiple: false,
-              title: "Select extxyz dataset file",
+              title: t("Select extxyz dataset file"),
               filters: [{ name: "extxyz", extensions: ["xyz", "extxyz"] }],
             },
       );
       const p = Array.isArray(selected) ? selected[0] : selected;
       if (p) setPath(p);
     } catch {
-      message.error("Could not open the file dialog");
+      message.error(t("Could not open the file dialog"));
     }
   };
 
@@ -112,7 +114,7 @@ export default function Sidebar() {
           gap: 8,
         }}
       >
-        <Tooltip title="Show datasets" placement="right">
+        <Tooltip title={t("Show datasets")} placement="right">
           <Button
             type="text"
             size="small"
@@ -140,9 +142,9 @@ export default function Sidebar() {
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <Typography.Text strong style={{ fontSize: 12, color: "#616161", letterSpacing: 1 }}>
-          DATASETS
+          {t("DATASETS")}
         </Typography.Text>
-        <Tooltip title="Collapse sidebar">
+        <Tooltip title={t("Collapse sidebar")}>
           <Button
             type="text"
             size="small"
@@ -154,7 +156,7 @@ export default function Sidebar() {
       <Input
         size="small"
         prefix={<SearchOutlined style={{ color: "#8A8A8A" }} />}
-        placeholder="Search datasets..."
+        placeholder={t("Search datasets...")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
       />
@@ -163,13 +165,13 @@ export default function Sidebar() {
         onClick={() => setAdding(true)}
         style={{ justifyContent: "flex-start" }}
       >
-        Add Dataset
+        {t("Add Dataset")}
       </Button>
       <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
         {filtered.length === 0 ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={<span style={{ fontSize: 12 }}>No datasets</span>}
+            description={<span style={{ fontSize: 12 }}>{t("No datasets")}</span>}
             style={{ marginTop: 24 }}
           />
         ) : (
@@ -180,49 +182,50 @@ export default function Sidebar() {
       </div>
       <div style={{ borderTop: "1px solid #EAECF0", paddingTop: 8 }}>
         <Typography.Text strong style={{ fontSize: 11, color: "#616161", letterSpacing: 0.5 }}>
-          Dataset Storage
+          {t("Dataset Storage")}
         </Typography.Text>
         <div style={{ fontSize: 12, color: "#242424", fontVariantNumeric: "tabular-nums", marginTop: 2 }}>
           {datasets.length > 0 && totalBytes > 0
-            ? `${formatSize(totalBytes)} · ${datasets.length} dataset${datasets.length > 1 ? "s" : ""}`
+            ? datasets.length > 1
+              ? t("{size} · {n} datasets", { size: formatSize(totalBytes), n: datasets.length })
+              : t("{size} · {n} dataset", { size: formatSize(totalBytes), n: datasets.length })
             : "—"}
         </div>
       </div>
       <Modal
-        title="Add Dataset"
+        title={t("Add Dataset")}
         open={adding}
         onCancel={() => setAdding(false)}
         onOk={register}
-        okText="Register"
+        okText={t("Register")}
         confirmLoading={busy}
         okButtonProps={{ disabled: !path.trim() }}
       >
         <Space direction="vertical" style={{ width: "100%" }} size={12}>
           <Space.Compact style={{ width: "100%" }}>
             <Input
-              placeholder="D:\datasets\GaAs  (DeepMD directory or .xyz file)"
+              placeholder={t("D:\\datasets\\GaAs  (DeepMD directory or .xyz file)")}
               value={path}
               onChange={(e) => setPath(e.target.value)}
             />
             <Button
               icon={<FolderOpen16Regular />}
               onClick={() => void browse(true)}
-              title="Browse for a DeepMD dataset folder"
+              title={t("Browse for a DeepMD dataset folder")}
             />
             <Button
               icon={<Document16Regular />}
               onClick={() => void browse(false)}
-              title="Browse for an .xyz / .extxyz file"
+              title={t("Browse for an .xyz / .extxyz file")}
             />
           </Space.Compact>
           <Input
-            placeholder="Display name (optional)"
+            placeholder={t("Display name (optional)")}
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Format is auto-detected (DeepMD raw directory / extxyz file). The source data is
-            registered read-only, never copied.
+            {t("Format is auto-detected (DeepMD raw directory / extxyz file). The source data is registered read-only, never copied.")}
           </Typography.Text>
         </Space>
       </Modal>
@@ -245,6 +248,7 @@ function DatasetItem({
   onDelete: (d: DatasetMeta) => void;
 }) {
   const { setActiveDataset, activeDatasetId } = useWorkspace();
+  const { t } = useT();
   const active = d.id === activeDatasetId;
   return (
     <div
@@ -275,15 +279,15 @@ function DatasetItem({
           {d.name}
           {!d.cache_valid && (
             <Typography.Text type="warning" style={{ fontSize: 11, marginLeft: 6 }}>
-              changed
+              {t("changed")}
             </Typography.Text>
           )}
         </div>
         <Dropdown
           menu={{
             items: [
-              { key: "rename", label: "Rename" },
-              { key: "delete", label: "Delete", danger: true },
+              { key: "rename", label: t("Rename") },
+              { key: "delete", label: t("Delete"), danger: true },
             ],
             onClick: ({ key, domEvent }) => {
               domEvent.stopPropagation();
@@ -304,7 +308,7 @@ function DatasetItem({
         </Dropdown>
       </div>
       <div style={{ fontSize: 11, color: "#616161" }}>
-        {formatLabel(d.format)} · {d.number_of_frames.toLocaleString()} structures
+        {formatLabel(d.format)} · {t("{n} structures", { n: d.number_of_frames.toLocaleString() })}
       </div>
       <div style={{ fontSize: 11, color: "#8A8A8A" }}>
         {d.elements.join(" · ")} · PBC {d.periodicity.flags.join("") || "—"}

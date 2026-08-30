@@ -22,6 +22,7 @@ import { ipc } from "./ipc/client";
 import { useWorkspace } from "./stores/workspace";
 import { wireJobEvents } from "./stores/jobs";
 import { useEngineUpdate, wireEngineUpdate } from "./stores/engineUpdate";
+import { getT, initLanguage, useT } from "./i18n";
 import type { DatasetMeta } from "./types/protocol";
 import { APP_ICON_URL } from "./brand";
 
@@ -48,6 +49,7 @@ export default function App() {
     page,
     setPage,
   } = useWorkspace();
+  const { t } = useT();
 
   const restartBackend = useCallback(async () => {
     setBackendStarting();
@@ -55,11 +57,14 @@ export default function App() {
   }, [setBackendStarting]);
 
   const offerEngineUpdate = useCallback(() => {
+    // Called from the once-registered ready handler — resolve the current
+    // language at call time so switching languages does not re-run the effect.
+    const { t } = getT();
     const upd = useEngineUpdate.getState();
     if (upd.status !== "available") return;
     notification.info({
-      message: "MDescriptor engine update available",
-      description: `Installed ${upd.installed} — PyPI has ${upd.latest}. The upgrade runs in the background; a backend restart applies it.`,
+      message: t("MDescriptor engine update available"),
+      description: t("Installed {installed} — PyPI has {latest}. The upgrade runs in the background; a backend restart applies it.", { installed: upd.installed, latest: upd.latest ?? "" }),
       duration: 0,
       btn: (
         <Space>
@@ -69,7 +74,7 @@ export default function App() {
               notification.destroy();
             }}
           >
-            Later
+            {t("Later")}
           </Button>
           <Button
             type="primary"
@@ -79,10 +84,10 @@ export default function App() {
               void upd.runUpdate().then((/* done */) => {
                 const s = useEngineUpdate.getState();
                 if (s.status === "restart_required") {
+                  const { t: tNow } = getT();
                   notification.success({
-                    message: `Engine updated to ${s.latest}`,
-                    description:
-                      "Restart the backend to load it. After any engine update, rerun scripts/probe_engine.py + pytest (ADR-2).",
+                    message: tNow("Engine updated to {version}", { version: s.latest ?? "" }),
+                    description: tNow("Restart the backend to load it. After any engine update, rerun scripts/probe_engine.py + pytest (ADR-2)."),
                     duration: 0,
                     btn: (
                       <Button
@@ -93,17 +98,17 @@ export default function App() {
                           void restartBackend();
                         }}
                       >
-                        Restart backend
+                        {tNow("Restart backend")}
                       </Button>
                     ),
                   });
                 } else if (s.status === "error") {
-                  message.error(`Engine update failed: ${s.error}`);
+                  message.error(tNow("Engine update failed: {message}", { message: s.error ?? "" }));
                 }
               });
             }}
           >
-            Update to {upd.latest}
+            {t("Update to {version}", { version: upd.latest ?? "" })}
           </Button>
         </Space>
       ),
@@ -137,11 +142,13 @@ export default function App() {
     (async () => {
       await ipc.connect(() => {
         useWorkspace.getState().setBackendError();
-        message.error("Backend process exited");
+        message.error(getT().t("Backend process exited"));
       });
       const handleReady = async () => {
         if (disposed) return;
         try {
+          // apply the persisted UI language before the main UI renders
+          await initLanguage();
           const info = await ipc.request<{
             mdescriptor_version: string;
             mdescriptor_api_version: number;
@@ -221,7 +228,7 @@ export default function App() {
             }}
           />
           <div style={{ color: "#616161" }}>
-            {backendStatus === "starting" ? "Starting backend…" : "Backend exited. Restart the app."}
+            {backendStatus === "starting" ? t("Starting backend…") : t("Backend exited. Restart the app.")}
           </div>
         </div>
       </div>
@@ -263,7 +270,7 @@ export default function App() {
                 }}
               >
                 {tab.icon}
-                {tab.label}
+                {t(tab.label)}
               </button>
             ))}
           </div>

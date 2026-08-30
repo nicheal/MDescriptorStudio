@@ -6,12 +6,14 @@ import { Badge, Button, Drawer, Empty, Popconfirm, Progress, Typography } from "
 import { Clock16Regular, Dismiss16Regular } from "@fluentui/react-icons";
 import SettingsDrawer from "./SettingsDrawer";
 import { ipc } from "../ipc/client";
-import { JOB_TYPE_LABEL, mergeJobRows, useJobs, type JobState } from "../stores/jobs";
+import { jobStatusLabel, jobTypeLabel, mergeJobRows, useJobs, type JobState } from "../stores/jobs";
 import { useWorkspace } from "../stores/workspace";
+import { useT } from "../i18n";
 import type { JobRow } from "../types/protocol";
 
 export default function JobsDrawer() {
   const { runningJobs, jobsDrawerOpen, setJobsDrawerOpen } = useWorkspace();
+  const { t, tr } = useT();
   const { jobs, order } = useJobs();
   const [rows, setRows] = useState<JobRow[]>([]);
 
@@ -34,13 +36,13 @@ export default function JobsDrawer() {
     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
       <Badge count={runningJobs} size="small" offset={[0, 2]}>
         <Button icon={<Clock16Regular />} onClick={() => setJobsDrawerOpen(true)}>
-          Jobs
+          {t("Jobs")}
         </Button>
       </Badge>
       <SettingsDrawer />
-      <Drawer title="JOBS" placement="right" width={380} open={jobsDrawerOpen} onClose={() => setJobsDrawerOpen(false)}>
+      <Drawer title={t("JOBS")} placement="right" width={380} open={jobsDrawerOpen} onClose={() => setJobsDrawerOpen(false)}>
         {listed.length === 0 ? (
-          <Empty description="No jobs yet" style={{ marginTop: 48 }} />
+          <Empty description={t("No jobs yet")} style={{ marginTop: 48 }} />
         ) : (
           listed.map((j) => <JobCard key={j.id} job={j} />)
         )}
@@ -50,6 +52,7 @@ export default function JobsDrawer() {
 }
 
 function JobCard({ job }: { job: JobState }) {
+  const { t, tr } = useT();
   const running = job.status === "RUNNING" || job.status === "QUEUED";
   const statusColor =
     job.status === "COMPLETED" ? "#107C10" : job.status === "FAILED" ? "#C42B1C" : job.status === "CANCELLED" ? "#8A8A8A" : "#0F6CBD";
@@ -57,23 +60,23 @@ function JobCard({ job }: { job: JobState }) {
     <div style={{ borderBottom: "1px solid #EAECF0", padding: "12px 4px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <Typography.Text strong style={{ fontSize: 13 }}>
-          {JOB_TYPE_LABEL[job.job_type] ?? job.job_type}
+          {jobTypeLabel(tr, job.job_type)}
         </Typography.Text>
         {running ? (
           <Popconfirm
-            title="Stop this job?"
+            title={t("Stop this job?")}
             onConfirm={() => void ipc.request("job.cancel", { id: job.id })}
-            okText="Stop job"
-            cancelText="Keep running"
+            okText={t("Stop job")}
+            cancelText={t("Keep running")}
             okButtonProps={{ danger: true }}
           >
             <Button size="small" icon={<Dismiss16Regular />}>
-              Stop
+              {t("Stop")}
             </Button>
           </Popconfirm>
         ) : (
           <Typography.Text style={{ color: statusColor, fontSize: 12, fontWeight: 600 }}>
-            {job.status}
+            {jobStatusLabel(tr, job.status)}
           </Typography.Text>
         )}
       </div>

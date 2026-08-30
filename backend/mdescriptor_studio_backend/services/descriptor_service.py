@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -33,6 +34,73 @@ _VALIDATE_TYPES = {"integer", "number", "boolean", "string", "enum", "array", "o
 # (mapped from ComputeControl counters by _report_engine_progress). Without
 # this split the load phase drives the bar to 100% before compute even starts.
 _LOAD_BAR_SHARE = 0.1
+
+
+def _process_rss_bytes() -> int | None:
+    """Return the current process resident set size when the OS exposes it."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class _Counters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", ctypes.c_ulong),
+                    ("PageFaultCount", ctypes.c_ulong),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = _Counters()
+            counters.cb = ctypes.sizeof(_Counters)
+            ok = ctypes.windll.psapi.GetProcessMemoryInfo(
+                ctypes.windll.kernel32.GetCurrentProcess(),
+                ctypes.byref(counters),
+                counters.cb,
+            )
+            return int(counters.WorkingSetSize) if ok else None
+        import resource
+
+        value = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        return value * (1024 if os.uname().sysname == "Linux" else 1)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+class _MemorySampler:
+    """Sample process RSS during native descriptor computation."""
+
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.peak: int | None = None
+
+    def _sample(self) -> None:
+        value = _process_rss_bytes()
+        if value is not None:
+            self.peak = max(self.peak or 0, value)
+
+    def start(self) -> None:
+        self._sample()
+
+        def loop() -> None:
+            while not self._stop.wait(0.05):
+                self._sample()
+
+        self._thread = threading.Thread(target=loop, name="descriptor-memory-sampler", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> int | None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        self._sample()
+        return self.peak
 
 
 class DescriptorService:
@@ -285,11 +353,14 @@ class DescriptorService:
             target=self._report_engine_progress, args=(ctx, control, stop_poll), daemon=True
         )
         poller.start()
+        memory_sampler = _MemorySampler()
+        memory_sampler.start()
         try:
             result = self.adapter.compute(descriptor, batch, control)
         except Exception as exc:
             raise engine_exception_to_app_error(exc) from exc
         finally:
+            memory_peak_bytes = memory_sampler.stop()
             # settle the poller before any later emit so no stale fraction can
             # land after "done"
             stop_poll.set()
@@ -335,8 +406,8 @@ class DescriptorService:
             json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         self.db.execute(
-            "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ? WHERE id = ?",
-            (_NOW(), str(run_dir), run_id),
+            "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ?, memory_peak_bytes = ? WHERE id = ?",
+            (_NOW(), str(run_dir), memory_peak_bytes, run_id),
         )
         ctx.progress(None, None, "done", fraction=1.0)
         return {

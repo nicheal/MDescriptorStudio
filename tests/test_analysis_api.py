@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from mdescriptor_studio_backend.analysis import AnalysisEngine, SampleMatrix
+from mdescriptor_studio_backend.datasets.base import DatasetFrame
 from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, ANALYSIS_STALE, AppError
 from mdescriptor_studio_backend.services.analysis_service import AnalysisService
 from mdescriptor_studio_backend.services.result_service import ResultService
@@ -295,4 +297,102 @@ def test_frame_scoped_export_resolves_selected_sample_to_actual_frame(tmp_path: 
     output = service._write_export(run, [0], "json", "structure", tmp_path / "export.json", _Context())
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert [record["frame"] for record in payload["records"]] == [7]
+    db.close()
+
+
+def test_structural_perturbation_service_recomputes_descriptor_sweep(tmp_path: Path) -> None:
+    db = Database(tmp_path / "database.sqlite")
+    source_path = tmp_path / "source.xyz"
+    source_path.write_text("fixture", encoding="utf-8")
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, created_at)"
+        " VALUES ('ds_perturb', 'perturb', 'extxyz', ?, 4, '[\"H\"]', '{}', '{\"isolated\": true}', 'fixture', '2026-01-01T00:00:00+00:00')",
+        (str(source_path),),
+    )
+
+    frames = []
+    baseline_values = []
+    for index in range(4):
+        positions = np.array(
+            [[float(index), 0.1 * index, 0.2], [float(index) + 0.5, 0.1 * index + 0.2, 0.4]],
+            dtype=np.float64,
+        )
+        frames.append(
+            DatasetFrame(
+                numbers=np.array([1, 1], dtype=np.int64),
+                positions=positions,
+                cell=np.zeros((3, 3), dtype=np.float64),
+                pbc=np.zeros(3, dtype=bool),
+                index=index,
+                id=f"frame_{index}",
+            )
+        )
+        baseline_values.append([positions[:, 0].mean(), positions[:, 1].mean() + 2.0 * positions[:, 2].mean()])
+    baseline_values = np.asarray(baseline_values, dtype=np.float64)
+    result_dir = tmp_path / "results" / "run_perturb"
+    result_dir.mkdir(parents=True)
+    np.save(result_dir / "values.npy", baseline_values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_perturb", "level": "structure", "row_semantics": "structure", "shape": list(baseline_values.shape)}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json, scope, status, created_at, result_path)"
+        " VALUES ('run_perturb', 'ds_perturb', 'FAKE', 'test', '{}', 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(result_dir),),
+    )
+
+    class _SourceAdapter:
+        def __len__(self):
+            return len(frames)
+
+        def get_frame(self, index):
+            return frames[index]
+
+    class _ComputeAdapter:
+        def build(self, _name, parameters):
+            return parameters
+
+        @staticmethod
+        def to_structure_batch(batch):
+            return batch
+
+        @staticmethod
+        def compute(_descriptor, batch):
+            values = [
+                [frame.positions[:, 0].mean(), frame.positions[:, 1].mean() + 2.0 * frame.positions[:, 2].mean()]
+                for frame in batch
+            ]
+            return SimpleNamespace(values=np.asarray(values, dtype=np.float64), row_offsets=None)
+
+    source_adapter = _SourceAdapter()
+
+    class _Datasets:
+        adapter = _ComputeAdapter()
+
+        @staticmethod
+        def _adapter_for(_dataset):
+            return source_adapter
+
+    jobs = _InlineJobs(db)
+    service = AnalysisService(db, jobs, ResultService(db), datasets=_Datasets(), data_dir=tmp_path)
+    service._assert_dataset_current = lambda _row: None
+
+    response = service.perturbation_sensitivity(
+        {
+            "run_id": "run_perturb",
+            "perturbation": "jitter",
+            "amplitudes": [0.0, 0.05, 0.1],
+            "max_structures": 4,
+            "seed": 42,
+        }
+    )
+    assert response["job_id"] == "job_1"
+    analysis = service.get({"analysis_id": response["analysis_id"]})
+    assert analysis["status"] == "COMPLETED"
+    assert analysis["preview"]["kind"] == "perturbation_sensitivity"
+    assert analysis["preview"]["curve_count"] == 3
+    curve = service.chunk({"analysis_id": response["analysis_id"], "array": "mean_response", "limit": 10})
+    assert len(curve["data"]) == 3
+    assert curve["data"][0] == pytest.approx(0.0)
     db.close()

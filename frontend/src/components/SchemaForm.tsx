@@ -5,6 +5,7 @@ import { Button, Checkbox, Input, InputNumber, Select, Space, Tooltip, Typograph
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { FolderOpen16Regular } from "@fluentui/react-icons";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { useT } from "../i18n";
 import type { ParamSchema } from "../types/protocol";
 
 export type ParamValues = Record<string, unknown>;
@@ -20,8 +21,8 @@ function parameterLabel(name: string, schema: ParamSchema): string {
   return schema.display_name?.trim() || humanizeParameterName(name).replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function parameterDescription(name: string, schema: ParamSchema): string {
-  return schema.description?.trim() || `${parameterLabel(name, schema)} setting.`;
+function parameterDescription(t: (key: string, vars?: Record<string, string | number>) => string, name: string, schema: ParamSchema): string {
+  return schema.description?.trim() || t("{name} setting.", { name: parameterLabel(name, schema) });
 }
 
 function formatObjectValue(value: unknown): string {
@@ -54,7 +55,8 @@ export function SchemaField({
   allowExternalModel?: boolean;
   onModelBrowseError?: () => void;
 }) {
-  const description = parameterDescription(name, schema);
+  const { t } = useT();
+  const description = parameterDescription(t, name, schema);
   const displayName = parameterLabel(name, schema);
   const hasProperties = Object.keys(schema.properties ?? {}).length > 0;
   const [objectText, setObjectText] = useState(() => formatObjectValue(value ?? schema.default));
@@ -161,7 +163,7 @@ export function SchemaField({
         <Select
           mode="multiple"
           style={{ width: "100%" }}
-          placeholder="elements"
+          placeholder={t("elements")}
           value={(value as string[]) ?? elementOptions ?? []}
           options={(elementOptions ?? []).map((e) => ({ value: e, label: e }))}
           onChange={(v) => onChange(v)}
@@ -172,7 +174,7 @@ export function SchemaField({
         <Select
           mode="tags"
           style={{ width: "100%" }}
-          placeholder="numbers, Enter to add"
+          placeholder={t("numbers, Enter to add")}
           value={((value as unknown[]) ?? (schema.default as unknown[]) ?? []).map(String)}
           onChange={(vs) => {
             if (schema.items?.type === "string") {
@@ -197,9 +199,9 @@ export function SchemaField({
         try {
           const selected = await openDialog({
             multiple: false,
-            title: "Select model file",
+            title: t("Select model file"),
             ...(extensions.length > 0
-              ? { filters: [{ name: "Model files", extensions }] }
+              ? { filters: [{ name: t("Model files"), extensions }] }
               : {}),
           });
           const path = Array.isArray(selected) ? selected[0] : selected;
@@ -214,7 +216,7 @@ export function SchemaField({
         <Space.Compact style={{ width: "100%", display: "flex" }}>
           <Input
             style={{ flex: 1, minWidth: 0 }}
-            placeholder="Leave empty to use the bundled model"
+            placeholder={t("Leave empty to use the bundled model")}
             value={(value as string) ?? ""}
             onChange={(e) => onChange(e.target.value || undefined)}
           />
@@ -222,9 +224,9 @@ export function SchemaField({
             <Button
               icon={<FolderOpen16Regular />}
               onClick={() => void browseModel()}
-              aria-label="Browse for a model file"
+              aria-label={t("Browse for a model file")}
             >
-              Browse
+              {t("Browse")}
             </Button>
           )}
         </Space.Compact>,

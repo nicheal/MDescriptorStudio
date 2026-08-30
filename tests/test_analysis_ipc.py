@@ -88,7 +88,22 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
             "analysis.acquisition",
             {"reference_run_id": run_id, "query_run_id": run_id, "n_samples": 4, "novelty_weight": 0.7},
         )
+        uncertainty_id = run(
+            "analysis.acquisition",
+            {
+                "reference_run_id": run_id,
+                "query_run_id": run_id,
+                "n_samples": 4,
+                "acquisition_method": "uncertainty_diversity",
+                "uncertainty_k": 4,
+                "seed": 42,
+            },
+        )
         run("analysis.compare", {"left_run_id": run_id, "right_run_id": run_id})
+        mantel_id = run(
+            "analysis.mantel",
+            {"left_run_id": run_id, "right_run_id": run_id, "method": "spearman", "permutations": 19, "max_samples": 8, "seed": 42},
+        )
         quality_id = run("analysis.feature_variance", {"run_id": run_id, "top_k": 4})
         run("analysis.feature_correlation", {"run_id": run_id, "top_k": 4, "heatmap_features": 4})
         run("analysis.effective_dimension", {"run_id": run_id})
@@ -96,15 +111,24 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
             "analysis.property_correlation",
             {"run_id": run_id, "property": "energy_per_atom", "folds": 3, "top_k": 4},
         )
-        run("analysis.local_diversity", {"run_id": run_id, "n_clusters": 3, "k": 3})
+        local_id = run("analysis.local_diversity", {"run_id": run_id, "mode": "atom", "n_clusters": 3, "k": 3, "cutoff": 3.0})
         run("analysis.kernel", {"run_id": run_id, "kernel": "rbf", "max_samples": 8})
         run("analysis.trajectory", {"run_id": run_id, "frame_start": 0, "frame_end": 7, "frame_step": 1})
         run("analysis.drift", {"reference_run_id": run_id, "query_run_id": run_id, "chunk_size": 3, "reference_chunk_size": 3})
         run("analysis.sensitivity", {"run_ids": [run_id, run_id]})
+        perturbation_id = run(
+            "analysis.perturbation_sensitivity",
+            {"run_id": run_id, "perturbation": "jitter", "n_amplitudes": 2, "max_amplitude": 0.01, "max_structures": 2, "seed": 42},
+        )
 
         listed = bp.request(sequence, "analysis.list", {"run_id": run_id})
         sequence += 1
         assert listed["result"]
+        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (perturbation_id, "perturbation_sensitivity")):
+            checked = bp.request(sequence, "analysis.get", {"analysis_id": analysis_id})
+            sequence += 1
+            assert checked["result"]["status"] == "COMPLETED"
+            assert checked["result"]["preview"]["kind"] == kind
         got = bp.request(sequence, "analysis.get", {"analysis_id": quality_id})
         sequence += 1
         assert got["result"]["status"] == "COMPLETED"

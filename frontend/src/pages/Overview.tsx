@@ -8,12 +8,14 @@ import ReactECharts from "echarts-for-react";
 import Histogram from "../components/Histogram";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
+import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import type { Stats } from "../types/protocol";
 
 export default function Overview() {
   const st = useWorkspace();
   const d = activeDataset(st);
+  const { t } = useT();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recalculating, setRecalculating] = useState(false);
 
@@ -57,26 +59,26 @@ export default function Overview() {
           type="warning"
           style={{ background: "#FFF7E6", border: "1px solid #F0A000", padding: "4px 12px", borderRadius: 6, marginBottom: 0 }}
         >
-          ⚠ Dataset changed on disk since it was scanned. Statistics may be outdated.
+          ⚠ {t("Dataset changed on disk since it was scanned. Statistics may be outdated.")}
         </Typography.Paragraph>
       )}
       {recalculating && (
         <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
-          Recomputing statistics…
+          {t("Recomputing statistics…")}
         </Typography.Paragraph>
       )}
-      <Typography.Text style={{ fontSize: 14, fontWeight: 600 }}>Overview</Typography.Text>
+      <Typography.Text style={{ fontSize: 14, fontWeight: 600 }}>{t("Overview")}</Typography.Text>
 
       <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 12 }}>
         {/* column 1: statistics, element donut, property availability */}
         <div style={{ width: "32%", minWidth: 290, display: "flex", flexDirection: "column", gap: 12 }}>
-          <Panel title="Dataset Statistics">
+          <Panel title={t("Dataset Statistics")}>
             <StatsTable d={d} stats={stats} />
           </Panel>
-          <Panel title="Element Distribution" style={{ flex: 1, minHeight: 110 }}>
+          <Panel title={t("Element Distribution")} style={{ flex: 1, minHeight: 110 }}>
             <ElementDonut stats={stats} />
           </Panel>
-          <Panel title="Property Availability">
+          <Panel title={t("Property Availability")}>
             <PropertyTable stats={stats} />
           </Panel>
         </div>
@@ -84,18 +86,18 @@ export default function Overview() {
         {/* columns 2–3: 2×2 histograms (all in the primary series color, per UI.png) */}
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
           <Panel style={{ flex: 1, minHeight: 140 }}>
-            <Histogram title="Energy / Atom" unit="eV" hist={stats?.energy_per_atom ?? null} />
+            <Histogram title={t("Energy / Atom")} unit="eV" hist={stats?.energy_per_atom ?? null} />
           </Panel>
           <Panel style={{ flex: 1, minHeight: 140 }}>
-            <Histogram title="Volume" unit="Å³" hist={stats?.volume ?? null} />
+            <Histogram title={t("Volume")} unit="Å³" hist={stats?.volume ?? null} />
           </Panel>
         </div>
         <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
           <Panel style={{ flex: 1, minHeight: 140 }}>
-            <Histogram title="Force Magnitude" unit="eV/Å" hist={stats?.force_magnitude ?? null} />
+            <Histogram title={t("Force Magnitude")} unit="eV/Å" hist={stats?.force_magnitude ?? null} />
           </Panel>
           <Panel style={{ flex: 1, minHeight: 140 }}>
-            <Histogram title="Max |Force|" unit="eV/Å" hist={stats?.max_force ?? null} />
+            <Histogram title={t("Max |Force|")} unit="eV/Å" hist={stats?.max_force ?? null} />
           </Panel>
         </div>
       </div>
@@ -141,6 +143,7 @@ function StatsTable({
   d: NonNullable<ReturnType<typeof activeDataset>>;
   stats: Stats | null;
 }) {
+  const { t } = useT();
   const row = (k: string, v: React.ReactNode) => (
     <div
       key={k}
@@ -162,10 +165,10 @@ function StatsTable({
   );
   return (
     <div>
-      {row("Structures", d.number_of_frames.toLocaleString())}
-      {row("Atoms", stats ? stats.atoms_total.toLocaleString() : "—")}
+      {row(t("Structures"), d.number_of_frames.toLocaleString())}
+      {row(t("Atoms"), stats ? stats.atoms_total.toLocaleString() : "—")}
       {row(
-        "Elements",
+        t("Elements"),
         <span style={{ display: "inline-flex", gap: 4 }}>
           {(stats?.elements ?? []).map((e) => (
             <span
@@ -196,40 +199,41 @@ function StatsTable({
         </span>,
       )}
       {row(
-        "Properties",
+        t("Properties"),
         [
-          d.properties.energy?.per_structure && "Energy",
-          d.properties.forces?.per_atom && "Force",
-          d.properties.virial?.per_structure && "Virial",
+          d.properties.energy?.per_structure && t("Energy"),
+          d.properties.forces?.per_atom && t("Force"),
+          d.properties.virial?.per_structure && t("Virial"),
         ]
           .filter(Boolean)
           .join(", ") || "—",
       )}
-      {row("Format", d.format.charAt(0).toUpperCase() + d.format.slice(1))}
+      {row(t("Format"), d.format.charAt(0).toUpperCase() + d.format.slice(1))}
       {row("PBC", d.periodicity.flags.join("") || "—")}
-      {row("Created", new Date(d.created_at).toLocaleString())}
-      {row("File Size", d.file_size ? formatSize(d.file_size) : "—")}
+      {row(t("Created"), new Date(d.created_at).toLocaleString())}
+      {row(t("File Size"), d.file_size ? formatSize(d.file_size) : "—")}
     </div>
   );
 }
 
 function PropertyTable({ stats }: { stats: Stats | null }) {
+  const { t } = useT();
   const rows = [
     {
       key: "energy",
-      label: "Energy",
+      label: t("Energy"),
       perAtom: stats?.properties.energy.per_atom ?? false,
       perStruct: stats?.properties.energy.per_structure ?? false,
     },
     {
       key: "forces",
-      label: "Force",
+      label: t("Force"),
       perAtom: stats?.properties.forces.per_atom ?? false,
       perStruct: false,
     },
     {
       key: "virial",
-      label: "Virial",
+      label: t("Virial"),
       perAtom: false,
       perStruct: stats?.properties.virial.per_structure ?? false,
     },
@@ -240,8 +244,8 @@ function PropertyTable({ stats }: { stats: Stats | null }) {
     <div style={{ fontSize: 12.5 }}>
       <div style={{ display: "flex", alignItems: "center", padding: "2px 0 4px", color: "#616161", fontSize: 12 }}>
         <span style={{ flex: 1.4 }} />
-        <span style={{ flex: 1, textAlign: "center" }}>Per-Atom</span>
-        <span style={{ flex: 1, textAlign: "center" }}>Per-Structure</span>
+        <span style={{ flex: 1, textAlign: "center" }}>{t("Per-Atom")}</span>
+        <span style={{ flex: 1, textAlign: "center" }}>{t("Per-Structure")}</span>
       </div>
       {rows.map((r) => (
         <div
@@ -263,10 +267,11 @@ function PropertyTable({ stats }: { stats: Stats | null }) {
 }
 
 function ElementDonut({ stats }: { stats: Stats | null }) {
+  const { t } = useT();
   if (!stats || stats.elements.length === 0) {
     return (
       <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "#8A8A8A", fontSize: 12 }}>
-        Statistics pending…
+        {t("Statistics pending…")}
       </div>
     );
   }
@@ -316,10 +321,11 @@ function ElementDonut({ stats }: { stats: Stats | null }) {
 }
 
 function EmptyState() {
+  const { t } = useT();
   return (
     <div style={{ textAlign: "center", marginTop: 120 }}>
-      <Typography.Title level={5}>No datasets</Typography.Title>
-      <Typography.Text type="secondary">Add a DeepMD or extxyz dataset to begin.</Typography.Text>
+      <Typography.Title level={5}>{t("No datasets")}</Typography.Title>
+      <Typography.Text type="secondary">{t("Add a DeepMD or extxyz dataset to begin.")}</Typography.Text>
     </div>
   );
 }

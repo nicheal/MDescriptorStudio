@@ -24,9 +24,11 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../../ipc/client";
 import { activeDataset, refetchDatasets, useWorkspace } from "../../stores/workspace";
+import { useT, type T } from "../../i18n";
 import {
   JOB_STATUS_COLOR as STATUS_COLOR,
-  JOB_TYPE_LABEL,
+  jobStatusLabel,
+  jobTypeLabel,
   mergeJobRows,
   useJobs,
   type JobState,
@@ -78,6 +80,7 @@ export default function RightRail() {
 
 function DataHealthRail() {
   const { message } = AntApp.useApp();
+  const { t } = useT();
   const st = useWorkspace();
   const d = activeDataset(st);
   const [health, setHealth] = useState<DatasetHealth | null>(null);
@@ -135,7 +138,7 @@ function DataHealthRail() {
       if (useWorkspace.getState().activeDatasetId !== dsId) return;
       applyStats(fresh);
       useWorkspace.getState().bumpStatsTick(); // Overview refetches too
-      message.success("Rescan complete");
+      message.success(t("Rescan complete"));
     } catch (e) {
       const err = e as { code: string; message: string };
       message.error(`${err.code}: ${err.message}`);
@@ -154,29 +157,29 @@ function DataHealthRail() {
     {
       key: "missing",
       icon: <GridDots16Regular />,
-      title: "Missing values",
-      subtitle: "Across all properties",
+      title: t("Missing values"),
+      subtitle: t("Across all properties"),
       count: health ? health.missing_values : null,
     },
     {
       key: "cell",
       icon: <Cube16Regular />,
-      title: "Invalid cell",
-      subtitle: "Non-positive or degenerate",
+      title: t("Invalid cell"),
+      subtitle: t("Non-positive or degenerate"),
       count: health ? health.invalid_cell : null,
     },
     {
       key: "dup",
       icon: <Copy16Regular />,
-      title: "Duplicate structures",
-      subtitle: "Exact duplicates (hash)",
+      title: t("Duplicate structures"),
+      subtitle: t("Exact duplicates (hash)"),
       count: health ? health.duplicate_structures : null,
     },
     {
       key: "force",
       icon: <BroadActivityFeed16Regular />,
-      title: "Extreme force",
-      subtitle: `|F| > ${health ? health.extreme_force_threshold : 50} eV/Å`,
+      title: t("Extreme force"),
+      subtitle: t("|F| > {threshold} eV/Å", { threshold: health ? health.extreme_force_threshold : 50 }),
       count: health ? health.extreme_force : null,
     },
   ];
@@ -209,9 +212,9 @@ function DataHealthRail() {
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6, paddingBottom: 4 }}>
           <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
-            Data Health
+            {t("Data Health")}
           </Typography.Text>
-          <Tooltip title="Quality checks from the last full scan: property values missing on some structures, non-positive or degenerate cells, exact duplicate structures (content hash), and any atom force above the threshold.">
+          <Tooltip title={t("Quality checks from the last full scan: property values missing on some structures, non-positive or degenerate cells, exact duplicate structures (content hash), and any atom force above the threshold.")}>
             <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
               <Info16Regular />
             </span>
@@ -220,7 +223,7 @@ function DataHealthRail() {
 
         {!d ? (
           <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
-            Register a dataset to see its health.
+            {t("Register a dataset to see its health.")}
           </Typography.Text>
         ) : (
           <>
@@ -251,7 +254,7 @@ function DataHealthRail() {
                 fontWeight: 600,
               }}
             >
-              {scanning === null ? "Rescan" : `Scanning… ${Math.round(scanning * 100)}%`}
+              {scanning === null ? t("Rescan") : t("Scanning… {percent}%", { percent: Math.round(scanning * 100) })}
             </Button>
           </>
         )}
@@ -262,6 +265,7 @@ function DataHealthRail() {
 
 function RecentJobsRail() {
   const setJobsDrawerOpen = useWorkspace().setJobsDrawerOpen;
+  const { t } = useT();
   const { jobs, order } = useJobs();
   const [rows, setRows] = useState<JobRow[]>([]);
 
@@ -314,9 +318,9 @@ function RecentJobsRail() {
       >
         <div style={{ display: "flex", alignItems: "center", gap: 6, paddingBottom: 4 }}>
           <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
-            Recent Jobs
+            {t("Recent Jobs")}
           </Typography.Text>
-          <Tooltip title="Latest descriptor compute jobs. Live jobs update automatically — the top-right Jobs button has the full history.">
+          <Tooltip title={t("Latest descriptor compute jobs. Live jobs update automatically — the top-right Jobs button has the full history.")}>
             <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
               <Info16Regular />
             </span>
@@ -325,7 +329,7 @@ function RecentJobsRail() {
 
         {recent.length === 0 ? (
           <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
-            No descriptor computes yet — submit one from this page.
+            {t("No descriptor computes yet — submit one from this page.")}
           </Typography.Text>
         ) : (
           <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -349,7 +353,7 @@ function RecentJobsRail() {
             fontWeight: 600,
           }}
         >
-          View all jobs
+          {t("View all jobs")}
         </Button>
       </div>
     </div>
@@ -357,6 +361,8 @@ function RecentJobsRail() {
 }
 
 function JobRailRow({ job, first }: { job: JobState; first: boolean }) {
+  const i18n = useT();
+  const { tr } = i18n;
   const active = job.status === "RUNNING" || job.status === "QUEUED";
   const detail =
     job.completed != null && job.total != null
@@ -379,10 +385,9 @@ function JobRailRow({ job, first }: { job: JobState; first: boolean }) {
             minWidth: 0,
           }}
         >
-          {JOB_TYPE_LABEL[job.job_type] ?? job.job_type}
-        </span>
+          {jobTypeLabel(tr, job.job_type)}        </span>
         <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: STATUS_COLOR[job.status], flex: "0 0 auto" }}>
-          {job.status}
+          {jobStatusLabel(tr, job.status)}
         </span>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 2 }}>
@@ -399,7 +404,7 @@ function JobRailRow({ job, first }: { job: JobState; first: boolean }) {
           {detail}
         </span>
         <span style={{ fontSize: 11, color: "#616161", fontVariantNumeric: "tabular-nums", flex: "0 0 auto" }}>
-          {job.created_at ? formatRailTime(job.created_at) : "—"}
+          {job.created_at ? formatRailTime(job.created_at, i18n) : "—"}
         </span>
       </div>
       {active && (
@@ -478,6 +483,7 @@ function HealthRow({
 }
 
 function ScanRow({ scanning, lastScanAt }: { scanning: number | null; lastScanAt: string | null }) {
+  const i18n = useT();
   const done = scanning === null && lastScanAt;
   const icon = scanning !== null ? (
     <span className="rail-spin" style={{ display: "inline-flex" }}>
@@ -493,9 +499,9 @@ function ScanRow({ scanning, lastScanAt }: { scanning: number | null; lastScanAt
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 0", borderTop: "1px solid #EAECF0" }}>
       <span style={{ color: iconColor, display: "inline-flex", flex: "0 0 auto" }}>{icon}</span>
       <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: "#242424" }}>Scan status</span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: "#242424" }}>{i18n.t("Scan status")}</span>
         <span style={{ fontSize: 11, color: "#616161" }}>
-          {scanning !== null ? "Scanning…" : done ? "Completed" : "Pending"}
+          {scanning !== null ? i18n.t("Scanning…") : done ? i18n.t("Completed") : i18n.t("Pending")}
         </span>
       </span>
       <span
@@ -510,7 +516,7 @@ function ScanRow({ scanning, lastScanAt }: { scanning: number | null; lastScanAt
         {scanning !== null
           ? `${Math.round(scanning * 100)}%`
           : done
-            ? formatRailTime(lastScanAt!)
+            ? formatRailTime(lastScanAt!, i18n)
             : "—"}
       </span>
     </div>
@@ -518,14 +524,14 @@ function ScanRow({ scanning, lastScanAt }: { scanning: number | null; lastScanAt
 }
 
 /** "Today 10:24 AM" style, from a UTC ISO timestamp. */
-function formatRailTime(iso: string): string {
+function formatRailTime(iso: string, i18n: T): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "—";
-  const time = date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const time = date.toLocaleTimeString(i18n.locale, { hour: "numeric", minute: "2-digit" });
   const now = new Date();
   const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const diffDays = Math.round((day(now) - day(date)) / 86_400_000);
-  if (diffDays === 0) return `Today ${time}`;
-  if (diffDays === 1) return `Yesterday ${time}`;
-  return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} ${time}`;
+  if (diffDays === 0) return i18n.t("Today {time}", { time });
+  if (diffDays === 1) return i18n.t("Yesterday {time}", { time });
+  return `${date.toLocaleDateString(i18n.locale, { month: "short", day: "numeric" })} ${time}`;
 }

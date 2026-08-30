@@ -6,6 +6,7 @@ import { CheckCircleFilled, MoreOutlined } from "@ant-design/icons";
 import { ipc } from "../../ipc/client";
 import { RenameDatasetModal, useDatasetDelete } from "../datasetActions";
 import { activeDataset, useWorkspace } from "../../stores/workspace";
+import { useT } from "../../i18n";
 
 function PropertyChip({ label, ok }: { label: string; ok: boolean }) {
   return (
@@ -32,12 +33,13 @@ export default function ContextBar() {
   const { message } = AntApp.useApp();
   const confirmDelete = useDatasetDelete();
   const [renameOpen, setRenameOpen] = useState(false);
+  const { t } = useT();
   const st = useWorkspace();
   const d = activeDataset(st);
   if (!d) {
     return (
       <div style={{ padding: "10px 24px", background: "#FFFFFF", borderBottom: "1px solid #EAECF0" }}>
-        <Typography.Text type="secondary">No active dataset</Typography.Text>
+        <Typography.Text type="secondary">{t("No active dataset")}</Typography.Text>
       </div>
     );
   }
@@ -47,9 +49,9 @@ export default function ContextBar() {
   const copyPath = async () => {
     try {
       await navigator.clipboard.writeText(d.source_path);
-      message.success("Path copied");
+      message.success(t("Path copied"));
     } catch {
-      message.error("Could not access the clipboard");
+      message.error(t("Could not access the clipboard"));
     }
   };
   return (
@@ -64,7 +66,7 @@ export default function ContextBar() {
         {d.name}
         {!d.cache_valid && (
           <Typography.Text type="warning" style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
-            changed on disk
+            {t("changed on disk")}
           </Typography.Text>
         )}
       </div>
@@ -72,7 +74,7 @@ export default function ContextBar() {
         <Space size={8} wrap style={{ flex: 1, minWidth: 0 }}>
           <Tag style={{ marginRight: 0 }}>{formatLabel}</Tag>
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            {d.number_of_frames.toLocaleString()} structures
+            {t("{n} structures", { n: d.number_of_frames.toLocaleString() })}
           </Typography.Text>
           <Space size={2}>
             {d.elements.map((el) => (
@@ -83,9 +85,9 @@ export default function ContextBar() {
           </Space>
           <Tag style={{ marginRight: 0 }}>PBC {pbcLabel}</Tag>
           <Space size={6} style={{ marginLeft: 4 }}>
-            <PropertyChip label="Energy" ok={has(d.properties.energy?.per_structure)} />
-            <PropertyChip label="Force" ok={has(d.properties.forces?.per_atom)} />
-            <PropertyChip label="Virial" ok={has(d.properties.virial?.per_structure)} />
+            <PropertyChip label={t("Energy")} ok={has(d.properties.energy?.per_structure)} />
+            <PropertyChip label={t("Force")} ok={has(d.properties.forces?.per_atom)} />
+            <PropertyChip label={t("Virial")} ok={has(d.properties.virial?.per_structure)} />
           </Space>
         </Space>
         <Space size={2} style={{ flex: "0 0 auto" }}>
@@ -100,11 +102,11 @@ export default function ContextBar() {
           <Dropdown
             menu={{
               items: [
-                { key: "copy-path", label: "Copy dataset path" },
-                { key: "refresh-stats", label: "Refresh statistics" },
+                { key: "copy-path", label: t("Copy dataset path") },
+                { key: "refresh-stats", label: t("Refresh statistics") },
                 { type: "divider" },
-                { key: "rename", label: "Rename dataset" },
-                { key: "delete", label: "Delete dataset", danger: true },
+                { key: "rename", label: t("Rename dataset") },
+                { key: "delete", label: t("Delete dataset"), danger: true },
               ],
               onClick: ({ key }) => {
                 if (key === "copy-path") void copyPath();
@@ -115,7 +117,7 @@ export default function ContextBar() {
                     .request("dataset.statistics", { id: d.id })
                     .then(() => {
                       useWorkspace.getState().bumpStatsTick();
-                      message.info("Statistics refreshed");
+                      message.info(t("Statistics refreshed"));
                     })
                     .catch((e: { code: string; message: string }) =>
                       message.error(`${e.code}: ${e.message}`),

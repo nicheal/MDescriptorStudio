@@ -1,7 +1,9 @@
 import { useWorkspace } from "../../stores/workspace";
+import { useT } from "../../i18n";
 
 export default function StatusBar() {
   const { backendStatus, engineVersion, runningJobs, cpuThreads } = useWorkspace();
+  const { t } = useT();
   const color = backendStatus === "ready" ? "#107C10" : "#C42B1C";
   const threads = cpuThreads ?? (typeof navigator !== "undefined" ? navigator.hardwareConcurrency : null);
   return (
@@ -22,7 +24,11 @@ export default function StatusBar() {
         <span
           style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }}
         />
-        {runningJobs > 0 ? `${runningJobs} job${runningJobs > 1 ? "s" : ""} running` : "Ready"}
+        {runningJobs > 0
+          ? runningJobs > 1
+            ? t("{n} jobs running", { n: runningJobs })
+            : t("{n} job running", { n: runningJobs })
+          : t("Ready")}
       </span>
       <span style={{ display: "inline-flex", alignItems: "center" }}>
         MDescriptor {engineVersion ?? "—"}
@@ -30,7 +36,7 @@ export default function StatusBar() {
       <span
         style={{ display: "inline-flex", alignItems: "center", justifyContent: "flex-end", flex: 1, gap: 16 }}
       >
-        <span style={{ fontVariantNumeric: "tabular-nums" }}>CPU {threads ?? "—"} threads</span>
+        <span style={{ fontVariantNumeric: "tabular-nums" }}>{t("CPU {n} threads", { n: threads ?? "—" })}</span>
       </span>
     </div>
   );

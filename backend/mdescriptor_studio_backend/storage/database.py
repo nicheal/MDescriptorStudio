@@ -97,6 +97,9 @@ MIGRATIONS: dict[int, str] = {
     CREATE INDEX IF NOT EXISTS idx_analysis_cache_key ON analysis_runs(cache_key);
     CREATE INDEX IF NOT EXISTS idx_analysis_input_run ON analysis_runs(descriptor_run_id, analysis_type, status);
     """,
+    4: """
+    ALTER TABLE descriptor_runs ADD COLUMN memory_peak_bytes INTEGER;
+    """,
 }
 
 
