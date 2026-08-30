@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import product
 from typing import Any, Callable
 
 import numpy as np
@@ -300,6 +301,164 @@ def _cross_nearest(reference: np.ndarray, query: np.ndarray, metric: str, query_
         if progress:
             progress(stop / max(query.shape[0], 1), "nearest-reference distances")
     return nearest, distances
+
+
+def _cross_k_nearest(
+    reference: np.ndarray,
+    query: np.ndarray,
+    metric: str,
+    query_chunk: int,
+    reference_chunk: int,
+    k: int,
+    progress: Callable[[float, str], None] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Bounded-memory k-nearest reference search.
+
+    The acquisition layer uses the complete local neighborhood rather than a
+    single nearest point to estimate descriptor-space extrapolation.  Keeping
+    only the best ``k`` values per query preserves the memory bound of the
+    existing cross-dataset search even for large reference sets.
+    """
+    reference = _as_float64(reference)
+    query = _as_float64(query)
+    if metric not in ("euclidean", "cosine"):
+        raise AppError(ANALYSIS_INPUT_INVALID, "cross-dataset metric must be euclidean or cosine")
+    if reference.shape[0] == 0:
+        raise AppError(ANALYSIS_INPUT_INVALID, "reference descriptor set cannot be empty")
+    k_eff = min(max(int(k), 1), reference.shape[0])
+    distances = np.full((query.shape[0], k_eff), np.inf, dtype=np.float64)
+    indices = np.full((query.shape[0], k_eff), -1, dtype=np.int64)
+    for start in range(0, query.shape[0], query_chunk):
+        stop = min(start + query_chunk, query.shape[0])
+        query_block = query[start:stop]
+        best_distances = np.full((query_block.shape[0], k_eff), np.inf, dtype=np.float64)
+        best_indices = np.full((query_block.shape[0], k_eff), -1, dtype=np.int64)
+        query_norm = np.linalg.norm(query_block, axis=1, keepdims=True) if metric == "cosine" else None
+        for ref_start in range(0, reference.shape[0], reference_chunk):
+            ref_block = reference[ref_start : ref_start + reference_chunk]
+            if metric == "euclidean":
+                block = _safe_import("scipy.spatial.distance", "scipy").cdist(query_block, ref_block, metric="euclidean")
+            else:
+                ref_norm = np.linalg.norm(ref_block, axis=1)
+                similarity = (query_block @ ref_block.T) / np.maximum(query_norm * ref_norm[None, :], 1e-15)
+                block = np.maximum(1.0 - similarity, 0.0)
+            candidate_distances = np.concatenate([best_distances, block], axis=1)
+            candidate_indices = np.concatenate([
+                best_indices,
+                np.broadcast_to(np.arange(ref_start, ref_start + ref_block.shape[0]), block.shape),
+            ], axis=1)
+            keep = np.argpartition(candidate_distances, k_eff - 1, axis=1)[:, :k_eff]
+            row = np.arange(query_block.shape[0])[:, None]
+            best_distances = candidate_distances[row, keep]
+            best_indices = candidate_indices[row, keep]
+            order = np.argsort(best_distances, axis=1, kind="stable")
+            best_distances = np.take_along_axis(best_distances, order, axis=1)
+            best_indices = np.take_along_axis(best_indices, order, axis=1)
+        distances[start:stop] = best_distances
+        indices[start:stop] = best_indices
+        if progress:
+            progress(stop / max(query.shape[0], 1), "nearest-reference neighborhoods")
+    return indices, distances
+
+
+def _local_neighbor_graph(samples: SampleMatrix, cutoff: float, max_neighbors: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    """Build a coordinate-aware local-environment graph.
+
+    The returned CSR-like arrays use atom rows as vertices.  Periodic frames
+    are queried against translated images, so a neighbor across a cell face is
+    counted once while the stored index still points to the original atom.
+    """
+    if samples.positions is None:
+        return (
+            np.zeros(samples.n_samples, dtype=np.int64),
+            np.zeros(samples.n_samples + 1, dtype=np.int64),
+            np.zeros(0, dtype=np.int64),
+            np.zeros(0, dtype=np.float64),
+            ["atom coordinates are unavailable; coordination and neighbor shell were not computed"],
+        )
+    positions = np.asarray(samples.positions, dtype=np.float64)
+    if positions.shape != (samples.n_samples, 3) or not np.isfinite(positions).all():
+        return (
+            np.zeros(samples.n_samples, dtype=np.int64),
+            np.zeros(samples.n_samples + 1, dtype=np.int64),
+            np.zeros(0, dtype=np.int64),
+            np.zeros(0, dtype=np.float64),
+            ["atom coordinates are invalid; coordination and neighbor shell were not computed"],
+        )
+    cKDTree = _safe_import("scipy.spatial", "scipy").cKDTree
+    cells = np.asarray(samples.cells, dtype=np.float64) if samples.cells is not None else None
+    pbc = np.asarray(samples.pbc, dtype=bool) if samples.pbc is not None else None
+    graph_indices: list[int] = []
+    graph_distances: list[float] = []
+    offsets = np.zeros(samples.n_samples + 1, dtype=np.int64)
+    coordination = np.zeros(samples.n_samples, dtype=np.int64)
+    warnings: list[str] = []
+    frame_values = np.asarray(samples.frame, dtype=np.int64)
+    for frame in np.unique(frame_values).tolist():
+        members = np.flatnonzero(frame_values == int(frame))
+        frame_positions = positions[members]
+        frame_cell = None
+        frame_pbc = None
+        if cells is not None and cells.ndim == 3 and cells.shape[0] == samples.n_samples:
+            frame_cell = cells[members[0]]
+        if pbc is not None and pbc.ndim == 2 and pbc.shape == (samples.n_samples, 3):
+            frame_pbc = pbc[members[0]]
+        periodic = bool(
+            frame_cell is not None
+            and frame_cell.shape == (3, 3)
+            and frame_pbc is not None
+            and frame_pbc.any()
+            and abs(float(np.linalg.det(frame_cell))) > 1e-10
+        )
+        if periodic:
+            periodic_axes = [axis for axis in range(3) if bool(frame_pbc[axis])]
+            shift_tuples = list(product((-1, 0, 1), repeat=len(periodic_axes)))
+            shifts = []
+            for compact_shift in shift_tuples:
+                shift = np.zeros(3, dtype=np.float64)
+                for axis, value in zip(periodic_axes, compact_shift):
+                    shift[axis] = value
+                shifts.append(shift)
+            shifts_array = np.asarray(shifts, dtype=np.float64)
+            translated = (frame_positions[None, :, :] + shifts_array[:, None, :] @ frame_cell).reshape(-1, 3)
+            source_indices = np.tile(np.arange(members.size, dtype=np.int64), len(shifts))
+            zero_shift_index = shift_tuples.index(tuple(0 for _ in periodic_axes))
+            tree = cKDTree(translated)
+        else:
+            translated = frame_positions
+            source_indices = np.arange(members.size, dtype=np.int64)
+            zero_shift_index = 0
+            tree = cKDTree(frame_positions)
+
+        for local_index, center in enumerate(frame_positions):
+            candidates = tree.query_ball_point(center, cutoff)
+            nearest: dict[int, float] = {}
+            for candidate in candidates:
+                source = int(source_indices[candidate])
+                shift_index = candidate // max(members.size, 1) if periodic else 0
+                if source == local_index and shift_index == zero_shift_index:
+                    continue
+                distance = float(np.linalg.norm(translated[candidate] - center))
+                if distance <= 1e-10:
+                    continue
+                if distance < nearest.get(source, np.inf):
+                    nearest[source] = distance
+            ordered = sorted(nearest.items(), key=lambda item: (item[1], item[0]))[:max_neighbors]
+            global_index = int(members[local_index])
+            coordination[global_index] = len(ordered)
+            graph_indices.extend(int(members[source]) for source, _distance in ordered)
+            graph_distances.extend(distance for _source, distance in ordered)
+            offsets[global_index + 1] = len(graph_indices)
+
+    # Frames are usually contiguous, but the assignment above deliberately
+    # writes offsets by global atom index.  Fill gaps for any non-contiguous
+    # frame ordering before exposing the CSR arrays.
+    for index in range(1, offsets.size):
+        if offsets[index] < offsets[index - 1]:
+            offsets[index] = offsets[index - 1]
+    return coordination, offsets, np.asarray(graph_indices, dtype=np.int64), np.asarray(graph_distances, dtype=np.float64), warnings + [
+        "neighbor distances are stored in the companion neighbor_distances artifact"
+    ]
 
 
 def _joint_projection(reference: np.ndarray, query: np.ndarray, max_each: int) -> dict[str, np.ndarray]:
