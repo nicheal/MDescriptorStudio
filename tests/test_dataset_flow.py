@@ -78,6 +78,22 @@ def test_register_statistics_frame_flow(tmp_path: Path) -> None:
         assert payload["ghost_count"] > 0
         assert int(payload["xyz"].splitlines()[0]) == 64 + payload["ghost_count"]
         assert payload["energy_per_atom"] is not None
+        assert payload["bond_cutoff"] == 2.4
+
+        # Explore can narrow the displayed bond range without changing the
+        # underlying dataset; the value also controls periodic image padding.
+        tuned = bp.request(
+            151,
+            "dataset.frame",
+            {"id": deepmd_meta["id"], "index": 3, "bond_cutoff": 1.2},
+        )
+        assert tuned["result"]["bond_cutoff"] == 1.2
+        invalid_cutoff = bp.request(
+            152,
+            "dataset.frame",
+            {"id": deepmd_meta["id"], "index": 3, "bond_cutoff": 0},
+        )
+        assert invalid_cutoff["error"]["code"] == "INVALID_PARAMS"
 
         # duplicate registration rejected
         dup = bp.request(16, "dataset.register", {"path": str(xyz)})

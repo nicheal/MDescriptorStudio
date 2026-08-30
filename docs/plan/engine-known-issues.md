@@ -1,9 +1,16 @@
-# mdescriptor 已知问题清单（基于 0.2.3 实测）
+# mdescriptor 已知问题清单（基于 0.2.7 实测）
 
-> 日期：2026-08-29；环境：Windows x64，cp312 wheel，项目 `.venv`
+> 日期：2026-08-30；环境：Windows x64，cp312 wheel，项目 `.venv`
 > 性质：MDescriptor Studio 开发过程中的实测发现，可直接作为上游 issue 素材（github.com/nicheal/MDescriptor）
-> 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ **已于 2026-08-29 升级至 0.2.5 并逐条复核**（方法：`scripts/verify_known_issues.py` + `scripts/probe_engine.py` diff；pytest 24 项全绿）
+> 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ **已于 2026-08-29 升级至 0.2.5 并于 2026-08-30 更新至 0.2.7**；本轮按 `scripts/probe_engine.py` 重建 API 基线，并补测启动预热与参数元数据。
 > 仍需上游修改的项已整理为可开工清单：**`upstream-issues.md`**（5 项：wheel 缺契约文档、GPU 路径、`from_frames`、`list_descriptors` 返回类型、可选错误子类）
+
+## 0.2.7 复核补充
+
+- `get_runtime_info()` 的 `baseline_version` 为 `"2"`，`descriptor_info_schema_version` 为 `3`；28 个描述符的 schema 版本均为 `3`。
+- 170 个内置参数全部提供 `display_name` 与 `description`，ACE `trans`/`D` 的嵌套属性也提供同样的展示元数据。
+- `mdescriptor.gui_baseline()`、`mdescriptor.preload_native()`、`StructureBatch.from_frames()`、`UnsupportedPeriodicityError` 均可用；`list_descriptors(detailed=True)` 返回详细摘要。
+- `EngineAdapter.warmup()` 在 0.2.7 下成功预热全部 28 个描述符；前端参数表单已改为直接消费引擎 schema，不再维护参数名映射表。
 
 ## 0.2.5 复核总结
 

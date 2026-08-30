@@ -24,6 +24,14 @@ from .storage.database import Database
 log = logging.getLogger(__name__)
 
 
+def _configure_stdio() -> None:
+    """Keep the NDJSON transport UTF-8 even when Windows uses a legacy code page."""
+    for stream in (sys.stdin, sys.stdout):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="strict")
+
+
 def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root, updates):
     def system_info(_params):
         return {
@@ -32,6 +40,8 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
             "platform": platform.platform(),
             "mdescriptor_version": engine_info.get("version"),
             "mdescriptor_api_version": engine_info.get("api_version"),
+            "mdescriptor_baseline_version": engine_info.get("baseline_version"),
+            "mdescriptor_descriptor_info_schema_version": engine_info.get("descriptor_info_schema_version"),
             "data_dir": str(root),
             "cpu_threads": platform.os.cpu_count(),
         }
@@ -96,6 +106,7 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
 
 
 def main() -> int:
+    _configure_stdio()
     setup_logging()
     root = data_dir()
     log.info("backend %s starting; data dir %s", __version__, root)
@@ -130,6 +141,8 @@ def main() -> int:
             "backend_version": __version__,
             "mdescriptor_version": info.get("version"),
             "mdescriptor_api_version": info.get("api_version"),
+            "mdescriptor_baseline_version": info.get("baseline_version"),
+            "mdescriptor_descriptor_info_schema_version": info.get("descriptor_info_schema_version"),
         },
     )
     # non-blocking PyPI check so the UI can offer an engine update (ADR-2)

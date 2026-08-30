@@ -28,7 +28,31 @@ class ResultService:
         if cond:
             sql += " WHERE " + " AND ".join(cond)
         sql += " ORDER BY r.created_at DESC LIMIT 500"
-        return self.db.query(sql, tuple(args))
+        rows = self.db.query(sql, tuple(args))
+        for row in rows:
+            # Keep the list response small: expose only the computed array
+            # shape from metadata, never the descriptor values themselves.
+            row["shape"] = self._read_result_shape(row.get("result_path"))
+        return rows
+
+    @staticmethod
+    def _read_result_shape(result_path: str | None) -> str | None:
+        if not result_path:
+            return None
+        try:
+            metadata = json.loads(
+                (Path(result_path) / "metadata.json").read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError):
+            # Pending/legacy runs may not have result metadata yet; they still
+            # belong in the run history with an empty shape.
+            return None
+        shape = metadata.get("shape") if isinstance(metadata, dict) else None
+        if isinstance(shape, str):
+            return shape
+        if isinstance(shape, list):
+            return json.dumps(shape, ensure_ascii=False)
+        return None
 
     def get(self, params: dict) -> dict:
         run_id = params.get("run_id")

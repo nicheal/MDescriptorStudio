@@ -142,6 +142,8 @@ export default function App() {
           const info = await ipc.request<{
             mdescriptor_version: string;
             mdescriptor_api_version: number;
+            mdescriptor_baseline_version?: string;
+            mdescriptor_descriptor_info_schema_version?: number;
             cpu_threads?: number;
           }>("system.info");
           setBackendReady(info.mdescriptor_version, info.cpu_threads ?? null);

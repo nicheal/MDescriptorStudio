@@ -5,6 +5,15 @@ import type { DatasetMeta } from "../types/protocol";
 
 export type BackendStatus = "starting" | "ready" | "error";
 export type Page = "overview" | "explore" | "descriptors" | "results";
+export type PcaMode = "structure" | "atom";
+
+export interface SelectedSample {
+  datasetId: string;
+  runId: string;
+  mode: PcaMode;
+  frame: number;
+  atom?: number;
+}
 
 interface WorkspaceState {
   backendStatus: BackendStatus;
@@ -13,6 +22,7 @@ interface WorkspaceState {
   activeDatasetId: string | null;
   activeFrameIndex: number;
   activeDescriptorRunId: string | null;
+  selectedSample: SelectedSample | null;
   datasets: DatasetMeta[];
   runningJobs: number;
   page: Page;
@@ -28,6 +38,7 @@ interface WorkspaceState {
   setActiveDataset: (id: string | null) => void;
   setActiveFrame: (index: number) => void;
   setActiveRun: (id: string | null) => void;
+  setSelectedSample: (sample: SelectedSample | null) => void;
   setRunningJobs: (n: number) => void;
   setPage: (p: Page) => void;
   setJobsDrawerOpen: (open: boolean) => void;
@@ -41,6 +52,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   activeDatasetId: null,
   activeFrameIndex: 0,
   activeDescriptorRunId: null,
+  selectedSample: null,
   datasets: [],
   runningJobs: 0,
   page: "overview",
@@ -60,10 +72,14 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
           value: id,
         });
       }
-      return { activeDatasetId: id, activeFrameIndex: 0, activeDescriptorRunId: null };
+      return { activeDatasetId: id, activeFrameIndex: 0, activeDescriptorRunId: null, selectedSample: null };
     }),
   setActiveFrame: (index) => set({ activeFrameIndex: index }),
-  setActiveRun: (id) => set({ activeDescriptorRunId: id }),
+  setActiveRun: (id) =>
+    set((st) =>
+      st.activeDescriptorRunId === id ? st : { activeDescriptorRunId: id, selectedSample: null },
+    ),
+  setSelectedSample: (sample) => set({ selectedSample: sample }),
   setRunningJobs: (n) => set({ runningJobs: n }),
   setPage: (p) => set({ page: p }),
   setJobsDrawerOpen: (open) => set({ jobsDrawerOpen: open }),

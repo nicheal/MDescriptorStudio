@@ -9,33 +9,35 @@ import {
   Input,
   InputNumber,
   Modal,
+  Radio,
   Select,
   Space,
   Tooltip,
   Typography,
 } from "antd";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
-import { SchemaField, speciesToNumbers, type ParamValues } from "../components/SchemaForm";
+import { collectDefaults, SchemaField, speciesToNumbers, type ParamValues } from "../components/SchemaForm";
 import type { DescriptorInfo, DescriptorSchema } from "../types/protocol";
 
-// Single-letter badge coding for the sidebar (color + letter per enum value;
-// the row tooltip expands each letter into its full meaning).
-const BADGE_COLORS: Record<string, string> = {
+// Single-letter badge coding for the sidebar (soft tinted block + letter per
+// enum value; the row tooltip expands each letter into its full meaning).
+const BADGE_STYLES: Record<string, { bg: string; fg: string }> = {
   // level
-  structure: "#0F6CBD",
-  atom: "#107C10",
-  pair: "#CA5010",
+  structure: { bg: "#E5F0FA", fg: "#0B5A9C" },
+  atom: { bg: "#E6F3E6", fg: "#0C630C" },
+  pair: { bg: "#FBEADD", fg: "#A84308" },
   // backend
-  cpp: "#744DA9",
-  numpy: "#038387",
+  cpp: { bg: "#EFE8F7", fg: "#5F3A8C" },
+  numpy: { bg: "#DFF2F2", fg: "#026E72" },
   // category
-  local: "#4263EB",
-  matrix: "#0CA678",
-  many_body: "#9A6700",
-  rotational: "#A4262C",
-  model_backed: "#E8590C",
+  local: { bg: "#E8ECFC", fg: "#354EC4" },
+  matrix: { bg: "#DFF5EE", fg: "#07855F" },
+  many_body: { bg: "#F6EFDC", fg: "#7A5300" },
+  rotational: { bg: "#FAE8E8", fg: "#8C1F24" },
+  model_backed: { bg: "#FDEAE0", fg: "#C24A08" },
 };
 const BADGE_LETTERS: Record<string, string> = {
   structure: "S",
@@ -51,14 +53,15 @@ const BADGE_LETTERS: Record<string, string> = {
 };
 
 function MetaBadge({ value }: { value: string }) {
+  const c = BADGE_STYLES[value] ?? { bg: "#F2F2F2", fg: "#616161" };
   return (
     <span
       style={{
         width: 16,
         height: 16,
         borderRadius: 4,
-        background: BADGE_COLORS[value] ?? "#8A8886",
-        color: "#FFFFFF",
+        background: c.bg,
+        color: c.fg,
         fontSize: 10,
         fontWeight: 600,
         lineHeight: "16px",
@@ -71,6 +74,40 @@ function MetaBadge({ value }: { value: string }) {
   );
 }
 
+function SectionHeading({ number, title, description }: { number: number; title: string; description?: string }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+      <span
+        aria-hidden="true"
+        style={{
+          width: 26,
+          height: 26,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          border: "2px solid #2B83F6",
+          borderRadius: "50%",
+          color: "#1677FF",
+          fontSize: 14,
+          fontWeight: 600,
+          lineHeight: 1,
+          flexShrink: 0,
+        }}
+      >
+        {number}
+      </span>
+      <Typography.Text strong style={{ fontSize: 16, color: "#242424" }}>
+        {title}
+      </Typography.Text>
+      {description && (
+        <Tooltip title={description}>
+          <InfoCircleOutlined aria-label={description} style={{ color: "#98A2B3", fontSize: 15, cursor: "help" }} />
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
 export default function Descriptors() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
@@ -78,6 +115,7 @@ export default function Descriptors() {
   const [list, setList] = useState<DescriptorInfo[]>([]);
   const [schemas, setSchemas] = useState<Record<string, DescriptorSchema>>({});
   const [selected, setSelected] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
   const [values, setValues] = useState<ParamValues>({});
   const [scope, setScope] = useState<"dataset" | "frame">("dataset");
   const [frameIndex, setFrameIndex] = useState(0);
@@ -103,13 +141,13 @@ export default function Descriptors() {
     })();
   }, []);
 
-  useEffect(() => {
-    setValues({});
-  }, [selected]);
-
   const schema = selected ? (schemas[selected] ?? null) : null;
 
   const elementOptions = d?.elements ?? [];
+
+  useEffect(() => {
+    setValues(schema ? collectDefaults(schema.parameters, elementOptions) : {});
+  }, [selected, schema, d?.id, elementOptions.join("\u0000")]);
 
   // ADR-11 precheck: disable descriptors incompatible with the dataset's periodicity
   const incompatibleReasons = useMemo(() => {
@@ -117,7 +155,7 @@ export default function Descriptors() {
     if (!d) return out;
     const p = d.periodicity;
     for (const info of list) {
-      const input = (info as unknown as { input?: { periodicity?: string[]; mixed_periodicity?: boolean } }).input;
+      const input = info.input;
       if (!input) continue;
       const allowed = input.periodicity ?? ["isolated", "fully_periodic"];
       if (p.mixed && input.mixed_periodicity === false) {
@@ -133,7 +171,17 @@ export default function Descriptors() {
 
   if (!d) return <Empty description="Register a dataset first" style={{ marginTop: 120 }} />;
 
-  const filtered = list;
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return list;
+    return list.filter((info) =>
+      [info.name, info.display_name, info.description, info.category]
+        .filter(Boolean)
+        .some((text) => text.toLowerCase().includes(needle)),
+    );
+  }, [list, query]);
+  const availableDtypes = schema?.output.dtypes?.length ? schema.output.dtypes : ["float64"];
+  const effectiveDtype = availableDtypes.includes(dtype) ? dtype : availableDtypes[0];
 
   const submit = async () => {
     if (!schema || !selected) return;
@@ -152,7 +200,7 @@ export default function Descriptors() {
           parameters: params,
           scope,
           frame_index: scope === "frame" ? frameIndex : undefined,
-          output_dtype: dtype,
+          output_dtype: effectiveDtype,
         },
       );
       if (r.cache) {
@@ -168,7 +216,7 @@ export default function Descriptors() {
               parameters: params,
               scope,
               frame_index: scope === "frame" ? frameIndex : undefined,
-              output_dtype: dtype,
+              output_dtype: effectiveDtype,
               force: true,
             });
             if (r2.job_id) {
@@ -204,10 +252,14 @@ export default function Descriptors() {
   const infoTooltip = (info: DescriptorInfo) => {
     const s = schemas[info.name];
     const reason = incompatibleReasons.get(info.name);
+    const description = s?.description || info.description;
     const rows: [string, string][] = s
       ? ([
+          ["Descriptor version", s.descriptor_version],
+          ["Schema version", String(s.schema_version)],
           ["Level", s.level],
           ["Backend", s.backend],
+          ["Execution engine", s.execution_engine],
           ["Category", s.category],
           ["Devices", s.execution.devices.join(", ")],
           ["Threads", s.execution.num_threads ? "yes" : "no"],
@@ -228,8 +280,8 @@ export default function Descriptors() {
           <div style={{ color: "#FFD666", fontWeight: 600, fontSize: 12, marginBottom: 6 }}>⚠ {reason}</div>
         )}
         <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{s?.display_name ?? info.display_name}</div>
-        {s?.description && (
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", marginBottom: 8 }}>{s.description}</div>
+        {description && (
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.75)", marginBottom: 8 }}>{description}</div>
         )}
         <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", columnGap: 12, rowGap: 2, fontSize: 12 }}>
           {rows.map(([k, v]) => (
@@ -256,7 +308,14 @@ export default function Descriptors() {
           padding: 8,
         }}
       >
-        <Input.Search placeholder="Filter descriptors" size="small" style={{ marginBottom: 8 }} />
+        <Input.Search
+          placeholder="Filter descriptors"
+          size="small"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          allowClear
+          style={{ marginBottom: 8 }}
+        />
         {filtered.map((info) => {
           const reason = incompatibleReasons.get(info.name);
           const disabled = Boolean(reason);
@@ -305,13 +364,39 @@ export default function Descriptors() {
       {/* center column: configuration form (metadata lives in the sidebar badges/tooltip) */}
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
         {/* configuration form */}
-        <div style={{ flex: 1, minHeight: 0, background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, padding: 16, overflowY: "auto" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            background: "#FFFFFF",
+            border: "1px solid #EAECF0",
+            borderRadius: 6,
+            overflow: "hidden",
+          }}
+        >
           {schema ? (
             <>
-              <Typography.Text strong style={{ fontSize: 12, color: "#616161" }}>
-                CONFIGURATION · {schema.display_name}
-              </Typography.Text>
-              <div style={{ marginTop: 8 }}>
+              <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 20px 24px" }}>
+              <SectionHeading
+                number={1}
+                title="Parameters"
+                description={`Configure the ${schema.display_name} descriptor parameters.`}
+              />
+              <Typography.Paragraph type="secondary" style={{ margin: "-6px 0 18px", fontSize: 12 }}>
+                {schema.description}
+              </Typography.Paragraph>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+                  columnGap: 18,
+                  rowGap: 20,
+                  paddingBottom: 24,
+                  borderBottom: "1px solid #EAECF0",
+                }}
+              >
                 {Object.entries(schema.parameters).map(([name, meta]) => (
                   <SchemaField
                     key={name}
@@ -319,64 +404,89 @@ export default function Descriptors() {
                     schema={meta}
                     value={values[name]}
                     elementOptions={elementOptions}
+                    modelExtensions={schema.asset.file_extensions}
+                    allowExternalModel={schema.asset.allow_external}
+                    onModelBrowseError={() => message.error("Could not open the model file dialog")}
                     onChange={(v) => setValues((prev) => ({ ...prev, [name]: v }))}
                   />
                 ))}
               </div>
-              <Typography.Text strong style={{ fontSize: 12, color: "#616161" }}>
-                EXECUTION
-              </Typography.Text>
-              <div style={{ marginTop: 8, marginBottom: 12 }}>
-                <div style={{ marginBottom: 12 }}>
-                  <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Device</Typography.Text>
-                  <div style={{ marginTop: 4 }}>
-                    <Select value="cpu" style={{ width: "100%", maxWidth: 200 }} disabled options={[{ value: "cpu", label: "CPU" }]} />
-                  </div>
-                </div>
-                {schema.execution.num_threads && (
-                  <div style={{ marginBottom: 12 }}>
-                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Threads</Typography.Text>
-                    <div style={{ marginTop: 4 }}>
-                      <Tooltip title="v0.1 uses the engine default thread count">
-                        <InputNumber min={1} max={64} value={threads} disabled onChange={(v) => setThreads(v ?? undefined)} style={{ width: "100%", maxWidth: 200 }} placeholder="engine default" />
-                      </Tooltip>
+              <div style={{ padding: "22px 0 24px", borderBottom: "1px solid #EAECF0" }}>
+                <SectionHeading number={2} title="Execution" description="Choose where and how the descriptor is calculated." />
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                    columnGap: 20,
+                    rowGap: 18,
+                    alignItems: "start",
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Device</Typography.Text>
+                    <div style={{ marginTop: 7 }}>
+                      <Select value="cpu" style={{ width: "100%" }} disabled options={[{ value: "cpu", label: "CPU" }]} />
                     </div>
                   </div>
-                )}
-                <div style={{ marginBottom: 12 }}>
-                  <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Output</Typography.Text>
-                  <div style={{ marginTop: 4 }}>
-                    <Select
-                      value={dtype}
-                      style={{ width: "100%", maxWidth: 200 }}
-                      options={(schema.output.dtypes ?? ["float64"]).map((t) => ({ value: t, label: t }))}
-                      onChange={setDtype}
-                    />
+                  {schema.execution.num_threads && (
+                    <div style={{ minWidth: 0 }}>
+                      <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Threads</Typography.Text>
+                      <div style={{ marginTop: 7 }}>
+                        <Tooltip title="v0.1 uses the engine default thread count">
+                          <InputNumber min={1} max={64} value={threads} disabled onChange={(v) => setThreads(v ?? undefined)} style={{ width: "100%" }} placeholder="engine default" />
+                        </Tooltip>
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ minWidth: 0 }}>
+                    <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Output dtype</Typography.Text>
+                    <div style={{ marginTop: 9 }}>
+                      <Radio.Group value={effectiveDtype} onChange={(event) => setDtype(event.target.value)}>
+                        <Space size={18} wrap>
+                          {availableDtypes.map((type) => (
+                            <Radio key={type} value={type}>
+                              {type}
+                            </Radio>
+                          ))}
+                        </Space>
+                      </Radio.Group>
+                    </div>
                   </div>
                 </div>
-                <div style={{ marginBottom: 12 }}>
-                  <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Scope</Typography.Text>
-                  <div style={{ marginTop: 4 }}>
-                    <Select
-                      value={scope}
-                      style={{ width: "100%", maxWidth: 200 }}
-                      onChange={(v) => setScope(v)}
-                      options={[
-                        { value: "dataset", label: "Entire dataset" },
-                        { value: "frame", label: "Current frame" },
-                      ]}
-                    />
-                  </div>
-                </div>
+              </div>
+              <div style={{ paddingTop: 22 }}>
+                <SectionHeading number={3} title="Scope" description="Choose whether to calculate one frame or the entire dataset." />
+                <Radio.Group value={scope} onChange={(event) => setScope(event.target.value as "dataset" | "frame")}>
+                  <Space size={24} wrap>
+                    <Radio value="frame">
+                      Current frame <Typography.Text type="secondary">(Frame {frameIndex})</Typography.Text>
+                    </Radio>
+                    <Radio value="dataset">
+                      Entire dataset <Typography.Text type="secondary">({d.number_of_frames.toLocaleString()} structures)</Typography.Text>
+                    </Radio>
+                  </Space>
+                </Radio.Group>
                 {scope === "frame" && (
-                  <div style={{ marginBottom: 12 }}>
+                  <div style={{ marginTop: 16 }}>
                     <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>Frame index</Typography.Text>
-                    <div style={{ marginTop: 4 }}>
-                      <InputNumber min={0} max={d.number_of_frames - 1} value={frameIndex} onChange={(v) => setFrameIndex(v ?? 0)} style={{ width: "100%", maxWidth: 200 }} />
+                    <div style={{ marginTop: 7, maxWidth: 220 }}>
+                      <InputNumber min={0} max={d.number_of_frames - 1} value={frameIndex} onChange={(v) => setFrameIndex(v ?? 0)} style={{ width: "100%" }} />
                     </div>
                   </div>
                 )}
-                <Space>
+              </div>
+              </div>
+              <div
+                style={{
+                  flex: "0 0 auto",
+                  display: "flex",
+                  alignItems: "center",
+                  padding: "14px 20px 16px",
+                  borderTop: "1px solid #EAECF0",
+                  background: "#FFFFFF",
+                }}
+              >
+                <Space size={16} wrap>
                   <Button type="primary" onClick={() => void submit()} loading={submitting}>
                     Calculate
                   </Button>
@@ -387,7 +497,9 @@ export default function Descriptors() {
               </div>
             </>
           ) : (
-            <Empty description="Select a descriptor" />
+            <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Empty description="Select a descriptor" />
+            </div>
           )}
         </div>
       </div>

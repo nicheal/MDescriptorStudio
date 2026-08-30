@@ -27,7 +27,7 @@ backend/mdescriptor_studio_backend/
 │   ├── dataset_service.py       # 注册(job)/移除/列表/统计缓存/帧序列化(xyz+atom_rows)
 │   ├── descriptor_service.py    # registry/describe/submit(参数校验+input 预检+缓存键+compute job+落盘)
 │   ├── result_service.py        # run 历史/metadata；load_values 仅供分析
-│   └── analysis_service.py      # PCA：numpy SVD，atom/pair 级按 structure mean-pool
+│   └── analysis_service.py      # PCA：numpy SVD，atom/pair 级按 structure mean-pool + 持久缓存
 └── storage/database.py          # SQLite WAL + 写锁 + 迁移(当前 v1)
 ```
 
@@ -37,7 +37,8 @@ backend/mdescriptor_studio_backend/
 
 - `datasets.periodicity`：`{fully_periodic, isolated, mixed, flags}` JSON——ADR-11 预检数据源。
 - `descriptor_runs.cache_key = SHA256(fingerprint, name, canonical_params, engine_version, scope, frame_index, dtype)`——§28 缓存键。
-- `descriptor_runs.descriptor_version`：0.2.3 无 per-descriptor 版本，以引擎版本代替（engine-api-report §5.6）。
+- `descriptor_runs.descriptor_version`：记录 `describe_descriptor()` 返回的 per-descriptor 版本（0.2.7 内置描述符均为 `"1"`；见 engine-api-report）。
+- `analysis_runs` 按 `descriptor_run_id + analysis_type + params_json(mode)` 查找 PCA 结果；完成且 `pca.json` 存在时直接复用，`QUEUED/RUNNING` 请求复用关联 job。
 
 ## 3. 线程模型（ADR-17）
 
@@ -57,6 +58,9 @@ descriptor.submit
         → compute → values.npy/metadata.json → run COMPLETED
   → job.finished 事件 {run_id, shape, dtype, level, feature_count}
 ```
+
+PCA 请求先查 `analysis_runs` 的同 run/mode 完成记录；命中时返回
+`{job_id: null, analysis_id, cache: {existing_analysis_id}}`，不重新执行 SVD。
 
 ## 5. 指纹与失效
 

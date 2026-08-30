@@ -1,10 +1,11 @@
 {
-  "engine_version": "0.2.5",
+  "engine_version": "0.2.7",
   "runtime_info": {
-    "version": "0.2.5",
+    "version": "0.2.7",
     "api_version": 1,
+    "baseline_version": "2",
     "configuration_schema_version": 1,
-    "descriptor_info_schema_version": 2,
+    "descriptor_info_schema_version": 3,
     "result_schema_version": 1
   },
   "descriptor_names": [
@@ -56,9 +57,19 @@
     "object": 21,
     "species": 16
   },
+  "parameter_presentation": {
+    "top_level_total": 170,
+    "top_level_display_names": 170,
+    "top_level_descriptions": 170,
+    "nested_total": 10,
+    "nested_display_names": 10,
+    "nested_descriptions": 10
+  },
+  "detailed_descriptor_count": 28,
+  "structure_batch_from_frames": true,
   "descriptors": {
     "ACE": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "ACE",
       "descriptor_version": "1",
       "display_name": "ACE",
@@ -76,30 +87,39 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "N": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum correlation order",
           "default": 3,
+          "description": "Highest body/correlation order included in the ACE basis.",
           "minimum": 1
         },
         "r0": {
           "type": "number",
           "required": false,
+          "display_name": "Reference radial scale",
           "default": 2.5,
+          "description": "Reference radius used by the ACE radial transform.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "trans": {
           "type": "object",
           "required": false,
+          "display_name": "Radial transform",
           "default": null,
+          "description": "Configuration of the radial coordinate transform used by ACE.",
           "properties": {
             "type": {
               "type": "enum",
               "required": false,
+              "display_name": "Transform type",
               "default": "PolyTransform",
+              "description": "Radial transform family.",
               "enum": [
                 "PolyTransform"
               ]
@@ -107,18 +127,24 @@
             "p": {
               "type": "number",
               "required": false,
+              "display_name": "Transform power",
               "default": 2.0,
+              "description": "Power used by the polynomial radial transform.",
               "exclusiveMinimum": 0.0
             },
             "r0": {
               "type": "number",
               "required": false,
+              "display_name": "Transform reference radius",
+              "description": "Reference radius used inside the radial transform.",
               "exclusiveMinimum": 0.0
             },
             "a": {
               "type": "number",
               "required": false,
+              "display_name": "Transform shift",
               "default": 1.0,
+              "description": "Non-negative shift applied by the radial transform.",
               "minimum": 0.0
             }
           }
@@ -126,6 +152,8 @@
         "wL": {
           "type": "array",
           "required": false,
+          "display_name": "Angular-degree weights",
+          "description": "Weights controlling the relative contribution of ACE angular degrees.",
           "items": {
             "type": "number"
           }
@@ -133,6 +161,8 @@
         "maxdeg": {
           "type": "array",
           "required": false,
+          "display_name": "Maximum polynomial degrees",
+          "description": "Maximum polynomial degree allowed for each ACE correlation order.",
           "items": {
             "type": "number"
           }
@@ -140,12 +170,16 @@
         "D": {
           "type": "object",
           "required": false,
+          "display_name": "Sparse degree mapping",
           "default": null,
+          "description": "Optional explicit sparse mapping for ACE degree selection.",
           "properties": {
             "type": {
               "type": "enum",
               "required": false,
+              "display_name": "Degree mapping type",
               "default": "SparsePSHDegree",
+              "description": "Sparse degree-mapping family.",
               "enum": [
                 "SparsePSHDegree"
               ]
@@ -153,31 +187,41 @@
             "wL": {
               "type": "number",
               "required": false,
+              "display_name": "Degree-map angular weight",
               "default": 1.5,
+              "description": "Angular-degree weight used by the sparse degree mapper.",
               "exclusiveMinimum": 0.0
             },
             "csp": {
               "type": "number",
               "required": false,
+              "display_name": "Species degree coefficient",
               "default": 1.0,
+              "description": "Coefficient controlling species-dependent degree selection.",
               "minimum": 0.0
             },
             "chc": {
               "type": "number",
               "required": false,
+              "display_name": "Correlation degree coefficient",
               "default": 0.0,
+              "description": "Coefficient controlling correlation-order degree selection.",
               "minimum": 0.0
             },
             "ahc": {
               "type": "number",
               "required": false,
+              "display_name": "Angular degree coefficient",
               "default": 0.0,
+              "description": "Coefficient controlling angular-degree selection.",
               "minimum": 0.0
             },
             "bhc": {
               "type": "number",
               "required": false,
+              "display_name": "Body-order coefficient",
               "default": 0.0,
+              "description": "Coefficient controlling body-order degree selection.",
               "minimum": 0.0
             }
           }
@@ -185,32 +229,42 @@
         "rcut": {
           "type": "number",
           "required": false,
+          "display_name": "Outer cutoff radius",
           "default": 5.0,
+          "description": "Outer radius of the ACE neighbor environment.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "rin": {
           "type": "number",
           "required": false,
+          "display_name": "Inner cutoff radius",
+          "description": "Inner radius at which the ACE radial cutoff begins.",
           "minimum": 0.0,
           "unit": "Å"
         },
         "pcut": {
           "type": "integer",
           "required": false,
+          "display_name": "Outer cutoff polynomial degree",
           "default": 2,
+          "description": "Polynomial degree used for the outer radial cutoff.",
           "minimum": 0
         },
         "pin": {
           "type": "integer",
           "required": false,
+          "display_name": "Inner cutoff polynomial degree",
           "default": 2,
+          "description": "Polynomial degree used for the inner radial cutoff.",
           "minimum": 0
         },
         "constants": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Include constant terms",
+          "default": false,
+          "description": "Whether to include constant basis terms in the ACE output."
         }
       },
       "execution": {
@@ -245,7 +299,7 @@
       }
     },
     "ACSF": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "ACSF",
       "descriptor_version": "1",
       "display_name": "ACSF",
@@ -263,24 +317,31 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "r_cut": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum neighbor distance used by the symmetry functions.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "g2_params": {
           "type": "object",
           "required": false,
-          "default": {}
+          "display_name": "G2 radial parameters",
+          "default": {},
+          "description": "Parameter groups for radial G2 symmetry functions, typically eta and Rs."
         },
         "g3_params": {
           "type": "array",
           "required": false,
+          "display_name": "G3 radial parameters",
           "default": [],
+          "description": "Kappa values controlling the radial G3 symmetry functions.",
           "items": {
             "type": "number"
           }
@@ -288,12 +349,16 @@
         "g4_params": {
           "type": "object",
           "required": false,
-          "default": {}
+          "display_name": "G4 angular parameters",
+          "default": {},
+          "description": "Parameter groups for angular G4 symmetry functions: eta, zeta, and lambda."
         },
         "g5_params": {
           "type": "object",
           "required": false,
-          "default": {}
+          "display_name": "G5 angular parameters",
+          "default": {},
+          "description": "Parameter groups for angular G5 symmetry functions: eta, zeta, and lambda."
         }
       },
       "execution": {
@@ -328,7 +393,7 @@
       }
     },
     "AtomicComposition": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "AtomicComposition",
       "descriptor_version": "1",
       "display_name": "Atomic Composition",
@@ -346,12 +411,15 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "per_system": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Aggregate per structure",
+          "default": true,
+          "description": "Returns one composition vector per structure instead of one vector per atom."
         }
       },
       "execution": {
@@ -386,7 +454,7 @@
       }
     },
     "C00PSMLFF": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "C00PSMLFF",
       "descriptor_version": "1",
       "display_name": "C00PS-MLFF",
@@ -404,31 +472,40 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "r_cut": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum neighbor distance included in the C00 and power-spectrum channels.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "n_radial": {
           "type": "integer",
           "required": false,
+          "display_name": "Radial basis size",
           "default": 8,
+          "description": "Number of radial basis functions used by the C00/PS representation.",
           "minimum": 1
         },
         "l_max": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 4,
+          "description": "Largest angular degree included in the power-spectrum channel.",
           "minimum": 0
         },
         "cutoff_function": {
           "type": "enum",
           "required": false,
+          "display_name": "Cutoff function",
           "default": "bp",
+          "description": "Radial cutoff function used to smoothly limit neighbor contributions.",
           "enum": [
             "bp",
             "mo",
@@ -439,51 +516,69 @@
         "radial_sigma": {
           "type": "number",
           "required": false,
+          "display_name": "Radial density width",
           "default": 0.5,
+          "description": "Width used to smooth the radial density basis.",
           "minimum": 0.0,
           "unit": "Å"
         },
         "include_radial": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Include radial channel",
+          "default": true,
+          "description": "Includes the C00 radial features in the output."
         },
         "include_angular": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Include angular channel",
+          "default": true,
+          "description": "Includes the power-spectrum angular features in the output."
         },
         "normalize_radial": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Normalize radial channel",
+          "default": false,
+          "description": "Normalizes the radial C00 features before combining channels."
         },
         "normalize_angular": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Normalize angular channel",
+          "default": false,
+          "description": "Normalizes the angular power-spectrum features before combining channels."
         },
         "super_vector": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Use super vector",
+          "default": false,
+          "description": "Uses the super-vector layout for combining species-resolved features."
         },
         "radial_weight": {
           "type": "number",
           "required": false,
+          "display_name": "Radial channel weight",
           "default": 1.0,
+          "description": "Non-negative weight applied to the radial feature channel.",
           "minimum": 0.0
         },
         "angular_weight": {
           "type": "number",
           "required": false,
+          "display_name": "Angular channel weight",
           "default": 1.0,
+          "description": "Non-negative weight applied to the angular feature channel.",
           "minimum": 0.0
         },
         "exclude_self_interaction": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Exclude self interaction",
+          "default": true,
+          "description": "Excludes the central atom's zero-distance self contribution when enabled."
         }
       },
       "execution": {
@@ -518,7 +613,7 @@
       }
     },
     "CoulombMatrix": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "CoulombMatrix",
       "descriptor_version": "1",
       "display_name": "Coulomb Matrix",
@@ -536,12 +631,16 @@
         "n_atoms_max": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum atom count",
+          "description": "Maximum number of atoms represented in the padded matrix.",
           "minimum": 1
         },
         "permutation": {
           "type": "enum",
           "required": false,
+          "display_name": "Permutation handling",
           "default": "sorted_l2",
+          "description": "How atom ordering is handled to obtain a permutation-robust representation.",
           "enum": [
             "none",
             "sorted_l2",
@@ -551,7 +650,9 @@
         "exponent": {
           "type": "number",
           "required": false,
-          "default": 2.4
+          "display_name": "Atomic-number exponent",
+          "default": 2.4,
+          "description": "Exponent applied to atomic-number terms in the interaction matrix."
         }
       },
       "execution": {
@@ -586,7 +687,7 @@
       }
     },
     "DPA4": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "DPA4",
       "descriptor_version": "1",
       "display_name": "DPA4",
@@ -607,6 +708,7 @@
         "model": {
           "type": "model",
           "required": false,
+          "display_name": "Model resource",
           "default": {
             "__type__": "ModelResource",
             "name": "DPA4-Air-OMat24-v20260704.pt",
@@ -652,7 +754,7 @@
       }
     },
     "DPA4C": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "DPA4C",
       "descriptor_version": "1",
       "display_name": "DPA4C",
@@ -673,6 +775,7 @@
         "model": {
           "type": "model",
           "required": false,
+          "display_name": "Model resource",
           "default": {
             "__type__": "ModelResource",
             "name": "DPA4C-Air-OMat24-v20260819.pt",
@@ -684,7 +787,9 @@
         "calibrate": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Enable calibration",
+          "default": true,
+          "description": "Applies the DPA4C calibration layer to the model-backed descriptor output."
         }
       },
       "execution": {
@@ -723,7 +828,7 @@
       }
     },
     "EAD": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "EAD",
       "descriptor_version": "1",
       "display_name": "EAD",
@@ -741,6 +846,7 @@
         "parameters": {
           "type": "object",
           "required": false,
+          "display_name": "Angular parameters",
           "default": {
             "L": 3,
             "eta": [
@@ -751,19 +857,24 @@
             "Rs": [
               0.0
             ]
-          }
+          },
+          "description": "EAD angular settings containing the maximum angular order L, widths eta, and centers Rs."
         },
         "Rc": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum neighbor distance included by the EAD descriptor.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "cutoff": {
           "type": "enum",
           "required": false,
+          "display_name": "Cutoff function",
           "default": "cosine",
+          "description": "Smooth radial cutoff function used by EAD.",
           "enum": [
             "cosine"
           ]
@@ -801,7 +912,7 @@
       }
     },
     "EwaldSumMatrix": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "EwaldSumMatrix",
       "descriptor_version": "1",
       "display_name": "Ewald Sum Matrix",
@@ -819,12 +930,16 @@
         "n_atoms_max": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum atom count",
+          "description": "Maximum number of atoms represented in the padded matrix.",
           "minimum": 1
         },
         "permutation": {
           "type": "enum",
           "required": false,
+          "display_name": "Permutation handling",
           "default": "sorted_l2",
+          "description": "How atom ordering is handled to obtain a permutation-robust representation.",
           "enum": [
             "none",
             "sorted_l2",
@@ -834,31 +949,41 @@
         "accuracy": {
           "type": "number",
           "required": false,
+          "display_name": "Ewald accuracy",
           "default": 1e-05,
+          "description": "Target numerical accuracy for the Ewald summation.",
           "exclusiveMinimum": 0.0,
           "maximum": 1.0
         },
         "w": {
           "type": "number",
           "required": false,
+          "display_name": "Ewald weighting",
           "default": 1.0,
+          "description": "Positive weighting parameter used in the Ewald interaction construction.",
           "exclusiveMinimum": 0.0
         },
         "r_cut": {
           "type": "number",
           "required": false,
+          "display_name": "Real-space cutoff",
+          "description": "Real-space cutoff radius used by the Ewald sum.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "g_cut": {
           "type": "number",
           "required": false,
+          "display_name": "Reciprocal-space cutoff",
+          "description": "Reciprocal-space cutoff used by the Ewald sum.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "a": {
           "type": "number",
           "required": false,
+          "display_name": "Ewald splitting parameter",
+          "description": "Positive parameter controlling the real-space/reciprocal-space Ewald split.",
           "exclusiveMinimum": 0.0
         }
       },
@@ -893,7 +1018,7 @@
       }
     },
     "LBispectrum": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "LBispectrum",
       "descriptor_version": "1",
       "display_name": "L-Bispectrum",
@@ -911,58 +1036,78 @@
         "twojmax": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum bispectrum order",
           "default": 3,
+          "description": "Angular resolution parameter controlling the bispectrum basis size.",
           "minimum": 0
         },
         "diagonal": {
           "type": "integer",
           "required": false,
+          "display_name": "Diagonal truncation",
           "default": 3,
+          "description": "Level of diagonal truncation applied to the bispectrum terms.",
           "minimum": 0,
           "maximum": 3
         },
         "rfac0": {
           "type": "number",
           "required": false,
+          "display_name": "Radial mapping factor",
           "default": 0.99363,
+          "description": "Positive factor controlling the radial mapping used by the bispectrum.",
           "exclusiveMinimum": 0.0
         },
         "rmin0": {
           "type": "number",
           "required": false,
+          "display_name": "Minimum radial distance",
           "default": 0.0,
+          "description": "Lower radial bound used by the bispectrum radial mapping.",
           "minimum": 0.0,
           "unit": "Å"
         },
         "rcutfac": {
           "type": "number",
           "required": false,
+          "display_name": "Radial cutoff factor",
           "default": 1.0,
+          "description": "Positive factor scaling the effective radial cutoff.",
           "exclusiveMinimum": 0.0
         },
         "element_profile": {
           "type": "object",
-          "required": false
+          "required": false,
+          "display_name": "Element profiles",
+          "description": "Optional combined per-element radius and weight profiles."
         },
         "element_radii": {
           "type": "object",
-          "required": false
+          "required": false,
+          "display_name": "Element radii",
+          "description": "Optional per-element radial values used in the neighbor profile."
         },
         "weights": {
           "type": "object",
-          "required": false
+          "required": false,
+          "display_name": "Element weights",
+          "description": "Optional per-element weights applied to neighbor contributions."
         },
         "rcut": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 3.5,
+          "description": "Maximum neighbor distance included in the bispectrum descriptor.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "normalize_U": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Normalize expansion basis",
+          "default": false,
+          "description": "Normalizes the hyperspherical expansion coefficients before forming features."
         }
       },
       "execution": {
@@ -997,7 +1142,7 @@
       }
     },
     "LMBTR": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "LMBTR",
       "descriptor_version": "1",
       "display_name": "Local MBTR",
@@ -1015,38 +1160,47 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "geometry": {
           "type": "object",
           "required": false,
+          "display_name": "Geometry mapping",
           "default": {
             "function": "distance"
-          }
+          },
+          "description": "Defines the local geometric quantity, such as distance or angle, encoded by LMBTR."
         },
         "grid": {
           "type": "object",
           "required": false,
+          "display_name": "Discretization grid",
           "default": {
             "min": 0.0,
             "max": 6.0,
             "n": 50,
             "sigma": 0.1
-          }
+          },
+          "description": "Defines the feature range, number of bins, and Gaussian broadening."
         },
         "weighting": {
           "type": "object",
           "required": false,
+          "display_name": "Geometry weighting",
           "default": {
             "function": "exp",
             "scale": 0.5,
             "threshold": 0.001
-          }
+          },
+          "description": "Defines how local contributions are weighted by distance or other geometric criteria."
         },
         "periodic": {
           "type": "boolean",
           "required": false,
+          "display_name": "Periodic calculation",
           "default": true,
+          "description": "Enables periodic boundary handling; the current implementation supports only true.",
           "enum": [
             true
           ]
@@ -1054,12 +1208,16 @@
         "normalize_gaussians": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Normalize Gaussian basis",
+          "default": true,
+          "description": "Normalizes each Gaussian used to broaden the discretized representation."
         },
         "normalization": {
           "type": "enum",
           "required": false,
+          "display_name": "Feature normalization",
           "default": "none",
+          "description": "Normalization applied to the final LMBTR feature vector.",
           "enum": [
             "none",
             "l2",
@@ -1099,7 +1257,7 @@
       }
     },
     "LodeSphericalExpansion": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "LodeSphericalExpansion",
       "descriptor_version": "1",
       "display_name": "LODE Spherical Expansion",
@@ -1117,49 +1275,65 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "cutoff": {
           "type": "number",
           "required": false,
+          "display_name": "Neighbor cutoff radius",
           "default": 6.0,
+          "description": "Maximum short-range neighbor distance included in the density expansion.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "density_width": {
           "type": "number",
           "required": false,
+          "display_name": "Density width",
           "default": 0.3,
+          "description": "Gaussian width used to smooth each neighbor density contribution.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "max_radial": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum radial order",
           "default": 6,
+          "description": "Number of radial basis functions retained in the long-distance expansion.",
           "minimum": 0
         },
         "max_angular": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 4,
+          "description": "Largest spherical-harmonic degree retained in the long-distance expansion.",
           "minimum": 0
         },
         "k_cutoff": {
           "type": "number",
           "required": false,
+          "display_name": "Reciprocal-space cutoff",
           "default": 2.5,
+          "description": "Cutoff controlling the reciprocal-space part of the long-distance representation.",
           "exclusiveMinimum": 0.0
         },
         "exponent": {
           "type": "integer",
           "required": false,
+          "display_name": "Long-distance exponent",
           "default": 1,
-          "minimum": 0
+          "description": "Power-law exponent used for the long-distance interaction term.",
+          "minimum": 1,
+          "maximum": 9
         },
         "radial_radius": {
           "type": "number",
           "required": false,
+          "display_name": "Radial basis radius",
+          "description": "Radius used to construct the radial basis for the long-distance channel.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         }
@@ -1195,7 +1369,7 @@
       }
     },
     "MBTR": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "MBTR",
       "descriptor_version": "1",
       "display_name": "MBTR",
@@ -1213,38 +1387,47 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "geometry": {
           "type": "object",
           "required": false,
+          "display_name": "Geometry mapping",
           "default": {
             "function": "distance"
-          }
+          },
+          "description": "Defines the geometric quantity, such as distance or angle, encoded by MBTR."
         },
         "grid": {
           "type": "object",
           "required": false,
+          "display_name": "Discretization grid",
           "default": {
             "min": 0.0,
             "max": 6.0,
             "n": 50,
             "sigma": 0.1
-          }
+          },
+          "description": "Defines the feature range, number of bins, and Gaussian broadening."
         },
         "weighting": {
           "type": "object",
           "required": false,
+          "display_name": "Geometry weighting",
           "default": {
             "function": "exp",
             "scale": 0.5,
             "threshold": 0.001
-          }
+          },
+          "description": "Defines how contributions are weighted by distance or other geometric criteria."
         },
         "periodic": {
           "type": "boolean",
           "required": false,
+          "display_name": "Periodic calculation",
           "default": true,
+          "description": "Enables periodic boundary handling; the current implementation supports only true.",
           "enum": [
             true
           ]
@@ -1252,12 +1435,16 @@
         "normalize_gaussians": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Normalize Gaussian basis",
+          "default": true,
+          "description": "Normalizes each Gaussian used to broaden the discretized representation."
         },
         "normalization": {
           "type": "enum",
           "required": false,
+          "display_name": "Feature normalization",
           "default": "none",
+          "description": "Normalization applied to the final MBTR feature vector.",
           "enum": [
             "none",
             "l2",
@@ -1297,7 +1484,7 @@
       }
     },
     "MTP": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "MTP",
       "descriptor_version": "1",
       "display_name": "MTP",
@@ -1316,56 +1503,72 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "model": {
           "type": "model",
           "required": false,
+          "display_name": "Model resource",
           "description": "Optional model resource. A JSON string is an explicit local path; a serialized ModelResource selects a named or checked resource."
         },
         "min_dist": {
           "type": "number",
           "required": false,
+          "display_name": "Minimum radial distance",
           "default": 0.0,
+          "description": "Inner radial boundary of the MTP environment.",
           "minimum": 0.0,
           "unit": "Å"
         },
         "max_dist": {
           "type": "number",
           "required": false,
+          "display_name": "Maximum radial distance",
           "default": 5.0,
+          "description": "Outer radial boundary of the MTP environment.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "r_cut": {
           "type": "number",
           "required": false,
+          "display_name": "Interaction cutoff",
+          "description": "Compatibility cutoff value used to derive the MTP maximum radial distance.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "radial_basis_size": {
           "type": "integer",
           "required": false,
+          "display_name": "Radial basis size",
           "default": 4,
+          "description": "Number of basis functions in each MTP radial channel.",
           "minimum": 1
         },
         "radial_funcs_count": {
           "type": "integer",
           "required": false,
+          "display_name": "Radial function count",
           "default": 1,
+          "description": "Number of independent radial function families used by the MTP basis.",
           "minimum": 1
         },
         "max_rank": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum tensor rank",
           "default": 2,
+          "description": "Largest moment-tensor rank included in the standalone MTP basis.",
           "minimum": 0,
           "maximum": 5
         },
         "radial_basis_type": {
           "type": "enum",
           "required": false,
+          "display_name": "Radial basis family",
           "default": "RBChebyshev",
+          "description": "Radial basis family used by the standalone MTP implementation.",
           "enum": [
             "RBChebyshev",
             "Chebyshev",
@@ -1408,7 +1611,7 @@
       }
     },
     "NEP": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "NEP",
       "descriptor_version": "1",
       "display_name": "NEP",
@@ -1427,6 +1630,7 @@
         "model": {
           "type": "model",
           "required": false,
+          "display_name": "Model resource",
           "default": {
             "__type__": "ModelResource",
             "name": "nep89_20250409.txt",
@@ -1472,7 +1676,7 @@
       }
     },
     "NeighborList": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "NeighborList",
       "descriptor_version": "1",
       "display_name": "Neighbor List",
@@ -1490,19 +1694,25 @@
         "cutoff": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum center-neighbor distance included in the pair list.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "full_neighbor_list": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Full neighbor list",
+          "default": true,
+          "description": "Includes both ordered directions of each neighbor pair when enabled."
         },
         "self_pairs": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Include self pairs",
+          "default": false,
+          "description": "Includes zero-shift center-to-itself pairs when enabled."
         }
       },
       "execution": {
@@ -1537,7 +1747,7 @@
       }
     },
     "SNAP": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SNAP",
       "descriptor_version": "1",
       "display_name": "SNAP",
@@ -1555,25 +1765,33 @@
         "weights": {
           "type": "object",
           "required": false,
-          "default": {}
+          "display_name": "Element weights",
+          "default": {},
+          "description": "Optional per-element weights applied to neighbor contributions."
         },
         "lmax": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 3,
+          "description": "Largest angular degree included in the SNAP bispectrum.",
           "minimum": 0
         },
         "rcut": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 3.5,
+          "description": "Maximum neighbor distance included in the SNAP descriptor.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "normalize_U": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Normalize expansion basis",
+          "default": false,
+          "description": "Normalizes the hyperspherical expansion coefficients before forming features."
         }
       },
       "execution": {
@@ -1608,7 +1826,7 @@
       }
     },
     "SO3": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SO3",
       "descriptor_version": "1",
       "display_name": "SO3",
@@ -1626,32 +1844,42 @@
         "nmax": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum radial order",
           "default": 3,
+          "description": "Number of radial basis channels used by the SO(3) descriptor.",
           "minimum": 1
         },
         "lmax": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 3,
+          "description": "Largest angular degree included in the SO(3) expansion.",
           "minimum": 0
         },
         "rcut": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 3.5,
+          "description": "Maximum neighbor distance included in the SO(3) descriptor.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "alpha": {
           "type": "number",
           "required": false,
+          "display_name": "Radial decay parameter",
           "default": 2.0,
+          "description": "Positive radial decay parameter controlling the SO(3) basis.",
           "exclusiveMinimum": 0.0
         },
         "weight_on": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Enable neighbor weighting",
+          "default": false,
+          "description": "Enables the radial neighbor weighting used by the SO(3) construction."
         }
       },
       "execution": {
@@ -1686,7 +1914,7 @@
       }
     },
     "SO4": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SO4",
       "descriptor_version": "1",
       "display_name": "SO4",
@@ -1704,20 +1932,26 @@
         "lmax": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 3,
+          "description": "Largest hyperspherical angular degree included in the SO(4) expansion.",
           "minimum": 0
         },
         "rcut": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 3.5,
+          "description": "Maximum neighbor distance included in the SO(4) descriptor.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "normalize_U": {
           "type": "boolean",
           "required": false,
-          "default": false
+          "display_name": "Normalize expansion basis",
+          "default": false,
+          "description": "Normalizes the hyperspherical expansion coefficients before forming features."
         }
       },
       "execution": {
@@ -1752,7 +1986,7 @@
       }
     },
     "SOAP": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SOAP",
       "descriptor_version": "1",
       "display_name": "SOAP",
@@ -1770,12 +2004,15 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "rbf": {
           "type": "enum",
           "required": false,
+          "display_name": "Radial basis",
           "default": "gto",
+          "description": "Radial basis family used to expand the neighbor density.",
           "enum": [
             "gto",
             "polynomial"
@@ -1784,27 +2021,35 @@
         "n_max": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum radial order",
           "default": 8,
+          "description": "Number of radial basis functions used for each species.",
           "minimum": 1
         },
         "l_max": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 6,
+          "description": "Largest spherical-harmonic degree included in the expansion.",
           "minimum": 0,
           "maximum": 20
         },
         "sigma": {
           "type": "number",
           "required": false,
+          "display_name": "Density width",
           "default": 1.0,
+          "description": "Gaussian width used to smear each atomic neighbor density.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "average": {
           "type": "enum",
           "required": false,
+          "display_name": "Environment averaging",
           "default": "inner",
+          "description": "Controls whether atom-centered environments are averaged and at which stage.",
           "enum": [
             "off",
             "inner",
@@ -1814,21 +2059,27 @@
         "weighting": {
           "type": "object",
           "required": false,
-          "default": {}
+          "display_name": "Distance weighting",
+          "default": {},
+          "description": "Optional distance-dependent weighting applied to neighbor density."
         },
         "r_cut": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
+          "description": "Maximum distance from the center included in the descriptor.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "compression": {
           "type": "object",
           "required": false,
+          "display_name": "Feature compression",
           "default": {
             "mode": "off",
             "species_weighting": null
-          }
+          },
+          "description": "Optional compression of the species-resolved SOAP power spectrum."
         }
       },
       "execution": {
@@ -1863,7 +2114,7 @@
       }
     },
     "SOAPTurbo": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SOAPTurbo",
       "descriptor_version": "1",
       "display_name": "SOAP Turbo",
@@ -1881,11 +2132,14 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "alpha_max": {
           "type": "array",
           "required": false,
+          "display_name": "Radial channels per species",
+          "description": "Number of radial channels retained for each chemical species.",
           "items": {
             "type": "integer"
           }
@@ -1893,33 +2147,43 @@
         "l_max": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 6,
+          "description": "Largest spherical-harmonic degree included in the power spectrum.",
           "minimum": 0,
           "maximum": 20
         },
         "rcut_hard": {
           "type": "number",
           "required": false,
+          "display_name": "Hard cutoff radius",
           "default": 5.0,
+          "description": "Outer neighbor distance beyond which contributions are discarded.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "rcut_soft": {
           "type": "number",
           "required": false,
+          "display_name": "Soft cutoff radius",
+          "description": "Radius at which the smooth cutoff region begins; it cannot exceed the hard cutoff.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "nf": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff smoothing factor",
           "default": 1.0,
+          "description": "Positive factor controlling the radial cutoff smoothing profile.",
           "exclusiveMinimum": 0.0
         },
         "radial_enhancement": {
           "type": "integer",
           "required": false,
+          "display_name": "Radial enhancement mode",
           "default": 0,
+          "description": "Selects the radial enhancement variant used by SOAP Turbo.",
           "enum": [
             0,
             1,
@@ -1929,7 +2193,9 @@
         "basis": {
           "type": "enum",
           "required": false,
+          "display_name": "Radial basis",
           "default": "poly3",
+          "description": "Radial basis family used for the compressed SOAP representation.",
           "enum": [
             "poly3",
             "poly3gauss"
@@ -1938,7 +2204,9 @@
         "compression": {
           "type": "enum",
           "required": false,
+          "display_name": "Feature compression",
           "default": "off",
+          "description": "Compression recipe for reducing SOAP Turbo power-spectrum channels.",
           "enum": [
             "off",
             "trivial",
@@ -1956,6 +2224,8 @@
         "atom_sigma_r": {
           "type": "array",
           "required": false,
+          "display_name": "Radial atomic width",
+          "description": "Per-species width of the radial atomic density contribution.",
           "items": {
             "type": "number"
           }
@@ -1963,6 +2233,8 @@
         "atom_sigma_r_scaling": {
           "type": "array",
           "required": false,
+          "display_name": "Radial width scaling",
+          "description": "Per-species scaling applied to the radial atomic width.",
           "items": {
             "type": "number"
           }
@@ -1970,6 +2242,8 @@
         "atom_sigma_t": {
           "type": "array",
           "required": false,
+          "display_name": "Tangential atomic width",
+          "description": "Per-species width of the tangential/angular atomic density contribution.",
           "items": {
             "type": "number"
           }
@@ -1977,6 +2251,8 @@
         "atom_sigma_t_scaling": {
           "type": "array",
           "required": false,
+          "display_name": "Tangential width scaling",
+          "description": "Per-species scaling applied to the tangential atomic width.",
           "items": {
             "type": "number"
           }
@@ -1984,6 +2260,8 @@
         "amplitude_scaling": {
           "type": "array",
           "required": false,
+          "display_name": "Amplitude scaling",
+          "description": "Per-species scaling of neighbor density amplitudes.",
           "items": {
             "type": "number"
           }
@@ -1991,6 +2269,8 @@
         "central_weight": {
           "type": "array",
           "required": false,
+          "display_name": "Central-atom weight",
+          "description": "Per-species weight assigned to the central atom contribution.",
           "items": {
             "type": "number"
           }
@@ -1998,6 +2278,8 @@
         "central_species": {
           "type": "array",
           "required": false,
+          "display_name": "Central species filter",
+          "description": "Optional atomic numbers for which central-atom environments are generated.",
           "items": {
             "type": "integer"
           }
@@ -2035,7 +2317,7 @@
       }
     },
     "SineMatrix": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SineMatrix",
       "descriptor_version": "1",
       "display_name": "Sine Matrix",
@@ -2053,12 +2335,16 @@
         "n_atoms_max": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum atom count",
+          "description": "Maximum number of atoms represented in the padded matrix.",
           "minimum": 1
         },
         "permutation": {
           "type": "enum",
           "required": false,
+          "display_name": "Permutation handling",
           "default": "sorted_l2",
+          "description": "How atom ordering is handled to obtain a permutation-robust representation.",
           "enum": [
             "none",
             "sorted_l2",
@@ -2068,7 +2354,9 @@
         "exponent": {
           "type": "number",
           "required": false,
-          "default": 2.4
+          "display_name": "Atomic-number exponent",
+          "default": 2.4,
+          "description": "Exponent applied to atomic-number terms in the periodic sine matrix."
         }
       },
       "execution": {
@@ -2102,7 +2390,7 @@
       }
     },
     "SoapPowerSpectrum": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SoapPowerSpectrum",
       "descriptor_version": "1",
       "display_name": "SOAP Power Spectrum",
@@ -2120,32 +2408,41 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "cutoff": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum neighbor distance included in the spherical density.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "density_width": {
           "type": "number",
           "required": false,
+          "display_name": "Density width",
           "default": 0.3,
+          "description": "Gaussian width used to smooth each neighbor density contribution.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "max_radial": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum radial order",
           "default": 6,
+          "description": "Number of radial basis functions retained in the power spectrum.",
           "minimum": 0
         },
         "max_angular": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 4,
+          "description": "Largest spherical-harmonic degree used to form the power spectrum.",
           "minimum": 0
         }
       },
@@ -2181,7 +2478,7 @@
       }
     },
     "SoapRadialSpectrum": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SoapRadialSpectrum",
       "descriptor_version": "1",
       "display_name": "SOAP Radial Spectrum",
@@ -2199,32 +2496,41 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "cutoff": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum neighbor distance included in the spherical density.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "density_width": {
           "type": "number",
           "required": false,
+          "display_name": "Density width",
           "default": 0.3,
+          "description": "Gaussian width used to smooth each neighbor density contribution.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "max_radial": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum radial order",
           "default": 6,
+          "description": "Number of radial basis functions retained in the spectrum.",
           "minimum": 0
         },
         "max_angular": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 4,
+          "description": "Largest spherical-harmonic degree used to form the spectrum.",
           "minimum": 0
         }
       },
@@ -2260,7 +2566,7 @@
       }
     },
     "SortedDistances": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SortedDistances",
       "descriptor_version": "1",
       "display_name": "Sorted Distances",
@@ -2278,25 +2584,32 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "cutoff": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum center-neighbor distance considered for sorting.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "max_neighbors": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum neighbors",
           "default": 8,
+          "description": "Maximum number of neighbor distances retained for each atom.",
           "minimum": 1
         },
         "separate_neighbor_types": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Separate neighbor species",
+          "default": true,
+          "description": "Keeps distance slots separated by neighbor chemical species when enabled."
         }
       },
       "execution": {
@@ -2331,7 +2644,7 @@
       }
     },
     "SphericalExpansion": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SphericalExpansion",
       "descriptor_version": "1",
       "display_name": "Spherical Expansion",
@@ -2349,32 +2662,41 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "cutoff": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum neighbor distance included in the density expansion.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "density_width": {
           "type": "number",
           "required": false,
+          "display_name": "Density width",
           "default": 0.3,
+          "description": "Gaussian width used to represent each neighbor in the smooth density.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "max_radial": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum radial order",
           "default": 6,
+          "description": "Number of radial basis functions retained in the expansion.",
           "minimum": 0
         },
         "max_angular": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 4,
+          "description": "Largest spherical-harmonic degree retained in the expansion.",
           "minimum": 0
         }
       },
@@ -2410,7 +2732,7 @@
       }
     },
     "SphericalExpansionByPair": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "SphericalExpansionByPair",
       "descriptor_version": "1",
       "display_name": "Spherical Expansion by Pair",
@@ -2428,32 +2750,41 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "cutoff": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum neighbor distance included in the pair density expansion.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "density_width": {
           "type": "number",
           "required": false,
+          "display_name": "Density width",
           "default": 0.3,
+          "description": "Gaussian width used to represent each neighbor in the smooth pair density.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "max_radial": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum radial order",
           "default": 6,
+          "description": "Number of radial basis functions retained in the pair expansion.",
           "minimum": 0
         },
         "max_angular": {
           "type": "integer",
           "required": false,
+          "display_name": "Maximum angular order",
           "default": 4,
+          "description": "Largest spherical-harmonic degree retained in the pair expansion.",
           "minimum": 0
         }
       },
@@ -2489,7 +2820,7 @@
       }
     },
     "ValleOganov": {
-      "schema_version": 2,
+      "schema_version": 3,
       "name": "ValleOganov",
       "descriptor_version": "1",
       "display_name": "Valle–Oganov",
@@ -2507,12 +2838,15 @@
         "species": {
           "type": "species",
           "required": true,
+          "display_name": "Chemical species",
           "description": "Chemical species included in the descriptor."
         },
         "function": {
           "type": "enum",
           "required": false,
+          "display_name": "Fingerprint geometry",
           "default": "distance",
+          "description": "Selects whether the fingerprint is built from distances or angles.",
           "enum": [
             "distance",
             "angle"
@@ -2521,38 +2855,52 @@
         "n": {
           "type": "integer",
           "required": false,
+          "display_name": "Grid point count",
           "default": 50,
+          "description": "Number of grid points used to discretize the fingerprint.",
           "minimum": 2
         },
         "sigma": {
           "type": "number",
           "required": false,
+          "display_name": "Gaussian width",
           "default": 0.1,
+          "description": "Width of the Gaussian broadening applied to each fingerprint sample.",
           "exclusiveMinimum": 0.0
         },
         "r_cut": {
           "type": "number",
           "required": false,
+          "display_name": "Cutoff radius",
           "default": 6.0,
+          "description": "Maximum neighbor distance used to construct the fingerprint.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
         "geometry": {
           "type": "object",
-          "required": false
+          "required": false,
+          "display_name": "Geometry mapping",
+          "description": "Optional explicit geometry configuration; normally derived from function."
         },
         "grid": {
           "type": "object",
-          "required": false
+          "required": false,
+          "display_name": "Discretization grid",
+          "description": "Optional explicit grid configuration; normally derived from n, sigma, and r_cut."
         },
         "weighting": {
           "type": "object",
-          "required": false
+          "required": false,
+          "display_name": "Geometry weighting",
+          "description": "Optional explicit distance/angle weighting configuration."
         },
         "periodic": {
           "type": "boolean",
           "required": false,
+          "display_name": "Periodic calculation",
           "default": true,
+          "description": "Enables periodic boundary handling; the current implementation supports only true.",
           "enum": [
             true
           ]
@@ -2560,12 +2908,16 @@
         "normalize_gaussians": {
           "type": "boolean",
           "required": false,
-          "default": true
+          "display_name": "Normalize Gaussian basis",
+          "default": true,
+          "description": "Normalizes each Gaussian used to broaden the fingerprint."
         },
         "normalization": {
           "type": "enum",
           "required": false,
+          "display_name": "Feature normalization",
           "default": "valle_oganov",
+          "description": "Normalization applied to the final Valle–Oganov feature vector.",
           "enum": [
             "none",
             "l2",
@@ -2612,7 +2964,8 @@
     "DescriptorInputError",
     "MDescriptorError",
     "ModelLoadError",
-    "PackageNotFoundError"
+    "PackageNotFoundError",
+    "UnsupportedPeriodicityError"
   ],
   "compute_control_methods": [
     "cancel",
@@ -2634,6 +2987,9 @@
     "describe_descriptor": true,
     "get_runtime_info": true,
     "list_descriptors": true,
-    "create_descriptor": true
+    "create_descriptor": true,
+    "gui_baseline": true,
+    "preload_native": true,
+    "UnsupportedPeriodicityError": true
   }
 }

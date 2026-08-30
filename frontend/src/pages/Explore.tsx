@@ -1,7 +1,7 @@
 // Explore page (M2): 3Dmol viewer dominant (~70%), Structure Inspector (30%),
 // frame navigation, Atom Table. Design doc §18/§89, ADR-10 perf targets.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Empty, InputNumber, Space, Table, Typography } from "antd";
+import { Button, Empty, InputNumber, Space, Table, Tooltip, Typography } from "antd";
 import {
   ArrowLeft16Regular,
   ArrowRight16Regular,
@@ -13,20 +13,100 @@ import { activeDataset, useWorkspace } from "../stores/workspace";
 import { elementColor } from "../util/elements";
 import type { FramePayload } from "../types/protocol";
 
+const DEFAULT_BOND_CUTOFF = 2.4;
+const MIN_BOND_CUTOFF = 0.1;
+const MAX_BOND_CUTOFF = 10;
+
+type ViewerAtom = {
+  elem: string;
+  x: number;
+  y: number;
+  z: number;
+  bonds: number[];
+  bondOrder: number[];
+};
+
+type ViewerModel = {
+  addAtoms: (atoms: ViewerAtom[]) => void;
+};
+
+function parseViewerAtoms(xyz: string, cutoff: number): ViewerAtom[] {
+  const lines = xyz.trim().split(/\r?\n/);
+  const atomCount = Number(lines[0]);
+  if (!Number.isInteger(atomCount) || atomCount <= 0) return [];
+
+  const atoms: ViewerAtom[] = [];
+  for (let i = 0; i < atomCount; i += 1) {
+    const tokens = lines[i + 2]?.trim().split(/\s+/) ?? [];
+    const [elem, xText, yText, zText] = tokens;
+    const x = Number(xText);
+    const y = Number(yText);
+    const z = Number(zText);
+    if (!elem || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    atoms.push({ elem, x, y, z, bonds: [], bondOrder: [] });
+  }
+
+  // Use a spatial hash so large frames do not require an O(N²) pair scan.
+  const cells = new Map<string, number[]>();
+  const cellKey = (x: number, y: number, z: number) =>
+    `${Math.floor(x / cutoff)},${Math.floor(y / cutoff)},${Math.floor(z / cutoff)}`;
+  const cellCoords = (value: number) => Math.floor(value / cutoff);
+  atoms.forEach((atom, index) => {
+    const key = cellKey(atom.x, atom.y, atom.z);
+    const bucket = cells.get(key);
+    if (bucket) bucket.push(index);
+    else cells.set(key, [index]);
+  });
+
+  const cutoffSquared = cutoff * cutoff;
+  for (let i = 0; i < atoms.length; i += 1) {
+    const atom = atoms[i];
+    const cx = cellCoords(atom.x);
+    const cy = cellCoords(atom.y);
+    const cz = cellCoords(atom.z);
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dz = -1; dz <= 1; dz += 1) {
+          const candidates = cells.get(`${cx + dx},${cy + dy},${cz + dz}`) ?? [];
+          for (const j of candidates) {
+            if (j <= i) continue;
+            const other = atoms[j];
+            const distanceSquared =
+              (atom.x - other.x) ** 2 + (atom.y - other.y) ** 2 + (atom.z - other.z) ** 2;
+            if (distanceSquared <= 1e-6 || distanceSquared > cutoffSquared) continue;
+            atom.bonds.push(j);
+            atom.bondOrder.push(1);
+            other.bonds.push(i);
+            other.bondOrder.push(1);
+          }
+        }
+      }
+    }
+  }
+  return atoms;
+}
+
+function clampBondCutoff(value: number): number {
+  return Math.max(MIN_BOND_CUTOFF, Math.min(MAX_BOND_CUTOFF, value));
+}
+
 export default function Explore() {
   const st = useWorkspace();
   const d = activeDataset(st);
   const [frame, setFrame] = useState<FramePayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [jumpTo, setJumpTo] = useState<number | null>(null);
+  const [bondCutoff, setBondCutoff] = useState(DEFAULT_BOND_CUTOFF);
   const viewerDiv = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<
     {
       clear: () => void;
-      addModel: (s: string, f: string) => unknown;
+      addModel: () => ViewerModel;
       addLine: (spec: object) => void;
       setStyle: (sel: object, style: object) => void;
       addStyle: (sel: object, style: object) => void;
+      getView: () => number[];
+      setView: (view: number[]) => void;
       zoomTo: () => void;
       render: () => void;
     } | null
@@ -34,17 +114,23 @@ export default function Explore() {
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const loadStart = useRef<number>(0);
+  const renderedFrameRef = useRef<number | null>(null);
 
   const total = d?.number_of_frames ?? 0;
 
   const fetchFrame = useCallback(
-    async (index: number) => {
+    async (index: number, requestedBondCutoff = bondCutoff) => {
       if (!d) return;
       const idx = Math.max(0, Math.min(index, total - 1));
+      const cutoff = clampBondCutoff(requestedBondCutoff);
       setLoading(true);
       loadStart.current = performance.now();
       try {
-        const f = await ipc.request<FramePayload>("dataset.frame", { id: d.id, index: idx });
+        const f = await ipc.request<FramePayload>("dataset.frame", {
+          id: d.id,
+          index: idx,
+          bond_cutoff: cutoff,
+        });
         setFrame(f);
         st.setActiveFrame(idx);
         setJumpTo(null);
@@ -55,11 +141,12 @@ export default function Explore() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [d, total],
+    [d, total, bondCutoff],
   );
 
   // reset when dataset changes
   useEffect(() => {
+    renderedFrameRef.current = null;
     setFrame(null);
     if (d && total > 0) void fetchFrame(st.activeFrameIndex || 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -96,9 +183,12 @@ export default function Explore() {
   useEffect(() => {
     const v = viewerRef.current;
     if (!viewerReady || !v || !frame) return;
+    const previousView = renderedFrameRef.current === frame.index ? v.getView() : null;
     v.clear();
-    v.addModel(frame.xyz, "xyz");
-    for (const el of new Set(frame.atom_rows.map((r) => r.el))) {
+    const atoms = parseViewerAtoms(frame.xyz, clampBondCutoff(frame.bond_cutoff));
+    const model = v.addModel();
+    model.addAtoms(atoms);
+    for (const el of new Set(atoms.map((atom) => atom.elem))) {
       const color = elementColor(el);
       v.setStyle({ elem: el }, { sphere: { scale: 0.28, color }, stick: { radius: 0.12, color } });
     }
@@ -127,8 +217,10 @@ export default function Explore() {
         });
       }
     }
-    v.zoomTo();
+    if (previousView) v.setView(previousView);
+    else v.zoomTo();
     v.render();
+    renderedFrameRef.current = frame.index;
     if (frame.ghost_count) console.info(`frame ${frame.index}: +${frame.ghost_count} periodic image atoms`);
     const ms = performance.now() - loadStart.current;
     console.info(`frame ${frame.index} fetched+rendered in ${ms.toFixed(0)}ms`);
@@ -145,6 +237,7 @@ export default function Explore() {
           display: "flex",
           alignItems: "center",
           gap: 10,
+          flexWrap: "wrap",
           background: "#FFFFFF",
           border: "1px solid #EAECF0",
           borderRadius: 6,
@@ -186,7 +279,37 @@ export default function Explore() {
             }}
           />
         </Space>
-        {loading && <Typography.Text type="secondary">loading…</Typography.Text>}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
+          <Tooltip title="Show bonds for atom pairs no farther apart than this distance.">
+            <Typography.Text type="secondary" style={{ fontSize: 12, cursor: "help" }}>
+              Bond length ≤
+            </Typography.Text>
+          </Tooltip>
+          <InputNumber
+            size="small"
+            min={MIN_BOND_CUTOFF}
+            max={MAX_BOND_CUTOFF}
+            step={0.1}
+            precision={2}
+            value={bondCutoff}
+            disabled={loading}
+            aria-label="Bond length display threshold"
+            addonAfter="Å"
+            onChange={(value) => {
+              if (value == null || !Number.isFinite(value)) return;
+              const next = clampBondCutoff(value);
+              if (next === bondCutoff) return;
+              setBondCutoff(next);
+              void fetchFrame(idx, next);
+            }}
+            style={{ width: 122 }}
+          />
+        </div>
+        <div style={{ width: 56, flexShrink: 0, textAlign: "right" }} aria-live="polite">
+          <Typography.Text type="secondary" style={{ visibility: loading ? "visible" : "hidden" }}>
+            loading…
+          </Typography.Text>
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 12, flex: 1, minHeight: 0 }}>

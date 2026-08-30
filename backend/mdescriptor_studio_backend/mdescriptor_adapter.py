@@ -1,7 +1,7 @@
 """Single boundary to the mdescriptor engine (docs/plan/05-ENGINE_ADAPTER.md).
 
 No other module may `import mdescriptor`. All engine exceptions are converted
-to AppError here. Engine updates via UpdateService (PyPI pin mdescriptor==0.2.5 as of 2026-08-29, ADR-2).
+to AppError here. Engine updates via UpdateService (PyPI pin mdescriptor==0.2.7 as of 2026-08-30, ADR-2).
 """
 
 from __future__ import annotations
@@ -79,8 +79,9 @@ class EngineAdapter:
         """frames: sequence of datasets.base.DatasetFrame -> engine batch.
 
         Isolated frames must carry a zero cell and pbc=(0,0,0); periodic frames
-        a nonsingular cell and pbc=(1,1,1). Mixed periodicity in one batch is
-        rejected (engine contract).
+        a nonsingular cell and pbc=(1,1,1). Mixed periodicity is accepted only
+        for descriptors whose input capability advertises it; periodic-only
+        descriptors are rejected by the engine.
         """
         if not frames:
             raise AppError("INVALID_PARAMS", "no frames to compute")
@@ -117,12 +118,16 @@ class EngineAdapter:
 
         create_descriptor lazily imports native extension modules; on 0.2.3/win
         resolving those imports while worker threads (or a stdin reader thread)
-        were live deadlocked the import machinery (fixed in 0.2.5, re-verified
-        in scripts/verify_known_issues.py). The warmup stays as defense in
+        were live deadlocked the import machinery (fixed in 0.2.5 and retained
+        through 0.2.7, re-verified in scripts/verify_known_issues.py). The warmup stays as defense in
         depth and to pay each descriptor's first-build cost at startup, before
         any job thread exists.
         """
         import numpy as np
+
+        preload_native = getattr(md, "preload_native", None)
+        if callable(preload_native):
+            preload_native()
 
         numbers = np.array([1], dtype=np.int64)
         batch = md.StructureBatch(
@@ -169,7 +174,7 @@ class EngineAdapter:
     # -- errors ------------------------------------------------------------
     @staticmethod
     def _convert(exc: md.MDescriptorError) -> AppError:
-        # 0.2.5 engine errors carry a structured code (gui-adaptation-baseline.md);
+        # 0.2.7 engine errors carry a structured code (gui-adaptation-baseline.md);
         # use it to split DescriptorInputError into periodicity vs invalid input.
         if isinstance(exc, md.DescriptorInputError):
             code = getattr(exc, "code", "")

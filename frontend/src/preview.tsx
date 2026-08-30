@@ -251,6 +251,7 @@ function mockFramePayload(index: number) {
     pbc: "XYZ",
     cell: [2 * a, 0, 0, 0, a, 0, 0, 0, a],
     ghost_count: 0,
+    bond_cutoff: 2.4,
   };
 }
 
@@ -425,6 +426,17 @@ const METHODS: Record<string, Handler> = {
       x_label: "PC1 (61.2%)",
       y_label: "PC2 (22.1%)",
     };
+  },
+  "result.heatmap": (p) => {
+    const atoms = Array.from({ length: 8 }, (_, i) => i);
+    const features = Array.from({ length: 96 }, (_, i) => i);
+    const frame = Number(p.frame_index ?? 0);
+    const values = atoms.map((atom) =>
+      features.map((feature) =>
+        Number((Math.sin(atom * 0.8 + feature / 14 + frame / 10) * 0.45 + Math.cos(feature / 9) * 0.2).toFixed(6)),
+      ),
+    );
+    return { atoms, features, values, atomOffset: 0 };
   },
 };
 

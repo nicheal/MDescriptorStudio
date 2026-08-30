@@ -12,6 +12,8 @@ interface SystemInfo {
   backend_version: string;
   mdescriptor_version: string;
   mdescriptor_api_version: number;
+  mdescriptor_baseline_version?: string;
+  mdescriptor_descriptor_info_schema_version?: number;
   protocol_version: number;
   data_dir: string;
   cpu_threads: number;
@@ -161,6 +163,9 @@ export default function SettingsDrawer() {
           <Descriptions.Item label="MDescriptor">{info?.mdescriptor_version ?? "—"}</Descriptions.Item>
           <Descriptions.Item label="Protocol">{info?.protocol_version ?? "—"}</Descriptions.Item>
           <Descriptions.Item label="Engine API">v{info?.mdescriptor_api_version ?? "—"}</Descriptions.Item>
+          <Descriptions.Item label="GUI schema">
+            {info?.mdescriptor_baseline_version ?? "—"} / {info?.mdescriptor_descriptor_info_schema_version ?? "—"}
+          </Descriptions.Item>
           <Descriptions.Item label="Platform">Windows x64</Descriptions.Item>
         </Descriptions>
         <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 16 }}>

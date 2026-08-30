@@ -108,19 +108,31 @@ export interface FramePayload {
   pbc: string;
   cell: number[] | null;
   ghost_count: number;
+  bond_cutoff: number;
 }
 
 export interface DescriptorInfo {
   name: string;
   display_name: string;
+  description: string;
+  schema_version: number;
+  descriptor_version: string;
   level: string;
   backend: string;
+  execution_engine: string;
   category: string;
   capabilities: string[];
+  input: {
+    periodicity: string[];
+    mixed_periodicity: boolean;
+    spin: boolean;
+    charge_spin: boolean;
+  };
 }
 
 export interface ParamSchema {
   type: string;
+  display_name?: string;
   description?: string;
   default?: unknown;
   required?: boolean;
@@ -130,18 +142,20 @@ export interface ParamSchema {
   exclusiveMaximum?: number;
   enum?: string[];
   unit?: string;
-  items?: { type: string };
+  items?: ParamSchema;
   properties?: Record<string, ParamSchema>;
 }
 
 export interface DescriptorSchema {
   schema_version: number;
   name: string;
+  descriptor_version: string;
   display_name: string;
   description: string;
   category: string;
   level: string;
   backend: string;
+  execution_engine: string;
   capabilities: string[];
   parameters: Record<string, ParamSchema>;
   execution: {
@@ -207,7 +221,7 @@ export interface RunRow {
   status: string;
   created_at: string;
   result_path: string | null;
-  shape?: string;
+  shape?: string | null;
   metadata?: Record<string, unknown>;
 }
 
@@ -229,4 +243,13 @@ export interface PcaPayload {
   explained_variance: number[];
   x_label: string;
   y_label: string;
+}
+
+export interface PcaAnalysisResponse {
+  job_id: string | null;
+  analysis_id: string;
+  cache: {
+    existing_analysis_id: string;
+    status?: "QUEUED" | "RUNNING" | "COMPLETED";
+  } | null;
 }

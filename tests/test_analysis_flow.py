@@ -50,6 +50,13 @@ def test_pca_and_heatmap(tmp_path: Path) -> None:
         assert payload["result"]["explained_variance"][0] > 0
         assert pts[0]["energy"] is not None  # color-by data attached
 
+        # repeated request reuses the persisted PCA artifact instead of
+        # creating another analysis job
+        cached = bp.request(18, "analysis.pca", {"run_id": run_id})["result"]
+        assert cached["job_id"] is None
+        assert cached["analysis_id"] == analysis_id
+        assert cached["cache"]["existing_analysis_id"] == analysis_id
+
         # PCA atom mode: one point per atom row (8 frames x 16 atoms = 128)
         pca_atom = bp.request(15, "analysis.pca", {"run_id": run_id, "mode": "atom"})
         done = wait_job(bp, pca_atom["result"]["job_id"], timeout=120)

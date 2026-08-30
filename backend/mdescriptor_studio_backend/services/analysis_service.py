@@ -8,6 +8,7 @@ PCA -> Explore reverse jump.
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,10 @@ class AnalysisService:
         self.results = results
         self.datasets = datasets
         self.data_dir = data_dir
+        # RPC requests are handled concurrently. Serialize only the
+        # cache-lookup/create section so two identical requests cannot enqueue
+        # duplicate PCA jobs; the actual calculation still runs in JobService.
+        self._pca_submit_lock = threading.Lock()
 
     def pca(self, params: dict) -> dict:
         run_id = params.get("run_id")
@@ -40,56 +45,139 @@ class AnalysisService:
         row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (run_id,))
         if row is None:
             raise AppError(INVALID_PARAMS, f"run {run_id} does not exist")
-        analysis_id = f"ana_{uuid.uuid4().hex[:12]}"
-        self.db.execute(
-            "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at)"
-            " VALUES (?, ?, 'pca', ?, 'QUEUED', ?)",
-            (analysis_id, run_id, json.dumps({k: v for k, v in params.items() if k != 'run_id'}), _NOW()),
+        analysis_params = {"mode": mode}
+        params_json = json.dumps(
+            analysis_params, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
 
-        def runner(ctx):
-            ctx.progress(0, 1, "loading values")
-            values, run_row = self.results.load_values(run_id)
-            ctx.check_cancelled()
-            coords, explained, frames, atoms = self._pca_points(values, run_row, mode)
-            n_points = coords.shape[0]
-            ctx.progress(0.7, 1, "assembling points")
-            frame_props = self._frame_properties(run_row, int(frames.max()) + 1 if frames.size else 1)
-            out_dir = self.data_dir / "analysis" / analysis_id
-            out_dir.mkdir(parents=True, exist_ok=True)
-            np.save(out_dir / "coords.npy", coords)
-            payload = {
-                "analysis_id": analysis_id,
-                "run_id": run_id,
-                "mode": mode,
-                "n_points": int(n_points),
-                "points": [
-                    {
-                        "i": i,
-                        "frame": int(frames[i]),
-                        **({"atom": int(atoms[i])} if atoms is not None else {}),
-                        "pc1": round(float(coords[i, 0]), 4),
-                        "pc2": round(float(coords[i, 1]), 4),
-                        **frame_props[int(frames[i])],
-                    }
-                    for i in range(n_points)
-                ],
-                "explained_variance": [round(float(v), 6) for v in explained[:2]],
-                "x_label": f"PC1 ({explained[0] * 100:.1f}%)",
-                "y_label": f"PC2 ({explained[1] * 100:.1f}%)",
-            }
-            (out_dir / "pca.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            self.db.execute(
-                "UPDATE analysis_runs SET status = 'COMPLETED', result_path = ?, finished_at = ? WHERE id = ?",
-                (str(out_dir), _NOW(), analysis_id),
+        with self._pca_submit_lock:
+            cached = self._find_cached_pca(run_id, mode)
+            if cached is not None:
+                return {
+                    "job_id": None,
+                    "analysis_id": cached["id"],
+                    "cache": {"existing_analysis_id": cached["id"]},
+                }
+
+            active = self._find_active_pca(run_id, mode)
+            if active is not None and active["job_id"]:
+                return {
+                    "job_id": active["job_id"],
+                    "analysis_id": active["id"],
+                    "cache": {
+                        "existing_analysis_id": active["id"],
+                        "status": active["status"],
+                    },
+                }
+
+            # Reuse an abandoned queued/running analysis row if it has no
+            # linked job (legacy databases may contain such rows); otherwise
+            # create the persistent cache entry now.
+            analysis_id = active["id"] if active is not None else f"ana_{uuid.uuid4().hex[:12]}"
+            if active is None:
+                self.db.execute(
+                    "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at)"
+                    " VALUES (?, ?, 'pca', ?, 'QUEUED', ?)",
+                    (analysis_id, run_id, params_json, _NOW()),
+                )
+
+            def runner(ctx):
+                ctx.progress(0, 1, "loading values")
+                values, run_row = self.results.load_values(run_id)
+                ctx.check_cancelled()
+                coords, explained, frames, atoms = self._pca_points(values, run_row, mode)
+                n_points = coords.shape[0]
+                ctx.progress(0.7, 1, "assembling points")
+                frame_props = self._frame_properties(
+                    run_row, int(frames.max()) + 1 if frames.size else 1
+                )
+                out_dir = self.data_dir / "analysis" / analysis_id
+                out_dir.mkdir(parents=True, exist_ok=True)
+                np.save(out_dir / "coords.npy", coords)
+                payload = {
+                    "analysis_id": analysis_id,
+                    "run_id": run_id,
+                    "mode": mode,
+                    "n_points": int(n_points),
+                    "points": [
+                        {
+                            "i": i,
+                            "frame": int(frames[i]),
+                            **({"atom": int(atoms[i])} if atoms is not None else {}),
+                            "pc1": round(float(coords[i, 0]), 4),
+                            "pc2": round(float(coords[i, 1]), 4),
+                            **frame_props[int(frames[i])],
+                        }
+                        for i in range(n_points)
+                    ],
+                    "explained_variance": [round(float(v), 6) for v in explained[:2]],
+                    "x_label": f"PC1 ({explained[0] * 100:.1f}%)",
+                    "y_label": f"PC2 ({explained[1] * 100:.1f}%)",
+                }
+                (out_dir / "pca.json").write_text(
+                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+                )
+                self.db.execute(
+                    "UPDATE analysis_runs SET status = 'COMPLETED', result_path = ?, finished_at = ? WHERE id = ?",
+                    (str(out_dir), _NOW(), analysis_id),
+                )
+                ctx.progress(1, 1, "done")
+                return {"analysis_id": analysis_id, "n_points": payload["n_points"]}
+
+            job_id = self.jobs.submit(
+                "analysis.pca", runner, dataset_id=row["dataset_id"], analysis_run_id=analysis_id
             )
-            ctx.progress(1, 1, "done")
-            return {"analysis_id": analysis_id, "n_points": payload["n_points"]}
+            return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
-        job_id = self.jobs.submit(
-            "analysis.pca", runner, dataset_id=row["dataset_id"], analysis_run_id=analysis_id
+    def _find_cached_pca(self, run_id: str, mode: str) -> dict | None:
+        """Find the newest usable completed PCA for this run and mode.
+
+        Parameters are normalized in Python so cache entries written by older
+        builds (with JSON whitespace, or with ``{}`` for the old default
+        structure mode) remain reusable.
+        """
+        rows = self.db.query(
+            "SELECT id, params_json, result_path FROM analysis_runs"
+            " WHERE descriptor_run_id = ? AND analysis_type = 'pca' AND status = 'COMPLETED'"
+            " ORDER BY created_at DESC, id DESC",
+            (run_id,),
         )
-        return {"job_id": job_id, "analysis_id": analysis_id}
+        for row in rows:
+            if self._pca_params_match(row["params_json"], mode) and self._pca_artifact_exists(row):
+                return row
+        return None
+
+    def _find_active_pca(self, run_id: str, mode: str) -> dict | None:
+        rows = self.db.query(
+            "SELECT id, params_json, status FROM analysis_runs"
+            " WHERE descriptor_run_id = ? AND analysis_type = 'pca'"
+            " AND status IN ('QUEUED', 'RUNNING')"
+            " ORDER BY created_at DESC, id DESC",
+            (run_id,),
+        )
+        for row in rows:
+            if not self._pca_params_match(row["params_json"], mode):
+                continue
+            job = self.db.query_one(
+                "SELECT id FROM jobs WHERE analysis_run_id = ?"
+                " AND status IN ('QUEUED', 'RUNNING') ORDER BY created_at DESC, id DESC LIMIT 1",
+                (row["id"],),
+            )
+            return {**row, "job_id": job["id"] if job else None}
+        return None
+
+    @staticmethod
+    def _pca_params_match(raw: str | None, mode: str) -> bool:
+        try:
+            saved = json.loads(raw or "{}")
+        except (TypeError, json.JSONDecodeError):
+            return False
+        return saved == {"mode": mode} or (mode == "structure" and saved == {})
+
+    @staticmethod
+    def _pca_artifact_exists(row: dict) -> bool:
+        result_path = row.get("result_path")
+        return bool(result_path and (Path(result_path) / "pca.json").is_file())
 
     @classmethod
     def _pca_points(cls, values: np.ndarray, run_row: dict, mode: str):

@@ -61,8 +61,12 @@ class DescriptorService:
                 {
                     "name": s["name"],
                     "display_name": s.get("display_name", name),
+                    "description": s.get("description", ""),
+                    "schema_version": s.get("schema_version"),
+                    "descriptor_version": s.get("descriptor_version"),
                     "level": s.get("level"),
                     "backend": s.get("backend"),
+                    "execution_engine": s.get("execution_engine"),
                     "category": s.get("category"),
                     "capabilities": s.get("capabilities", []),
                     "input": s.get("input", {}),
@@ -331,8 +335,8 @@ class DescriptorService:
         """Poll engine ComputeControl counters onto the compute phase's slice of
         the job bar ([_LOAD_BAR_SHARE, 1], 05 文档 §3 进度映射).
 
-        0.2.5 kernels never advance completed() — the bar then just holds at
-        the phase base; 0.2.6 feeds per-frame checkpoints. Runs on a daemon
+        0.2.5 kernels never advanced completed() — the bar then held at
+        the phase base; 0.2.6 and later feed per-frame checkpoints. Runs on a daemon
         thread stopped/joined by the compute caller.
         """
         while not stop.wait(0.2):

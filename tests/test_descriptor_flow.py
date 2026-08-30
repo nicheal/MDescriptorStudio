@@ -30,8 +30,21 @@ def test_descriptor_registry_and_compute(tmp_path: Path) -> None:
         listing = bp.request(101, "descriptor.list")
         names = [d["name"] for d in listing["result"]]
         assert len(names) == 28 and "ACE" in names and "NEP" in names
+        assert all(
+            item["display_name"]
+            and item["description"]
+            and item["schema_version"] >= 3
+            and item["descriptor_version"]
+            and item["execution_engine"]
+            and item["input"]
+            for item in listing["result"]
+        )
 
         schema = bp.request(102, "descriptor.describe", {"name": "ACE"})["result"]
+        assert schema["schema_version"] == 3
+        assert schema["parameters"]["species"]["display_name"] == "Chemical species"
+        assert schema["parameters"]["species"]["description"]
+        assert schema["parameters"]["trans"]["properties"]["p"]["display_name"] == "Transform power"
         assert schema["parameters"]["species"]["required"] is True
         assert "properties" in schema["parameters"]["trans"]  # nested object
 

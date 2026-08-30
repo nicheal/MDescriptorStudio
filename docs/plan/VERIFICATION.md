@@ -8,7 +8,7 @@
 | 验收标准 | 证据 |
 |---|---|
 | 启动显示空壳页 | [GUI] 截图：四页 Tab + Sidebar + 状态栏（2026-08-29 实机） |
-| 状态栏显示引擎版本 | [GUI] 状态栏 "Ready · MDescriptor 0.2.3 · Windows x64" |
+| 状态栏显示引擎版本 | [GUI] 状态栏 "Ready · MDescriptor 0.2.7 · Windows x64" |
 | IPC 往返 < 100ms | [TEST] system.info 往返 <10ms 量级（smoke 测试）；帧读取 p95=16ms |
 | 日志落盘 | [TEST+GUI] `%LOCALAPPDATA%\MDescriptorStudio\logs\backend.log` 实机查验 |
 | git init 首个 commit | [BUILD] commit f798237（docs 基线）→ 6 个里程碑 commit |
@@ -35,7 +35,7 @@
 
 | 验收标准 | 证据 |
 |---|---|
-| 不硬编码 descriptor/参数 | [TEST] descriptor.list 返回 28 项（引擎动态）；前端 SchemaForm 全部由 schema 驱动 |
+| 不硬编码 descriptor/参数 | [TEST] descriptor.list 返回 28 项（引擎动态）；前端 SchemaForm 全部由 schema 驱动，字段标题/描述消费 0.2.7 schema 元数据 |
 | 表单由 schema 生成（含嵌套 object） | [GUI] 截图：ACE 表单含 trans/D 嵌套子表单、enum/number/array/species 控件 |
 | 兼容性预检禁用 | [TEST] UNSUPPORTED_PERIODICITY 提交兜底（descriptor_service._check_input_capability）；前端列表禁用逻辑按 input.periodicity |
 | 提交走通 | [TEST] descriptor.submit → compute → COMPLETED（ACE, 12×64） |
@@ -53,7 +53,7 @@
 
 | 验收标准 | 证据 |
 |---|---|
-| PCA | [TEST] test_analysis_flow：8 帧 → 8 点，explained_variance > 0，能量着色数据齐备；前端 ECharts scatter + color-by |
+| PCA | [TEST] test_analysis_flow：8 帧 → 8 点，explained_variance > 0，能量着色数据齐备；重复请求复用同一 `analysis_id` 且 `job_id=null`；前端 ECharts scatter + color-by |
 | PCA → Structure 联动 | 前端点选 → activeFrameIndex + Open in Explore 跨页跳转（与 M2 已验证的帧渲染同一通路；GUI 交互点击验证受桌面占用限制，未单独截图） |
 | Heatmap | [TEST] frame 2 → 16×16 原子级矩阵 + atomOffset 正确 |
 | setup.exe | [BUILD] `src-tauri\target\release\bundle\nsis\MDescriptor Studio_0.1.0_x64-setup.exe`（59 MB，含 56 MB backend sidecar） |

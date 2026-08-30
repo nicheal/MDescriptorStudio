@@ -1,18 +1,18 @@
-# mdescriptor 上游待修改清单（基于 0.2.5 复测）
+# mdescriptor 上游待修改清单（基于 0.2.7 复测）
 
-> 日期：2026-08-29；环境：Windows x64，cp312 wheel **0.2.5**，项目 `.venv`（Python 3.12.9）+ numpy 2.5.2
-> 来源：`engine-known-issues.md` 的 0.2.5 逐条复核结论；验证脚本 `scripts/verify_known_issues.py`（只读探测 + 最小复现），schema 事实基线见 `engine-api-report.md`/`.json`
-> 范围：仅列 0.2.5 复测后**仍需修改**的项。0.2.3 清单中的其余项已修复或判定非问题（死锁、`execution_engine`、`cooperative_cancel`、`descriptor_version`、错误文案与结构化 payload、mixed periodicity 能力位、LodeSphericalExpansion 仅周期化属有意行为），不再重复。
+> 日期：2026-08-30；环境：Windows x64，cp312 wheel **0.2.7**，项目 `.venv`（Python 3.12.9）+ numpy 2.5.2
+> 来源：`engine-known-issues.md` 的历史复核与 0.2.7 `scripts/probe_engine.py` 探测；schema 事实基线见 `engine-api-report.md`/`.json`
+> 范围：仅列 0.2.7 复测后仍需修改的项。0.2.7 已补齐 GUI baseline API、`StructureBatch.from_frames()`、详细描述符列表和 `UnsupportedPeriodicityError`；参数展示元数据也已完整提供。
 
 | # | 问题 | 优先级 | 类型 |
 |---|---|---|---|
-| 1 | `gui-adaptation-baseline.md` 未随 PyPI wheel 发布 | P1 | 打包 |
-| 2 | 无任何 GPU 执行路径（28/28 `devices: ["cpu"]`） | P1 | 能力 |
-| 3 | `StructureBatch` 缺 `from_frames()` 类构造器 | P2 | API 人体工学 |
-| 4 | `list_descriptors()` 返回裸名字 `tuple` | P2 | API 人体工学 |
-| 5 | `DescriptorInputError` 无独立子类（可选） | P3 | API 人体工学 |
+| 1 | 无任何 GPU 执行路径（28/28 `devices: ["cpu"]`） | P1 | 能力 |
+
+0.2.5 的原始条目证据保留在下文，作为变更历史；其中 #1/#3/#4/#5 已由 0.2.7 的公开 API 解决。
 
 ---
+
+## 历史条目（0.2.5，已由 0.2.7 复核）
 
 ## 1. 权威契约文档 `gui-adaptation-baseline.md` 不随 wheel 发布
 

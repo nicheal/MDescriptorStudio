@@ -18,15 +18,15 @@ import {
   Delete16Regular,
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
-import { activeDataset, useWorkspace } from "../stores/workspace";
+import { activeDataset, useWorkspace, type PcaMode, type SelectedSample } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
-import type { PcaPayload, RunRow } from "../types/protocol";
+import { createCartesianDataZoom } from "../components/chartInteraction";
+import StructurePreview from "../components/StructurePreview";
+import type { FramePayload, PcaAnalysisResponse, PcaPayload, RunRow } from "../types/protocol";
 
-// PCA payloads survive tab switches and dataset switches (bug1/bug2): keyed by
-// run id + mode, module-level so remounting the page restores the last chart.
+// Fast UI cache for tab switches; the authoritative cache is persisted by the
+// backend in analysis_runs + pca.json and is consulted by analysis.pca.
 const pcaCache = new Map<string, PcaPayload>();
-
-type PcaMode = "structure" | "atom";
 
 const RUN_STATUS_COLOR: Record<string, string> = {
   QUEUED: "#616161",
@@ -41,12 +41,18 @@ export default function Results() {
   const st = useWorkspace();
   const d = activeDataset(st);
   const [runs, setRuns] = useState<RunRow[]>([]);
-  const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  // Keep the selected result in the workspace so remounting Results after a
+  // tab switch does not reset the table to its first row.
+  const selectedRun = st.activeDescriptorRunId;
+  const setSelectedRun = st.setActiveRun;
+  const selectedSample = st.selectedSample;
+  const setSelectedSample = st.setSelectedSample;
   const [pca, setPca] = useState<PcaPayload | null>(null);
   const [pcaMode, setPcaMode] = useState<PcaMode>("structure");
   const [colorBy, setColorBy] = useState<string>("energy");
-  const [selectedPoint, setSelectedPoint] = useState<number | null>(null);
   const [pcaBusy, setPcaBusy] = useState(false);
+  const [selectedFrame, setSelectedFrame] = useState<FramePayload | null>(null);
+  const [selectedFrameBusy, setSelectedFrameBusy] = useState(false);
   const [heatmap, setHeatmap] = useState<{ atoms: number[]; features: number[]; values: number[][]; atomOffset: number } | null>(null);
   // current selection key ("run:mode"); runPca completes after an async job and
   // must not paint a stale payload onto a chart that moved on meanwhile
@@ -56,7 +62,8 @@ export default function Results() {
     if (!d) return;
     const rows = await ipc.request<RunRow[]>("result.list", { dataset_id: d.id });
     setRuns(rows);
-    setSelectedRun((cur) => (cur && rows.some((r) => r.id === cur) ? cur : rows[0]?.id ?? null));
+    const currentRunId = useWorkspace.getState().activeDescriptorRunId;
+    setSelectedRun(currentRunId && rows.some((r) => r.id === currentRunId) ? currentRunId : rows[0]?.id ?? null);
   }, [d]);
 
   useEffect(() => {
@@ -96,12 +103,51 @@ export default function Results() {
   // selected run (or dataset) changed: show that run's cached PCA, or clear —
   // never keep the previous dataset's chart on screen (bug2)
   const pcaCacheKey = selectedRun ? `${selectedRun}:${pcaMode}` : null;
+  const selectedPoint: SelectedSample | null =
+    selectedSample &&
+    selectedSample.datasetId === d?.id &&
+    selectedSample.runId === selectedRun &&
+    selectedSample.mode === pcaMode
+      ? selectedSample
+      : null;
   useEffect(() => {
     activeKeyRef.current = pcaCacheKey;
     setPca(pcaCacheKey ? pcaCache.get(pcaCacheKey) ?? null : null);
-    setSelectedPoint(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedRun, d?.id, pcaMode]);
+
+  const selectedFrameIndex = selectedPoint?.frame ?? null;
+  useEffect(() => {
+    const datasetId = d?.id;
+    if (!datasetId || selectedFrameIndex == null) {
+      setSelectedFrame(null);
+      setSelectedFrameBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSelectedFrame(null);
+    setSelectedFrameBusy(true);
+    void ipc
+      .request<FramePayload>("dataset.frame", {
+        id: datasetId,
+        index: selectedFrameIndex,
+        bond_cutoff: 2.4,
+      })
+      .then((frame) => {
+        if (!cancelled) setSelectedFrame(frame);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedFrame(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSelectedFrameBusy(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [d?.id, selectedFrameIndex]);
 
   // delete one run: backend cascades analyses + linked jobs and removes the
   // stored result dirs; drop this run's cached PCA payloads so they can never
@@ -121,20 +167,31 @@ export default function Results() {
 
   const runPca = async (mode: PcaMode) => {
     if (!selectedRun) return;
+    const runId = selectedRun;
     setPcaBusy(true);
     try {
-      const r = await ipc.request<{ job_id: string }>("analysis.pca", { run_id: selectedRun, mode });
-      trackJob(r.job_id, "analysis.pca");
-      const done = await watchJob(r.job_id);
-      if (done.status === "COMPLETED") {
-        const full = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: done.result?.analysis_id });
-        const key = `${selectedRun}:${mode}`;
-        pcaCache.set(key, full);
-        if (activeKeyRef.current === key) setPca(full);
-        message.success("PCA ready");
-      } else {
-        message.error(`PCA ${done.status}: ${done.error?.message ?? ""}`);
+      const r = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: runId, mode });
+      let analysisId = r.analysis_id;
+      let fromCache = !r.job_id;
+      if (r.job_id) {
+        trackJob(r.job_id, "analysis.pca");
+        const done = await watchJob(r.job_id);
+        if (done.status !== "COMPLETED") {
+          message.error(`PCA ${done.status}: ${done.error?.message ?? ""}`);
+          return;
+        }
+        const completedAnalysisId = done.result?.analysis_id;
+        if (typeof completedAnalysisId === "string") analysisId = completedAnalysisId;
+        fromCache = false;
       }
+      if (!analysisId) {
+        throw new Error("analysis.pca returned no analysis_id");
+      }
+      const full = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: analysisId });
+      const key = `${runId}:${mode}`;
+      pcaCache.set(key, full);
+      if (activeKeyRef.current === key) setPca(full);
+      message.success(fromCache ? "PCA loaded from cache" : "PCA ready");
     } catch (e) {
       const err = e as { code: string; message: string };
       message.error(`${err.code}: ${err.message}`);
@@ -146,27 +203,29 @@ export default function Results() {
   const switchPcaMode = (mode: PcaMode) => {
     if (mode === pcaMode) return;
     setPcaMode(mode);
-    setSelectedPoint(null);
+    setSelectedSample(null);
     const key = selectedRun ? `${selectedRun}:${mode}` : null;
     const cached = key ? pcaCache.get(key) ?? null : null;
     setPca(cached);
     if (!cached && selectedRun) void runPca(mode);
   };
 
+  const heatmapFrameIndex = selectedPoint?.frame ?? st.activeFrameIndex;
   const loadHeatmap = useCallback(async () => {
-    if (!selectedRun || !d) return;
+    if (!selectedRun || !d?.id) return;
     try {
       const h = await ipc.request<{ atoms: number[]; features: number[]; values: number[][]; atomOffset: number }>(
         "result.heatmap",
-        { run_id: selectedRun, frame_index: st.activeFrameIndex },
+        { run_id: selectedRun, frame_index: heatmapFrameIndex },
       );
       setHeatmap(h);
     } catch {
       setHeatmap(null);
     }
-  }, [selectedRun, d, st.activeFrameIndex]);
+  }, [selectedRun, d?.id, heatmapFrameIndex]);
 
   useEffect(() => {
+    setHeatmap(null);
     void loadHeatmap();
   }, [loadHeatmap]);
 
@@ -193,8 +252,8 @@ export default function Results() {
               emphasis: { iconStyle: { borderColor: "#0F6CBD" } },
             },
             dataZoom: [
-              { type: "inside", filterMode: "none", throttle: 60 },
-              { type: "slider", height: 14, bottom: 6, filterMode: "none" },
+              ...createCartesianDataZoom(),
+              { type: "slider", xAxisIndex: 0, height: 14, bottom: 6, filterMode: "none" },
             ],
             tooltip: {
               formatter: (p: { dataIndex: number }) => {
@@ -262,40 +321,116 @@ export default function Results() {
       click: (p: { dataIndex: number }) => {
         const pt = pca?.points[p.dataIndex];
         if (!pt) return;
-        setSelectedPoint(pt.frame);
+        if (!d) return;
+        setSelectedSample({
+          datasetId: d.id,
+          runId: pca.run_id,
+          mode: pca.mode ?? pcaMode,
+          frame: pt.frame,
+          atom: pt.atom,
+        });
         useWorkspace.getState().setActiveFrame(pt.frame);
         message.info(`Frame ${pt.frame} selected — open Explore to view`);
       },
     }),
-    [pca, message],
+    [d, message, pca, pcaMode, setSelectedSample],
   );
 
+  const heatmapOption = useMemo(() => {
+    if (!heatmap) return null;
+    const flatValues = heatmap.values.flat();
+    if (flatValues.length === 0) return null;
+    const rawMin = Math.min(...flatValues);
+    const rawMax = Math.max(...flatValues);
+    const rangePadding = rawMin === rawMax ? Math.max(Math.abs(rawMin) * 0.05, 1e-6) : 0;
+    return {
+      grid: { left: 8, right: 42, top: 8, bottom: 8 },
+      tooltip: {
+        formatter: (p: { value: [number, number, number] }) => {
+          const [featureIndex, atomIndex, value] = p.value;
+          return `Atom <b>${heatmap.atoms[atomIndex] ?? atomIndex}</b><br/>Feature <b>${heatmap.features[featureIndex] ?? featureIndex}</b><br/>Value <b>${Number(value).toFixed(5)}</b>`;
+        },
+      },
+      xAxis: {
+        type: "category",
+        data: heatmap.features.map(String),
+        show: false,
+      },
+      yAxis: {
+        type: "category",
+        data: heatmap.atoms.map(String),
+        inverse: true,
+        show: false,
+      },
+      visualMap: {
+        min: rawMin - rangePadding,
+        max: rawMax + rangePadding,
+        calculable: false,
+        show: true,
+        right: 4,
+        top: "center",
+        itemWidth: 12,
+        itemHeight: 160,
+        inRange: { color: ["#2166AC", "#F7F7F7", "#B2182B"] },
+        text: ["hi", "lo"],
+        textStyle: { fontSize: 10 },
+      },
+      series: [
+        {
+          type: "heatmap",
+          data: heatmap.values.flatMap((row, i) => row.map((v, j) => [j, i, v])),
+          emphasis: { itemStyle: { borderColor: "#242424", borderWidth: 1 } },
+        },
+      ],
+      animation: false,
+    };
+  }, [heatmap]);
+
+  // Keep the history table dense while allowing every descriptor currently
+  // listed in it to fit without wrapping or truncation.
+  const descriptorColumnWidth = useMemo(() => {
+    const longest = runs.reduce(
+      (max, run) => Math.max(max, run.descriptor_name.length),
+      "Descriptor".length,
+    );
+    return Math.max(112, longest * 8 + 24);
+  }, [runs]);
+
   return (
-    <div>
-      {runs.length === 0 ? (
-        // single empty state — the run table would just duplicate "No data"
-        <Empty description="No completed runs yet — compute a descriptor first" style={{ marginTop: 60 }} />
-      ) : (
-        <>
-          {/* run history */}
-          <div style={{ marginBottom: 12 }}>
-            <Table
-              size="small"
-              pagination={{ pageSize: 5 }}
-              rowKey="id"
-              dataSource={runs}
-              onRow={(r) => ({
-                onClick: () => setSelectedRun(r.id),
-                style: { cursor: "pointer", background: r.id === selectedRun ? "#EBF3FC" : undefined },
-              })}
-              columns={[
-                { title: "Run", dataIndex: "id", key: "id", render: (v: string) => <Typography.Text code style={{ fontSize: 11 }}>{v}</Typography.Text> },
-                { title: "Descriptor", dataIndex: "descriptor_name", key: "d" },
-                { title: "Scope", dataIndex: "scope", key: "s", width: 90 },
+    <div className="results-page">
+      <section className="results-card results-run-card">
+        <SectionHeading title="RUN" meta={`${runs.length} result${runs.length === 1 ? "" : "s"}`} />
+        {runs.length > 0 ? (
+          <Table
+            className="results-run-table"
+            size="small"
+            tableLayout="fixed"
+            pagination={runs.length > 5 ? { pageSize: 5 } : false}
+            rowKey="id"
+            dataSource={runs}
+            onRow={(r) => ({
+              onClick: () => setSelectedRun(r.id),
+              style: { cursor: "pointer", background: r.id === selectedRun ? "#EBF3FC" : undefined },
+            })}
+            columns={[
+                { title: "Descriptor", dataIndex: "descriptor_name", key: "d", width: descriptorColumnWidth },
+                { title: "Scope", dataIndex: "scope", key: "s", width: 84 },
+                {
+                  title: "Shape",
+                  dataIndex: "shape",
+                  key: "shape",
+                  width: 130,
+                  align: "center",
+                  render: (v: string | null | undefined) => v ? (
+                    <Typography.Text code style={{ fontSize: 11 }} title={v}>{v}</Typography.Text>
+                  ) : (
+                    <Typography.Text type="secondary">—</Typography.Text>
+                  ),
+                },
                 { title: "Status", dataIndex: "status", key: "st", width: 100, render: (v: string) => (
                   <Typography.Text style={{ color: RUN_STATUS_COLOR[v], fontWeight: 600, fontSize: 12 }}>{v}</Typography.Text>
                 ) },
-                { title: "Created", dataIndex: "created_at", key: "c", width: 170, render: (v: string) => new Date(v).toLocaleString() },
+                { title: "Created", dataIndex: "created_at", key: "c", width: 168, render: (v: string) => new Date(v).toLocaleString() },
                 {
                   title: "",
                   key: "actions",
@@ -325,119 +460,147 @@ export default function Results() {
                   ),
                 },
               ]}
-            />
-          </div>
+          />
+        ) : (
+          <Empty description="No completed runs yet — compute a descriptor first" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        )}
+      </section>
 
-          <div style={{ display: "flex", gap: 16 }}>
-          {/* PCA plot-first */}
-          <div style={{ flex: 4, background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, padding: 12 }}>
-            <Space style={{ marginBottom: 8 }}>
-              <Typography.Text strong>PCA · {runs.find((r) => r.id === selectedRun)?.descriptor_name}</Typography.Text>
-              <Select
-                size="small"
-                value={pcaMode}
-                style={{ width: 130 }}
-                onChange={switchPcaMode}
-                options={[
-                  { value: "structure", label: "By structure" },
-                  { value: "atom", label: "By atom" },
-                ]}
-              />
-              <Select
-                size="small"
-                value={colorBy}
-                style={{ width: 150 }}
-                onChange={setColorBy}
-                options={[
-                  { value: "energy", label: "Color by Energy" },
-                  { value: "force", label: "Color by Max|F|" },
-                  { value: "volume", label: "Color by Volume" },
-                  { value: "none", label: "No color mapping" },
-                ]}
-              />
-              <Button size="small" icon={<ArrowSync16Regular />} loading={pcaBusy} onClick={() => void runPca(pcaMode)}>
-                Run PCA
-              </Button>
-            </Space>
-            {pca ? (
+      {runs.length > 0 && <div className="results-analysis-layout">
+        {/* PCA plot-first */}
+        <section className="results-card results-pca-card">
+          <SectionHeading
+            title="PCA"
+            meta={runs.find((r) => r.id === selectedRun)?.descriptor_name ?? "—"}
+          />
+          <Space className="results-pca-controls" wrap>
+            <Select
+              size="small"
+              value={pcaMode}
+              style={{ width: 130 }}
+              onChange={switchPcaMode}
+              options={[
+                { value: "structure", label: "By structure" },
+                { value: "atom", label: "By atom" },
+              ]}
+            />
+            <Select
+              size="small"
+              value={colorBy}
+              style={{ width: 150 }}
+              onChange={setColorBy}
+              options={[
+                { value: "energy", label: "Color by Energy" },
+                { value: "force", label: "Color by Max|F|" },
+                { value: "volume", label: "Color by Volume" },
+                { value: "none", label: "No color mapping" },
+              ]}
+            />
+            <Button size="small" icon={<ArrowSync16Regular />} loading={pcaBusy} onClick={() => void runPca(pcaMode)}>
+              Run PCA
+            </Button>
+          </Space>
+          {pca ? (
+            <div className="results-chart-frame">
               <ReactECharts
+                className="results-pca-chart"
+                style={{ width: "100%", height: "100%" }}
                 option={pcaOption}
-                style={{ height: "calc(100vh - 560px)", minHeight: 420 }}
                 notMerge
                 onEvents={pcaEvents}
               />
-            ) : (
-              <Empty description="Click Run PCA" style={{ marginTop: 120 }} />
-            )}
-          </div>
-
-          {/* selected sample inspector + heatmap */}
-          <div style={{ width: 320, display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, padding: 12 }}>
-              <Typography.Text strong style={{ fontSize: 12, color: "#616161" }}>
-                SELECTED SAMPLE
-              </Typography.Text>
-              {selectedPoint != null ? (
-                <>
-                  <div style={{ marginTop: 8, fontSize: 13 }}>
-                    <Row k="Frame" v={String(selectedPoint)} />
-                  </div>
-                  <Button
-                    size="small"
-                    icon={<ArrowRight16Regular />}
-                    style={{ marginTop: 8 }}
-                    onClick={() => {
-                      st.setActiveFrame(selectedPoint);
-                      st.setPage("explore");
-                    }}
-                  >
-                    Open in Explore
-                  </Button>
-                </>
-              ) : (
-                <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
-                  Click a PCA point
-                </Typography.Text>
-              )}
             </div>
-            {heatmap && heatmap.values.length > 0 && (
-              <div style={{ background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, padding: 12 }}>
-                <Typography.Text strong style={{ fontSize: 12, color: "#616161" }}>
-                  HEATMAP · frame {st.activeFrameIndex} (atoms {heatmap.atomOffset}–{heatmap.atomOffset + heatmap.atoms.length - 1})
-                </Typography.Text>
-                <ReactECharts
-                  option={{
-                    grid: { left: 50, right: 12, top: 10, bottom: 30 },
-                    xAxis: { type: "category", name: "feature", data: [], show: false },
-                    yAxis: { type: "category", data: [], show: false },
-                    visualMap: {
-                      min: Math.min(...heatmap.values.flat()),
-                      max: Math.max(...heatmap.values.flat()),
-                      calculable: false,
-                      show: true,
-                      right: 0,
-                      top: "center",
-                      inRange: { color: ["#2166AC", "#F7F7F7", "#B2182B"] },
-                      text: ["hi", "lo"],
-                    },
-                    series: [
-                      {
-                        type: "heatmap",
-                        data: heatmap.values.flatMap((row, i) => row.map((v, j) => [j, i, v])),
-                        progress: { progress: 0 },
-                      },
-                    ],
-                    animation: false,
+          ) : (
+            <Empty description="Click Run PCA" style={{ marginTop: 120 }} />
+          )}
+        </section>
+
+        <div className="results-side-column">
+          <section className="results-card results-selected-sample-card">
+            <SectionHeading title="SELECTED SAMPLE" />
+            {selectedPoint != null ? (
+              <div className="results-sample-details">
+                <Row k="Frame" v={String(selectedPoint.frame)} />
+                {selectedPoint.atom != null && <Row k="Atom" v={String(selectedPoint.atom)} />}
+                <Row k="Formula" v={selectedFrame?.formula ?? (selectedFrameBusy ? "Loading…" : "—")} />
+                <Row
+                  k="E / atom"
+                  v={selectedFrame?.energy_per_atom != null ? `${selectedFrame.energy_per_atom.toFixed(4)} eV` : "—"}
+                />
+                <Row
+                  k="Max |F|"
+                  v={selectedFrame?.force_max != null ? `${selectedFrame.force_max.toFixed(4)} eV/Å` : "—"}
+                />
+                <Button
+                  size="small"
+                  icon={<ArrowRight16Regular />}
+                  onClick={() => {
+                    st.setActiveFrame(selectedPoint.frame);
+                    st.setPage("explore");
                   }}
-                  style={{ height: 220 }}
+                >
+                  Open in Explore
+                </Button>
+              </div>
+            ) : (
+              <Typography.Text type="secondary" className="results-card-empty-copy">
+                Click a PCA point to inspect its structure.
+              </Typography.Text>
+            )}
+          </section>
+
+          <section className="results-card results-structure-card">
+            <SectionHeading title="SELECTED STRUCTURE" meta={selectedFrame ? `Frame ${selectedFrame.index}` : undefined} />
+            {selectedFrame ? (
+              <StructurePreview
+                frame={selectedFrame}
+                onOpen={() => {
+                  st.setActiveFrame(selectedFrame.index);
+                  st.setPage("explore");
+                }}
+              />
+            ) : (
+              <div className="results-structure-empty">
+                <Typography.Text type="secondary">
+                  {selectedFrameBusy ? "Loading structure…" : "Select a PCA point to preview its structure."}
+                </Typography.Text>
+              </div>
+            )}
+          </section>
+
+          <section className="results-card results-heatmap-card">
+            <SectionHeading
+              title="HEATMAP"
+              meta={heatmap ? `Frame ${heatmapFrameIndex}` : undefined}
+            />
+            {heatmapOption && heatmap && heatmap.values.length > 0 ? (
+              <div className="results-chart-frame">
+                <ReactECharts
+                  className="results-heatmap-chart"
+                  style={{ width: "100%", height: "100%" }}
+                  option={heatmapOption}
                   notMerge
                 />
               </div>
+            ) : (
+              <div className="results-heatmap-empty">
+                <Typography.Text type="secondary">
+                  {selectedRun ? "Heatmap is available for atom-level results." : "Select a run to load a heatmap."}
+                </Typography.Text>
+              </div>
             )}
-          </div>
+          </section>
         </div>
-        </>
-      )}
+      </div>}
+    </div>
+  );
+}
+
+function SectionHeading({ title, meta }: { title: string; meta?: string }) {
+  return (
+    <div className="results-section-heading">
+      <Typography.Text strong>{title}</Typography.Text>
+      {meta && <Typography.Text type="secondary">{meta}</Typography.Text>}
     </div>
   );
 }

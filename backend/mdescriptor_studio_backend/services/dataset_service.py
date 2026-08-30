@@ -31,6 +31,9 @@ from .job_service import JobService
 log = logging.getLogger(__name__)
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
+DEFAULT_BOND_CUTOFF = 2.4
+MIN_BOND_CUTOFF = 0.1
+MAX_BOND_CUTOFF = 10.0
 
 
 def _symbol(z: int) -> str:
@@ -46,6 +49,24 @@ def formula_of(symbols: list[str]) -> str:
     return "".join(
         f"{sym}{n}" for sym, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     )
+
+
+def _bond_cutoff(value: object) -> float:
+    """Validate the optional display-bond cutoff sent by Explore."""
+    if value is None:
+        return DEFAULT_BOND_CUTOFF
+    if isinstance(value, bool):
+        raise AppError(INVALID_PARAMS, "'bond_cutoff' must be a finite number")
+    try:
+        cutoff = float(value)
+    except (TypeError, ValueError) as exc:
+        raise AppError(INVALID_PARAMS, "'bond_cutoff' must be a finite number") from exc
+    if not np.isfinite(cutoff) or not MIN_BOND_CUTOFF <= cutoff <= MAX_BOND_CUTOFF:
+        raise AppError(
+            INVALID_PARAMS,
+            f"'bond_cutoff' must be between {MIN_BOND_CUTOFF} and {MAX_BOND_CUTOFF} Å",
+        )
+    return cutoff
 
 
 class DatasetService:
@@ -333,6 +354,7 @@ class DatasetService:
         ds_id, index = params.get("id"), params.get("index")
         if not isinstance(index, int):
             raise AppError(INVALID_PARAMS, "'index' (int) is required")
+        bond_cutoff = _bond_cutoff(params.get("bond_cutoff"))
         row = self._row(ds_id)
         adapter = self._adapter_for(row)
         try:
@@ -372,7 +394,7 @@ class DatasetService:
             lat = " ".join(f"{v:.6f}" for v in cell.reshape(-1))
             header += f' Lattice="{lat}"'
         # periodic images appended to the SAME model so cross-boundary bonds form
-        ghosts = periodic_boundary_ghosts(symbols, positions, cell) if periodic else []
+        ghosts = periodic_boundary_ghosts(symbols, positions, cell, cutoff=bond_cutoff) if periodic else []
         display_symbols = symbols + [g[0] for g in ghosts]
         display_positions = (
             np.vstack([positions, np.array([g[1] for g in ghosts])]) if ghosts else positions
@@ -402,12 +424,13 @@ class DatasetService:
             "pbc": "".join("XYZ"[i] for i, v in enumerate(f.pbc) if v) or "—",
             "cell": cell.reshape(-1).tolist() if periodic else None,
             "ghost_count": len(ghosts),
+            "bond_cutoff": bond_cutoff,
         }
 
 
 def periodic_boundary_ghosts(
     symbols: list[str], positions: np.ndarray, cell: np.ndarray,
-    cutoff: float = 2.4, max_ghosts: int = 3000,
+    cutoff: float = DEFAULT_BOND_CUTOFF, max_ghosts: int = 3000,
 ) -> list[tuple[str, np.ndarray]]:
     """Periodic-image atoms that complete bonds cut by the cell boundary.
 
