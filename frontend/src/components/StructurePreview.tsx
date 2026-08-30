@@ -20,6 +20,7 @@ type Viewer = {
   addModel: () => ViewerModel;
   addLine: (spec: object) => void;
   setStyle: (sel: object, style: object) => void;
+  addStyle: (sel: object, style: object) => void;
   zoomTo: () => void;
   render: () => void;
 };
@@ -101,9 +102,10 @@ function addUnitCell(viewer: Viewer, cell: number[] | null) {
 interface StructurePreviewProps {
   frame: FramePayload;
   onOpen: () => void;
+  selectedAtom?: number;
 }
 
-export default function StructurePreview({ frame, onOpen }: StructurePreviewProps) {
+export default function StructurePreview({ frame, onOpen, selectedAtom }: StructurePreviewProps) {
   const viewerDiv = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
@@ -149,10 +151,13 @@ export default function StructurePreview({ frame, onOpen }: StructurePreviewProp
         { sphere: { scale: 0.24, color }, stick: { radius: 0.1, color } },
       );
     }
+    if (selectedAtom != null && selectedAtom >= 0 && selectedAtom < atoms.length) {
+      viewer.addStyle({ index: selectedAtom }, { sphere: { scale: 0.44, color: "#D13438" }, stick: { radius: 0.15, color: "#D13438" } });
+    }
     addUnitCell(viewer, frame.cell);
     viewer.zoomTo();
     viewer.render();
-  }, [frame, viewerReady]);
+  }, [frame, selectedAtom, viewerReady]);
 
   return (
     <div className="results-structure-preview-shell">

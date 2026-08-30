@@ -6,6 +6,7 @@ import {
   Image16Regular,
   Options16Regular,
   Sparkle16Regular,
+  DocumentTableRegular,
 } from "@fluentui/react-icons";
 import Sidebar from "./components/layout/Sidebar";
 import ContextBar from "./components/layout/ContextBar";
@@ -15,6 +16,7 @@ import TitleBar from "./components/layout/TitleBar";
 import Overview from "./pages/Overview";
 import Explore from "./pages/Explore";
 import Descriptors from "./pages/Descriptors";
+import Results from "./pages/Results";
 import Analysis from "./pages/Analysis";
 import { ipc } from "./ipc/client";
 import { useWorkspace } from "./stores/workspace";
@@ -24,11 +26,12 @@ import type { DatasetMeta } from "./types/protocol";
 import { APP_ICON_URL } from "./brand";
 
 // Jobs is not a tab — the top-right Jobs button/drawer is the single jobs
-// surface, and the Descriptors rail shows recent descriptor computes.
-const TABS: { key: "overview" | "explore" | "descriptors" | "analysis"; label: string; icon: ReactNode }[] = [
+// surface, and the Descriptors/Results rail shows recent descriptor computes.
+const TABS: { key: "overview" | "explore" | "descriptors" | "results" | "analysis"; label: string; icon: ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <Grid16Regular /> },
   { key: "explore", label: "Explore", icon: <Image16Regular /> },
   { key: "descriptors", label: "Descriptors", icon: <Sparkle16Regular /> },
+  { key: "results", label: "Results", icon: <DocumentTableRegular /> },
   { key: "analysis", label: "Analysis", icon: <Options16Regular /> },
 ];
 
@@ -278,6 +281,7 @@ export default function App() {
               {page === "overview" && <Overview />}
               {page === "explore" && <Explore />}
               {page === "descriptors" && <Descriptors />}
+              {page === "results" && <Results />}
               {page === "analysis" && <Analysis />}
             </div>
             <RightRail />

@@ -86,15 +86,18 @@ Analysis API 统一使用同一结果模型：计算型方法立即返回
 |---|---|
 | analysis.list/get/delete/preview/chunk | 通用 artifact 生命周期；结果目录必须有 completed manifest |
 | analysis.umap / analysis.tsne | run_id、mode、seed=42；UMAP 默认 n_neighbors=15/min_dist=0.1，t-SNE 默认 perplexity=30 |
-| analysis.neighbors / analysis.similarity | k 默认 10；Euclidean/Cosine；返回 n×k 邻居/距离，不返回 n×n 矩阵 |
+| analysis.neighbors / analysis.similarity / analysis.pairwise | k 默认 10；Euclidean/Cosine；neighbors 返回 n×k，pairwise 仅返回确定性有界抽样矩阵（UI 默认 ≤400 samples） |
 | analysis.cluster | algorithm=kmeans/dbscan/hdbscan/agglomerative；cluster 数默认 6；返回 labels 及可选 centers/probabilities |
 | analysis.outlier | algorithm=knn/lof/isolation_forest/mahalanobis；contamination 默认 0.01；返回 labels/scores |
-| analysis.fps / analysis.sampling | FPS、random、stratified、cluster_representative、per_element；FPS 目标默认 1000 |
-| analysis.coverage / analysis.drift | reference_run_id/query_run_id；参考集自覆盖 q95/q99 默认阈值；返回分块 nearest distance 和 Covered/Marginal/Out-of-coverage |
-| analysis.compare | 相同 feature count 做 feature-level；不同 descriptor 仅在 sample IDs 对齐时做 distance/ranking correlation |
-| analysis.feature_variance / analysis.feature_correlation | variance、Top-K correlation pairs；不默认传完整 D×D heatmap |
+| analysis.fps / analysis.sampling / analysis.acquisition | FPS、random、stratified、cluster_representative、per_element；acquisition 在 reference novelty pool 内做 diversity sampling，不调用模型推理 |
+| analysis.coverage / analysis.overlap / analysis.drift | reference_run_id/query_run_id；nearest coverage、near-duplicate overlap、MMD/centroid/covariance drift，并返回有界 joint projection |
+| analysis.compare | sample IDs 对齐；比较 pair-distance Pearson/Spearman、kNN overlap、PCA topology、ARI 和 effective dimension；同 feature count 时追加 feature delta |
+| analysis.feature_variance / analysis.feature_correlation | variance、zero-variance、redundancy summary、Top-K pairs 和 ≤512 feature 的有界 correlation heatmap |
 | analysis.effective_dimension | eigenvalues、explained variance、participation ratio 和 90/95/99% 阈值 |
-| analysis.trajectory / analysis.sensitivity | 显式 frame range/timestep；sensitivity 只比较已有 Completed Run |
+| analysis.property_correlation | energy / force / volume 等已存在物理量；feature correlation、cross-validated Ridge 和 descriptor-distance/property-delta correlation |
+| analysis.local_diversity | 强制 atom mode；按 element 做 neighbor-distance category、clustering 和 effective dimension summary |
+| analysis.kernel | linear/cosine/polynomial/RBF；有界 kernel matrix、centered eigenvalues 和 effective rank |
+| analysis.trajectory / analysis.sensitivity | 显式 frame range/timestep；sensitivity 只比较同一种 Descriptor 的 Completed Run；不同 descriptor 使用 analysis.compare |
 | analysis.export | JSON/CSV identity/meta，DeepMD/extxyz 子集；禁止修改 source_path |
 
 新分析输入必须是当前 fingerprint 对应的 Completed Descriptor Run。NaN/Inf、

@@ -380,21 +380,78 @@ body {
   margin: 0;
 }
 
-.analysis-runs-card {
+.descriptor-results-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+
+.descriptor-results-card {
   padding-bottom: 0;
 }
 
-.analysis-runs-card .analysis-section-heading {
-  margin-bottom: 6px;
+.descriptor-results-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
 }
 
-.analysis-runs-table {
+.descriptor-results-section-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 20px;
+  margin-bottom: 4px;
+}
+
+.descriptor-results-section-heading > .ant-typography:first-child {
+  color: #242424;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.descriptor-results-section-heading > .ant-typography + .ant-typography {
+  color: #616161;
+  font-size: 12px;
+}
+
+.descriptor-results-description {
+  display: block;
+  max-width: 720px;
+  font-size: 12px;
+}
+
+.descriptor-results-table {
   margin: 0 -12px;
   width: calc(100% + 24px);
 }
 
-.analysis-runs-table .ant-table-container {
+.descriptor-results-table .ant-table-container {
   border-radius: 0 0 6px 6px;
+}
+
+.descriptor-results-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.descriptor-results-actions .ant-btn {
+  min-width: 32px;
+}
+
+.descriptor-results-row-selected > td {
+  background: #ebf3fc !important;
+}
+
+@media (max-width: 720px) {
+  .descriptor-results-card-header {
+    flex-direction: column;
+  }
 }
 
 .analysis-workspace {
@@ -481,6 +538,40 @@ body {
 .analysis-overview-chart-frame .svg-container {
   width: 100% !important;
   height: 100% !important;
+}
+
+.analysis-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.analysis-purpose-chart {
+  width: 100%;
+  height: min(50vh, 430px);
+  min-height: 320px;
+}
+
+.analysis-purpose-chart.compact {
+  height: min(42vh, 360px);
+  min-height: 290px;
+}
+
+.analysis-purpose-chart .js-plotly-plot,
+.analysis-purpose-chart .plot-container,
+.analysis-purpose-chart .svg-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.analysis-data-table {
+  margin-top: 10px;
+}
+
+.explore-atom-row-selected > td {
+  background: #fde7e9 !important;
+  color: #a4262c;
+  font-weight: 600;
 }
 
 .analysis-metric-strip {
@@ -608,6 +699,10 @@ body {
 }
 
 @media (max-width: 720px) {
+  .analysis-chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .analysis-inspector {
     grid-template-columns: minmax(0, 1fr);
   }

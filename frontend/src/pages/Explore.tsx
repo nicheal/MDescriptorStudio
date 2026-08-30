@@ -117,6 +117,12 @@ export default function Explore() {
   const renderedFrameRef = useRef<number | null>(null);
 
   const total = d?.number_of_frames ?? 0;
+  const selectedSample = st.selectedSample;
+  const selectedAtom = selectedSample
+    && selectedSample.datasetId === d?.id
+    && selectedSample.frame === frame?.index
+    ? selectedSample.atom
+    : undefined;
 
   const fetchFrame = useCallback(
     async (index: number, requestedBondCutoff = bondCutoff) => {
@@ -192,6 +198,9 @@ export default function Explore() {
       const color = elementColor(el);
       v.setStyle({ elem: el }, { sphere: { scale: 0.28, color }, stick: { radius: 0.12, color } });
     }
+    if (selectedAtom != null && selectedAtom >= 0 && selectedAtom < atoms.length) {
+      v.addStyle({ index: selectedAtom }, { sphere: { scale: 0.5, color: "#D13438" }, stick: { radius: 0.17, color: "#D13438" } });
+    }
     // unit cell wireframe (12 edges) for periodic frames; cell is row-major a1,a2,a3
     if (frame.cell && frame.cell.length === 9) {
       const A = frame.cell;
@@ -224,7 +233,7 @@ export default function Explore() {
     if (frame.ghost_count) console.info(`frame ${frame.index}: +${frame.ghost_count} periodic image atoms`);
     const ms = performance.now() - loadStart.current;
     console.info(`frame ${frame.index} fetched+rendered in ${ms.toFixed(0)}ms`);
-  }, [viewerReady, frame]);
+  }, [viewerReady, frame, selectedAtom]);
 
   if (!d) return <Empty description="Register a dataset first" style={{ marginTop: 120 }} />;
 
@@ -374,6 +383,7 @@ export default function Explore() {
           pagination={false}
           dataSource={frame?.atom_rows ?? []}
           rowKey="i"
+          rowClassName={(row) => row.i === selectedAtom ? "explore-atom-row-selected" : ""}
           columns={[
             { title: "#", dataIndex: "i", key: "i", width: 60 },
             { title: "Element", dataIndex: "el", key: "el", width: 80 },

@@ -6,9 +6,10 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from mdescriptor_studio_backend.analysis import AnalysisEngine, SampleMatrix
-from mdescriptor_studio_backend.errors import ANALYSIS_STALE, AppError
+from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, ANALYSIS_STALE, AppError
 from mdescriptor_studio_backend.services.analysis_service import AnalysisService
 from mdescriptor_studio_backend.services.result_service import ResultService
 from mdescriptor_studio_backend.storage.database import Database
@@ -61,6 +62,31 @@ def _service(tmp_path: Path):
     )
     jobs = _InlineJobs(db)
     return db, jobs, AnalysisService(db, jobs, ResultService(db), datasets=None, data_dir=tmp_path)
+
+
+def test_sensitivity_requires_same_descriptor_before_enqueue(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    result_dir = tmp_path / "results" / "run_2"
+    result_dir.mkdir(parents=True)
+    values = np.arange(96, dtype=np.float32).reshape(12, 8)
+    np.save(result_dir / "values.npy", values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_2", "level": "structure", "row_semantics": "structure", "shape": list(values.shape)}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES ('run_2', 'ds_1', 'ACSF', 'test', '{}',"
+        " 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(result_dir),),
+    )
+
+    with pytest.raises(AppError, match="same descriptor") as exc:
+        service.sensitivity({"run_ids": ["run_1", "run_2"]})
+
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+    assert jobs.calls == 0
+    db.close()
 
 
 def test_generic_analysis_is_cached_and_chunked(tmp_path: Path) -> None:
@@ -158,6 +184,9 @@ def test_legacy_pca_cache_includes_preprocessing_mode(tmp_path: Path) -> None:
     raw = service.pca({"run_id": "run_1", "preprocess": "raw"})
     assert centered["analysis_id"] != raw["analysis_id"]
     assert jobs.calls == 2
+    cache_keys = db.query("SELECT cache_key FROM analysis_runs WHERE analysis_type = 'pca' ORDER BY id")
+    assert all(row["cache_key"] for row in cache_keys)
+    assert len({row["cache_key"] for row in cache_keys}) == 2
     raw_row = db.query_one("SELECT result_path FROM analysis_runs WHERE id = ?", (raw["analysis_id"],))
     raw_payload = json.loads((Path(raw_row["result_path"]) / "pca.json").read_text(encoding="utf-8"))
     assert raw_payload["preprocess"] == "raw"

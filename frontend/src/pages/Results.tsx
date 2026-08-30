@@ -1,5 +1,6 @@
 /**
- * Compatibility entry point for callers that still import the pre-Analysis
- * page name. The product navigation and implementation now live in Analysis.
+ * Descriptor result history page.  Analysis owns the downstream analysis
+ * workspace; this entry point keeps the Results page name aligned with the
+ * product navigation.
  */
-export { default } from "./Analysis";
+export { default } from "./DescriptorResults";

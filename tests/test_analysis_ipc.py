@@ -57,6 +57,7 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
         assert projection_ids
         run("analysis.neighbors", {"run_id": run_id, "k": 2})
         run("analysis.similarity", {"run_id": run_id, "k": 2, "query_index": 0})
+        pairwise_id = run("analysis.pairwise", {"run_id": run_id, "max_samples": 8})
 
         for algorithm, params in (
             ("kmeans", {"n_clusters": 2}),
@@ -82,10 +83,21 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
             run("analysis.sampling", {"run_id": run_id, "algorithm": algorithm, **params, "seed": 42})
 
         run("analysis.coverage", {"reference_run_id": run_id, "query_run_id": run_id, "chunk_size": 3, "reference_chunk_size": 3})
+        run("analysis.overlap", {"reference_run_id": run_id, "query_run_id": run_id})
+        run(
+            "analysis.acquisition",
+            {"reference_run_id": run_id, "query_run_id": run_id, "n_samples": 4, "novelty_weight": 0.7},
+        )
         run("analysis.compare", {"left_run_id": run_id, "right_run_id": run_id})
         quality_id = run("analysis.feature_variance", {"run_id": run_id, "top_k": 4})
         run("analysis.feature_correlation", {"run_id": run_id, "top_k": 4, "heatmap_features": 4})
         run("analysis.effective_dimension", {"run_id": run_id})
+        run(
+            "analysis.property_correlation",
+            {"run_id": run_id, "property": "energy_per_atom", "folds": 3, "top_k": 4},
+        )
+        run("analysis.local_diversity", {"run_id": run_id, "n_clusters": 3, "k": 3})
+        run("analysis.kernel", {"run_id": run_id, "kernel": "rbf", "max_samples": 8})
         run("analysis.trajectory", {"run_id": run_id, "frame_start": 0, "frame_end": 7, "frame_step": 1})
         run("analysis.drift", {"reference_run_id": run_id, "query_run_id": run_id, "chunk_size": 3, "reference_chunk_size": 3})
         run("analysis.sensitivity", {"run_ids": [run_id, run_id]})
@@ -102,6 +114,14 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
         chunk = bp.request(sequence, "analysis.chunk", {"analysis_id": quality_id, "array": "variance", "limit": 4})
         sequence += 1
         assert len(chunk["result"]["data"]) == 4
+        pairwise = bp.request(
+            sequence,
+            "analysis.chunk",
+            {"analysis_id": pairwise_id, "array": "distance_matrix", "limit": 8, "column_end": 8},
+        )
+        sequence += 1
+        assert pairwise["result"]["shape"] == [8, 8]
+        assert len(pairwise["result"]["data"]) == 8
 
         export_path = tmp_path / "analysis-subset.json"
         export_id = run("analysis.export", {"run_id": run_id, "indices": [0, 2], "mode": "structure", "format": "json", "output_path": str(export_path)})

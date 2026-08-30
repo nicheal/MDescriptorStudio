@@ -180,5 +180,5 @@
 
 ## ADR-25 选择、导出与跨 Run 比较
 
-**决策**：Plotly 支持 click 单点与 box/lasso 框选；Sampling 导出 JSON/CSV 身份文件和 DeepMD/extxyz 子集，源文件只读。Compare 在 feature count 相同时做 feature-level 指标；不同描述符只有 sample IDs 对齐时才做 distance/ranking correlation。Parameter Sensitivity 只比较已有 Completed Run。
+**决策**：Plotly 支持 click 单点与 box/lasso 框选；Sampling 导出 JSON/CSV 身份文件和 DeepMD/extxyz 子集，源文件只读。Compare 在 feature count 相同时做 feature-level 指标；不同描述符只有 sample IDs 对齐时才做 distance/ranking correlation。Parameter Sensitivity 只比较同一描述符的已有 Completed Run；不同描述符使用 Compare。
 **后果**：用户可从散点选择直接回到 Explore，跨描述符不会通过补零/截断伪造 feature-level 可比性。

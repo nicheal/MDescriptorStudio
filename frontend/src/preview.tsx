@@ -205,7 +205,9 @@ const JOB_ROWS = [
 
 let mockLatestAnalysisId = "ana-mock-analysis";
 let mockLatestAnalysisKind = "projection";
-let mockAnalysisArrays: Record<string, number[]> = {};
+let mockAnalysisArrays: Record<string, unknown[]> = {};
+let mockLatestPcaMode = "structure";
+let mockLatestPcaPreprocess = "raw";
 
 function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kind = "projection") {
   mockLatestAnalysisId = analysisId;
@@ -217,15 +219,44 @@ function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kin
   return { job_id: jobId, analysis_id: analysisId, cache: null };
 }
 
+function mockAnalysisPoints(kind: string, count = 180) {
+  return Array.from({ length: count }, (_, i) => {
+    const label = i % 4;
+    const row = kind === "local_diversity" ? i % 8 : undefined;
+    return {
+      i,
+      frame: Math.floor(i / (row == null ? 1 : 8)),
+      row,
+      element: row == null ? undefined : (i % 2 ? 33 : 31),
+      x: Math.sin(i / 12) * 3 + label * 0.45,
+      y: Math.cos(i / 17) * 2 + label * 0.25,
+      label: kind === "outliers" ? (i % 23 === 0 ? 1 : 0) : kind === "local_diversity" ? (i % 31 === 0 ? 2 : i % 11 === 0 ? 1 : 0) : label,
+      cluster: label,
+      score: 0.1 + Math.abs(Math.sin(i / 9)),
+      distance: 0.08 + Math.abs(Math.cos(i / 14)),
+      sample_id: row == null ? `frame:${i}` : `frame:${Math.floor(i / 8)}:row:${row}`,
+    };
+  });
+}
+
 function mockOverviewPreview() {
   if (mockLatestAnalysisKind === "feature_variance") {
     return { analysis_id: mockLatestAnalysisId, kind: "feature_variance", top_k: 12, top_indices: [12, 3, 41, 7, 28, 16, 55, 2, 36, 19, 64, 8], top_values: [2.84, 2.17, 1.92, 1.68, 1.51, 1.34, 1.18, 1.04, 0.92, 0.81, 0.74, 0.68] };
   }
   if (mockLatestAnalysisKind === "feature_correlation") {
+    const featureIndices = [2, 3, 7, 8, 12, 16, 28, 41];
+    mockAnalysisArrays = {
+      correlation_feature_indices: featureIndices,
+      correlation_matrix: featureIndices.map((_, i) => featureIndices.map((__, j) => i === j ? 1 : Number((Math.cos((i + 1) * (j + 1)) * 0.82).toFixed(4)))),
+    };
     return {
       analysis_id: mockLatestAnalysisId,
       kind: "feature_correlation",
       feature_count: 256,
+      zero_variance_count: 3,
+      highly_correlated_pairs: 7,
+      redundant_feature_count: 5,
+      redundancy_ratio: 0.0195,
       pairs: [
         { feature_a: 12, feature_b: 41, correlation: 0.94 },
         { feature_a: 3, feature_b: 7, correlation: -0.91 },
@@ -237,6 +268,45 @@ function mockOverviewPreview() {
       ],
     };
   }
+  if (mockLatestAnalysisKind === "similarity") {
+    const rows = Array.from({ length: 18 }, (_, index) => ({ rank: index + 1, i: index + 1, frame: index + 1, sample_id: `frame:${index + 1}`, distance: 0.02 + index * 0.035, similarity: 0.98 - index * 0.035 }));
+    return { analysis_id: mockLatestAnalysisId, kind: "similarity", metric: "cosine", query_index: 0, rows };
+  }
+  if (mockLatestAnalysisKind === "pairwise_similarity") {
+    const size = 36;
+    mockAnalysisArrays = { similarity_matrix: Array.from({ length: size }, (_, i) => Array.from({ length: size }, (__, j) => Number(Math.exp(-Math.abs(i - j) / 8).toFixed(4)))) };
+    return { analysis_id: mockLatestAnalysisId, kind: "pairwise_similarity", metric: "cosine", sample_count: size, distance_min: 0, distance_max: 1 };
+  }
+  if (["clusters", "outliers", "sampling", "acquisition", "local_diversity"].includes(mockLatestAnalysisKind)) {
+    const points = mockAnalysisPoints(mockLatestAnalysisKind);
+    const selected = points.filter((_, index) => index % 17 === 0).map(({ i, frame, row, sample_id }) => ({ i, frame, row, sample_id }));
+    if (mockLatestAnalysisKind === "local_diversity") {
+      return { analysis_id: mockLatestAnalysisId, kind: "local_diversity", sample_count: points.length, categories: ["main", "distorted", "outlier"], element_summary: [{ element: 31, samples: 90, clusters: 4, distorted: 8, outliers: 3, effective_dimension: 6.2 }, { element: 33, samples: 90, clusters: 4, distorted: 9, outliers: 3, effective_dimension: 5.8 }], points, rows: points };
+    }
+    return { analysis_id: mockLatestAnalysisId, kind: mockLatestAnalysisKind, algorithm: mockLatestAnalysisKind === "acquisition" ? "novelty_fps" : mockLatestAnalysisKind, cluster_count: 4, noise_count: 3, outlier_count: 8, selected_count: selected.length, candidate_pool: points.length, mean_selected_novelty: 0.82, points, rows: points, selected };
+  }
+  if (["coverage", "overlap", "drift"].includes(mockLatestAnalysisKind)) {
+    const reference = Array.from({ length: 100 }, (_, i) => [Math.sin(i / 9) * 2, Math.cos(i / 13) * 1.5]);
+    const query = Array.from({ length: 80 }, (_, i) => [Math.sin(i / 8) * 2 + 0.6, Math.cos(i / 11) * 1.5 + 0.35]);
+    const labels = query.map((_, i) => i < 52 ? 0 : i < 70 ? 1 : 2);
+    mockAnalysisArrays = { projection_coords: [...reference, ...query], projection_source: [...reference.map(() => 0), ...query.map(() => 1)], labels };
+    const rows = query.map((_, i) => ({ i, frame: i, sample_id: `frame:${i}`, labels: labels[i], distances: Number((0.1 + i / 85).toFixed(4)), reference_i: i % reference.length }));
+    return mockLatestAnalysisKind === "overlap"
+      ? { analysis_id: mockLatestAnalysisId, kind: "overlap", categories: ["near_duplicate", "highly_similar", "independent"], near_duplicates: 52, highly_similar: 18, independent: 10, overlap_fraction: 0.875, mean_distance: 0.43, rows }
+      : { analysis_id: mockLatestAnalysisId, kind: mockLatestAnalysisKind, categories: ["covered", "marginal", "out_of_coverage"], covered: 52, marginal: 18, out_of_coverage: 10, mean_distance: 0.43, mmd: 0.18, centroid_distance: 0.37, covariance_shift: 0.12, rows };
+  }
+  if (mockLatestAnalysisKind === "compare") {
+    const pairs = Array.from({ length: 800 }, (_, i) => 0.1 + Math.abs(Math.sin(i / 21)) * 2.4);
+    const coords = Array.from({ length: 120 }, (_, i) => [Math.sin(i / 10) * 2, Math.cos(i / 14) * 1.6]);
+    mockAnalysisArrays = { left_pair_distances: pairs, right_pair_distances: pairs.map((value, i) => value * 0.94 + Math.sin(i / 12) * 0.08), left_coords: coords, right_coords: coords.map(([x, y]) => [x * 0.96 + 0.2, y * 1.04 - 0.1]) };
+    return { analysis_id: mockLatestAnalysisId, kind: "compare", pairwise_distance_pearson: 0.96, pairwise_distance_spearman: 0.94, neighbor_overlap: 0.81, clustering_stability: 0.87, pca_topology_error: 0.12, left_effective_dimension: 8.4, right_effective_dimension: 9.1 };
+  }
+  if (mockLatestAnalysisKind === "property_correlation") {
+    const targets = Array.from({ length: 160 }, (_, i) => -4.2 + Math.sin(i / 17) * 0.8);
+    const predictions = targets.map((value, i) => value + Math.sin(i / 8) * 0.12);
+    mockAnalysisArrays = { targets, predictions, residuals: targets.map((value, i) => value - predictions[i]), pair_distance: Array.from({ length: 800 }, (_, i) => Math.abs(Math.sin(i / 19)) * 4), pair_property_delta: Array.from({ length: 800 }, (_, i) => Math.abs(Math.sin(i / 19)) * 0.7 + Math.abs(Math.cos(i / 7)) * 0.1) };
+    return { analysis_id: mockLatestAnalysisId, kind: "property_correlation", property: "energy_per_atom", sample_count: targets.length, r2: 0.91, rmse: 0.084, mae: 0.067, distance_property_correlation: 0.78, top_features: Array.from({ length: 12 }, (_, i) => ({ feature: i * 3 + 2, correlation: 0.9 - i * 0.11 })) };
+  }
   if (mockLatestAnalysisKind === "effective_dimension") {
     const explained = [0.24, 0.17, 0.12, 0.1, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.012, 0.008, 0.004];
     mockAnalysisArrays = { explained_variance: explained };
@@ -245,8 +315,9 @@ function mockOverviewPreview() {
   if (mockLatestAnalysisKind === "trajectory") {
     const time = Array.from({ length: 180 }, (_, index) => index);
     const stepDistance = time.map((index) => Number((0.08 + Math.abs(Math.sin(index / 13)) * 0.24 + (index > 118 && index < 132 ? 0.52 : 0)).toFixed(5)));
-    mockAnalysisArrays = { time, frames: time, step_distance: stepDistance };
-    return { analysis_id: mockLatestAnalysisId, kind: "trajectory", frame_start: 0, frame_end: 179, frame_step: 1, time_unit: "frame", total_distance: Number(stepDistance.reduce((sum, value) => sum + value, 0).toFixed(4)) };
+    const referenceDistance = time.map((_, index) => Math.abs(Math.sin(index / 31)) * 2.5 + index / 280);
+    mockAnalysisArrays = { time, frames: time, step_distance: stepDistance, reference_distance: referenceDistance, cumulative_distance: stepDistance.map((_, index) => stepDistance.slice(0, index + 1).reduce((sum, value) => sum + value, 0)), event_indices: [119, 122, 126, 129, 132] };
+    return { analysis_id: mockLatestAnalysisId, kind: "trajectory", frame_start: 0, frame_end: 179, frame_step: 1, time_unit: "frame", total_distance: Number(stepDistance.reduce((sum, value) => sum + value, 0).toFixed(4)), max_reference_distance: Math.max(...referenceDistance), event_count: 5, points: mockAnalysisPoints("trajectory", time.length) };
   }
   if (mockLatestAnalysisKind === "drift") {
     const rows = Array.from({ length: 240 }, (_, index) => {
@@ -262,12 +333,17 @@ function mockOverviewPreview() {
       kind: "sensitivity",
       baseline_run_id: "run-dpa2",
       runs: [
-        { run_id: "run-dpa2", parameters: { cutoff: 5, sel: 96 }, mean_delta_norm: 0 },
-        { run_id: "run-dpa2-cut6", parameters: { cutoff: 6, sel: 96 }, mean_delta_norm: 0.42 },
-        { run_id: "run-dpa2-cut7", parameters: { cutoff: 7, sel: 128 }, mean_delta_norm: 0.89 },
-        { run_id: "run-dpa2-cut8", parameters: { cutoff: 8, sel: 128 }, mean_delta_norm: 1.24 },
+        { run_id: "run-dpa2", parameters: { cutoff: 5, sel: 96 }, pairwise_distance_pearson: 1, neighbor_overlap: 1, clustering_stability: 1, effective_dimension: 8.1 },
+        { run_id: "run-dpa2-cut6", parameters: { cutoff: 6, sel: 96 }, pairwise_distance_pearson: 0.97, neighbor_overlap: 0.86, clustering_stability: 0.92, effective_dimension: 8.4 },
+        { run_id: "run-dpa2-cut7", parameters: { cutoff: 7, sel: 128 }, pairwise_distance_pearson: 0.91, neighbor_overlap: 0.78, clustering_stability: 0.84, effective_dimension: 9.2 },
+        { run_id: "run-dpa2-cut8", parameters: { cutoff: 8, sel: 128 }, pairwise_distance_pearson: 0.86, neighbor_overlap: 0.69, clustering_stability: 0.75, effective_dimension: 9.8 },
       ],
     };
+  }
+  if (mockLatestAnalysisKind === "kernel") {
+    const size = 48;
+    mockAnalysisArrays = { kernel_matrix: Array.from({ length: size }, (_, i) => Array.from({ length: size }, (__, j) => Number(Math.exp(-Math.abs(i - j) / 10).toFixed(4)))), eigenvalues: Array.from({ length: size }, (_, i) => Math.exp(-i / 7) * 12) };
+    return { analysis_id: mockLatestAnalysisId, kind: "kernel", kernel: "rbf", sample_count: size, effective_rank: 8.7, top_eigenvalue_fraction: 0.18, kernel_min: 0.01, kernel_max: 1 };
   }
   return {
     analysis_id: mockLatestAnalysisId,
@@ -402,6 +478,25 @@ const METHODS: Record<string, Handler> = {
   },
   "dataset.frame": (p) => mockFramePayload(Number(p.index ?? 0)),
   "job.list": () => JOB_ROWS,
+  "job.get": (p) => {
+    const id = String(p.id ?? "");
+    const row = JOB_ROWS.find((job) => job.id === id);
+    return row ?? {
+      id,
+      job_type: "analysis",
+      dataset_id: "ds-gaas",
+      descriptor_run_id: null,
+      status: "RUNNING",
+      progress: 0,
+      completed: null,
+      total: null,
+      message: null,
+      error: null,
+      created_at: new Date().toISOString(),
+      started_at: new Date().toISOString(),
+      finished_at: null,
+    };
+  },
   "settings.get": () => ({ value: "ds-gaas" }),
   "settings.set": () => ({}),
   "engine.check_update": () => ({
@@ -463,7 +558,7 @@ const METHODS: Record<string, Handler> = {
       shape: "[12480, 256]",
     },
   ],
-  // mutable run rows + a scripted job lifecycle so the Analysis tab can be
+  // mutable run rows + a scripted job lifecycle so the Results page can be
   // watched flipping QUEUED -> RUNNING -> COMPLETED without the real backend
   "result.list": () => {
     startJobPlaybook();
@@ -480,6 +575,8 @@ const METHODS: Record<string, Handler> = {
   "analysis.pca": (_p) => {
     mockLatestAnalysisId = "ana-mock-pca";
     mockLatestAnalysisKind = "projection";
+    mockLatestPcaMode = String(_p.mode ?? "structure");
+    mockLatestPcaPreprocess = String(_p.preprocess ?? "center");
     mockAnalysisArrays = {};
     window.setTimeout(() => {
       mockEmit("job.finished", { job_id: "job-pca-live", status: "COMPLETED", result: { analysis_id: "ana-mock-pca" }, error: null });
@@ -492,6 +589,7 @@ const METHODS: Record<string, Handler> = {
       descriptor_run_id: "run-dpa2",
       analysis_type: "pca",
       status: "COMPLETED",
+      parameters: { mode: mockLatestPcaMode, preprocess: mockLatestPcaPreprocess },
       dataset_ids: ["ds-gaas"],
       input_run_ids: ["run-dpa2"],
       created_at: new Date(NOW - 58 * 60000).toISOString(),
@@ -504,7 +602,8 @@ const METHODS: Record<string, Handler> = {
     const offset = Math.max(0, Math.floor(Number(p.offset ?? 0) || 0));
     const limit = Math.min(20_000, Math.max(1, Math.floor(Number(p.limit ?? 2000) || 2000)));
     const data = values.slice(offset, offset + limit);
-    return { analysis_id: mockLatestAnalysisId, array, offset, next_offset: offset + data.length, shape: [values.length], dtype: "float64", data };
+    const columns = Array.isArray(values[0]) ? (values[0] as unknown[]).length : undefined;
+    return { analysis_id: mockLatestAnalysisId, array, offset, next_offset: offset + data.length, shape: columns == null ? [values.length] : [values.length, columns], dtype: "float64", data };
   },
   "analysis.umap": (_p) => {
     mockLatestAnalysisId = "ana-mock-analysis";
@@ -518,43 +617,46 @@ const METHODS: Record<string, Handler> = {
   },
   "analysis.neighbors": (_p) => mockAnalysisSubmit("job-neighbors-live"),
   "analysis.similarity": (_p) => mockAnalysisSubmit("job-similarity-live", "ana-mock-similarity", "similarity"),
+  "analysis.pairwise": (_p) => mockAnalysisSubmit("job-pairwise-live", "ana-mock-pairwise", "pairwise_similarity"),
   "analysis.cluster": (_p) => mockAnalysisSubmit("job-cluster-live", "ana-mock-clusters", "clusters"),
   "analysis.outlier": (_p) => mockAnalysisSubmit("job-outlier-live", "ana-mock-outliers", "outliers"),
   "analysis.sampling": (_p) => mockAnalysisSubmit("job-sampling-live", "ana-mock-sampling", "sampling"),
   "analysis.fps": (_p) => mockAnalysisSubmit("job-fps-live", "ana-mock-sampling", "sampling"),
   "analysis.coverage": (_p) => mockAnalysisSubmit("job-coverage-live", "ana-mock-coverage", "coverage"),
+  "analysis.overlap": (_p) => mockAnalysisSubmit("job-overlap-live", "ana-mock-overlap", "overlap"),
+  "analysis.acquisition": (_p) => mockAnalysisSubmit("job-acquisition-live", "ana-mock-acquisition", "acquisition"),
   "analysis.compare": (_p) => mockAnalysisSubmit("job-compare-live", "ana-mock-compare", "compare"),
   "analysis.feature_variance": (_p) => mockAnalysisSubmit("job-feature-variance-live", "ana-mock-feature-variance", "feature_variance"),
   "analysis.feature_correlation": (_p) => mockAnalysisSubmit("job-feature-correlation-live", "ana-mock-feature-correlation", "feature_correlation"),
   "analysis.effective_dimension": (_p) => mockAnalysisSubmit("job-effective-dimension-live", "ana-mock-effective-dimension", "effective_dimension"),
+  "analysis.property_correlation": (_p) => mockAnalysisSubmit("job-property-live", "ana-mock-property", "property_correlation"),
+  "analysis.local_diversity": (_p) => mockAnalysisSubmit("job-local-live", "ana-mock-local", "local_diversity"),
+  "analysis.kernel": (_p) => mockAnalysisSubmit("job-kernel-live", "ana-mock-kernel", "kernel"),
   "analysis.trajectory": (_p) => mockAnalysisSubmit("job-trajectory-live", "ana-mock-trajectory", "trajectory"),
   "analysis.drift": (_p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift"),
   "analysis.sensitivity": (_p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity"),
   "analysis.export": (_p) => mockAnalysisSubmit("job-export-live", "ana-mock-export"),
   "result.get_pca": (p) => {
-    const gauss2 = (mu: number, sigma: number) => {
-      let u = 0, v = 0;
-      while (u === 0) u = Math.random();
-      while (v === 0) v = Math.random();
-      return mu + sigma * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-    };
+    const scale = mockLatestPcaPreprocess === "standardized" ? 1.35 : mockLatestPcaPreprocess === "center" ? 1 : 0.78;
+    const rawShift = mockLatestPcaPreprocess === "raw" ? 1.6 : 0;
     const points = Array.from({ length: 250 }, (_, i) => {
       const cluster = i % 2;
-      const energy = cluster ? gauss2(-3.2, 0.25) : gauss2(-4.4, 0.3);
+      const noiseX = Math.sin(i * 1.71) * 0.32;
+      const noiseY = Math.cos(i * 1.13) * 0.28;
       return {
         i,
         frame: i % 6320,
-        pc1: cluster ? gauss2(3, 1.1) : gauss2(-3, 1.2),
-        pc2: cluster ? gauss2(1.5, 1.3) : gauss2(-1.5, 1.2),
-        energy: Math.round(energy * 1e4) / 1e4,
-        force_max: Math.round(Math.abs(gauss2(2.6, 1)) * 1e4) / 1e4,
-        volume: Math.round(Math.abs(gauss2(650, 70)) * 10) / 10,
+        pc1: Math.round((rawShift + scale * (cluster ? 3 : -3) + noiseX + Math.sin(i / 17) * 0.4) * 1e4) / 1e4,
+        pc2: Math.round((scale * (cluster ? 1.5 : -1.5) + noiseY + Math.cos(i / 23) * 0.35) * 1e4) / 1e4,
+        energy: cluster ? -3.2 : -4.4,
+        force_max: Math.round((2.4 + Math.abs(Math.sin(i / 9))) * 1e4) / 1e4,
+        volume: Math.round((650 + Math.sin(i / 11) * 70) * 10) / 10,
       };
     });
     return {
       analysis_id: "ana-mock-pca",
       run_id: p.run_id ?? "run-dpa2",
-      mode: p.mode ?? "structure",
+      mode: mockLatestPcaMode,
       n_points: points.length,
       points,
       explained_variance: [0.612, 0.221],
@@ -612,7 +714,7 @@ const RUNS = [
   },
 ];
 
-// one-shot timeline for job-soap: the Analysis table should show QUEUED on
+// one-shot timeline for job-soap: the Results table should show QUEUED on
 // mount, RUNNING within ~1.5s of the first job.progress, COMPLETED at ~4.5s
 let jobPlaybookStarted = false;
 function startJobPlaybook() {

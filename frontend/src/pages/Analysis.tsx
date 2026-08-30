@@ -1,6 +1,7 @@
 /*
  * Analysis is the successor to the old Results page.  It owns one shared run
- * history/selector, one compact inspector, and a set of real backend-backed modules.
+ * selector, one compact inspector, and a set of real backend-backed modules.
+ * Descriptor run history lives on the separate Results page.
  * Plotly is deliberately scoped to this page; Overview remains ECharts and
  * Explore remains 3Dmol.
  */
@@ -13,7 +14,6 @@ import {
   Empty,
   Input,
   InputNumber,
-  Popconfirm,
   Progress,
   Select,
   Space,
@@ -33,7 +33,8 @@ import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace, type PcaMode } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
 import StructurePreview from "../components/StructurePreview";
-import { displayableDescriptorRuns, normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
+import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
+import AnalysisResultVisualization, { type AnalysisArrays } from "./analysisVisualizations";
 import type {
   AnalysisJobResponse,
   AnalysisChunk,
@@ -45,12 +46,24 @@ import type {
   RunRow,
 } from "../types/protocol";
 
-type TabKey = "overview" | "projection" | "similarity" | "clusters" | "outliers" | "sampling" | "coverage" | "compare";
+type TabKey = "overview" | "projection" | "similarity" | "clusters" | "outliers" | "sampling" | "coverage" | "compare" | "local" | "kernel";
 type ProjectionName = "pca" | "umap" | "tsne";
-type OverviewAnalysis = "feature_variance" | "feature_correlation" | "effective_dimension" | "trajectory" | "drift" | "sensitivity";
+type OverviewAnalysis = "feature_variance" | "feature_correlation" | "effective_dimension" | "property_correlation" | "trajectory" | "drift" | "sensitivity";
 
 type Point = AnalysisPoint;
-type NumericArrays = Record<string, number[]>;
+type NumericArrays = AnalysisArrays;
+
+type CachedAnalysis = {
+  preview: AnalysisPreview | null;
+  points: Point[];
+  selectedIndices: number[];
+  arrays: NumericArrays;
+};
+
+type ProjectionOverrides = {
+  mode?: PcaMode;
+  preprocess?: string;
+};
 
 type Metric = {
   label: string;
@@ -66,6 +79,8 @@ const TAB_LABELS: Record<TabKey, string> = {
   sampling: "Sampling",
   coverage: "Coverage",
   compare: "Compare",
+  local: "Local",
+  kernel: "Kernel",
 };
 
 const OVERVIEW_KIND_LABELS: Record<string, string> = {
@@ -77,14 +92,51 @@ const OVERVIEW_KIND_LABELS: Record<string, string> = {
   sensitivity: "PARAMETER SENSITIVITY",
 };
 
-const RUN_STATUS_COLOR: Record<string, string> = {
-  QUEUED: "#616161",
-  RUNNING: "#0F6CBD",
-  COMPLETED: "#107C10",
-  STALE: "#F0A000",
-  FAILED: "#C42B1C",
-  CANCELLED: "#8A8A8A",
+const ARTIFACT_ARRAYS: Record<string, string[]> = {
+  pairwise_similarity: ["similarity_matrix", "distance_matrix", "sample_indices"],
+  compare: ["left_coords", "right_coords", "left_pair_distances", "right_pair_distances", "neighbor_overlap", "sample_indices"],
+  feature_correlation: ["correlation_matrix", "correlation_feature_indices"],
+  effective_dimension: ["explained_variance"],
+  property_correlation: ["targets", "predictions", "residuals", "pair_distance", "pair_property_delta"],
+  coverage: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
+  overlap: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
+  drift: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
+  trajectory: ["time", "frames", "step_distance", "reference_distance", "cumulative_distance", "event_indices"],
+  kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
 };
+
+function pcaPayloadPoints(payload: PcaPayload): Point[] {
+  return payload.points.map((point) => ({
+    i: point.i,
+    frame: point.frame,
+    row: point.atom,
+    x: point.pc1,
+    y: point.pc2,
+    energy: point.energy,
+    force_max: point.force_max,
+    volume: point.volume,
+  }));
+}
+
+function selectedIndicesFromPreview(result: AnalysisPreview): number[] {
+  return (Array.isArray(result.selected) ? result.selected : [])
+    .map((row) => Number(row.i ?? row.sample_index))
+    .filter((index) => Number.isInteger(index) && index >= 0);
+}
+
+function tabForAnalysisType(analysisType: string): TabKey {
+  if (["pca", "umap", "tsne"].includes(analysisType)) return "projection";
+  if (["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity"].includes(analysisType)) return "overview";
+  if (["similarity", "neighbors", "pairwise", "pairwise_similarity"].includes(analysisType)) return "similarity";
+  if (["kmeans", "dbscan", "hdbscan", "agglomerative", "hierarchical"].includes(analysisType)) return "clusters";
+  if (["lof", "knn", "isolation_forest", "isolation-forest", "iforest", "mahalanobis", "mahalanobis_distance"].includes(analysisType)) return "outliers";
+  if (["fps", "random", "stratified", "cluster_representative", "per_element", "acquisition", "novelty_fps"].includes(analysisType)) return "sampling";
+  if (["coverage", "overlap"].includes(analysisType)) return "coverage";
+  if (analysisType === "compare") return "compare";
+  if (analysisType === "local_diversity") return "local";
+  if (analysisType === "kernel") return "kernel";
+  return "overview";
+}
 
 export default function Analysis() {
   const { message } = AntApp.useApp();
@@ -109,6 +161,10 @@ export default function Analysis() {
   const [clusterAlgorithm, setClusterAlgorithm] = useState("kmeans");
   const [outlierAlgorithm, setOutlierAlgorithm] = useState("lof");
   const [samplingAlgorithm, setSamplingAlgorithm] = useState("fps");
+  const [similarityMode, setSimilarityMode] = useState<"query" | "all_neighbors" | "pairwise">("query");
+  const [coverageMode, setCoverageMode] = useState<"coverage" | "overlap">("coverage");
+  const [propertyName, setPropertyName] = useState("energy_per_atom");
+  const [kernelName, setKernelName] = useState("rbf");
   const [secondRun, setSecondRun] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState("csv");
   const [exportPath, setExportPath] = useState("");
@@ -122,8 +178,9 @@ export default function Analysis() {
   const [tsnePerplexity, setTsnePerplexity] = useState(30);
   const [overviewArrays, setOverviewArrays] = useState<NumericArrays>({});
   const [overviewArraysBusy, setOverviewArraysBusy] = useState(false);
-  const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
+  const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
   const operationRef = useRef(0);
+  const analysisCacheRef = useRef(new Map<string, CachedAnalysis>());
 
   const selectedRun = st.activeDescriptorRunId;
   const setSelectedRun = st.setActiveRun;
@@ -143,8 +200,8 @@ export default function Analysis() {
       setRuns(resultRows);
       setAnalyses(analysisRows.filter((row) => (row.dataset_ids ?? []).includes(dataset.id) || row.descriptor_run_id && resultRows.some((run) => run.id === row.descriptor_run_id)));
       const current = useWorkspace.getState().activeDescriptorRunId;
-      const usable = resultRows.filter((row) => row.status === "COMPLETED");
-      setSelectedRun(current && usable.some((row) => row.id === current) ? current : usable[0]?.id ?? null);
+      const completedRuns = resultRows.filter((row) => row.status === "COMPLETED");
+      setSelectedRun(current && completedRuns.some((row) => row.id === current) ? current : completedRuns[0]?.id ?? null);
     } catch (error) {
       const err = error as { code?: string; message?: string };
       message.error(`${err.code ?? "ANALYSIS"}: ${err.message ?? "Could not load analysis runs"}`);
@@ -167,13 +224,21 @@ export default function Analysis() {
     setSelectedFrame(null);
     setSecondRun(null);
     setOverviewArrays({});
+    setLoadingAnalysisId(null);
   }, [dataset?.id, selectedRun]);
 
   useEffect(() => {
-    if (secondRun && (secondRun === selectedRun || !runs.some((run) => run.id === secondRun && run.status === "COMPLETED"))) {
+    const selectedRow = runs.find((run) => run.id === selectedRun);
+    const secondRow = secondRun ? runs.find((run) => run.id === secondRun) : undefined;
+    const sensitivityPair = tab === "overview" && overviewAnalysis === "sensitivity";
+    const sensitivityDescriptorMismatch = sensitivityPair
+      && selectedRow
+      && secondRow
+      && selectedRow.descriptor_name !== secondRow.descriptor_name;
+    if (secondRun && (secondRun === selectedRun || !secondRow || secondRow.status !== "COMPLETED" || sensitivityDescriptorMismatch)) {
       setSecondRun(null);
     }
-  }, [runs, secondRun, selectedRun]);
+  }, [overviewAnalysis, runs, secondRun, selectedRun, tab]);
 
   useEffect(() => {
     const offFinished = ipc.on("job.finished", () => void refresh());
@@ -196,40 +261,54 @@ export default function Analysis() {
 
   useEffect(() => {
     const kind = String(preview?.kind ?? "");
-    const arrayNames = kind === "effective_dimension"
-      ? ["explained_variance"]
-      : kind === "trajectory"
-        ? ["time", "frames", "step_distance"]
-        : [];
-    if (tab !== "overview" || !analysisId || !arrayNames.length) {
+    const arrayNames = ARTIFACT_ARRAYS[kind] ?? [];
+    if (!analysisId || !arrayNames.length) {
       setOverviewArrays({});
+      setOverviewArraysBusy(false);
+      return;
+    }
+
+    const cached = analysisCacheRef.current.get(analysisId);
+    const cachedArrays = cached?.arrays ?? {};
+    const missingArrays = arrayNames.filter((name) => !Object.prototype.hasOwnProperty.call(cachedArrays, name));
+    if (!missingArrays.length) {
+      setOverviewArrays(cachedArrays);
       setOverviewArraysBusy(false);
       return;
     }
 
     let disposed = false;
     setOverviewArraysBusy(true);
-    void Promise.all(arrayNames.map(async (name) => {
+    void Promise.all(missingArrays.map(async (name) => {
       try {
         const chunk = await ipc.request<AnalysisChunk>("analysis.chunk", {
           analysis_id: analysisId,
           array: name,
           offset: 0,
           limit: 20_000,
+          column_end: 2_000,
         });
-        return [name, numericArray(chunk.data)] as const;
+        return [name, chunk.data] as const;
       } catch {
         return [name, []] as const;
       }
     })).then((entries) => {
       if (disposed) return;
-      setOverviewArrays(Object.fromEntries(entries));
+      const arrays = { ...cachedArrays, ...Object.fromEntries(entries) };
+      const current = analysisCacheRef.current.get(analysisId);
+      analysisCacheRef.current.set(analysisId, {
+        preview: current?.preview ?? cached?.preview ?? preview,
+        points: current?.points ?? cached?.points ?? normalizePoints(preview ?? { analysis_id: analysisId }),
+        selectedIndices: current?.selectedIndices ?? cached?.selectedIndices ?? selectedIndicesFromPreview(preview ?? { analysis_id: analysisId }),
+        arrays,
+      });
+      setOverviewArrays(arrays);
     }).finally(() => {
       if (!disposed) setOverviewArraysBusy(false);
     });
 
     return () => { disposed = true; };
-  }, [analysisId, preview, tab]);
+  }, [analysisId, preview]);
 
   const runRequest = useCallback(async (method: string, params: Record<string, unknown>, label: string) => {
     if (!selectedRun) {
@@ -242,6 +321,7 @@ export default function Analysis() {
     const isCurrent = () => operationRef.current === operation
       && useWorkspace.getState().activeDescriptorRunId === requestRunId
       && useWorkspace.getState().activeDatasetId === requestDatasetId;
+    setLoadingAnalysisId(null);
     setBusy(true);
     setLastJobProgress(0);
     setPoints([]);
@@ -271,15 +351,32 @@ export default function Analysis() {
       }
       if (!id) throw new Error(`${method} returned no analysis_id`);
       if (!isCurrent()) return null;
+      const frontendCached = response.job_id ? undefined : analysisCacheRef.current.get(id);
+      if (frontendCached) {
+        setAnalysisId(id);
+        setPreview(frontendCached.preview);
+        setPoints(frontendCached.points);
+        setSelectedIndices(frontendCached.selectedIndices);
+        setOverviewArrays(frontendCached.arrays);
+        setLastJobProgress(1);
+        message.success(`${label} loaded from cache`);
+        return id;
+      }
       const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: id, limit: 20_000 });
       if (!isCurrent()) return null;
+      const nextPoints = normalizePoints(result);
+      const nextSelectedIndices = selectedIndicesFromPreview(result);
+      const cached = analysisCacheRef.current.get(id);
+      analysisCacheRef.current.set(id, {
+        preview: result,
+        points: nextPoints,
+        selectedIndices: nextSelectedIndices,
+        arrays: cached?.arrays ?? {},
+      });
       setAnalysisId(id);
       setPreview(result);
-      setPoints(normalizePoints(result));
-      const selected = (Array.isArray(result.selected) ? result.selected : [])
-        .map((row) => Number(row.i))
-        .filter((index) => Number.isInteger(index) && index >= 0);
-      if (selected.length) setSelectedIndices(selected);
+      setPoints(nextPoints);
+      setSelectedIndices(nextSelectedIndices);
       setLastJobProgress(1);
       message.success(response.job_id ? `${label} complete` : `${label} loaded from cache`);
       return id;
@@ -292,10 +389,13 @@ export default function Analysis() {
     }
   }, [dataset?.id, message, selectedRun]);
 
-  const runProjection = useCallback(async () => {
+  const runProjection = useCallback(async ({ mode: requestedMode, preprocess: requestedPreprocess }: ProjectionOverrides = {}) => {
     if (!selectedRun) return;
     const requestRunId = selectedRun;
     const requestDatasetId = dataset?.id;
+    const activeMode = requestedMode ?? mode;
+    const activePreprocess = requestedPreprocess ?? preprocess;
+    setLoadingAnalysisId(null);
     if (projection === "pca") {
       const operation = ++operationRef.current;
       const isCurrent = () => operationRef.current === operation
@@ -311,7 +411,7 @@ export default function Analysis() {
       setInspectedPoint(null);
       useWorkspace.getState().setSelectedSample(null);
       try {
-        const response = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: requestRunId, mode, seed: 42, preprocess });
+        const response = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: requestRunId, mode: activeMode, seed: 42, preprocess: activePreprocess });
         let id = response.analysis_id;
         if (response.job_id) {
           trackJob(response.job_id, "analysis.pca");
@@ -329,11 +429,30 @@ export default function Analysis() {
           if (typeof done.result?.analysis_id === "string") id = done.result.analysis_id;
         }
         if (!isCurrent()) return;
+        const frontendCached = response.job_id ? undefined : analysisCacheRef.current.get(id);
+        if (frontendCached) {
+          setAnalysisId(id);
+          setPreview(frontendCached.preview);
+          setPoints(frontendCached.points);
+          setSelectedIndices(frontendCached.selectedIndices);
+          setOverviewArrays(frontendCached.arrays);
+          setLastJobProgress(1);
+          message.success("PCA loaded from cache");
+          return;
+        }
         const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: id });
         if (!isCurrent()) return;
+        const nextPoints = pcaPayloadPoints(payload);
+        const cached = analysisCacheRef.current.get(id);
+        analysisCacheRef.current.set(id, {
+          preview: null,
+          points: nextPoints,
+          selectedIndices: [],
+          arrays: cached?.arrays ?? {},
+        });
         setAnalysisId(id);
         setPreview(null);
-        setPoints(payload.points.map((point) => ({ i: point.i, frame: point.frame, row: point.atom, x: point.pc1, y: point.pc2, energy: point.energy, force_max: point.force_max, volume: point.volume })));
+        setPoints(nextPoints);
         setSelectedIndices([]);
         setLastJobProgress(1);
         message.success(response.job_id ? "PCA complete" : "PCA loaded from cache");
@@ -346,33 +465,161 @@ export default function Analysis() {
       return;
     }
     const projectionParams = projection === "umap"
-      ? { mode, preprocess, n_neighbors: 15, min_dist: 0.1 }
-      : { mode, preprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000 };
+      ? { mode: activeMode, preprocess: activePreprocess, n_neighbors: 15, min_dist: 0.1 }
+      : { mode: activeMode, preprocess: activePreprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000 };
     await runRequest(`analysis.${projection}`, projectionParams, projection.toUpperCase());
   }, [dataset?.id, message, mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity]);
+
+  const handlePreprocessChange = useCallback((value: string) => {
+    setPreprocess(value);
+    if (projection === "pca" && selectedRun && value !== preprocess) {
+      void runProjection({ preprocess: value });
+    }
+  }, [preprocess, projection, runProjection, selectedRun]);
+
+  const loadAnalysis = useCallback(async (row: AnalysisRow) => {
+    if (!dataset || !selectedRun || row.status !== "COMPLETED") return;
+    const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
+    if (!inputRunIds.includes(selectedRun)) {
+      message.warning("Select the source descriptor run before loading this analysis");
+      return;
+    }
+
+    const operation = ++operationRef.current;
+    const requestRunId = selectedRun;
+    const requestDatasetId = dataset.id;
+    const isCurrent = () => operationRef.current === operation
+      && useWorkspace.getState().activeDescriptorRunId === requestRunId
+      && useWorkspace.getState().activeDatasetId === requestDatasetId;
+    const analysisType = row.analysis_type.toLowerCase();
+    const analysisTab = tabForAnalysisType(analysisType);
+    setTab(analysisTab);
+    if (analysisTab === "overview" && ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity"].includes(analysisType)) {
+      setOverviewAnalysis(analysisType as OverviewAnalysis);
+    }
+    if (analysisTab === "projection") {
+      setProjection(analysisType as ProjectionName);
+      if (analysisType === "pca") {
+        const savedMode: PcaMode = row.parameters?.mode === "atom" ? "atom" : "structure";
+        const savedPreprocess = row.parameters?.preprocess;
+        const savedPreprocessValue = savedPreprocess === "raw" || savedPreprocess === "standardized" ? savedPreprocess : "center";
+        setMode(savedMode);
+        setPreprocess(savedPreprocessValue);
+      }
+    }
+    if (analysisType === "pairwise" || analysisType === "pairwise_similarity") setSimilarityMode("pairwise");
+    if (analysisType === "overlap") setCoverageMode("overlap");
+    if (analysisType === "acquisition") setSamplingAlgorithm("novelty_fps");
+
+    setLoadingAnalysisId(row.id);
+    setBusy(true);
+    setLastJobProgress(null);
+    setPoints([]);
+    setPreview(null);
+    setAnalysisId(null);
+    setOverviewArrays({});
+    setSelectedIndices([]);
+    setInspectedPoint(null);
+    setSelectedFrame(null);
+    useWorkspace.getState().setSelectedSample(null);
+
+    try {
+      const cached = analysisCacheRef.current.get(row.id);
+      if (cached) {
+        if (!isCurrent()) return;
+        setAnalysisId(row.id);
+        setPreview(cached.preview);
+        setPoints(cached.points);
+        setSelectedIndices(cached.selectedIndices);
+        setOverviewArrays(cached.arrays);
+        setLastJobProgress(1);
+        message.success(`Loaded cached ${analysisType.toUpperCase()}`);
+        return;
+      }
+
+      if (analysisType === "pca") {
+        const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: row.id });
+        if (!isCurrent()) return;
+        const nextPoints = pcaPayloadPoints(payload);
+        const nextCached: CachedAnalysis = { preview: null, points: nextPoints, selectedIndices: [], arrays: {} };
+        analysisCacheRef.current.set(row.id, nextCached);
+        setAnalysisId(row.id);
+        setPreview(null);
+        setPoints(nextPoints);
+        setSelectedIndices([]);
+        setOverviewArrays({});
+      } else {
+        const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: row.id, limit: 20_000 });
+        if (!isCurrent()) return;
+        const nextPoints = normalizePoints(result);
+        const nextSelectedIndices = selectedIndicesFromPreview(result);
+        const nextCached: CachedAnalysis = { preview: result, points: nextPoints, selectedIndices: nextSelectedIndices, arrays: {} };
+        analysisCacheRef.current.set(row.id, nextCached);
+        setAnalysisId(row.id);
+        setPreview(result);
+        setPoints(nextPoints);
+        setSelectedIndices(nextSelectedIndices);
+        setOverviewArrays({});
+      }
+      setLastJobProgress(1);
+      message.success(`Loaded cached ${analysisType.toUpperCase()}`);
+    } catch (error) {
+      const err = error as { code?: string; message?: string };
+      if (isCurrent()) message.error(`${err.code ?? "ANALYSIS"}: ${err.message ?? "could not load analysis"}`);
+    } finally {
+      if (operationRef.current === operation) {
+        setBusy(false);
+        setLoadingAnalysisId(null);
+      }
+    }
+  }, [dataset, message, selectedRun]);
 
   const runTabAnalysis = useCallback(async () => {
     if (tab === "projection") return runProjection();
     if (tab === "similarity") {
-      await runRequest("analysis.similarity", { k, query_index: queryIndex, metric: "cosine", preprocess: "raw" }, "Similarity");
+      const method = similarityMode === "pairwise" ? "analysis.pairwise" : similarityMode === "all_neighbors" ? "analysis.neighbors" : "analysis.similarity";
+      const parameters = similarityMode === "pairwise"
+        ? { metric: "cosine", preprocess: "raw", mode, max_samples: 400 }
+        : { k, query_index: queryIndex, metric: "cosine", preprocess: "raw", mode };
+      await runRequest(method, parameters, similarityMode === "pairwise" ? "Pairwise similarity" : similarityMode === "all_neighbors" ? "Neighbor graph" : "Similarity");
     } else if (tab === "clusters") {
-      await runRequest("analysis.cluster", { algorithm: clusterAlgorithm, n_clusters: nClusters, preprocess: "standardized" }, clusterAlgorithm.toUpperCase());
+      await runRequest("analysis.cluster", { algorithm: clusterAlgorithm, n_clusters: nClusters, preprocess: "standardized", mode }, clusterAlgorithm.toUpperCase());
     } else if (tab === "outliers") {
-      await runRequest("analysis.outlier", { algorithm: outlierAlgorithm, k, contamination, preprocess: "standardized" }, outlierAlgorithm.toUpperCase());
+      await runRequest("analysis.outlier", { algorithm: outlierAlgorithm, k, contamination, preprocess: "standardized", mode }, outlierAlgorithm.toUpperCase());
     } else if (tab === "sampling") {
-      await runRequest("analysis.sampling", { algorithm: samplingAlgorithm, n_samples: nSamples, mode }, "Sampling");
+      if (samplingAlgorithm === "novelty_fps") {
+        if (!secondRun || !selectedRun) {
+          message.warning("Select a reference run for novelty acquisition");
+          return;
+        }
+        await runRequest("analysis.acquisition", { reference_run_id: secondRun, query_run_id: selectedRun, n_samples: nSamples, mode, novelty_weight: 0.65 }, "Novelty acquisition");
+      } else {
+        await runRequest("analysis.sampling", { algorithm: samplingAlgorithm, n_samples: nSamples, mode }, "Sampling");
+      }
     } else if (tab === "coverage" || tab === "compare") {
       if (!secondRun || !selectedRun) {
         message.warning("Select a reference/query run pair");
         return;
       }
-      const method = tab === "coverage" ? "analysis.coverage" : "analysis.compare";
-      const parameters = tab === "coverage" ? { reference_run_id: selectedRun, query_run_id: secondRun, metric: "euclidean", q95: undefined, q99: undefined } : { left_run_id: selectedRun, right_run_id: secondRun };
-      await runRequest(method, parameters, tab === "coverage" ? "Coverage" : "Compare");
+      const method = tab === "coverage" ? `analysis.${coverageMode}` : "analysis.compare";
+      const parameters = tab === "coverage" ? { reference_run_id: selectedRun, query_run_id: secondRun, metric: "euclidean", mode } : { left_run_id: selectedRun, right_run_id: secondRun, mode };
+      await runRequest(method, parameters, tab === "coverage" ? (coverageMode === "coverage" ? "Coverage" : "Overlap") : "Compare");
+    } else if (tab === "local") {
+      await runRequest("analysis.local_diversity", { mode: "atom", n_clusters: nClusters, k }, "Local diversity");
+    } else if (tab === "kernel") {
+      await runRequest("analysis.kernel", { kernel: kernelName, mode, max_samples: 400 }, "Kernel diagnostics");
     } else if (tab === "overview") {
       if ((overviewAnalysis === "drift" || overviewAnalysis === "sensitivity") && (!secondRun || !selectedRun)) {
         message.warning("Select a reference/query run pair");
         return;
+      }
+      if (overviewAnalysis === "sensitivity" && selectedRun && secondRun) {
+        const referenceRow = runs.find((run) => run.id === selectedRun);
+        const queryRow = runs.find((run) => run.id === secondRun);
+        if (!referenceRow || !queryRow || referenceRow.descriptor_name !== queryRow.descriptor_name) {
+          message.warning("Parameter sensitivity requires the same descriptor; use Compare for different descriptors");
+          return;
+        }
       }
       const overviewParams: Record<string, unknown> = overviewAnalysis === "drift"
         ? { reference_run_id: selectedRun, query_run_id: secondRun, metric: "euclidean" }
@@ -380,6 +627,8 @@ export default function Analysis() {
           ? { run_ids: [selectedRun, secondRun] }
           : overviewAnalysis === "trajectory"
             ? { frame_step: trajectoryStep }
+            : overviewAnalysis === "property_correlation"
+              ? { property: propertyName, folds: 5, top_k: 20, mode }
             : overviewAnalysis === "feature_correlation"
               ? { top_k: 20 }
               : overviewAnalysis === "effective_dimension"
@@ -387,12 +636,12 @@ export default function Analysis() {
                 : { top_k: 20 };
       await runRequest(`analysis.${overviewAnalysis}`, overviewParams, overviewAnalysis.replaceAll("_", " "));
     }
-  }, [clusterAlgorithm, contamination, k, mode, nClusters, nSamples, overviewAnalysis, queryIndex, runProjection, runRequest, samplingAlgorithm, secondRun, selectedRun, tab, trajectoryStep, message]);
+  }, [clusterAlgorithm, contamination, coverageMode, k, kernelName, mode, nClusters, nSamples, overviewAnalysis, propertyName, queryIndex, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, similarityMode, tab, trajectoryStep, message]);
 
   const inspectPoint = useCallback((point: Point) => {
     setInspectedPoint(point);
     if (dataset && selectedRun) {
-      useWorkspace.getState().setSelectedSample({ datasetId: dataset.id, runId: selectedRun, mode, frame: point.frame, atom: point.row });
+      useWorkspace.getState().setSelectedSample({ datasetId: dataset.id, runId: selectedRun, mode: point.row == null ? mode : "atom", frame: point.frame, atom: point.row });
       useWorkspace.getState().setActiveFrame(point.frame);
     }
   }, [dataset, mode, selectedRun]);
@@ -409,6 +658,7 @@ export default function Analysis() {
     const displayedSelected = selectedDisplayIndices(points, selectedIndices);
     return (
       <Plot
+        key={`${analysisId ?? "pending"}:${projection}:${mode}:${preprocess}`}
         data={[{
           type: "scattergl",
           mode: "markers",
@@ -440,7 +690,7 @@ export default function Analysis() {
         }}
       />
     );
-  }, [colorBy, handlePoint, inspectPoint, points, projection, selectedIndices]);
+  }, [analysisId, colorBy, handlePoint, inspectPoint, mode, points, preprocess, projection, selectedIndices]);
 
   const exportSelection = async () => {
     if (!selectedRun || !exportPath.trim()) {
@@ -467,10 +717,13 @@ export default function Analysis() {
   const deleteAnalysis = async (row: AnalysisRow) => {
     try {
       await ipc.request("analysis.delete", { analysis_id: row.id });
+      analysisCacheRef.current.delete(row.id);
       if (analysisId === row.id) {
         setAnalysisId(null);
         setPreview(null);
         setPoints([]);
+        setSelectedIndices([]);
+        setOverviewArrays({});
       }
       await refresh();
     } catch (error) {
@@ -479,32 +732,18 @@ export default function Analysis() {
     }
   };
 
-  const deleteRun = async (run: RunRow) => {
-    if (deletingRunId) return;
-    setDeletingRunId(run.id);
-    try {
-      await ipc.request("result.remove", { run_id: run.id });
-      message.success("Descriptor result deleted");
-      await refresh();
-    } catch (error) {
-      const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "RESULT"}: ${err.message ?? "delete failed"}`);
-    } finally {
-      setDeletingRunId(null);
-    }
-  };
-
   if (!dataset) return <Empty description="Register a dataset first" style={{ marginTop: 120 }} />;
   const selectedRunRow = runs.find((run) => run.id === selectedRun);
-  const resultRuns = displayableDescriptorRuns(runs);
-  const completedRuns = resultRuns.filter((run) => run.status === "COMPLETED");
-  const descriptorColumnWidth = Math.max(
-    112,
-    resultRuns.reduce(
-      (max, run) => Math.max(max, run.descriptor_name.length * 8 + 24),
-      "Descriptor".length * 8 + 24,
-    ),
-  );
+  const completedRuns = runs.filter((run) => run.status === "COMPLETED");
+  const sensitivityRuns = completedRuns.filter((run) => run.descriptor_name === selectedRunRow?.descriptor_name);
+  const sensitivityPair = tab === "overview" && overviewAnalysis === "sensitivity";
+  const pairRuns = sensitivityPair ? sensitivityRuns : completedRuns;
+  const visibleAnalyses = analyses.filter((row) => {
+    const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
+    return !selectedRun || inputRunIds.includes(selectedRun);
+  });
+  const overviewModuleControl = <Space wrap><Typography.Text>Module</Typography.Text><Select value={overviewAnalysis} onChange={setOverviewAnalysis} options={[{ value: "feature_variance", label: "Feature variance" }, { value: "feature_correlation", label: "Feature correlation" }, { value: "effective_dimension", label: "Effective dimension" }, { value: "property_correlation", label: "Property correlation" }, { value: "trajectory", label: "Trajectory" }, { value: "drift", label: "Dataset drift" }, { value: "sensitivity", label: "Parameter sensitivity" }]} /><Typography.Text type="secondary">{overviewAnalysis === "sensitivity" ? "Compare parameter variants of the same descriptor; use Compare for different descriptors." : "All results stay on the backend as bounded artifacts."}</Typography.Text></Space>;
+  const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension");
 
   return (
     <div className="analysis-page">
@@ -526,80 +765,6 @@ export default function Analysis() {
         {busy && <Progress percent={Math.round((lastJobProgress ?? 0) * 100)} size="small" style={{ width: 180, marginLeft: "auto" }} />}
       </section>
 
-      <section className="analysis-card analysis-runs-card">
-        <SectionHeading title="RUN" meta={`${resultRuns.length} result${resultRuns.length === 1 ? "" : "s"}`} />
-        {resultRuns.length ? (
-          <Table
-            className="analysis-runs-table"
-            size="small"
-            tableLayout="fixed"
-            pagination={resultRuns.length > 5 ? { pageSize: 5 } : false}
-            rowKey="id"
-            dataSource={resultRuns}
-            onRow={(run) => ({
-              onClick: () => { if (run.status === "COMPLETED") setSelectedRun(run.id); },
-              style: {
-                cursor: run.status === "COMPLETED" ? "pointer" : "default",
-                background: run.id === selectedRun ? "#EBF3FC" : undefined,
-              },
-            })}
-            columns={[
-              { title: "Descriptor", dataIndex: "descriptor_name", key: "descriptor", width: descriptorColumnWidth },
-              { title: "Scope", dataIndex: "scope", key: "scope", width: 84 },
-              {
-                title: "Shape",
-                dataIndex: "shape",
-                key: "shape",
-                width: 130,
-                align: "center" as const,
-                render: (value: string | null | undefined) => value ? <Typography.Text code style={{ fontSize: 11 }} title={value}>{value}</Typography.Text> : <Typography.Text type="secondary">—</Typography.Text>,
-              },
-              {
-                title: "Status",
-                dataIndex: "status",
-                key: "status",
-                width: 100,
-                render: (value: string) => <Typography.Text style={{ color: RUN_STATUS_COLOR[value] ?? "#616161", fontWeight: 600, fontSize: 12 }}>{value}</Typography.Text>,
-              },
-              { title: "Created", dataIndex: "created_at", key: "created", width: 168, render: (value: string) => new Date(value).toLocaleString() },
-              {
-                title: "操作",
-                key: "actions",
-                width: 52,
-                render: (_value: unknown, run: RunRow) => {
-                  const active = run.status === "QUEUED" || run.status === "RUNNING";
-                  return (
-                    <span onClick={(event) => event.stopPropagation()}>
-                      <Popconfirm
-                        title="Delete this descriptor result?"
-                        description="This also removes linked analysis history and stored files."
-                        okText="Delete"
-                        cancelText="Cancel"
-                        okButtonProps={{ danger: true }}
-                        disabled={active}
-                        onConfirm={() => void deleteRun(run)}
-                      >
-                        <Button
-                          size="small"
-                          type="text"
-                          aria-label={`Delete ${run.descriptor_name} result`}
-                          title={active ? "Cancel the running job first" : "Delete descriptor result"}
-                          icon={<Delete16Regular />}
-                          loading={deletingRunId === run.id}
-                          disabled={active || deletingRunId !== null}
-                        />
-                      </Popconfirm>
-                    </span>
-                  );
-                },
-              },
-            ]}
-          />
-        ) : (
-          <Empty description="No descriptor results yet — compute a descriptor first" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-        )}
-      </section>
-
       <Tabs
         activeKey={tab}
         onChange={(value) => setTab(value as TabKey)}
@@ -609,15 +774,20 @@ export default function Analysis() {
       <div className="analysis-workspace">
         <main className="analysis-main">
           <section className="analysis-card analysis-controls">
-            {tab === "projection" && <ProjectionControls projection={projection} setProjection={setProjection} mode={mode} setMode={setMode} preprocess={preprocess} setPreprocess={setPreprocess} tsnePerplexity={tsnePerplexity} setTsnePerplexity={setTsnePerplexity} />}
-            {tab === "similarity" && <Typography.Text type="secondary">Find the nearest descriptor points to a selected query index.</Typography.Text>}
-            {tab === "clusters" && <Space wrap><Typography.Text>Algorithm</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Clusters</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /></Space>}
-            {tab === "outliers" && <Space wrap><Typography.Text>Algorithm</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Contamination</Typography.Text><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /></Space>}
-            {tab === "sampling" && <Space wrap><Typography.Text>Method</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={["fps", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: value.replaceAll("_", " ") }))} /><Typography.Text>Target</Typography.Text><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom" }]} /></Space>}
-            {(tab === "coverage" || tab === "compare" || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? "Left" : "Reference"}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? "Right" : "Query"}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
-            {tab === "similarity" && <Space wrap><Typography.Text>Query index</Typography.Text><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /><Typography.Text>k</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
-            {tab === "overview" && <Space wrap><Typography.Text>Module</Typography.Text><Select value={overviewAnalysis} onChange={setOverviewAnalysis} options={[{ value: "feature_variance", label: "Feature variance" }, { value: "feature_correlation", label: "Feature correlation" }, { value: "effective_dimension", label: "Effective dimension" }, { value: "trajectory", label: "Trajectory" }, { value: "drift", label: "Dataset drift" }, { value: "sensitivity", label: "Parameter sensitivity" }]} /><Typography.Text type="secondary">All results stay on the backend as bounded artifacts.</Typography.Text></Space>}
+            {tab === "projection" && <ProjectionControls projection={projection} setProjection={setProjection} mode={mode} setMode={setMode} preprocess={preprocess} onPreprocessChange={handlePreprocessChange} tsnePerplexity={tsnePerplexity} setTsnePerplexity={setTsnePerplexity} />}
+            {tab === "similarity" && <Space wrap><Typography.Text>View</Typography.Text><Select value={similarityMode} onChange={setSimilarityMode} options={[{ value: "query", label: "Query neighbors" }, { value: "all_neighbors", label: "All-neighbor graph" }, { value: "pairwise", label: "Pairwise matrix" }]} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
+            {tab === "clusters" && <Space wrap><Typography.Text>Algorithm</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Clusters</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
+            {tab === "outliers" && <Space wrap><Typography.Text>Algorithm</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Contamination</Typography.Text><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
+            {tab === "sampling" && <Space wrap><Typography.Text>Method</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={["fps", "novelty_fps", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: value.replaceAll("_", " ") }))} /><Typography.Text>Target</Typography.Text><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom" }]} /></Space>}
+            {tab === "coverage" && <Space wrap><Typography.Text>Analysis</Typography.Text><Select value={coverageMode} onChange={setCoverageMode} options={[{ value: "coverage", label: "Coverage" }, { value: "overlap", label: "Train / test overlap" }]} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
+            {tab === "local" && <Space wrap><Typography.Text>Clusters / element</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Typography.Text>Neighbors</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><Typography.Text type="secondary">Atom-level descriptor rows are analyzed per element.</Typography.Text></Space>}
+            {tab === "kernel" && <Space wrap><Typography.Text>Kernel</Typography.Text><Select value={kernelName} onChange={setKernelName} options={["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
+            {tab === "overview" && overviewAnalysis === "sensitivity" && overviewModuleControl}
+            {(tab === "coverage" || tab === "compare" || (tab === "sampling" && samplingAlgorithm === "novelty_fps") || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? "Left" : tab === "sampling" ? "Query" : "Reference"}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? "Right" : tab === "sampling" ? "Reference" : "Query"}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} notFoundContent={sensitivityPair ? "No other completed run for this descriptor" : undefined} options={pairRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
+            {tab === "similarity" && similarityMode !== "pairwise" && <Space wrap>{similarityMode === "query" && <><Typography.Text>Query index</Typography.Text><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /></>}<Typography.Text>k</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
+            {tab === "overview" && overviewAnalysis !== "sensitivity" && overviewModuleControl}
             {tab === "overview" && overviewAnalysis === "trajectory" && <Space wrap><Typography.Text>Frame step</Typography.Text><InputNumber min={1} value={trajectoryStep} onChange={(value) => setTrajectoryStep(value ?? 1)} /></Space>}
+            {tab === "overview" && overviewAnalysis === "property_correlation" && <Space wrap><Typography.Text>Property</Typography.Text><Select value={propertyName} onChange={(value) => { setPropertyName(value); if (value === "force_magnitude") setMode("atom"); }} options={[{ value: "energy_per_atom", label: "Energy / atom" }, { value: "energy", label: "Energy" }, { value: "force_max", label: "Max |F|" }, { value: "force_magnitude", label: "Atom |F|" }, { value: "volume", label: "Volume" }]} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /></Space>}
             <Space wrap style={{ marginTop: 10 }}>
               <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy} disabled={!selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? `Run ${projection.toUpperCase()}` : tab === "overview" ? `Run ${overviewAnalysis.replaceAll("_", " ")}` : `Run ${TAB_LABELS[tab]}`}</Button>
               {points.length > 0 && <Select size="small" value={colorBy} onChange={setColorBy} options={[{ value: "none", label: "No color" }, { value: "energy", label: "Energy" }, { value: "force_max", label: "Max |F|" }, { value: "volume", label: "Volume" }]} />}
@@ -625,12 +795,13 @@ export default function Analysis() {
           </section>
 
           {tab === "projection" && <section className="analysis-card analysis-plot-card"><SectionHeading title="DESCRIPTOR SPACE" meta={`${points.length.toLocaleString()} preview points${selectedIndices.length ? ` · ${selectedIndices.length} selected` : ""}`} />{points.length ? <div className="analysis-plot-frame">{plot}</div> : <Empty description="Run PCA, UMAP, or t-SNE to populate the Plotly canvas." />}</section>}
-          {tab === "overview" && <OverviewResultVisualization preview={preview} arrays={overviewArrays} loading={overviewArraysBusy} />}
+          {legacyOverview && <OverviewResultVisualization preview={preview} arrays={overviewArrays} loading={overviewArraysBusy} />}
+          {tab !== "projection" && !legacyOverview && <AnalysisResultVisualization preview={preview} arrays={overviewArrays} points={points} loading={overviewArraysBusy} selectedIndices={selectedIndices} onSelect={handlePoint} />}
           {tab !== "projection" && <ResultPanel preview={preview} points={points} onSelect={(row) => {
             if (row.i == null && row.sample_index == null && row.frame == null) return;
             const index = Number(row.i ?? row.sample_index ?? 0);
             const frame = Number(row.frame ?? index);
-            handlePoint({ i: index, frame, row: row.row == null ? undefined : Number(row.row), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, label: row.labels == null ? undefined : Number(row.labels), score: row.scores == null ? undefined : Number(row.scores), distance: row.distances == null ? undefined : Number(row.distances) });
+            handlePoint({ i: index, frame, row: row.row == null ? undefined : Number(row.row), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, label: row.labels == null ? undefined : Number(row.labels), score: row.scores == null ? undefined : Number(row.scores), distance: row.distances == null ? undefined : Number(row.distances), element: row.element == null ? undefined : Number(row.element), cluster: row.cluster_labels == null ? undefined : Number(row.cluster_labels) });
           }} />}
 
           {tab === "sampling" && <section className="analysis-card"><SectionHeading title="EXPORT SELECTED SET" meta="Source data is never modified" /><Space.Compact style={{ width: "100%" }}><Select value={exportFormat} onChange={setExportFormat} options={["json", "csv", "extxyz", "deepmd"].map((value) => ({ value, label: value.toUpperCase() }))} style={{ width: 120 }} /><Input placeholder="D:\\exports\\analysis_subset.csv" value={exportPath} onChange={(event) => setExportPath(event.target.value)} /><Button icon={<ArrowDownload16Regular />} onClick={() => void exportSelection()}>Export</Button></Space.Compact></section>}
@@ -638,8 +809,8 @@ export default function Analysis() {
 
         <aside className="analysis-inspector">
           <section className="analysis-card"><SectionHeading title="INSPECTOR" meta={selectedPoint ? `Frame ${selectedPoint.frame}` : undefined} />{selectedPoint ? <><Row k="Sample" v={selectedPoint.sample_id ?? String(selectedPoint.i)} /><Row k="Frame" v={String(selectedPoint.frame)} />{selectedPoint.row != null && <Row k="Row" v={String(selectedPoint.row)} />}<Button size="small" icon={<ArrowRight16Regular />} onClick={() => { st.setActiveFrame(selectedPoint.frame); st.setPage("explore"); }}>Open in Explore</Button></> : <Typography.Text type="secondary">Click a point, or use box/lasso selection, to inspect a structure.</Typography.Text>}</section>
-          <section className="analysis-card"><SectionHeading title="STRUCTURE PREVIEW" meta={selectedFrame ? `Frame ${selectedFrame.index}` : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} onOpen={() => { st.setActiveFrame(selectedFrame.index); st.setPage("explore"); }} /> : <div className="analysis-empty-small">{selectedFrameBusy ? "Loading structure…" : "Select a sample to preview it."}</div>}</section>
-          <section className="analysis-card"><SectionHeading title="ANALYSIS HISTORY" meta={`${analyses.length}`} />{analyses.length ? <div className="analysis-history-list">{analyses.slice(0, 10).map((row) => <div className="analysis-history-row" key={row.id}><div><Typography.Text strong>{row.analysis_type}</Typography.Text><Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>{new Date(row.created_at).toLocaleString()}</Typography.Text></div><Space size={4}><Tag color={row.status === "COMPLETED" ? "green" : row.status === "STALE" ? "orange" : undefined}>{row.status}</Tag><Button size="small" type="text" icon={<Delete16Regular />} disabled={row.status === "RUNNING" || row.status === "QUEUED"} onClick={() => void deleteAnalysis(row)} /></Space></div>)}</div> : <Typography.Text type="secondary">No analysis artifacts yet.</Typography.Text>}</section>
+          <section className="analysis-card"><SectionHeading title="STRUCTURE PREVIEW" meta={selectedFrame ? `Frame ${selectedFrame.index}` : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} selectedAtom={selectedPoint?.row} onOpen={() => { st.setActiveFrame(selectedFrame.index); st.setPage("explore"); }} /> : <div className="analysis-empty-small">{selectedFrameBusy ? "Loading structure…" : "Select a sample to preview it."}</div>}</section>
+          <section className="analysis-card"><SectionHeading title="ANALYSIS HISTORY" meta={`${visibleAnalyses.length}`} />{visibleAnalyses.length ? <div className="analysis-history-list">{visibleAnalyses.slice(0, 10).map((row) => <div className="analysis-history-row" key={row.id}><div><Typography.Text strong>{row.analysis_type}</Typography.Text><Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>{new Date(row.created_at).toLocaleString()}</Typography.Text></div><Space size={4}><Tag color={row.status === "COMPLETED" ? "green" : row.status === "STALE" ? "orange" : undefined}>{row.status}</Tag><Button size="small" type="text" icon={<ArrowRight16Regular />} aria-label={`Load ${row.analysis_type} analysis`} title="Load cached analysis" loading={loadingAnalysisId === row.id} disabled={row.status !== "COMPLETED" || (loadingAnalysisId !== null && loadingAnalysisId !== row.id)} onClick={() => void loadAnalysis(row)} /><Button size="small" type="text" icon={<Delete16Regular />} aria-label={`Delete ${row.analysis_type} analysis`} disabled={row.status === "RUNNING" || row.status === "QUEUED"} onClick={() => void deleteAnalysis(row)} /></Space></div>)}</div> : <Typography.Text type="secondary">No analysis artifacts for this descriptor run yet.</Typography.Text>}</section>
         </aside>
       </div>
     </div>
@@ -719,7 +890,7 @@ function FeatureCorrelationChart({ preview }: { preview: AnalysisPreview }) {
 }
 
 function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview; arrays: NumericArrays }) {
-  const explained = arrays.explained_variance ?? [];
+  const explained = numericArray(arrays.explained_variance);
   if (!explained.length) return <OverviewNoData message="The explained-variance array is not available for visualization." />;
   const cumulative: number[] = [];
   let total = 0;
@@ -768,8 +939,9 @@ function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview
 }
 
 function TrajectoryChart({ preview, arrays }: { preview: AnalysisPreview; arrays: NumericArrays }) {
-  const xValues = arrays.time?.length ? arrays.time : arrays.frames ?? [];
-  const distances = arrays.step_distance ?? [];
+  const time = numericArray(arrays.time);
+  const xValues = time.length ? time : numericArray(arrays.frames);
+  const distances = numericArray(arrays.step_distance);
   const count = Math.min(xValues.length, distances.length);
   if (count < 2) return <OverviewNoData message="At least two trajectory points are needed for visualization." />;
   const cumulative: number[] = [];
@@ -853,17 +1025,22 @@ function DriftChart({ preview }: { preview: AnalysisPreview }) {
 }
 
 function SensitivityChart({ preview }: { preview: AnalysisPreview }) {
-  const runs = recordArray(preview.runs)
+  const records = recordArray(preview.runs);
+  const geometryMode = records.some((run) => finiteNumber(run.mean_delta_norm) === null);
+  const metricKey = geometryMode ? "pairwise_distance_spearman" : "mean_delta_norm";
+  const metricLabel = geometryMode ? "Pairwise distance Spearman" : "Mean descriptor delta norm";
+  const runs = records
     .map((run, index) => ({
       label: parameterLabel(run.parameters, index),
-      value: finiteNumber(run.mean_delta_norm),
+      value: finiteNumber(run[metricKey]),
       detail: parameterText(run.parameters),
     }))
     .filter((run): run is { label: string; value: number; detail: string } => run.value !== null);
   if (!runs.length) return <OverviewNoData message="No completed runs were returned for sensitivity analysis." />;
   const rows = runs.slice().reverse();
+  const extremeValue = geometryMode ? Math.min(...runs.map((run) => run.value)) : Math.max(...runs.map((run) => run.value));
   return <>
-    <MetricStrip metrics={[{ label: "Runs compared", value: String(runs.length) }, { label: "Largest mean delta", value: formatNumber(Math.max(...runs.map((run) => run.value))) }]} />
+    <MetricStrip metrics={[{ label: "Runs compared", value: String(runs.length) }, { label: geometryMode ? "Lowest geometry correlation" : "Largest mean delta", value: formatNumber(extremeValue) }]} />
     <OverviewPlot
       ariaLabel="Descriptor parameter sensitivity across completed runs"
       data={[{
@@ -873,11 +1050,11 @@ function SensitivityChart({ preview }: { preview: AnalysisPreview }) {
         y: rows.map((run) => run.label),
         customdata: rows.map((run) => run.detail),
         marker: { color: rows.map((_, index) => index === rows.length - 1 ? "#107C10" : "#0F6CBD") },
-        hovertemplate: "%{y}<br>mean delta norm=%{x:.5g}<br>%{customdata}<extra></extra>",
+        hovertemplate: `%{y}<br>${metricLabel.toLowerCase()}=%{x:.5g}<br>%{customdata}<extra></extra>`,
       }]}
-      layout={overviewLayout({ xaxis: { title: "Mean descriptor delta norm", zeroline: true }, yaxis: { automargin: true } })}
+      layout={overviewLayout({ xaxis: { title: metricLabel, zeroline: true }, yaxis: { automargin: true } })}
     />
-    <ChartCaption>以第一个 Completed Run 为基准；柱越长，descriptor 参数变化带来的整体结果差异越大。</ChartCaption>
+    <ChartCaption>{geometryMode ? "不同特征维度的描述符使用样本几何一致性比较；Spearman 越接近 1，样本排序越一致。" : "以第一个 Completed Run 为基准；柱越长，descriptor 参数变化带来的整体结果差异越大。"}</ChartCaption>
   </>;
 }
 
@@ -973,8 +1150,8 @@ function parameterLabel(value: unknown, index: number): string {
   return `Run ${index + 1}`;
 }
 
-function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, setPreprocess, tsnePerplexity, setTsnePerplexity }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; setPreprocess: (value: string) => void; tsnePerplexity: number; setTsnePerplexity: (value: number) => void }) {
-  return <Space wrap><Typography.Text>Method</Typography.Text><Select value={projection} onChange={setProjection} options={[{ value: "pca", label: "PCA" }, { value: "umap", label: "UMAP" }, { value: "tsne", label: "t-SNE" }]} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /><Typography.Text>Preprocess</Typography.Text><Select value={preprocess} onChange={setPreprocess} options={[{ value: "raw", label: "Raw scale" }, { value: "center", label: "Centered" }, { value: "standardized", label: "Standardized" }]} />{projection === "tsne" && <><Typography.Text>Perplexity</Typography.Text><InputNumber min={2} step={1} value={tsnePerplexity} onChange={(value) => setTsnePerplexity(value ?? 30)} /></>}</Space>;
+function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, onPreprocessChange, tsnePerplexity, setTsnePerplexity }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; onPreprocessChange: (value: string) => void; tsnePerplexity: number; setTsnePerplexity: (value: number) => void }) {
+  return <Space wrap><Typography.Text>Method</Typography.Text><Select value={projection} onChange={setProjection} options={[{ value: "pca", label: "PCA" }, { value: "umap", label: "UMAP" }, { value: "tsne", label: "t-SNE" }]} /><Typography.Text>Granularity</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: "Structure" }, { value: "atom", label: "Atom / local" }]} /><Typography.Text>Preprocess</Typography.Text><Select value={preprocess} onChange={onPreprocessChange} options={[{ value: "raw", label: "Raw scale" }, { value: "center", label: "Centered" }, { value: "standardized", label: "Standardized" }]} />{projection === "tsne" && <><Typography.Text>Perplexity</Typography.Text><InputNumber min={2} step={1} value={tsnePerplexity} onChange={(value) => setTsnePerplexity(value ?? 30)} /></>}</Space>;
 }
 
 function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPreview | null; points: Point[]; onSelect?: (row: Record<string, unknown>) => void }) {

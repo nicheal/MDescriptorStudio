@@ -1118,6 +1118,8 @@ ACE rcut = 6
 
 MDescriptor 只负责分别计算 Descriptor Run，Studio Analysis Layer 负责比较这些 Run。
 
+不同 Descriptor 的结果使用 Compare，不在 Parameter Sensitivity 中混合解释。
+
 ---
 
 ## 23. Analysis Layer 目录与 API
@@ -1670,4 +1672,28 @@ Back to physical structure
 
 这一主交互闭环设计。
 
+---
 
+## 36. 实现状态（2026-08-30）
+
+本轮已将本文规划的分析能力接入统一的 `AnalysisResult / Job / Cache / Preview / Chunk` 管线。这里的“完成”指算法、IPC、持久化结果和对应专用可视化均已实现；仍不包含势函数训练或能量/力推理。
+
+| 分析域 | 已实现方法 | 专用可视化 |
+|---|---|---|
+| Projection | PCA、UMAP、t-SNE，structure / atom 两种粒度 | 可选择散点、属性着色、结构检查器 |
+| Similarity | query nearest neighbors、all-neighbor graph、bounded pairwise similarity / distance | 排名横条图、成对热图、结果表 |
+| Clustering | K-Means、DBSCAN、HDBSCAN、Agglomerative | descriptor-space cluster map、cluster-size bars |
+| Outlier | kNN、LOF、Isolation Forest、Mahalanobis | score-colored map、score histogram |
+| Sampling | FPS、Random、Stratified、Cluster Representative、Per-element | selected-set map、分布图、导出 |
+| Acquisition | reference novelty + query diversity (`novelty_fps`) | novelty-colored map、selected-set highlight、novelty distribution |
+| Coverage / Overlap | nearest-reference coverage、near-duplicate / similar / independent overlap | joint PCA overlay、nearest-distance distribution、category table |
+| Descriptor Compare | pair-distance Pearson / Spearman、kNN overlap、PCA topology、ARI、effective dimension | pair-distance scatter、双 descriptor PCA overlay、KPI strip |
+| Feature Quality | variance、zero-variance、correlation、redundancy、effective dimension | variance bars、correlation heatmap、eigenspectrum / cumulative variance |
+| Property Correlation | descriptor-feature correlation、cross-validated Ridge、distance-property relation | target-prediction scatter、residual histogram、distance-property scatter、feature bars |
+| Local Environment | per-element clustering、neighbor-distance diversity、distorted / outlier environment | atom-level map、per-element category bars、summary table |
+| Trajectory | step / reference / cumulative distance、speed、event detection、PCA path | synchronized distance curves、PCA trajectory path |
+| Dataset Drift | coverage shift、RBF MMD、centroid shift、covariance shift | reference/query overlay、distance distribution、drift KPI strip |
+| Parameter Sensitivity | geometry agreement、neighbor consistency、cluster stability、effective dimension、runtime | grouped agreement bars、run comparison table |
+| Kernel | linear、cosine、polynomial、RBF kernel diagnostics | bounded kernel heatmap、centered eigenspectrum |
+
+所有带样本身份的图表和表格都保留 `frame`；atom-level 结果额外保留 `row / element`。选择局域环境后，Structure Preview 和 Explore 会高亮对应原子。矩阵类可视化采用确定性有界抽样，完整结果仍保存在后端 artifact 中，前端通过 `analysis.chunk` 按需读取。

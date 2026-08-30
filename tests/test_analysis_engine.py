@@ -37,6 +37,7 @@ def samples() -> SampleMatrix:
         ("tsne", lambda s: AnalysisEngine.tsne(s, {"perplexity": 8, "max_iter": 250})),
         ("neighbors", lambda s: AnalysisEngine.neighbors(s, {"k": 5})),
         ("similarity", lambda s: AnalysisEngine.similarity(s, {"k": 5})),
+        ("pairwise", lambda s: AnalysisEngine.pairwise(s, {"max_samples": 24})),
         ("kmeans", lambda s: AnalysisEngine.cluster(s, {"n_clusters": 4}, "kmeans")),
         ("dbscan", lambda s: AnalysisEngine.cluster(s, {"min_samples": 3}, "dbscan")),
         ("hdbscan", lambda s: AnalysisEngine.cluster(s, {"min_cluster_size": 3}, "hdbscan")),
@@ -51,10 +52,33 @@ def samples() -> SampleMatrix:
         ("cluster-representative", lambda s: AnalysisEngine.sampling(s, {"n_samples": 8}, "cluster_representative")),
         ("per-element", lambda s: AnalysisEngine.sampling(SampleMatrix(s.values, s.frame, elements=np.where(s.frame % 2, 31, 33)), {"n_samples": 8}, "per_element")),
         ("coverage", lambda s: AnalysisEngine.coverage(s, s, {})),
+        ("overlap", lambda s: AnalysisEngine.overlap(s, s, {})),
+        ("acquisition", lambda s: AnalysisEngine.acquisition(s, s, {"n_samples": 8})),
         ("compare", lambda s: AnalysisEngine.compare(s, s, {})),
         ("feature-variance", lambda s: AnalysisEngine.feature_variance(s, {})),
         ("feature-correlation", lambda s: AnalysisEngine.feature_correlation(s, {})),
         ("effective-dimension", lambda s: AnalysisEngine.effective_dimension(s, {})),
+        (
+            "property-correlation",
+            lambda s: AnalysisEngine.property_correlation(
+                SampleMatrix(s.values, s.frame, properties={"energy_per_atom": s.values[:, 0] * 0.5 + s.values[:, 1]}),
+                {"property": "energy_per_atom", "folds": 3},
+            ),
+        ),
+        (
+            "local-diversity",
+            lambda s: AnalysisEngine.local_diversity(
+                SampleMatrix(
+                    s.values,
+                    s.frame,
+                    row=np.arange(s.n_samples),
+                    elements=np.where(s.frame % 2, 31, 33),
+                    mode="atom",
+                ),
+                {"n_clusters": 3},
+            ),
+        ),
+        ("kernel", lambda s: AnalysisEngine.kernel(s, {"kernel": "rbf", "max_samples": 24})),
         ("trajectory", lambda s: AnalysisEngine.trajectory(s, {"frame_start": 0, "frame_end": 47})),
         ("drift", lambda s: AnalysisEngine.drift(s, s, {})),
         (
@@ -125,3 +149,63 @@ def test_tsne_adapts_default_perplexity_for_small_inputs() -> None:
     values = np.arange(8, dtype=np.float64).reshape(4, 2)
     result = AnalysisEngine.tsne(SampleMatrix(values, np.arange(4)), {"max_iter": 250})
     assert result["preview"]["parameters"]["perplexity"] == 3.0
+
+
+def test_compare_reports_geometry_and_neighbor_consistency(samples: SampleMatrix) -> None:
+    perturbed = SampleMatrix(samples.values * 1.5 + 0.01, samples.frame, sample_ids=samples.sample_ids)
+    result = AnalysisEngine.compare(samples, perturbed, {"max_samples": 32, "k": 5})
+    preview = result["preview"]
+    assert preview["pairwise_distance_pearson"] > 0.99
+    assert preview["pairwise_distance_spearman"] > 0.99
+    assert preview["neighbor_overlap"] > 0.99
+    assert "left_coords" in result["arrays"] and "right_coords" in result["arrays"]
+
+
+def test_sensitivity_accepts_different_feature_dimensions(samples: SampleMatrix) -> None:
+    narrow = SampleMatrix(samples.values[:, :3], samples.frame, sample_ids=samples.sample_ids)
+    result = AnalysisEngine.sensitivity(
+        [
+            ({"id": "wide", "descriptor_name": "SOAP", "parameters_json": "{}"}, samples),
+            ({"id": "narrow", "descriptor_name": "SOAP", "parameters_json": "{}"}, narrow),
+        ],
+        {"max_samples": 32, "k": 5, "n_clusters": 3},
+    )
+
+    rows = result["preview"]["runs"]
+    assert rows[0]["feature_count"] == samples.n_features
+    assert rows[1]["feature_count"] == 3
+    assert rows[1]["mean_delta_norm"] is None
+    assert np.isfinite(rows[1]["pairwise_distance_pearson"])
+    assert np.isfinite(rows[1]["pairwise_distance_spearman"])
+
+
+def test_sensitivity_rejects_different_descriptors(samples: SampleMatrix) -> None:
+    with pytest.raises(AppError, match="same descriptor") as exc:
+        AnalysisEngine.sensitivity(
+            [
+                ({"id": "soap", "descriptor_name": "SOAP", "parameters_json": "{}"}, samples),
+                ({"id": "acsf", "descriptor_name": "ACSF", "parameters_json": "{}"}, samples),
+            ],
+            {},
+        )
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+
+
+def test_overlap_identity_is_detected_as_duplicate(samples: SampleMatrix) -> None:
+    result = AnalysisEngine.overlap(samples, samples, {"duplicate_threshold": 1e-10})
+    assert result["preview"]["near_duplicates"] == samples.n_samples
+    assert np.all(result["arrays"]["nearest_indices"] == np.arange(samples.n_samples))
+
+
+def test_feature_redundancy_summary_counts_correlated_columns() -> None:
+    values = np.column_stack([np.arange(20), np.arange(20), np.arange(20) ** 2]).astype(np.float64)
+    result = AnalysisEngine.feature_correlation(SampleMatrix(values, np.arange(20)), {"redundancy_threshold": 0.99})
+    assert result["preview"]["highly_correlated_pairs"] >= 1
+    assert result["preview"]["redundant_feature_count"] >= 1
+
+
+def test_trajectory_includes_reference_distance_and_projection(samples: SampleMatrix) -> None:
+    result = AnalysisEngine.trajectory(samples, {"frame_start": 0, "frame_end": 47})
+    assert result["arrays"]["reference_distance"][0] == 0
+    assert result["arrays"]["coords"].shape == (48, 2)
+    assert result["arrays"]["cumulative_distance"][-1] >= result["arrays"]["step_distance"][-1]

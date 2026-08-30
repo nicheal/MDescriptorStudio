@@ -3,7 +3,7 @@
 //    duplicate structures / extreme forces from the last scan, plus scan
 //    status and a Rescan trigger.
 //  • Analysis page — no right rail, so the analysis workspace stays focused.
-//  • Descriptors page — Recent Jobs panel: latest descriptor compute jobs
+//  • Descriptors/Results pages — Recent Jobs panel: latest descriptor compute jobs
 //    (persisted history merged with the live session) with live progress;
 //    "View all jobs" opens the top-right Jobs drawer (full history).
 // Fits the viewport by design — no scrollbar at default window sizes; below
@@ -73,7 +73,7 @@ export default function RightRail() {
   const page = useWorkspace().page;
   const wide = useSyncExternalStore(subscribeResize, () => window.innerWidth >= 1280);
   if (!wide || page === "analysis") return null;
-  return page === "descriptors" ? <RecentJobsRail /> : <DataHealthRail />;
+  return page === "descriptors" || page === "results" ? <RecentJobsRail /> : <DataHealthRail />;
 }
 
 function DataHealthRail() {

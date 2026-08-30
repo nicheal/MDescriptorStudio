@@ -1,8 +1,8 @@
 import type { AnalysisPreview, RunRow } from "../types/protocol";
 
 /**
- * The RUN panel is a descriptor-run history, not a failure log.  Failed
- * calculations remain available through Jobs, while this panel keeps the
+ * The Descriptor Results page is a descriptor-run history, not a failure log.  Failed
+ * calculations remain available through Jobs, while this page keeps the
  * rows that can be inspected or are still transitioning to a result.
  */
 export function displayableDescriptorRuns(runs: readonly RunRow[]): RunRow[] {
@@ -19,6 +19,8 @@ export interface AnalysisPoint {
   label?: number;
   score?: number;
   distance?: number;
+  element?: number;
+  cluster?: number;
   energy?: number | null;
   force_max?: number | null;
   volume?: number | null;
@@ -31,7 +33,7 @@ export function normalizePoints(preview: AnalysisPreview): AnalysisPoint[] {
     const y = Number(value.y ?? value.pc2);
     const frame = Number(value.frame ?? 0);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return [];
-    return [{ i: Number(value.i ?? 0), frame, row: value.row == null ? undefined : Number(value.row), sample_id: value.sample_id == null ? undefined : String(value.sample_id), x, y, label: value.label == null ? undefined : Number(value.label), score: value.score == null ? undefined : Number(value.score), distance: value.distance == null ? undefined : Number(value.distance) }];
+    return [{ i: Number(value.i ?? 0), frame, row: value.row == null ? undefined : Number(value.row), sample_id: value.sample_id == null ? undefined : String(value.sample_id), x, y, label: value.label == null ? undefined : Number(value.label), score: value.score == null ? undefined : Number(value.score), distance: value.distance == null ? undefined : Number(value.distance), element: value.element == null ? undefined : Number(value.element), cluster: value.cluster == null ? undefined : Number(value.cluster) }];
   });
 }
 

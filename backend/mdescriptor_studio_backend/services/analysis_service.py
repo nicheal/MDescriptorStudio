@@ -35,7 +35,7 @@ from .job_service import JobService
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 _ANALYSIS_SCHEMA_VERSION = 1
-_ALGORITHM_VERSION = "studio-analysis-1"
+_ALGORITHM_VERSION = "studio-analysis-2"
 _MAX_PREVIEW_POINTS = 20_000
 
 
@@ -70,6 +70,7 @@ class AnalysisService:
         params_json = json.dumps(
             analysis_params, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
+        cache_key = self._analysis_cache_key("pca", [run_id], analysis_params)
 
         with self._pca_submit_lock:
             cached = self._find_cached_pca(run_id, mode, preprocess)
@@ -97,9 +98,26 @@ class AnalysisService:
             analysis_id = active["id"] if active is not None else f"ana_{uuid.uuid4().hex[:12]}"
             if active is None:
                 self.db.execute(
-                    "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at)"
-                    " VALUES (?, ?, 'pca', ?, 'QUEUED', ?)",
-                    (analysis_id, run_id, params_json, _NOW()),
+                    "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at,"
+                    " input_run_ids_json, dataset_ids_json, cache_key, schema_version, algorithm_version,"
+                    " preprocessing_json, warnings_json, artifact_manifest_json, preview_json, updated_at)"
+                    " VALUES (?, ?, 'pca', ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        analysis_id,
+                        run_id,
+                        params_json,
+                        _NOW(),
+                        json.dumps([run_id], ensure_ascii=False),
+                        json.dumps([row["dataset_id"]], ensure_ascii=False),
+                        cache_key,
+                        _ANALYSIS_SCHEMA_VERSION,
+                        _ALGORITHM_VERSION,
+                        json.dumps({"preprocess": preprocess}, ensure_ascii=False),
+                        json.dumps([], ensure_ascii=False),
+                        json.dumps({}, ensure_ascii=False),
+                        json.dumps({}, ensure_ascii=False),
+                        _NOW(),
+                    ),
                 )
 
             def runner(ctx):
@@ -374,11 +392,14 @@ class AnalysisService:
         preview = self._json_load(raw, {})
         if not isinstance(preview, dict):
             preview = {}
+        has_bounded_data = False
         if isinstance(preview.get("points"), list):
             preview = {**preview, "points": preview["points"][offset : offset + limit]}
-        elif isinstance(preview.get("rows"), list):
+            has_bounded_data = True
+        if isinstance(preview.get("rows"), list):
             preview = {**preview, "rows": preview["rows"][offset : offset + limit]}
-        else:
+            has_bounded_data = True
+        if not has_bounded_data:
             # Rebuild a row-oriented preview when a result was written by an
             # earlier generic backend that only stored arrays.
             preview["rows"] = self._rows_from_artifact(row, offset, limit)
@@ -448,6 +469,9 @@ class AnalysisService:
     def similarity(self, params: dict) -> dict:
         return self.submit_generic("similarity", params)
 
+    def pairwise(self, params: dict) -> dict:
+        return self.submit_generic("pairwise", params)
+
     def cluster(self, params: dict) -> dict:
         algorithm = str(params.get("algorithm") or params.get("method") or "kmeans").lower()
         return self.submit_generic(algorithm, params)
@@ -462,6 +486,12 @@ class AnalysisService:
     def coverage(self, params: dict) -> dict:
         return self.submit_generic("coverage", params)
 
+    def overlap(self, params: dict) -> dict:
+        return self.submit_generic("overlap", params)
+
+    def acquisition(self, params: dict) -> dict:
+        return self.submit_generic("acquisition", params)
+
     def compare(self, params: dict) -> dict:
         return self.submit_generic("compare", params)
 
@@ -470,6 +500,16 @@ class AnalysisService:
 
     def feature_correlation(self, params: dict) -> dict:
         return self.submit_generic("feature_correlation", params)
+
+    def property_correlation(self, params: dict) -> dict:
+        return self.submit_generic("property_correlation", params)
+
+    def local_diversity(self, params: dict) -> dict:
+        params = {**dict(params or {}), "mode": "atom"}
+        return self.submit_generic("local_diversity", params)
+
+    def kernel(self, params: dict) -> dict:
+        return self.submit_generic("kernel", params)
 
     def effective_dimension(self, params: dict) -> dict:
         return self.submit_generic("effective_dimension", params)
@@ -501,15 +541,16 @@ class AnalysisService:
         params = dict(params or {})
         input_ids = self._input_ids(analysis_type, params)
         run_rows = [self._usable_run(run_id) for run_id in input_ids]
+        if analysis_type == "sensitivity":
+            descriptor_names = {str(row["descriptor_name"]) for row in run_rows}
+            if len(descriptor_names) > 1:
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    "parameter sensitivity requires the same descriptor; use Compare for different descriptors",
+                    {"descriptors": sorted(descriptor_names)},
+                )
         canonical_params = self._canonical_params(params)
-        cache_key = hashlib.sha256(
-            json.dumps(
-                {"analysis_type": analysis_type, "inputs": input_ids, "params": canonical_params, "algorithm_version": _ALGORITHM_VERSION},
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        cache_key = self._analysis_cache_key(analysis_type, input_ids, canonical_params)
         with self._pca_submit_lock:
             cached = self.db.query_one(
                 "SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED' ORDER BY created_at DESC LIMIT 1",
@@ -559,8 +600,14 @@ class AnalysisService:
                 ctx.check_cancelled()
                 result = self._run_engine(analysis_type, params, run_rows, samples, ctx)
                 ctx.check_cancelled()
-                preview_samples = samples[1] if analysis_type in ("coverage", "drift") else samples[0]
-                preview = self._build_preview(result, preview_samples, analysis_type)
+                cross_dataset = analysis_type in ("coverage", "overlap", "acquisition", "drift")
+                preview_samples = samples[1] if cross_dataset else samples[0]
+                preview = self._build_preview(
+                    result,
+                    preview_samples,
+                    analysis_type,
+                    reference_samples=samples[0] if cross_dataset else None,
+                )
                 out_dir, manifest = self._commit_artifact(
                     analysis_id,
                     analysis_type,
@@ -584,7 +631,7 @@ class AnalysisService:
                     ),
                 )
                 ctx.progress(1, 1, "analysis complete")
-                n_points = preview_samples.n_samples if analysis_type in ("coverage", "drift") else samples[0].n_samples
+                n_points = preview_samples.n_samples if cross_dataset else samples[0].n_samples
                 return {"analysis_id": analysis_id, "n_points": n_points, "analysis_type": analysis_type, "warnings": result.get("warnings", [])}
 
             job_id = self.jobs.submit(
@@ -617,7 +664,7 @@ class AnalysisService:
             raise AppError(ANALYSIS_INPUT_INVALID, "output_path is required for export")
         target = str(Path(target).expanduser())
         canonical = self._canonical_params({"format": export_format, "indices": sorted(set(selected)), "output_path": target, "mode": mode})
-        cache_key = hashlib.sha256(json.dumps({"analysis_type": "export", "inputs": input_ids, "params": canonical, "algorithm_version": _ALGORITHM_VERSION}, sort_keys=True).encode()).hexdigest()
+        cache_key = self._analysis_cache_key("export", input_ids, canonical)
 
         with self._pca_submit_lock:
             cached = self.db.query_one("SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED'", (cache_key,))
@@ -675,6 +722,8 @@ class AnalysisService:
             return AnalysisEngine.neighbors(samples[0], params, progress)
         if analysis_type == "similarity":
             return AnalysisEngine.similarity(samples[0], params, progress)
+        if analysis_type == "pairwise":
+            return AnalysisEngine.pairwise(samples[0], params, progress)
         if analysis_type in ("kmeans", "dbscan", "hdbscan", "agglomerative", "hierarchical"):
             return AnalysisEngine.cluster(samples[0], params, analysis_type, progress)
         if analysis_type in ("knn", "lof", "isolation_forest", "isolation-forest", "iforest", "mahalanobis", "mahalanobis_distance"):
@@ -683,12 +732,22 @@ class AnalysisService:
             return AnalysisEngine.sampling(samples[0], params, analysis_type, progress)
         if analysis_type == "coverage":
             return AnalysisEngine.coverage(samples[0], samples[1], params, progress)
+        if analysis_type == "overlap":
+            return AnalysisEngine.overlap(samples[0], samples[1], params, progress)
+        if analysis_type == "acquisition":
+            return AnalysisEngine.acquisition(samples[0], samples[1], params, progress)
         if analysis_type == "compare":
             return AnalysisEngine.compare(samples[0], samples[1], params, progress)
         if analysis_type == "feature_variance":
             return AnalysisEngine.feature_variance(samples[0], params, progress)
         if analysis_type == "feature_correlation":
             return AnalysisEngine.feature_correlation(samples[0], params, progress)
+        if analysis_type == "property_correlation":
+            return AnalysisEngine.property_correlation(samples[0], params, progress)
+        if analysis_type == "local_diversity":
+            return AnalysisEngine.local_diversity(samples[0], params, progress)
+        if analysis_type == "kernel":
+            return AnalysisEngine.kernel(samples[0], params, progress)
         if analysis_type == "effective_dimension":
             return AnalysisEngine.effective_dimension(samples[0], params, progress)
         if analysis_type == "trajectory":
@@ -700,7 +759,7 @@ class AnalysisService:
         raise AppError(ANALYSIS_INPUT_INVALID, f"unsupported analysis type: {analysis_type}")
 
     def _input_ids(self, analysis_type: str, params: dict) -> list[str]:
-        if analysis_type in ("coverage", "drift"):
+        if analysis_type in ("coverage", "overlap", "acquisition", "drift"):
             ids = [params.get("reference_run_id"), params.get("query_run_id")]
         elif analysis_type == "compare":
             ids = [params.get("left_run_id") or params.get("reference_run_id"), params.get("right_run_id") or params.get("query_run_id")]
@@ -713,7 +772,7 @@ class AnalysisService:
         ids = [str(v) for v in ids if v]
         if not ids:
             raise AppError(INVALID_PARAMS, "at least one descriptor run id is required")
-        if analysis_type in ("coverage", "drift", "compare") and len(ids) != 2:
+        if analysis_type in ("coverage", "overlap", "acquisition", "drift", "compare") and len(ids) != 2:
             raise AppError(ANALYSIS_INPUT_INVALID, f"{analysis_type} requires reference and query run IDs")
         return ids
 
@@ -799,7 +858,16 @@ class AnalysisService:
             sample_ids = [f"frame:{int(f)}" for f in frames]
             elements = None
             mode = "structure"
-        return SampleMatrix(used, frames, rows, sample_ids, elements, mode)
+        properties = self._sample_properties(row, frames, rows, mode) if analysis_type == "property_correlation" else {}
+        return SampleMatrix(
+            values=used,
+            frame=frames,
+            row=rows,
+            sample_ids=sample_ids,
+            elements=elements,
+            mode=mode,
+            properties=properties,
+        )
 
     @staticmethod
     def _valid_offsets(offsets, n_rows: int) -> bool:
@@ -829,6 +897,43 @@ class AnalysisService:
         except Exception:  # element labels are optional metadata, not a reason to corrupt a run
             return None
 
+    def _sample_properties(self, run_row: dict, frames: np.ndarray, rows: np.ndarray | None, mode: str) -> dict[str, np.ndarray]:
+        """Load only the physical targets requested by property analysis."""
+        if self.datasets is None:
+            return {}
+        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
+        if dataset is None:
+            return {}
+        try:
+            adapter = self.datasets._adapter_for(dataset)
+            frame_cache = {int(index): adapter.get_frame(int(index)) for index in np.unique(frames).tolist()}
+        except Exception:
+            return {}
+
+        names = ("energy", "energy_per_atom", "force_max", "force_magnitude", "volume")
+        values = {name: np.full(frames.size, np.nan, dtype=np.float64) for name in names}
+        for sample_index, frame_index in enumerate(frames.tolist()):
+            frame = frame_cache.get(int(frame_index))
+            if frame is None:
+                continue
+            natoms = max(int(len(frame.numbers)), 1)
+            if frame.energy is not None:
+                values["energy"][sample_index] = float(frame.energy)
+                values["energy_per_atom"][sample_index] = float(frame.energy) / natoms
+            if frame.forces is not None and len(frame.forces):
+                magnitudes = np.linalg.norm(np.asarray(frame.forces, dtype=np.float64), axis=1)
+                values["force_max"][sample_index] = float(magnitudes.max())
+                if mode == "atom" and rows is not None:
+                    atom = int(rows[sample_index])
+                    if 0 <= atom < magnitudes.size:
+                        values["force_magnitude"][sample_index] = float(magnitudes[atom])
+            cell = np.asarray(frame.cell, dtype=np.float64)
+            if cell.shape == (3, 3):
+                volume = abs(float(np.linalg.det(cell)))
+                if np.isfinite(volume) and volume > 0:
+                    values["volume"][sample_index] = volume
+        return {name: array for name, array in values.items() if bool(np.isfinite(array).any())}
+
     @staticmethod
     def _result_metadata(row: dict) -> dict:
         try:
@@ -836,7 +941,7 @@ class AnalysisService:
         except (OSError, TypeError, ValueError):
             return {}
 
-    def _build_preview(self, result: dict, samples: SampleMatrix, analysis_type: str) -> dict:
+    def _build_preview(self, result: dict, samples: SampleMatrix, analysis_type: str, reference_samples: SampleMatrix | None = None) -> dict:
         arrays = result.get("arrays", {})
         preview = dict(result.get("preview") or {})
 
@@ -846,24 +951,64 @@ class AnalysisService:
             item = {"i": index, "frame": int(samples.frame[index]), "sample_id": samples.sample_ids[index]}
             if samples.row is not None:
                 item["row"] = int(samples.row[index])
+            if samples.elements is not None and index < len(samples.elements):
+                item["element"] = int(samples.elements[index])
+            return item
+
+        def reference_identity(index: int) -> dict | None:
+            if reference_samples is None or index < 0 or index >= reference_samples.n_samples:
+                return None
+            item = {
+                "reference_i": index,
+                "reference_frame": int(reference_samples.frame[index]),
+                "reference_sample_id": reference_samples.sample_ids[index],
+            }
+            if reference_samples.row is not None:
+                item["reference_row"] = int(reference_samples.row[index])
             return item
 
         if "coords" in arrays:
             coords = np.asarray(arrays["coords"])
             count = min(coords.shape[0], samples.n_samples, _MAX_PREVIEW_POINTS)
             indices = np.linspace(0, coords.shape[0] - 1, count, dtype=np.int64) if coords.shape[0] > count else np.arange(coords.shape[0])
+            sample_indices = np.asarray(arrays.get("sample_indices", []), dtype=np.int64)
             points = []
             for i in indices.tolist():
-                point = sample_identity(int(i))
+                logical_index = int(sample_indices[i]) if sample_indices.ndim == 1 and i < sample_indices.size else int(i)
+                point = sample_identity(logical_index)
                 if point is None:
                     continue
                 point.update({"x": float(coords[i, 0]), "y": float(coords[i, 1])})
-                for key in ("labels", "scores", "distances"):
+                for key in ("labels", "scores", "distances", "cluster_labels"):
                     if key in arrays and np.asarray(arrays[key]).ndim == 1 and i < len(arrays[key]):
-                        point[key[:-1] if key == "labels" else key] = float(arrays[key][i]) if key != "labels" else int(arrays[key][i])
+                        output_key = "label" if key == "labels" else "cluster" if key == "cluster_labels" else key
+                        point[output_key] = int(arrays[key][i]) if key in ("labels", "cluster_labels") else float(arrays[key][i])
                 points.append(point)
             preview["points"] = points
             preview["total_points"] = int(coords.shape[0])
+            row_keys = [key for key in ("labels", "scores", "distances", "cluster_labels") if key in arrays and np.asarray(arrays[key]).ndim == 1]
+            if row_keys:
+                rows = []
+                for i in range(min(coords.shape[0], _MAX_PREVIEW_POINTS)):
+                    logical_index = int(sample_indices[i]) if sample_indices.ndim == 1 and i < sample_indices.size else int(i)
+                    item = sample_identity(logical_index)
+                    if item is None:
+                        continue
+                    for key in row_keys:
+                        if i >= len(arrays[key]):
+                            continue
+                        value = np.asarray(arrays[key])[i]
+                        output_key = "labels" if key == "labels" else "cluster_labels" if key == "cluster_labels" else key
+                        item[output_key] = int(value) if key in ("labels", "cluster_labels") else float(value)
+                    rows.append(item)
+                preview["rows"] = rows
+                preview["total_rows"] = int(coords.shape[0])
+            if "selected_indices" in arrays:
+                selected = np.asarray(arrays["selected_indices"], dtype=np.int64)
+                preview["selected"] = [item for i in selected[:_MAX_PREVIEW_POINTS].tolist() if (item := sample_identity(int(i))) is not None]
+        elif analysis_type == "pairwise" and "sample_indices" in arrays:
+            matrix_indices = np.asarray(arrays["sample_indices"], dtype=np.int64)
+            preview["matrix_samples"] = [item for i in matrix_indices[:_MAX_PREVIEW_POINTS].tolist() if (item := sample_identity(int(i))) is not None]
         elif "selected_indices" in arrays:
             selected = np.asarray(arrays["selected_indices"], dtype=np.int64)
             preview["selected"] = [item for i in selected[:_MAX_PREVIEW_POINTS].tolist() if (item := sample_identity(int(i))) is not None]
@@ -916,6 +1061,10 @@ class AnalysisService:
                             item[key] = int(value) if key == "labels" else float(value)
                         else:
                             item[key] = self._json_safe(value)
+                if "nearest_indices" in arrays and i < len(arrays["nearest_indices"]):
+                    nearest = reference_identity(int(np.asarray(arrays["nearest_indices"])[i]))
+                    if nearest:
+                        item.update(nearest)
                 rows.append(item)
             preview["rows"] = rows
             preview["total_rows"] = n
@@ -1153,6 +1302,22 @@ class AnalysisService:
             return value
 
         return normalize(params)
+
+    @staticmethod
+    def _analysis_cache_key(analysis_type: str, input_ids: list[str], params: dict) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "analysis_type": analysis_type,
+                    "inputs": input_ids,
+                    "params": params,
+                    "algorithm_version": _ALGORITHM_VERSION,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
 
     def _rows_from_artifact(self, row: dict, offset: int, limit: int) -> list[dict]:
         manifest = self._json_load(row.get("artifact_manifest_json"), {})
