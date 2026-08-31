@@ -44,6 +44,16 @@ def test_corner_image_across_two_faces() -> None:
         assert np.linalg.norm(got - np.array(expected), axis=1).min() < 1e-6
 
 
+def test_cutoff_spanning_multiple_cells_keeps_all_nearby_images() -> None:
+    ghosts = periodic_boundary_ghosts(["C"], np.zeros((1, 3)), _cubic(1.0), cutoff=2.1)
+    distances = np.asarray([np.linalg.norm(position) for _, position in ghosts])
+    # Integer lattice vectors with norm <= 2.1: 6 faces + 12 edges + 8
+    # corners + 6 second-nearest axial images.
+    assert len(ghosts) == 32
+    assert np.all(distances <= 2.1 + 1e-9)
+    assert np.all(distances > 1e-6)
+
+
 def test_every_ghost_is_bonded_to_a_displayed_atom() -> None:
     """Invariant: kept images sit within cutoff of some real atom (vesta-style
     boundary padding without detached duplicates)."""

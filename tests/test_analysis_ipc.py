@@ -50,6 +50,25 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
             assert done["status"] == "COMPLETED", done
             return done["result"]["analysis_id"]
 
+        invalid_pca = bp.request(sequence, "analysis.pca", {})
+        sequence += 1
+        assert invalid_pca["error"]["code"] == "INVALID_PARAMS"
+
+        pca_response = bp.request(sequence, "analysis.pca", {"run_id": run_id, "mode": "structure", "preprocess": "center"})
+        sequence += 1
+        assert pca_response["result"]["job_id"]
+        pca_done = wait_job(bp, pca_response["result"]["job_id"], timeout=300)
+        assert pca_done["status"] == "COMPLETED", pca_done
+        pca_cached = bp.request(sequence, "analysis.pca", {"run_id": run_id, "mode": "structure", "preprocess": "center"})
+        sequence += 1
+        assert pca_cached["result"]["job_id"] is None
+        assert pca_cached["result"]["analysis_id"] == pca_response["result"]["analysis_id"]
+
+        fps_response = bp.request(sequence, "analysis.fps", {"run_id": run_id, "n_samples": 4, "seed": 42})
+        sequence += 1
+        fps_done = wait_job(bp, fps_response["result"]["job_id"], timeout=300)
+        assert fps_done["status"] == "COMPLETED", fps_done
+
         projection_ids = [
             run("analysis.umap", {"run_id": run_id, "n_neighbors": 3, "min_dist": 0.1, "seed": 42}),
             run("analysis.tsne", {"run_id": run_id, "perplexity": 3, "max_iter": 250, "seed": 42}),

@@ -14,6 +14,7 @@ import {
   Empty,
   Input,
   InputNumber,
+  Modal,
   Progress,
   Select,
   Space,
@@ -28,6 +29,7 @@ import {
   ArrowDownload16Regular,
   CheckmarkCircle16Regular,
   Delete16Regular,
+  Info16Regular,
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace, type PcaMode } from "../stores/workspace";
@@ -36,6 +38,7 @@ import { useT, type Pair } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
 import AnalysisResultVisualization, { type AnalysisArrays } from "./analysisVisualizations";
+import { getAnalysisMethodGuide, type AnalysisMethodGuide } from "./analysisMethodGuides";
 import type {
   AnalysisJobResponse,
   AnalysisChunk,
@@ -71,6 +74,15 @@ type Metric = {
   label: string;
   value: string;
 };
+
+function AnalysisRunLabel({ name, shape }: { name: string; shape: string }) {
+  return (
+    <span className="analysis-run-label">
+      <span className="analysis-run-name">{name}</span>
+      <span className="analysis-run-shape">{shape}</span>
+    </span>
+  );
+}
 
 const TAB_LABELS: Record<TabKey, Pair> = {
   overview: { en: "Overview", zh: "总览" },
@@ -209,6 +221,7 @@ export default function Analysis() {
   const [contamination, setContamination] = useState(0.01);
   const [queryIndex, setQueryIndex] = useState(0);
   const [overviewAnalysis, setOverviewAnalysis] = useState<OverviewAnalysis>("feature_variance");
+  const [methodGuideOpen, setMethodGuideOpen] = useState(false);
   const [trajectoryStep, setTrajectoryStep] = useState(1);
   const [perturbationType, setPerturbationType] = useState<"jitter" | "strain">("jitter");
   const [perturbationCount, setPerturbationCount] = useState(8);
@@ -291,12 +304,15 @@ export default function Analysis() {
     }
     let disposed = false;
     setSelectedFrameBusy(true);
-    void ipc.request<FramePayload>("dataset.frame", { id: dataset.id, index: selectedPoint.frame, bond_cutoff: 2.4 })
-      .then((frame) => { if (!disposed) setSelectedFrame(frame); })
+    const localShellActive = preview?.kind === "local_diversity" && selectedPoint.row != null;
+    const displayCutoff = 2.4;
+    const requestedCutoff = Math.min(10, Math.max(displayCutoff, localShellActive ? localCutoff : displayCutoff));
+    void ipc.request<FramePayload>("dataset.frame", { id: dataset.id, index: selectedPoint.frame, bond_cutoff: requestedCutoff })
+      .then((frame) => { if (!disposed) setSelectedFrame({ ...frame, bond_cutoff: displayCutoff }); })
       .catch(() => { if (!disposed) setSelectedFrame(null); })
       .finally(() => { if (!disposed) setSelectedFrameBusy(false); });
     return () => { disposed = true; };
-  }, [dataset, selectedPoint]);
+  }, [dataset, localCutoff, preview?.kind, selectedPoint]);
 
   useEffect(() => {
     const kind = String(preview?.kind ?? "");
@@ -794,6 +810,26 @@ export default function Analysis() {
     const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
     return !selectedRun || inputRunIds.includes(selectedRun);
   });
+  const methodGuideKey = tab === "projection"
+    ? `projection.${projection}`
+    : tab === "similarity"
+      ? `similarity.${similarityMode}`
+      : tab === "clusters"
+        ? `cluster.${clusterAlgorithm}`
+        : tab === "outliers"
+          ? `outlier.${outlierAlgorithm}`
+          : tab === "sampling"
+            ? `sampling.${samplingAlgorithm}`
+            : tab === "coverage"
+              ? `coverage.${coverageMode}`
+              : tab === "compare"
+                ? `compare.${compareMode}`
+                : tab === "local"
+                  ? "local.local_diversity"
+                  : tab === "kernel"
+                    ? `kernel.${kernelName}`
+                    : `overview.${overviewAnalysis}`;
+  const methodGuide = getAnalysisMethodGuide(methodGuideKey);
   const overviewModuleControl = <Space wrap><Typography.Text>{t("Module")}</Typography.Text><Select value={overviewAnalysis} onChange={setOverviewAnalysis} options={[{ value: "feature_variance", label: t("Feature variance") }, { value: "feature_correlation", label: t("Feature correlation") }, { value: "effective_dimension", label: t("Effective dimension") }, { value: "property_correlation", label: t("Property correlation") }, { value: "trajectory", label: t("Trajectory") }, { value: "drift", label: t("Dataset drift") }, { value: "sensitivity", label: t("Parameter sensitivity") }, { value: "perturbation_sensitivity", label: t("Structural perturbation") }]} /><Typography.Text type="secondary">{overviewAnalysis === "sensitivity" ? t("Compare parameter variants of the same descriptor; use Compare for different descriptors.") : overviewAnalysis === "perturbation_sensitivity" ? t("Recompute the selected descriptor after controlled atomic jitter or strain.") : t("All results stay on the backend as bounded artifacts.")}</Typography.Text></Space>;
   const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension");
 
@@ -809,7 +845,10 @@ export default function Analysis() {
             style={{ width: 250 }}
             disabled={busy}
             onChange={setSelectedRun}
-            options={completedRuns.map((run) => ({ value: run.id, label: `${run.descriptor_name} · ${run.shape ?? t("unknown shape")}` }))}
+            options={completedRuns.map((run) => ({
+              value: run.id,
+              label: <AnalysisRunLabel name={run.descriptor_name} shape={run.shape ?? t("unknown shape")} />,
+            }))}
           />
           <Tag color={selectedRunRow?.status === "COMPLETED" ? "green" : "orange"}>{selectedRunRow ? jobStatusLabel(tr, selectedRunRow.status) : t("No run")}</Tag>
           <Button size="small" icon={<ArrowSync16Regular />} onClick={() => void refresh()}>{t("Refresh")}</Button>
@@ -832,7 +871,7 @@ export default function Analysis() {
             {tab === "outliers" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>{t("Contamination")}</Typography.Text><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
             {tab === "sampling" && <Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: tr(SAMPLING_LABELS[value] ?? { en: value, zh: value }) }))} /><Typography.Text>{t("Target")}</Typography.Text><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom") }]} />{samplingAlgorithm === "uncertainty_diversity" && <><Typography.Text>kNN</Typography.Text><InputNumber min={2} value={uncertaintyK} onChange={(value) => setUncertaintyK(value ?? 8)} /></>}</Space>}
             {tab === "coverage" && <Space wrap><Typography.Text>{t("Analysis")}</Typography.Text><Select value={coverageMode} onChange={setCoverageMode} options={[{ value: "coverage", label: t("Coverage") }, { value: "overlap", label: t("Train / test overlap") }]} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
-            {tab === "local" && <Space wrap><Typography.Text>{t("Clusters / element")}</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Typography.Text>{t("Descriptor kNN")}</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><Typography.Text>{t("Neighbor cutoff")}</Typography.Text><InputNumber min={0.1} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value ?? 3)} addonAfter="Å" /><Typography.Text type="secondary">{t("Coordinates and periodic images determine coordination.")}</Typography.Text></Space>}
+            {tab === "local" && <Space wrap><Typography.Text>{t("Clusters / element")}</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Typography.Text>{t("Descriptor kNN")}</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><Typography.Text>{t("Neighbor cutoff")}</Typography.Text><InputNumber min={0.1} max={10} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value == null ? 3 : Math.max(0.1, Math.min(10, value)))} addonAfter="Å" /><Typography.Text type="secondary">{t("Coordinates and periodic images determine coordination.")}</Typography.Text></Space>}
             {tab === "kernel" && <Space wrap><Typography.Text>{t("Kernel")}</Typography.Text><Select value={kernelName} onChange={setKernelName} options={["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
             {tab === "overview" && overviewAnalysis === "sensitivity" && overviewModuleControl}
             {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap><Typography.Text>{t("Perturbation")}</Typography.Text><Select value={perturbationType} onChange={setPerturbationType} options={[{ value: "jitter", label: t("Atomic jitter (Å)") }, { value: "strain", label: t("Isotropic strain") }]} /><Typography.Text>{t("Steps")}</Typography.Text><InputNumber min={2} max={32} value={perturbationCount} onChange={(value) => setPerturbationCount(value ?? 8)} /><Typography.Text>{t("Maximum")}</Typography.Text><InputNumber min={0.001} step={0.01} precision={3} value={perturbationMaximum} onChange={(value) => setPerturbationMaximum(value ?? 0.2)} /><Typography.Text>{t("Metric")}</Typography.Text><Select value={perturbationMetric} onChange={setPerturbationMetric} options={["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value }))} /></Space>}
@@ -842,11 +881,25 @@ export default function Analysis() {
             {tab === "overview" && overviewAnalysis !== "sensitivity" && overviewModuleControl}
             {tab === "overview" && overviewAnalysis === "trajectory" && <Space wrap><Typography.Text>{t("Frame step")}</Typography.Text><InputNumber min={1} value={trajectoryStep} onChange={(value) => setTrajectoryStep(value ?? 1)} /></Space>}
             {tab === "overview" && overviewAnalysis === "property_correlation" && <Space wrap><Typography.Text>{t("Property")}</Typography.Text><Select value={propertyName} onChange={(value) => { setPropertyName(value); if (value === "force_magnitude") setMode("atom"); }} options={[{ value: "energy_per_atom", label: t("Energy / atom") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "force_magnitude", label: t("Atom |F|") }, { value: "volume", label: t("Volume") }]} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
-            <Space wrap style={{ marginTop: 10 }}>
-              <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy} disabled={!selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
-              {points.length > 0 && <Select size="small" value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
-            </Space>
+            <div className="analysis-controls-actions">
+              <Space wrap>
+                <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy} disabled={!selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
+                {points.length > 0 && <Select size="small" value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
+              </Space>
+              <Button
+                className="analysis-method-guide-button"
+                size="small"
+                icon={<Info16Regular />}
+                aria-haspopup="dialog"
+                aria-label={t("Open method guide")}
+                onClick={() => setMethodGuideOpen(true)}
+              >
+                {t("Method guide")}
+              </Button>
+            </div>
           </section>
+
+          <AnalysisMethodGuideModal guide={methodGuide} open={methodGuideOpen} onClose={() => setMethodGuideOpen(false)} />
 
           {tab === "projection" && <section className="analysis-card analysis-plot-card"><SectionHeading title={t("DESCRIPTOR SPACE")} meta={`${t("{n} preview points", { n: points.length.toLocaleString() })}${selectedIndices.length ? t(" · {n} selected", { n: selectedIndices.length }) : ""}`} />{points.length ? <div className="analysis-plot-frame">{plot}</div> : <Empty description={t("Run PCA, UMAP, or t-SNE to populate the Plotly canvas.")} />}</section>}
           {legacyOverview && <OverviewResultVisualization preview={preview} arrays={overviewArrays} loading={overviewArraysBusy} />}
@@ -863,7 +916,7 @@ export default function Analysis() {
 
         <aside className="analysis-inspector">
           <section className="analysis-card"><SectionHeading title={t("INSPECTOR")} meta={selectedPoint ? t("Frame {index}", { index: selectedPoint.frame }) : undefined} />{selectedPoint ? <><Row k={t("Sample")} v={selectedPoint.sample_id ?? String(selectedPoint.i)} /><Row k={t("Frame")} v={String(selectedPoint.frame)} />{selectedPoint.row != null && <Row k={t("Row")} v={String(selectedPoint.row)} />}<Button size="small" icon={<ArrowRight16Regular />} onClick={() => { st.setActiveFrame(selectedPoint.frame); st.setPage("explore"); }}>{t("Open in Explore")}</Button></> : <Typography.Text type="secondary">{t("Click a point, or use box/lasso selection, to inspect a structure.")}</Typography.Text>}</section>
-          <section className="analysis-card"><SectionHeading title={t("STRUCTURE PREVIEW")} meta={selectedFrame ? t("Frame {index}", { index: selectedFrame.index }) : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} selectedAtom={selectedPoint?.row} localCutoff={preview?.kind === "local_diversity" && selectedPoint?.row != null ? Number(preview.cutoff ?? 3) : undefined} onOpen={() => { st.setActiveFrame(selectedFrame.index); st.setPage("explore"); }} /> : <div className="analysis-empty-small">{selectedFrameBusy ? t("Loading structure…") : t("Select a sample to preview it.")}</div>}</section>
+          <section className="analysis-card"><SectionHeading title={t("STRUCTURE PREVIEW")} meta={selectedFrame ? t("Frame {index}", { index: selectedFrame.index }) : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} selectedAtom={selectedPoint?.row} localCutoff={preview?.kind === "local_diversity" && selectedPoint?.row != null ? localCutoff : undefined} onOpen={() => { st.setActiveFrame(selectedFrame.index); st.setPage("explore"); }} /> : <div className="analysis-empty-small">{selectedFrameBusy ? t("Loading structure…") : t("Select a sample to preview it.")}</div>}</section>
           <section className="analysis-card"><SectionHeading title={t("ANALYSIS HISTORY")} meta={`${visibleAnalyses.length}`} />{visibleAnalyses.length ? <div className="analysis-history-list">{visibleAnalyses.slice(0, 10).map((row) => <div className="analysis-history-row" key={row.id}><div><Typography.Text strong>{row.analysis_type}</Typography.Text><Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>{new Date(row.created_at).toLocaleString(locale)}</Typography.Text></div><Space size={4}><Tag color={row.status === "COMPLETED" ? "green" : row.status === "STALE" ? "orange" : undefined}>{jobStatusLabel(tr, row.status)}</Tag><Button size="small" type="text" icon={<ArrowRight16Regular />} aria-label={t("Load {name} analysis", { name: row.analysis_type })} title={t("Load cached analysis")} loading={loadingAnalysisId === row.id} disabled={row.status !== "COMPLETED" || (loadingAnalysisId !== null && loadingAnalysisId !== row.id)} onClick={() => void loadAnalysis(row)} /><Button size="small" type="text" icon={<Delete16Regular />} aria-label={t("Delete {name} analysis", { name: row.analysis_type })} disabled={row.status === "RUNNING" || row.status === "QUEUED"} onClick={() => void deleteAnalysis(row)} /></Space></div>)}</div> : <Typography.Text type="secondary">{t("No analysis artifacts for this descriptor run yet.")}</Typography.Text>}</section>
         </aside>
       </div>
@@ -1210,6 +1263,32 @@ function parameterLabel(value: unknown, index: number): string {
     if (entries.length) return entries.map(([key, item]) => `${key}=${String(item)}`).join(", ");
   }
   return `Run ${index + 1}`;
+}
+
+function AnalysisMethodGuideModal({ guide, open, onClose }: { guide: AnalysisMethodGuide; open: boolean; onClose: () => void }) {
+  const { t, tr } = useT();
+  return (
+    <Modal
+      className="analysis-method-guide-modal"
+      title={`${t("Method guide")} · ${tr(guide.title)}`}
+      open={open}
+      onCancel={onClose}
+      footer={null}
+      width={720}
+      destroyOnHidden
+    >
+      <div className="analysis-method-guide-content">
+        <section className="analysis-method-guide-section">
+          <Typography.Title level={5}>{t("Theory")}</Typography.Title>
+          <Typography.Paragraph>{tr(guide.theory)}</Typography.Paragraph>
+        </section>
+        <section className="analysis-method-guide-section">
+          <Typography.Title level={5}>{t("Applications")}</Typography.Title>
+          <Typography.Paragraph>{tr(guide.application)}</Typography.Paragraph>
+        </section>
+      </div>
+    </Modal>
+  );
 }
 
 function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, onPreprocessChange, tsnePerplexity, setTsnePerplexity }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; onPreprocessChange: (value: string) => void; tsnePerplexity: number; setTsnePerplexity: (value: number) => void }) {

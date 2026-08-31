@@ -1697,4 +1697,4 @@ Back to physical structure
 | Structural Perturbation Sensitivity | 对同一批结构执行 seeded atomic jitter 或 isotropic strain，重算所选 descriptor，统计 mean / median / P95 / max response 曲线 | response-versus-amplitude curve、per-structure response heatmap、response KPI strip |
 | Kernel | linear、cosine、polynomial、RBF kernel diagnostics | bounded kernel heatmap、centered eigenspectrum |
 
-所有带样本身份的图表和表格都保留 `frame`；atom-level 结果额外保留 `row / element`。选择局域环境后，Structure Preview 和 Explore 会高亮对应原子、邻居连线和 cutoff sphere。矩阵类可视化采用确定性有界抽样，完整结果仍保存在后端 artifact 中，前端通过 `analysis.chunk` 按需读取。Uncertainty acquisition 明确是 descriptor-space kNN 外推代理，不冒充模型预测方差；structural perturbation 也只做描述符响应分析，不引入势函数训练或能量/力推理。
+所有带样本身份的图表和表格都保留 `frame`；atom-level 结果额外保留 `row / element`。选择局域环境后，Structure Preview 和 Explore 会高亮对应原子、邻居连线和 cutoff sphere。矩阵类可视化采用确定性有界抽样，完整结果仍保存在后端 artifact 中，前端通过 `analysis.chunk` 按需读取。跨数据集距离和漂移统计默认以 reference 拟合的 standardized 坐标计算，也可显式选择 `raw`；reference 中的常量特征不会被静默删除，而是以单位尺度保留。局域周期邻居保留不同周期镜像形成的独立接触，CSR 行按全局原子顺序输出；样本数不足两组时 covariance shift 显示为不可估计并给出 warning。Uncertainty acquisition 明确是 descriptor-space kNN 外推代理，不冒充模型预测方差；structural perturbation 也只做描述符响应分析，不引入势函数训练或能量/力推理。

@@ -458,13 +458,13 @@ def periodic_boundary_ghosts(
     """Periodic-image atoms that complete bonds cut by the cell boundary.
 
     An atom whose *wrapped* fractional position lies within `cutoff` of a
-    cell face contributes candidate images at ±1 lattice shifts; a candidate
-    is kept only when it lands within `cutoff` of a displayed atom (and does
-    not coincide with one), so only bond-completing images survive. The
-    distance check is what keeps unwrapped frames (deepmd sets are often
-    centered on the origin, with negative coordinates) from spraying stray
-    atoms a full lattice vector outside the structure. Returns (element,
-    position) pairs, capped at max_ghosts.
+    cell face contributes candidate images at the lattice shifts required by
+    that cutoff (not only ±1); a candidate is kept only when it lands within
+    `cutoff` of a displayed atom (and does not coincide with one), so only
+    bond-completing images survive. The distance check is what keeps unwrapped
+    frames (deepmd sets are often centered on the origin, with negative
+    coordinates) from spraying stray atoms outside the structure. Returns
+    (element, position) pairs, capped at max_ghosts.
     """
     pos = np.asarray(positions, dtype=np.float64)
     if len(symbols) == 0:
@@ -480,9 +480,20 @@ def periodic_boundary_ghosts(
     cand = np.nonzero(near_face.any(axis=1))[0]
     if cand.size == 0:
         return []
+    # The inverse-cell columns bound the lattice coefficients of any
+    # displacement with norm <= cutoff.  The extra one accounts for the
+    # wrapped fractional separation between two atoms. This keeps local-shell
+    # visualization correct when the cutoff spans more than one unit cell.
+    shift_limits = [max(1, int(np.ceil(cutoff * np.linalg.norm(a_inv[:, axis]))) + 1) for axis in range(3)]
     shifts = np.array(
-        [(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)
-         if (dx, dy, dz) != (0, 0, 0)], dtype=np.float64,
+        [
+            (dx, dy, dz)
+            for dx in range(-shift_limits[0], shift_limits[0] + 1)
+            for dy in range(-shift_limits[1], shift_limits[1] + 1)
+            for dz in range(-shift_limits[2], shift_limits[2] + 1)
+            if (dx, dy, dz) != (0, 0, 0)
+        ],
+        dtype=np.float64,
     ) @ cell
     pos_sq = (pos * pos).sum(axis=1)
     out: list[tuple[str, np.ndarray]] = []

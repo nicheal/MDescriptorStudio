@@ -37,6 +37,22 @@ function parseViewerAtoms(frame: FramePayload): ViewerAtom[] {
     bonds: [],
     bondOrder: [],
   }));
+  // ``atom_rows`` intentionally contains only real atoms because its indices
+  // are used for navigation. The XYZ payload additionally contains periodic
+  // image atoms; include those images in the viewer/local-shell graph without
+  // changing the original atom index space.
+  const xyzLines = frame.xyz.trim().split(/\r?\n/);
+  const xyzCount = Number(xyzLines[0]);
+  if (Number.isInteger(xyzCount) && xyzCount > atoms.length) {
+    for (let index = atoms.length; index < xyzCount; index += 1) {
+      const [elem, xText, yText, zText] = xyzLines[index + 2]?.trim().split(/\s+/) ?? [];
+      const x = Number(xText);
+      const y = Number(yText);
+      const z = Number(zText);
+      if (!elem || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+      atoms.push({ elem, x, y, z, bonds: [], bondOrder: [] });
+    }
+  }
   const cells = new Map<string, number[]>();
   const cellKey = (x: number, y: number, z: number) =>
     `${Math.floor(x / cutoff)},${Math.floor(y / cutoff)},${Math.floor(z / cutoff)}`;

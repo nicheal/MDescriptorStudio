@@ -18,6 +18,58 @@ test("browser preview exposes the Analysis workflow and run selector", async ({ 
   await expect(page.getByText(/analysis history/i)).toBeVisible();
 });
 
+test("browser preview opens the selected analysis method guide", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 720 });
+  await page.goto("/preview.html");
+  await page.getByRole("button", { name: "Analysis" }).click();
+  const controls = page.locator(".analysis-controls");
+  const parameterSpace = controls.locator(":scope > .ant-space").first();
+  const runButton = page.getByRole("button", { name: "Run feature variance" });
+  const guideButton = page.getByRole("button", { name: "Open method guide" });
+  const parameterBox = await parameterSpace.boundingBox();
+  const runBox = await runButton.boundingBox();
+  const guideBox = await guideButton.boundingBox();
+  expect(parameterBox).not.toBeNull();
+  expect(runBox).not.toBeNull();
+  expect(guideBox).not.toBeNull();
+  expect(Math.abs((runBox?.y ?? 0) - (parameterBox?.y ?? 0))).toBeLessThan(8);
+  expect(Math.abs((guideBox?.y ?? 0) - (parameterBox?.y ?? 0))).toBeLessThan(8);
+  await guideButton.click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Theory", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("Applications", { exact: true })).toBeVisible();
+  await expect(dialog).toContainText("Feature variance");
+});
+
+test("browser preview aligns descriptor names left and array shapes right in the run selector", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 720 });
+  await page.goto("/preview.html");
+  await page.getByRole("button", { name: "Analysis" }).click();
+
+  const runSelect = page.locator(".analysis-toolbar .ant-select").first();
+  const selectedLabel = runSelect.locator(".ant-select-selection-item .analysis-run-label");
+  await expect(selectedLabel).toBeVisible();
+  await expect(selectedLabel.locator(".analysis-run-name")).toHaveText("DPA-2");
+  await expect(selectedLabel.locator(".analysis-run-shape")).toHaveText("[12480, 256]");
+
+  const selectedBox = await selectedLabel.boundingBox();
+  const nameBox = await selectedLabel.locator(".analysis-run-name").boundingBox();
+  const shapeBox = await selectedLabel.locator(".analysis-run-shape").boundingBox();
+  expect(selectedBox).not.toBeNull();
+  expect(nameBox).not.toBeNull();
+  expect(shapeBox).not.toBeNull();
+  expect((nameBox?.x ?? 0)).toBeLessThan(shapeBox?.x ?? 0);
+  expect(Math.abs((shapeBox?.x ?? 0) + (shapeBox?.width ?? 0) - ((selectedBox?.x ?? 0) + (selectedBox?.width ?? 0)))).toBeLessThan(3);
+
+  await runSelect.click();
+  const optionLabel = page.locator(".ant-select-item-option .analysis-run-label").first();
+  await expect(optionLabel).toBeVisible();
+  await expect(optionLabel.locator(".analysis-run-name")).toHaveText("DPA-2");
+  await expect(optionLabel.locator(".analysis-run-shape")).toHaveText("[12480, 256]");
+});
+
 test("browser preview reloads cached PCA and changes coordinates with preprocessing", async ({ page }) => {
   await page.goto("/preview.html");
   await page.getByRole("button", { name: "Analysis" }).click();

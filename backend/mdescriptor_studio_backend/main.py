@@ -188,7 +188,7 @@ def main() -> int:
             "mdescriptor_baseline_version": info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": info.get("descriptor_info_schema_version"),
             "analysis_api_version": 1,
-            "analysis_algorithm_version": "studio-analysis-1",
+            "analysis_algorithm_version": "studio-analysis-2",
         },
     )
     # non-blocking PyPI check so the UI can offer an engine update (ADR-2)

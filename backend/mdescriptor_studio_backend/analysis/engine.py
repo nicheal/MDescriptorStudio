@@ -252,28 +252,32 @@ def _preprocess_reference_query(reference: np.ndarray, query: np.ndarray, params
     means = reference.mean(axis=0)
     centered_reference = reference - means
     scale = centered_reference.std(axis=0)
-    keep = scale > np.finfo(np.float64).eps
+    # A feature that is constant in the reference set is still informative
+    # when the query set moves away from that reference value.  Dropping it
+    # would make raw coverage and OOD distances silently ignore an entire
+    # direction.  For standardized cross-set work, retain the feature with a
+    # unit scale so a reference-zero/query-nonzero displacement remains
+    # measurable.
+    keep = np.ones(reference.shape[1], dtype=bool)
+    constant = scale <= np.finfo(np.float64).eps
     warnings: list[str] = []
-    if not bool(keep.all()):
-        warnings.append(f"ignored {int((~keep).sum())} zero-variance reference feature(s)")
-    if not bool(keep.any()):
-        keep = np.ones(reference.shape[1], dtype=bool)
-        scale = np.ones(reference.shape[1], dtype=np.float64)
+    if bool(constant.any()) and mode != "raw":
+        warnings.append(f"retained {int(constant.sum())} reference-constant feature(s) with unit scale")
     if mode == "raw":
-        return reference[:, keep], query[:, keep], warnings, keep
-    centered_query = query[:, keep] - means[keep]
+        return reference, query, warnings, keep
+    centered_query = query - means
     if mode == "center":
-        return centered_reference[:, keep], centered_query, warnings, keep
-    denominator = np.where(scale[keep] > 0, scale[keep], 1.0)
-    return centered_reference[:, keep] / denominator, centered_query / denominator, warnings, keep
+        return centered_reference, centered_query, warnings, keep
+    denominator = np.where(scale > np.finfo(np.float64).eps, scale, 1.0)
+    return centered_reference / denominator, centered_query / denominator, warnings, keep
 
 
 def _cross_nearest(reference: np.ndarray, query: np.ndarray, metric: str, query_chunk: int, reference_chunk: int, progress: Callable[[float, str], None] | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Bounded-memory nearest-reference search with source identities."""
     reference = _as_float64(reference)
     query = _as_float64(query)
-    if metric not in ("euclidean", "cosine"):
-        raise AppError(ANALYSIS_INPUT_INVALID, "cross-dataset metric must be euclidean or cosine")
+    if metric not in ("euclidean", "cosine", "manhattan"):
+        raise AppError(ANALYSIS_INPUT_INVALID, "cross-dataset metric must be euclidean, cosine, or manhattan")
     distances = np.empty(query.shape[0], dtype=np.float64)
     nearest = np.empty(query.shape[0], dtype=np.int64)
     for start in range(0, query.shape[0], query_chunk):
@@ -292,6 +296,12 @@ def _cross_nearest(reference: np.ndarray, query: np.ndarray, metric: str, query_
                     query_block,
                     ref_block,
                     metric="euclidean",
+                )
+            elif metric == "manhattan":
+                matrix = _safe_import("scipy.spatial.distance", "scipy").cdist(
+                    query_block,
+                    ref_block,
+                    metric="cityblock",
                 )
             else:
                 ref_norm = np.linalg.norm(ref_block, axis=1)
@@ -327,8 +337,8 @@ def _cross_k_nearest(
     """
     reference = _as_float64(reference)
     query = _as_float64(query)
-    if metric not in ("euclidean", "cosine"):
-        raise AppError(ANALYSIS_INPUT_INVALID, "cross-dataset metric must be euclidean or cosine")
+    if metric not in ("euclidean", "cosine", "manhattan"):
+        raise AppError(ANALYSIS_INPUT_INVALID, "cross-dataset metric must be euclidean, cosine, or manhattan")
     if reference.shape[0] == 0:
         raise AppError(ANALYSIS_INPUT_INVALID, "reference descriptor set cannot be empty")
     k_eff = min(max(int(k), 1), reference.shape[0])
@@ -344,6 +354,8 @@ def _cross_k_nearest(
             ref_block = reference[ref_start : ref_start + reference_chunk]
             if metric == "euclidean":
                 block = _safe_import("scipy.spatial.distance", "scipy").cdist(query_block, ref_block, metric="euclidean")
+            elif metric == "manhattan":
+                block = _safe_import("scipy.spatial.distance", "scipy").cdist(query_block, ref_block, metric="cityblock")
             else:
                 ref_norm = np.linalg.norm(ref_block, axis=1)
                 similarity = (query_block @ ref_block.T) / np.maximum(query_norm * ref_norm[None, :], 1e-15)
@@ -371,8 +383,10 @@ def _local_neighbor_graph(samples: SampleMatrix, cutoff: float, max_neighbors: i
     """Build a coordinate-aware local-environment graph.
 
     The returned CSR-like arrays use atom rows as vertices.  Periodic frames
-    are queried against translated images, so a neighbor across a cell face is
-    counted once while the stored index still points to the original atom.
+    are queried against translated images.  Every periodic image contact is
+    retained, including repeated source indices for small cells; the stored
+    index still points to the original atom.  CSR rows are emitted in global
+    atom order even when frame rows are interleaved.
     """
     if samples.positions is None:
         return (
@@ -394,8 +408,8 @@ def _local_neighbor_graph(samples: SampleMatrix, cutoff: float, max_neighbors: i
     cKDTree = _safe_import("scipy.spatial", "scipy").cKDTree
     cells = np.asarray(samples.cells, dtype=np.float64) if samples.cells is not None else None
     pbc = np.asarray(samples.pbc, dtype=bool) if samples.pbc is not None else None
-    graph_indices: list[int] = []
-    graph_distances: list[float] = []
+    row_indices: list[list[int]] = [[] for _ in range(samples.n_samples)]
+    row_distances: list[list[float]] = [[] for _ in range(samples.n_samples)]
     offsets = np.zeros(samples.n_samples + 1, dtype=np.int64)
     coordination = np.zeros(samples.n_samples, dtype=np.int64)
     warnings: list[str] = []
@@ -418,7 +432,19 @@ def _local_neighbor_graph(samples: SampleMatrix, cutoff: float, max_neighbors: i
         )
         if periodic:
             periodic_axes = [axis for axis in range(3) if bool(frame_pbc[axis])]
-            shift_tuples = list(product((-1, 0, 1), repeat=len(periodic_axes)))
+            # Wrap periodic coordinates first so the finite image stencil is
+            # valid for datasets whose coordinates have crossed a cell many
+            # times.  The inverse-cell columns give a conservative number of
+            # lattice images needed for the requested Cartesian cutoff.
+            frame_inverse = np.linalg.inv(frame_cell)
+            fractional = frame_positions @ frame_inverse
+            fractional[:, periodic_axes] -= np.floor(fractional[:, periodic_axes])
+            graph_positions = fractional @ frame_cell
+            shift_limits = [
+                max(1, int(np.ceil(cutoff * np.linalg.norm(frame_inverse[:, axis]))) + 1)
+                for axis in periodic_axes
+            ]
+            shift_tuples = list(product(*[range(-limit, limit + 1) for limit in shift_limits]))
             shifts = []
             for compact_shift in shift_tuples:
                 shift = np.zeros(3, dtype=np.float64)
@@ -426,19 +452,20 @@ def _local_neighbor_graph(samples: SampleMatrix, cutoff: float, max_neighbors: i
                     shift[axis] = value
                 shifts.append(shift)
             shifts_array = np.asarray(shifts, dtype=np.float64)
-            translated = (frame_positions[None, :, :] + shifts_array[:, None, :] @ frame_cell).reshape(-1, 3)
+            translated = (graph_positions[None, :, :] + shifts_array[:, None, :] @ frame_cell).reshape(-1, 3)
             source_indices = np.tile(np.arange(members.size, dtype=np.int64), len(shifts))
             zero_shift_index = shift_tuples.index(tuple(0 for _ in periodic_axes))
             tree = cKDTree(translated)
         else:
-            translated = frame_positions
+            graph_positions = frame_positions
+            translated = graph_positions
             source_indices = np.arange(members.size, dtype=np.int64)
             zero_shift_index = 0
             tree = cKDTree(frame_positions)
 
-        for local_index, center in enumerate(frame_positions):
+        for local_index, center in enumerate(graph_positions):
             candidates = tree.query_ball_point(center, cutoff)
-            nearest: dict[int, float] = {}
+            contacts: list[tuple[int, float, int]] = []
             for candidate in candidates:
                 source = int(source_indices[candidate])
                 shift_index = candidate // max(members.size, 1) if periodic else 0
@@ -447,21 +474,23 @@ def _local_neighbor_graph(samples: SampleMatrix, cutoff: float, max_neighbors: i
                 distance = float(np.linalg.norm(translated[candidate] - center))
                 if distance <= 1e-10:
                     continue
-                if distance < nearest.get(source, np.inf):
-                    nearest[source] = distance
-            ordered = sorted(nearest.items(), key=lambda item: (item[1], item[0]))[:max_neighbors]
+                # Do not collapse by ``source``: two different periodic image
+                # contacts of the same atom are distinct neighbors in a small
+                # unit cell (for example the six self-images of a cubic cell).
+                contacts.append((source, distance, int(candidate)))
+            ordered = sorted(contacts, key=lambda item: (item[1], item[0], item[2]))[:max_neighbors]
             global_index = int(members[local_index])
             coordination[global_index] = len(ordered)
-            graph_indices.extend(int(members[source]) for source, _distance in ordered)
-            graph_distances.extend(distance for _source, distance in ordered)
-            offsets[global_index + 1] = len(graph_indices)
+            row_indices[global_index] = [int(members[source]) for source, _distance, _candidate in ordered]
+            row_distances[global_index] = [float(distance) for _source, distance, _candidate in ordered]
 
-    # Frames are usually contiguous, but the assignment above deliberately
-    # writes offsets by global atom index.  Fill gaps for any non-contiguous
-    # frame ordering before exposing the CSR arrays.
-    for index in range(1, offsets.size):
-        if offsets[index] < offsets[index - 1]:
-            offsets[index] = offsets[index - 1]
+    graph_indices: list[int] = []
+    graph_distances: list[float] = []
+    for global_index in range(samples.n_samples):
+        offsets[global_index] = len(graph_indices)
+        graph_indices.extend(row_indices[global_index])
+        graph_distances.extend(row_distances[global_index])
+    offsets[-1] = len(graph_indices)
     return coordination, offsets, np.asarray(graph_indices, dtype=np.int64), np.asarray(graph_distances, dtype=np.float64), warnings
 
 
@@ -856,6 +885,39 @@ class AnalysisEngine:
         target = min(_int_param(params, "n_samples", 1000, 1), n)
         algorithm = algorithm.lower().replace("-", "_")
         rng = np.random.default_rng(_seed(params))
+
+        def choose_grouped(labels: np.ndarray) -> np.ndarray:
+            """Choose exactly ``target`` rows while preserving group coverage."""
+            groups = np.unique(labels)
+            members = [np.flatnonzero(labels == group) for group in groups]
+            sizes = np.asarray([group.size for group in members], dtype=np.int64)
+            ideal = target * sizes.astype(np.float64) / max(n, 1)
+            counts = np.floor(ideal).astype(np.int64)
+            # When the target can cover every group, keep at least one row per
+            # group.  For a smaller target, the largest-remainder fill below
+            # selects exactly the requested number of groups.
+            if target >= len(groups):
+                counts = np.maximum(counts, 1)
+            counts = np.minimum(counts, sizes)
+            while int(counts.sum()) < target:
+                candidates = np.flatnonzero(counts < sizes)
+                if not candidates.size:
+                    break
+                residual = ideal[candidates] - counts[candidates]
+                counts[int(candidates[int(np.argmax(residual))])] += 1
+            while int(counts.sum()) > target:
+                minimum = 1 if target >= len(groups) else 0
+                candidates = np.flatnonzero(counts > minimum)
+                if not candidates.size:
+                    break
+                residual = ideal[candidates] - counts[candidates]
+                counts[int(candidates[int(np.argmin(residual))])] -= 1
+            selected: list[int] = []
+            for group_members, count in zip(members, counts.tolist()):
+                if count:
+                    selected.extend(rng.choice(group_members, size=count, replace=False).tolist())
+            return np.asarray(sorted(selected), dtype=np.int64)
+
         if algorithm == "random":
             selected = np.sort(rng.choice(n, size=target, replace=False))
         elif algorithm in ("fps", "farthest_point"):
@@ -876,16 +938,7 @@ class AnalysisEngine:
             if labels is None or len(labels) != n:
                 # Structure-level stratification has a stable frame fallback.
                 labels = samples.frame
-            selected_list: list[int] = []
-            groups = np.unique(labels)
-            for group in groups:
-                members = np.flatnonzero(labels == group)
-                count = max(1, round(target * len(members) / n))
-                count = min(count, len(members))
-                selected_list.extend(rng.choice(members, size=count, replace=False).tolist())
-            selected = np.asarray(sorted(set(selected_list)), dtype=np.int64)
-            if selected.size > target:
-                selected = np.sort(rng.choice(selected, size=target, replace=False))
+            selected = choose_grouped(np.asarray(labels))
         elif algorithm in ("cluster", "cluster_representative"):
             k = _int_param(params, "n_clusters", min(6, max(2, target)), 2)
             cls = _safe_import("sklearn.cluster", "scikit-learn").KMeans
@@ -905,14 +958,7 @@ class AnalysisEngine:
             labels = samples.elements
             if labels is None or len(labels) != n:
                 raise AppError(ANALYSIS_INPUT_INVALID, "per-element sampling requires atom-level element metadata")
-            selected_list = []
-            for group in np.unique(labels):
-                members = np.flatnonzero(labels == group)
-                count = max(1, round(target * len(members) / n))
-                selected_list.extend(rng.choice(members, size=min(count, len(members)), replace=False).tolist())
-            selected = np.asarray(sorted(set(selected_list)), dtype=np.int64)
-            if selected.size > target:
-                selected = np.sort(rng.choice(selected, size=target, replace=False))
+            selected = choose_grouped(np.asarray(labels))
         else:
             raise AppError(ANALYSIS_INPUT_INVALID, f"unsupported sampling algorithm: {algorithm}")
         if progress:
@@ -1029,7 +1075,16 @@ class AnalysisEngine:
         acquisition_score = np.zeros(pool_size, dtype=np.float64)
         for step in range(1, target):
             last = qry[pool[selected_local[-1]]]
-            distances = np.linalg.norm(qry[pool] - last, axis=1)
+            delta = qry[pool] - last
+            if metric == "euclidean":
+                distances = np.linalg.norm(delta, axis=1)
+            elif metric == "manhattan":
+                distances = np.abs(delta).sum(axis=1)
+            else:
+                pool_norm = np.linalg.norm(qry[pool], axis=1)
+                last_norm = float(np.linalg.norm(last))
+                denominator = np.maximum(pool_norm * max(last_norm, 1e-15), 1e-15)
+                distances = np.maximum(1.0 - (qry[pool] @ last) / denominator, 0.0)
             min_diversity = np.minimum(min_diversity, distances)
             diversity_scale = np.ptp(min_diversity[np.isfinite(min_diversity)]) if np.isfinite(min_diversity).any() else 0.0
             normalized_diversity = (min_diversity - np.nanmin(min_diversity)) / max(float(diversity_scale), 1e-15)
@@ -1177,13 +1232,14 @@ class AnalysisEngine:
             raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
         means = base.mean(axis=0)
         scales = base.std(axis=0)
-        keep = scales > np.finfo(np.float64).eps
+        # A feature that is constant in the baseline can still respond to a
+        # perturbation.  Keep it with unit scale instead of dropping the
+        # baseline-to-perturbed displacement from the response.
+        keep = np.ones(base.shape[1], dtype=bool)
         warnings = list(baseline.warnings)
-        if not bool(keep.all()):
-            warnings.append(f"ignored {int((~keep).sum())} zero-variance baseline feature(s)")
-        if not bool(keep.any()):
-            keep = np.ones(base.shape[1], dtype=bool)
-            scales = np.ones(base.shape[1], dtype=np.float64)
+        constant = scales <= np.finfo(np.float64).eps
+        if bool(constant.any()) and mode != "raw":
+            warnings.append(f"retained {int(constant.sum())} zero-variance baseline feature(s) with unit scale")
 
         def transform(values: np.ndarray) -> np.ndarray:
             values = _as_float64(values)
@@ -1199,7 +1255,7 @@ class AnalysisEngine:
             centered = used - means[keep]
             if mode == "center":
                 return centered
-            return centered / np.where(scales[keep] > 0, scales[keep], 1.0)
+            return centered / np.where(scales[keep] > np.finfo(np.float64).eps, scales[keep], 1.0)
 
         base_used = transform(base)
         metric = str(params.get("metric") or "euclidean")
@@ -1652,16 +1708,22 @@ class AnalysisEngine:
 
     @staticmethod
     def drift(reference: SampleMatrix, query: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
-        result = AnalysisEngine.coverage(reference, query, params, progress)
+        # All drift statistics must use the same reference-scaled coordinates.
+        # Otherwise coverage is measured in raw units while MMD/centroid/
+        # covariance shifts are measured in standardized units.
+        drift_params = dict(params or {})
+        if not drift_params.get("preprocess"):
+            drift_params["preprocess"] = "standardized"
+        result = AnalysisEngine.coverage(reference, query, drift_params, progress)
         distances = result["arrays"]["distances"]
-        ref, qry, drift_warnings, _keep = _preprocess_reference_query(reference.values, query.values, params, "standardized")
-        limit = min(_int_param(params, "distribution_samples", 500, 20), 2_000)
+        ref, qry, drift_warnings, _keep = _preprocess_reference_query(reference.values, query.values, drift_params, "standardized")
+        limit = min(_int_param(drift_params, "distribution_samples", 500, 20), 2_000)
         a = ref[_bounded_indices(ref.shape[0], limit)]
         b = qry[_bounded_indices(qry.shape[0], limit)]
         combined = np.vstack([a, b])
         combined_distances = _pairwise_matrix(combined, "euclidean")
         nonzero = combined_distances[combined_distances > np.finfo(np.float64).eps]
-        bandwidth = _float_param(params, "bandwidth", float(np.median(nonzero)) if nonzero.size else 1.0, np.finfo(np.float64).eps)
+        bandwidth = _float_param(drift_params, "bandwidth", float(np.median(nonzero)) if nonzero.size else 1.0, np.finfo(np.float64).eps)
         gamma = 1.0 / (2.0 * bandwidth * bandwidth)
         kernels = _safe_import("sklearn.metrics.pairwise", "scikit-learn")
         kxx = kernels.rbf_kernel(a, a, gamma=gamma)
@@ -1669,11 +1731,16 @@ class AnalysisEngine:
         kxy = kernels.rbf_kernel(a, b, gamma=gamma)
         mmd2 = max(float(kxx.mean() + kyy.mean() - 2.0 * kxy.mean()), 0.0)
         centroid_distance = float(np.linalg.norm(a.mean(axis=0) - b.mean(axis=0)))
-        covariance_a = np.atleast_2d(np.cov(a, rowvar=False))
-        covariance_b = np.atleast_2d(np.cov(b, rowvar=False))
-        covariance_shift = float(np.linalg.norm(covariance_a - covariance_b) / max(np.linalg.norm(covariance_a), 1e-15))
+        covariance_shift: float | None
+        if a.shape[0] < 2 or b.shape[0] < 2:
+            covariance_shift = None
+            drift_warnings.append("covariance shift requires at least two samples in both sets")
+        else:
+            covariance_a = np.atleast_2d(np.cov(a, rowvar=False))
+            covariance_b = np.atleast_2d(np.cov(b, rowvar=False))
+            covariance_shift = float(np.linalg.norm(covariance_a - covariance_b) / max(np.linalg.norm(covariance_a), 1e-15))
         result["preview"] = {**result["preview"], "kind": "drift", "mean_distance": float(distances.mean()), "median_distance": float(np.median(distances)), "max_distance": float(distances.max()), "mmd": float(np.sqrt(mmd2)), "mmd_squared": mmd2, "bandwidth": bandwidth, "centroid_distance": centroid_distance, "covariance_shift": covariance_shift}
-        result["warnings"] = [*result.get("warnings", []), *drift_warnings]
+        result["warnings"] = list(dict.fromkeys([*result.get("warnings", []), *drift_warnings]))
         return result
 
     @staticmethod
@@ -1689,7 +1756,16 @@ class AnalysisEngine:
             )
         rows = []
         baseline_run, baseline_sample = runs[0]
-        baseline_values, baseline_warnings, _baseline_keep = _preprocess(baseline_sample.values, params, "standardized")
+        same_feature_dimensions = all(sample.n_features == baseline_sample.n_features for _run, sample in runs)
+        if same_feature_dimensions:
+            baseline_values, _baseline_query, baseline_warnings, _baseline_keep = _preprocess_reference_query(
+                baseline_sample.values,
+                baseline_sample.values,
+                params,
+                "standardized",
+            )
+        else:
+            baseline_values, baseline_warnings, _baseline_keep = _preprocess(baseline_sample.values, params, "standardized")
         baseline_memory = baseline_run.get("memory_peak_bytes")
         try:
             baseline_memory = int(baseline_memory) if baseline_memory is not None else None
@@ -1703,7 +1779,18 @@ class AnalysisEngine:
                 parameter_value = parameters if isinstance(parameters, dict) else __import__("json").loads(parameters)
             except (TypeError, ValueError):
                 parameter_value = {"raw": str(parameters)}
-            values, run_warnings, _run_keep = _preprocess(sample.values, params, "standardized")
+            if same_feature_dimensions:
+                _baseline_again, values, run_warnings, _run_keep = _preprocess_reference_query(
+                    baseline_sample.values,
+                    sample.values,
+                    params,
+                    "standardized",
+                )
+                if i == 0:
+                    values = baseline_values
+                    run_warnings = []
+            else:
+                values, run_warnings, _run_keep = _preprocess(sample.values, params, "standardized")
             if i == 0:
                 geometry = {
                     "pairwise_distance_pearson": 1.0,
@@ -1739,7 +1826,7 @@ class AnalysisEngine:
                 "memory_delta_bytes": memory_delta,
                 "mean_delta_norm": mean_delta_norm,
                 **geometry,
-                "warnings": run_warnings,
+                "warnings": list(dict.fromkeys(run_warnings)),
             })
             if progress:
                 progress((i + 1) / len(runs), "comparing completed runs")
@@ -1757,5 +1844,5 @@ class AnalysisEngine:
                 "memory_metric": "peak process RSS during descriptor compute",
                 "memory_available": any(row["memory_peak_bytes"] is not None for row in rows),
             },
-            "warnings": baseline_warnings,
+            "warnings": list(dict.fromkeys(baseline_warnings)),
         }

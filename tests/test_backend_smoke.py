@@ -67,12 +67,14 @@ def test_handshake_system_info_and_errors(tmp_path: Path) -> None:
     assert re.fullmatch(r"\d+\.\d+\.\d+", ready["data"]["mdescriptor_version"])
     assert ready["data"]["mdescriptor_baseline_version"] == "2"
     assert ready["data"]["mdescriptor_descriptor_info_schema_version"] == 3
+    assert ready["data"]["analysis_algorithm_version"] == "studio-analysis-2"
 
     info = bp.request(1, "system.info")
     assert info["result"]["protocol_version"] == 1
     assert info["result"]["mdescriptor_version"] == ready["data"]["mdescriptor_version"]
     assert info["result"]["mdescriptor_baseline_version"] == "2"
     assert info["result"]["mdescriptor_descriptor_info_schema_version"] == 3
+    assert info["result"]["analysis_algorithm_version"] == ready["data"]["analysis_algorithm_version"]
 
     bad = bp.request(2, "no.such.method")
     assert bad["error"]["code"] == "INVALID_PARAMS"

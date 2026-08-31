@@ -129,6 +129,7 @@ export default function Explore() {
   const [viewerError, setViewerError] = useState<string | null>(null);
   const loadStart = useRef<number>(0);
   const renderedFrameRef = useRef<number | null>(null);
+  const fetchedGhostCutoffRef = useRef(0);
 
   const total = d?.number_of_frames ?? 0;
   const selectedSample = st.selectedSample;
@@ -147,15 +148,19 @@ export default function Explore() {
       if (!d) return;
       const idx = Math.max(0, Math.min(index, total - 1));
       const cutoff = clampBondCutoff(requestedBondCutoff);
+      const fetchCutoff = clampBondCutoff(Math.max(cutoff, localCutoff));
       setLoading(true);
       loadStart.current = performance.now();
       try {
         const f = await ipc.request<FramePayload>("dataset.frame", {
           id: d.id,
           index: idx,
-          bond_cutoff: cutoff,
+          // Request enough periodic images for the local shell, while keeping
+          // the user-facing bond threshold separate below.
+          bond_cutoff: fetchCutoff,
         });
-        setFrame(f);
+        fetchedGhostCutoffRef.current = fetchCutoff;
+        setFrame({ ...f, bond_cutoff: cutoff });
         st.setActiveFrame(idx);
         setJumpTo(null);
       } catch (e) {
@@ -165,16 +170,26 @@ export default function Explore() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [d, total, bondCutoff],
+    [d, total, bondCutoff, localCutoff],
   );
 
   // reset when dataset changes
   useEffect(() => {
     renderedFrameRef.current = null;
+    fetchedGhostCutoffRef.current = 0;
     setFrame(null);
     if (d && total > 0) void fetchFrame(st.activeFrameIndex || 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d?.id]);
+
+  // A local-shell cutoff may be larger than the cutoff used for the current
+  // frame. Re-fetch only when the cached ghost extent is insufficient; the
+  // ref prevents a frame update from creating a request loop.
+  useEffect(() => {
+    if (!d || !frame || !showLocalEnvironment || selectedAtom == null) return;
+    if (localCutoff <= fetchedGhostCutoffRef.current + 1e-9) return;
+    void fetchFrame(frame.index, bondCutoff);
+  }, [bondCutoff, d, fetchFrame, frame?.index, localCutoff, selectedAtom, showLocalEnvironment]);
 
   // 3Dmol lifecycle
   useEffect(() => {

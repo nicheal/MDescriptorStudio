@@ -298,6 +298,10 @@ export const zhDict: Record<string, string> = {
   "Kernel": "核函数",
 
   // Analysis — controls
+  "Method guide": "方法说明",
+  "Open method guide": "打开方法说明",
+  "Theory": "理论原理",
+  "Applications": "应用场景",
   "View": "视图",
   "Query neighbors": "查询近邻",
   "All-neighbor graph": "全近邻图",

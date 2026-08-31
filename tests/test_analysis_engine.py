@@ -105,6 +105,32 @@ def test_sampling_is_deterministic_and_bounded(samples: SampleMatrix) -> None:
     assert len(a["arrays"]["selected_indices"]) == 10
 
 
+def test_grouped_sampling_returns_exact_target_count() -> None:
+    values = np.arange(40, dtype=np.float64).reshape(20, 2)
+    frames = np.repeat(np.arange(4, dtype=np.int64), 5)
+    structure_samples = SampleMatrix(values, frames)
+    stratified = AnalysisEngine.sampling(structure_samples, {"n_samples": 10, "seed": 7}, "stratified")
+    assert stratified["arrays"]["selected_indices"].size == 10
+    assert np.unique(frames[stratified["arrays"]["selected_indices"]]).size == 4
+
+    elements = np.repeat(np.array([14, 32], dtype=np.int64), 10)
+    atom_samples = SampleMatrix(values, frames, elements=elements, mode="atom")
+    per_element = AnalysisEngine.sampling(atom_samples, {"n_samples": 5, "seed": 7}, "per_element")
+    selected = per_element["arrays"]["selected_indices"]
+    assert selected.size == 5
+    assert np.unique(elements[selected]).size == 2
+
+
+def test_cross_dataset_distances_keep_constant_reference_features() -> None:
+    reference = SampleMatrix(np.array([[0.0, 0.0], [0.0, 1.0]]), np.arange(2))
+    query = SampleMatrix(np.array([[100.0, 0.5]]), np.array([0]))
+
+    euclidean = AnalysisEngine.coverage(reference, query, {"preprocess": "raw", "metric": "euclidean"})
+    manhattan = AnalysisEngine.coverage(reference, query, {"preprocess": "raw", "metric": "manhattan"})
+    assert euclidean["arrays"]["distances"][0] > 99.0
+    assert np.isclose(manhattan["arrays"]["distances"][0], 100.5)
+
+
 def test_invalid_numeric_inputs_are_structured(samples: SampleMatrix) -> None:
     with pytest.raises(AppError) as exc:
         AnalysisEngine.pca(SampleMatrix(np.array([[np.nan, 1.0], [2.0, 3.0]]), np.array([0, 1])), {})
@@ -267,6 +293,25 @@ def test_structural_perturbation_sensitivity_returns_sorted_response_curves(samp
     assert np.all(np.diff(result["arrays"]["mean_response"]) >= -1e-12)
 
 
+def test_perturbation_response_keeps_constant_baseline_features() -> None:
+    baseline = SampleMatrix(
+        np.array([[0.0, 1.0], [0.0, 2.0]]),
+        np.arange(2),
+        sample_ids=["a", "b"],
+    )
+    perturbed = SampleMatrix(
+        np.array([[1.0, 1.0], [1.0, 2.0]]),
+        np.arange(2),
+        sample_ids=["a", "b"],
+    )
+    result = AnalysisEngine.perturbation_sensitivity(
+        baseline,
+        [(0.1, perturbed)],
+        {"preprocess": "raw", "metric": "euclidean"},
+    )
+    assert np.allclose(result["arrays"]["response_matrix"], 1.0)
+
+
 def test_local_diversity_reports_periodic_coordination_and_neighbor_shell() -> None:
     values = np.array(
         [[0.0, 1.0, 2.0], [1.0, 0.0, 2.0], [2.0, 1.0, 0.0], [1.5, 2.0, 0.5]],
@@ -298,6 +343,60 @@ def test_local_diversity_reports_periodic_coordination_and_neighbor_shell() -> N
     assert np.allclose(result["arrays"]["neighbor_distances"], 0.1)
 
 
+def test_local_neighbor_graph_keeps_periodic_image_contacts() -> None:
+    values = np.array([[0.0, 1.0], [1.0, 0.0], [0.5, 0.25]], dtype=np.float64)
+    result = AnalysisEngine.local_diversity(
+        SampleMatrix(
+            values,
+            np.arange(3, dtype=np.int64),
+            row=np.zeros(3, dtype=np.int64),
+            sample_ids=[f"frame:{i}:row:0" for i in range(3)],
+            elements=np.full(3, 14, dtype=np.int64),
+            mode="atom",
+            positions=np.zeros((3, 3), dtype=np.float64),
+            cells=np.repeat(np.eye(3, dtype=np.float64)[None, :, :], 3, axis=0),
+            pbc=np.ones((3, 3), dtype=bool),
+        ),
+        {"cutoff": 1.1, "max_neighbors": 8, "n_clusters": 2, "k": 1},
+    )
+    assert result["arrays"]["coordination"].tolist() == [6, 6, 6]
+    assert result["arrays"]["neighbor_offsets"].tolist() == [0, 6, 12, 18]
+    assert result["arrays"]["neighbor_indices"].tolist() == [0] * 6 + [1] * 6 + [2] * 6
+    assert np.allclose(result["arrays"]["neighbor_distances"], 1.0)
+
+
+def test_local_neighbor_graph_csr_rows_follow_global_order() -> None:
+    values = np.array(
+        [[0.0, 1.0], [1.0, 0.0], [0.2, 0.8], [0.8, 0.2]],
+        dtype=np.float64,
+    )
+    result = AnalysisEngine.local_diversity(
+        SampleMatrix(
+            values,
+            np.array([0, 1, 0, 1], dtype=np.int64),
+            row=np.arange(4, dtype=np.int64),
+            sample_ids=[f"sample:{i}" for i in range(4)],
+            elements=np.full(4, 14, dtype=np.int64),
+            mode="atom",
+            positions=np.array(
+                [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [0.1, 0.0, 0.0]],
+                dtype=np.float64,
+            ),
+        ),
+        {"cutoff": 0.2, "max_neighbors": 8, "n_clusters": 2, "k": 1},
+    )
+    assert result["arrays"]["neighbor_offsets"].tolist() == [0, 1, 2, 3, 4]
+    assert result["arrays"]["neighbor_indices"].tolist() == [2, 3, 0, 1]
+
+
+def test_drift_marks_covariance_shift_unavailable_for_singletons() -> None:
+    single = SampleMatrix(np.array([[2.0, 3.0]]), np.array([0]), sample_ids=["one"])
+    result = AnalysisEngine.drift(single, single, {})
+    assert result["preview"]["covariance_shift"] is None
+    assert np.isfinite(result["preview"]["mmd"])
+    assert any("covariance shift requires" in warning for warning in result["warnings"])
+
+
 def test_sensitivity_reports_peak_memory_and_delta(samples: SampleMatrix) -> None:
     result = AnalysisEngine.sensitivity(
         [
@@ -311,3 +410,24 @@ def test_sensitivity_reports_peak_memory_and_delta(samples: SampleMatrix) -> Non
     assert rows[1]["memory_delta_bytes"] == 60
     assert np.array_equal(result["arrays"]["memory_peak_bytes"], np.array([100.0, 160.0]))
     assert result["preview"]["memory_available"] is True
+
+
+def test_sensitivity_uses_baseline_scaling_for_common_shifts() -> None:
+    baseline = SampleMatrix(
+        np.array([[0.0, 1.0], [1.0, 2.0], [2.0, 4.0], [3.0, 8.0]]),
+        np.arange(4),
+        sample_ids=[f"s{i}" for i in range(4)],
+    )
+    shifted = SampleMatrix(
+        baseline.values + 5.0,
+        baseline.frame,
+        sample_ids=baseline.sample_ids,
+    )
+    result = AnalysisEngine.sensitivity(
+        [
+            ({"id": "base", "descriptor_name": "SOAP", "parameters_json": "{}"}, baseline),
+            ({"id": "shifted", "descriptor_name": "SOAP", "parameters_json": "{}"}, shifted),
+        ],
+        {"max_samples": 4, "n_clusters": 2, "k": 1},
+    )
+    assert result["preview"]["runs"][1]["mean_delta_norm"] > 1.0
