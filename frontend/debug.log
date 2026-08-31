@@ -16,3 +16,37 @@ WARNING: 0:27: '=' : global variable initializers should be constant expressions
 [0831/001715.757:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x4e6c015b3c00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
 [0831/001715.894:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x4e6c015b5400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
 [0831/001715.912:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x4e6c015b4e00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)
+[0831/040606.973:WARNING:ui\gl\angle_platform_impl.cc:52] Shader.cpp:771 (gl::Shader::resolveCompile): Compiler log: WARNING: 0:26: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+WARNING: 0:28: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+
+[0831/040606.980:WARNING:ui\gl\angle_platform_impl.cc:52] Shader.cpp:771 (gl::Shader::resolveCompile): Compiler log: WARNING: 0:25: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+WARNING: 0:27: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+
+[0831/040607.002:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x70ec001c5000]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[0831/040607.022:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x70ec001c6800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[0831/041730.585:WARNING:ui\gl\angle_platform_impl.cc:52] Shader.cpp:771 (gl::Shader::resolveCompile): Compiler log: WARNING: 0:26: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+WARNING: 0:28: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+
+[0831/041730.592:WARNING:ui\gl\angle_platform_impl.cc:52] Shader.cpp:771 (gl::Shader::resolveCompile): Compiler log: WARNING: 0:25: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+WARNING: 0:27: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+
+[0831/041730.616:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x351c001c8a00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[0831/041730.645:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x351c001cae00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[0831/041731.501:WARNING:ui\gl\angle_platform_impl.cc:52] Shader.cpp:771 (gl::Shader::resolveCompile): Compiler log: WARNING: 0:26: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+WARNING: 0:28: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+
+[0831/041731.508:WARNING:ui\gl\angle_platform_impl.cc:52] Shader.cpp:771 (gl::Shader::resolveCompile): Compiler log: WARNING: 0:25: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+WARNING: 0:27: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+
+[0831/041731.553:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x729403865e00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[0831/041731.575:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x7294001bbc00]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[0831/041731.698:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x729403866400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[0831/041731.716:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x729403868200]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)
+[0831/041734.829:WARNING:ui\gl\angle_platform_impl.cc:52] Shader.cpp:771 (gl::Shader::resolveCompile): Compiler log: WARNING: 0:26: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+WARNING: 0:28: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+
+[0831/041734.835:WARNING:ui\gl\angle_platform_impl.cc:52] Shader.cpp:771 (gl::Shader::resolveCompile): Compiler log: WARNING: 0:25: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+WARNING: 0:27: '=' : global variable initializers should be constant expressions (uniforms and globals are allowed in global initializers for legacy compatibility)
+
+[0831/041734.859:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x6b74001c1400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+[0831/041734.879:ERROR:gpu\command_buffer\service\gl_utils.cc:430] [.WebGL-0x6b7400b85800]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels

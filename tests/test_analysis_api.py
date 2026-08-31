@@ -24,6 +24,9 @@ class _Context:
     def progress(self, *args, **kwargs):
         return None
 
+    def attach_control(self, _control):
+        return None
+
 
 class _InlineJobs:
     def __init__(self, db: Database):
@@ -354,11 +357,15 @@ def test_structural_perturbation_service_recomputes_descriptor_sweep(tmp_path: P
             return parameters
 
         @staticmethod
+        def make_control():
+            return object()
+
+        @staticmethod
         def to_structure_batch(batch):
             return batch
 
         @staticmethod
-        def compute(_descriptor, batch):
+        def compute(_descriptor, batch, _control=None):
             values = [
                 [frame.positions[:, 0].mean(), frame.positions[:, 1].mean() + 2.0 * frame.positions[:, 2].mean()]
                 for frame in batch

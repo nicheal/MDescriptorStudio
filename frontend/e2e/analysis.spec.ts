@@ -101,10 +101,30 @@ test("browser preview exposes the Mantel permutation visualization", async ({ pa
   const controls = page.locator(".analysis-controls");
   const selects = controls.locator(".ant-select");
   await selects.nth(1).click();
-  await page.getByText("ACE · [12480, 96]", { exact: true }).last().click();
+  await page.getByText("ACE · run-ace", { exact: true }).last().click();
   await selects.nth(2).click();
   await page.getByText("Mantel permutation test", { exact: true }).last().click();
   await page.getByRole("button", { name: "Run Compare" }).click();
   await expect(page.getByText("MANTEL PERMUTATION TEST", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Mantel permutation null distribution")).toBeVisible({ timeout: 30_000 });
+});
+
+test("language switch in Settings applies immediately and persists across reload", async ({ page }) => {
+  await page.goto("/preview.html");
+  await expect(page.getByRole("button", { name: "Analysis" })).toBeVisible({ timeout: 30_000 });
+
+  // open Settings and switch to Chinese (antd radio buttons hide their inputs)
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByText("简体中文", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "总览" })).toBeVisible();
+  await expect(page.getByText("语言", { exact: true })).toBeVisible();
+
+  // the choice persists (localStorage) — reload and verify Chinese is still active
+  await page.reload();
+  await expect(page.getByRole("button", { name: "总览" })).toBeVisible({ timeout: 30_000 });
+
+  // switch back to English
+  await page.getByRole("button", { name: "设置" }).click();
+  await page.getByText("English", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Overview" })).toBeVisible();
 });

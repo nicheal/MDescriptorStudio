@@ -843,6 +843,8 @@ class AnalysisService:
         except (TypeError, ValueError):
             descriptor_parameters = {}
         descriptor = self.datasets.adapter.build(run_row["descriptor_name"], descriptor_parameters)
+        control = self.datasets.adapter.make_control()
+        ctx.attach_control(control)
         perturbation_results: list[tuple[float, SampleMatrix]] = []
         for amplitude_index, amplitude in enumerate(amplitudes):
             ctx.check_cancelled()
@@ -851,7 +853,7 @@ class AnalysisService:
                 for index, frame in enumerate(source_frames)
             ]
             batch = self.datasets.adapter.to_structure_batch(perturbed_frames)
-            computed = self.datasets.adapter.compute(descriptor, batch)
+            computed = self.datasets.adapter.compute(descriptor, batch, control)
             values = self._computed_structure_values(computed, len(perturbed_frames))
             perturbation_results.append((
                 amplitude,

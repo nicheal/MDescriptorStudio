@@ -13,7 +13,7 @@ import type { JobRow } from "../types/protocol";
 
 export default function JobsDrawer() {
   const { runningJobs, jobsDrawerOpen, setJobsDrawerOpen } = useWorkspace();
-  const { t, tr } = useT();
+  const { t } = useT();
   const { jobs, order } = useJobs();
   const [rows, setRows] = useState<JobRow[]>([]);
 

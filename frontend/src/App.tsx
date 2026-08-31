@@ -83,8 +83,8 @@ export default function App() {
               notification.destroy();
               void upd.runUpdate().then((/* done */) => {
                 const s = useEngineUpdate.getState();
+                const { t: tNow } = getT();
                 if (s.status === "restart_required") {
-                  const { t: tNow } = getT();
                   notification.success({
                     message: tNow("Engine updated to {version}", { version: s.latest ?? "" }),
                     description: tNow("Restart the backend to load it. After any engine update, rerun scripts/probe_engine.py + pytest (ADR-2)."),

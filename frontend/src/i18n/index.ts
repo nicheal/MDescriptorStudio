@@ -72,11 +72,16 @@ function interpolate(template: string, vars: Vars | undefined): string {
   );
 }
 
+/** Resolve one key for a language (exported for tests). */
+export function translateKey(lang: Lang, key: string, vars?: Vars): string {
+  return interpolate(lang === "zh" ? (zhDict[key] ?? key) : key, vars);
+}
+
 function makeT(lang: Lang): T {
   return {
     lang,
     locale: lang === "zh" ? "zh-CN" : undefined,
-    t: (key, vars) => interpolate(lang === "zh" ? (zhDict[key] ?? key) : key, vars),
+    t: (key, vars) => translateKey(lang, key, vars),
     tr: (pair) => (lang === "zh" ? pair.zh : pair.en),
   };
 }
