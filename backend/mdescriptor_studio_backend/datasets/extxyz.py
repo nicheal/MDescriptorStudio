@@ -13,6 +13,11 @@ from .deepmd_symbols import _SYMBOL_TO_Z
 
 _KEY_RE = re.compile(r'(\w+)\s*=\s*"([^"]*)"|(\w+)\s*=\s*(\S+)')
 _Z_RE = re.compile(r"^([A-Za-z]{1,3})")
+MAX_ATOMS = 1_000_000
+MAX_FRAME_BYTES = 512 * 1024 * 1024
+MAX_COLUMNS = 64
+MAX_LINE_BYTES = 8 * 1024 * 1024
+MAX_FRAMES = 250_000
 
 
 class ExtXYZAdapter(DatasetAdapter):
@@ -32,24 +37,41 @@ class ExtXYZAdapter(DatasetAdapter):
             with open(self.source_path, "r", encoding="utf-8", errors="replace") as f:
                 while True:
                     start = f.tell()
-                    line = f.readline()
+                    line = _readline_bounded(f)
                     if not line:
                         break
                     try:
                         natoms = int(line.strip())
                     except ValueError:
                         break  # trailing garbage
-                    comment = f.readline()
+                    if natoms < 0 or natoms > MAX_ATOMS:
+                        raise AppError(INVALID_DATASET, "extXYZ atom count is outside the supported limit")
+                    comment = _readline_bounded(f)
                     if not comment:
                         break
-                    meta = _parse_comment(comment)
+                    try:
+                        meta = _parse_comment(comment)
+                    except (AppError, IndexError, TypeError, ValueError) as exc:
+                        if isinstance(exc, AppError):
+                            raise
+                        raise AppError(INVALID_DATASET, "extXYZ frame header is malformed") from exc
+                    if len(self._offsets) >= MAX_FRAMES:
+                        raise AppError(INVALID_DATASET, "extXYZ dataset contains too many frames")
+                    n_cols = sum(size for _, size in meta["columns"])
+                    if natoms * max(16, n_cols * 8) > MAX_FRAME_BYTES:
+                        raise AppError(INVALID_DATASET, "extXYZ frame exceeds the supported size limit")
                     self._offsets.append(start)
                     self._frame_meta.append({"natoms": natoms, **meta})
+                    frame_bytes = len(comment.encode("utf-8"))
                     for _ in range(natoms):
-                        if not f.readline():
-                            break
+                        atom_line = _readline_bounded(f)
+                        if not atom_line:
+                            raise AppError(INVALID_DATASET, "extXYZ frame is truncated")
+                        frame_bytes += len(atom_line.encode("utf-8"))
+                        if frame_bytes > MAX_FRAME_BYTES:
+                            raise AppError(INVALID_DATASET, "extXYZ frame exceeds the supported size limit")
         except OSError as exc:
-            raise AppError(INVALID_DATASET, f"cannot read {self.source_path}: {exc}") from exc
+            raise AppError(INVALID_DATASET, "cannot read extXYZ source") from exc
 
     def __len__(self) -> int:
         return len(self._offsets)
@@ -73,11 +95,21 @@ class ExtXYZAdapter(DatasetAdapter):
         natoms = meta["natoms"]
         with open(self.source_path, "r", encoding="utf-8", errors="replace") as f:
             f.seek(self._offsets[index])
-            f.readline()  # natoms line
-            comment = f.readline()
-            meta = {**_parse_comment(comment), "natoms": natoms}
+            _readline_bounded(f)  # natoms line
+            comment = _readline_bounded(f)
+            try:
+                meta = {**_parse_comment(comment), "natoms": natoms}
+            except (AppError, IndexError, TypeError, ValueError) as exc:
+                if isinstance(exc, AppError):
+                    raise
+                raise AppError(INVALID_DATASET, "extXYZ frame header is malformed") from exc
             cols = meta["columns"]
             n_cols = sum(c for _, c in cols)
+            if natoms < 0 or natoms > MAX_ATOMS or n_cols <= 0 or n_cols > MAX_COLUMNS * 3:
+                raise AppError(INVALID_DATASET, "extXYZ frame dimensions are outside the supported limit")
+            estimated_bytes = natoms * max(16, n_cols * 8)
+            if estimated_bytes > MAX_FRAME_BYTES:
+                raise AppError(INVALID_DATASET, "extXYZ frame exceeds the supported size limit")
             # token offset per column group = sum of the preceding groups' sizes
             # (a column index is NOT a token offset: forces at group index 2
             # start at token 4 in the standard species:1:pos:3:forces:3 layout)
@@ -98,8 +130,13 @@ class ExtXYZAdapter(DatasetAdapter):
             species: list[str] = []
             positions = np.empty((natoms, 3), dtype=np.float64)
             forces = np.empty((natoms, 3), dtype=np.float64) if forces_i is not None else None
+            frame_bytes = len(comment.encode("utf-8"))
             for row in range(natoms):
-                tokens = f.readline().split()
+                atom_line = _readline_bounded(f)
+                frame_bytes += len(atom_line.encode("utf-8"))
+                if frame_bytes > MAX_FRAME_BYTES:
+                    raise AppError(INVALID_DATASET, "extXYZ frame exceeds the supported size limit")
+                tokens = atom_line.split()
                 if len(tokens) < n_cols:
                     raise AppError(INVALID_DATASET, f"frame {index} row {row}: truncated")
                 try:
@@ -141,6 +178,13 @@ class ExtXYZAdapter(DatasetAdapter):
         )
 
 
+def _readline_bounded(stream) -> str:
+    line = stream.readline(MAX_LINE_BYTES + 1)
+    if len(line.encode("utf-8")) > MAX_LINE_BYTES:
+        raise AppError(INVALID_DATASET, "extXYZ line exceeds the supported size limit")
+    return line
+
+
 def _parse_comment(comment: str) -> dict:
     meta: dict = {"lattice": None, "energy": None, "virial": None, "columns": None}
     lattice = None
@@ -150,12 +194,19 @@ def _parse_comment(comment: str) -> dict:
         value = m.group(2) if m.group(1) else m.group(4)
         if key == "Lattice":
             lattice = np.fromstring(value.strip(), sep=" ", dtype=np.float64)
+            if lattice.size > 9:
+                raise AppError(INVALID_DATASET, "extXYZ lattice contains too many values")
         elif key == "pbc":
-            pbc = tuple(v.upper() == "T" for v in value.split())
+            values = value.split()
+            if len(values) != 3:
+                raise AppError(INVALID_DATASET, "extXYZ pbc must contain exactly three flags")
+            pbc = tuple(v.upper() == "T" for v in values)
         elif key == "energy":
             meta["energy"] = float(value)
         elif key == "virial":
             meta["virial"] = np.fromstring(value.strip(), sep=" ", dtype=np.float64)
+            if meta["virial"].size != 9:
+                raise AppError(INVALID_DATASET, "extXYZ virial must contain exactly nine values")
         elif key == "Properties":
             cols: list[tuple[str, int]] = []
             parts = value.split(":")
@@ -165,9 +216,16 @@ def _parse_comment(comment: str) -> dict:
                     f"malformed Properties spec: {value!r} (expected name:type:size triples)",
                 )
             for i in range(0, len(parts), 3):
-                cols.append((parts[i], int(parts[i + 2])))
+                if len(cols) >= MAX_COLUMNS:
+                    raise AppError(INVALID_DATASET, "extXYZ has too many Properties columns")
+                size = int(parts[i + 2])
+                if not parts[i] or size <= 0 or size > MAX_COLUMNS * 3:
+                    raise AppError(INVALID_DATASET, "extXYZ Properties column size is invalid")
+                cols.append((parts[i], size))
             meta["columns"] = cols
-    if lattice is not None and lattice.size == 9:
+    if lattice is not None:
+        if lattice.size != 9:
+            raise AppError(INVALID_DATASET, "extXYZ lattice must contain exactly nine values")
         meta["lattice"] = lattice
     if pbc is None:
         nonzero = lattice is not None and np.abs(lattice).sum() > 1e-8

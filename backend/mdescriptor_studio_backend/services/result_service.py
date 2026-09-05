@@ -3,15 +3,46 @@
 from __future__ import annotations
 
 import json
-import shutil
+import logging
+import re
 from pathlib import Path
 
 from ..errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
+from ..security import (
+    UnsafePathError,
+    ensure_no_reparse_points,
+    remove_managed_tree,
+    validate_managed_path,
+)
+
+log = logging.getLogger(__name__)
+_ARTIFACT_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
 
 
 class ResultService:
-    def __init__(self, db):
+    def __init__(self, db, data_dir: Path | None = None):
         self.db = db
+        self.data_dir = Path(data_dir or db.path.parent).resolve(strict=False)
+
+    def _managed_result_path(self, run_id: str, stored: object) -> Path:
+        if not _ARTIFACT_ID_RE.fullmatch(run_id or "") or not str(run_id).startswith("run_"):
+            raise UnsafePathError("invalid descriptor run id")
+        return validate_managed_path(self.data_dir / "results", stored, run_id)
+
+    def _managed_analysis_path(self, analysis_id: str, stored: object) -> Path:
+        if not _ARTIFACT_ID_RE.fullmatch(analysis_id or "") or not str(analysis_id).startswith("ana_"):
+            raise UnsafePathError("invalid analysis id")
+        return validate_managed_path(self.data_dir / "analysis", stored, analysis_id)
+
+    def _managed_result_file(self, run_id: str, stored: object, name: str) -> Path:
+        if name not in {"metadata.json", "values.npy", "row_offsets.npy", "pca.json"}:
+            raise UnsafePathError("invalid descriptor artifact file")
+        root = self._managed_result_path(run_id, stored)
+        path = root / name
+        ensure_no_reparse_points(path)
+        if not path.is_file():
+            raise OSError(f"descriptor artifact file is missing: {name}")
+        return path
 
     def list(self, params: dict) -> list[dict]:
         sql = (
@@ -32,18 +63,18 @@ class ResultService:
         for row in rows:
             # Keep the list response small: expose only the computed array
             # shape from metadata, never the descriptor values themselves.
-            row["shape"] = self._read_result_shape(row.get("result_path"))
+            row["shape"] = self._read_result_shape(row["id"], row.get("result_path"))
         return rows
 
-    @staticmethod
-    def _read_result_shape(result_path: str | None) -> str | None:
+    def _read_result_shape(self, run_id: str, result_path: str | None) -> str | None:
         if not result_path:
             return None
         try:
             metadata = json.loads(
-                (Path(result_path) / "metadata.json").read_text(encoding="utf-8")
+                self._managed_result_file(run_id, result_path, "metadata.json")
+                .read_text(encoding="utf-8")
             )
-        except (OSError, TypeError, ValueError):
+        except (OSError, TypeError, ValueError, UnsafePathError):
             # Pending/legacy runs may not have result metadata yet; they still
             # belong in the run history with an empty shape.
             return None
@@ -64,7 +95,13 @@ class ResultService:
         # accidentally participate in a fresh calculation.
         if row["status"] not in ("COMPLETED", "STALE") or not row["result_path"]:
             raise AppError(RESULT_INCOMPATIBLE, f"run {run_id} is {row['status']}")
-        meta = json.loads((Path(row["result_path"]) / "metadata.json").read_text(encoding="utf-8"))
+        try:
+            meta = json.loads(
+                self._managed_result_file(str(run_id), row["result_path"], "metadata.json")
+                .read_text(encoding="utf-8")
+            )
+        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(RESULT_INCOMPATIBLE, "descriptor result artifact is unavailable") from exc
         dataset = self.db.query_one("SELECT name FROM datasets WHERE id = ?", (row["dataset_id"],))
         return {**row, "dataset_name": dataset["name"] if dataset else None, "metadata": meta}
 
@@ -73,8 +110,11 @@ class ResultService:
         import numpy as np
 
         row = self.get({"run_id": run_id})
-        path = Path(row["result_path"])
-        return np.load(path / "values.npy"), row
+        try:
+            values_path = self._managed_result_file(str(run_id), row["result_path"], "values.npy")
+        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(RESULT_INCOMPATIBLE, "descriptor result values are unavailable") from exc
+        return np.load(values_path, allow_pickle=False), {**row, "result_path": str(values_path.parent)}
 
     def remove(self, params: dict) -> dict:
         """Delete ONE run: DB rows (runs, analyses, linked jobs) + result dirs."""
@@ -91,6 +131,18 @@ class ResultService:
         analyses = self.db.query(
             "SELECT id, result_path FROM analysis_runs WHERE descriptor_run_id = ?", (run_id,)
         )
+        try:
+            result_path = self._managed_result_path(str(run_id), row["result_path"]) if row["result_path"] else None
+            analysis_paths = [
+                self._managed_analysis_path(str(ana["id"]), ana["result_path"])
+                for ana in analyses
+                if ana["result_path"]
+            ]
+        except (TypeError, ValueError, UnsafePathError) as exc:
+            # Validate every target before mutating the database. A poisoned
+            # result_path therefore cannot turn result.remove into arbitrary
+            # directory deletion.
+            raise AppError(RESULT_INCOMPATIBLE, "stored result paths are invalid") from exc
         # linked jobs first: they reference runs/analyses being deleted below
         self.db.execute(
             "DELETE FROM jobs WHERE descriptor_run_id = ? OR analysis_run_id IN"
@@ -102,15 +154,17 @@ class ResultService:
 
         # disk cleanup is best-effort: the DB rows are the source of truth, and
         # dataset.remove already tolerates orphaned dirs on disk
-        self._rmtree_quiet(row["result_path"])
-        for ana in analyses:
-            self._rmtree_quiet(ana["result_path"])
+        self._rmtree_quiet(result_path)
+        for path in analysis_paths:
+            self._rmtree_quiet(path)
         return {"ok": True}
 
-    @staticmethod
-    def _rmtree_quiet(path: str | None) -> None:
+    def _rmtree_quiet(self, path: Path | None) -> None:
         if path:
-            shutil.rmtree(path, ignore_errors=True)
+            try:
+                remove_managed_tree(path)
+            except (OSError, UnsafePathError):
+                log.warning("could not remove managed artifact", exc_info=True)
 
     # -- M5 helpers ------------------------------------------------------------
     def get_pca(self, params: dict) -> dict:
@@ -123,7 +177,13 @@ class ResultService:
         )
         if row is None or not row["result_path"]:
             raise AppError(INVALID_PARAMS, f"analysis {analysis_id} does not exist")
-        return json.loads((Path(row["result_path"]) / "pca.json").read_text(encoding="utf-8"))
+        try:
+            root = self._managed_analysis_path(str(analysis_id), row["result_path"])
+            target = root / "pca.json"
+            ensure_no_reparse_points(target)
+            return json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(RESULT_INCOMPATIBLE, "analysis artifact is unavailable") from exc
 
     def heatmap(self, params: dict) -> dict:
         """Atom-level values for ONE structure: N_atoms x min(features, 256)."""
@@ -132,14 +192,18 @@ class ResultService:
         run_id = params.get("run_id")
         frame_index = params.get("frame_index")
         values, row = self.load_values(run_id)
-        path = Path(row["result_path"])
-        offsets_file = path / "row_offsets.npy"
-        if not offsets_file.exists() or values.ndim != 2:
+        try:
+            offsets_file = self._managed_result_file(
+                str(run_id), row["result_path"], "row_offsets.npy"
+            )
+        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(RESULT_INCOMPATIBLE, "descriptor result artifact is unavailable") from exc
+        if values.ndim != 2:
             raise AppError(
                 RESULT_INCOMPATIBLE,
                 "heatmap requires an atom/pair-level run with row_offsets",
             )
-        offsets = np.load(offsets_file)
+        offsets = np.load(offsets_file, allow_pickle=False)
         n_struct = offsets.size - 1
         try:
             requested_frame = None if frame_index is None else int(frame_index)

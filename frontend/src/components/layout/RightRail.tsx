@@ -1,7 +1,8 @@
 // Persistent right rail, page-aware:
 //  • Overview/Explore — Data Health panel: missing values / invalid cells /
-//    duplicate structures / extreme forces from the last scan, plus scan
-//    status and a Rescan trigger.
+//    duplicate structures / extreme forces / non-physical structures /
+//    net-force imbalance from the last scan, plus scan status and a Rescan
+//    trigger.
 //  • Analysis page — no right rail, so the analysis workspace stays focused.
 //  • Descriptors/Results pages — Recent Jobs panel: latest descriptor compute jobs
 //    (persisted history merged with the live session) with live progress;
@@ -18,8 +19,10 @@ import {
   Clock16Regular,
   Copy16Regular,
   Cube16Regular,
+  Flash16Regular,
   GridDots16Regular,
   Info16Regular,
+  Search16Regular,
   Warning16Filled,
 } from "@fluentui/react-icons";
 import { ipc } from "../../ipc/client";
@@ -69,6 +72,24 @@ function jobDone(jobId: string, onProgress?: (p: number) => void): Promise<void>
       onProgress?.(j.progress);
     });
   });
+}
+
+/** Missing-values subtitle: per-property counts when the scan provides them
+ * (declared properties only), otherwise the generic fallback. */
+function missingValuesSubtitle(
+  byProp: DatasetHealth["missing_by_property"],
+  t: (key: string) => string,
+): string {
+  if (!byProp) return t("Across all properties");
+  const labels: Record<string, string> = {
+    energy: t("Energy"),
+    forces: t("Forces"),
+    virial: t("Virial"),
+  };
+  const parts = Object.entries(byProp)
+    .filter(([, n]) => (n ?? 0) > 0)
+    .map(([k, n]) => `${labels[k] ?? k} ${(n ?? 0).toLocaleString()}`);
+  return parts.length > 0 ? parts.join(" · ") : t("Across all properties");
 }
 
 export default function RightRail() {
@@ -147,19 +168,22 @@ function DataHealthRail() {
     }
   }, [d, scanning, applyStats, message]);
 
+  const openFindings = useWorkspace((s) => s.openFindings);
   const rows: {
     key: string;
     icon: React.ReactNode;
     title: string;
     subtitle: string;
     count: number | null;
+    check: string;
   }[] = [
     {
       key: "missing",
       icon: <GridDots16Regular />,
       title: t("Missing values"),
-      subtitle: t("Across all properties"),
+      subtitle: missingValuesSubtitle(health?.missing_by_property, t),
       count: health ? health.missing_values : null,
+      check: "missing_values",
     },
     {
       key: "cell",
@@ -167,6 +191,7 @@ function DataHealthRail() {
       title: t("Invalid cell"),
       subtitle: t("Non-positive or degenerate"),
       count: health ? health.invalid_cell : null,
+      check: "invalid_cell",
     },
     {
       key: "dup",
@@ -174,6 +199,7 @@ function DataHealthRail() {
       title: t("Duplicate structures"),
       subtitle: t("Exact duplicates (hash)"),
       count: health ? health.duplicate_structures : null,
+      check: "duplicate_structures",
     },
     {
       key: "force",
@@ -181,6 +207,25 @@ function DataHealthRail() {
       title: t("Extreme force"),
       subtitle: t("|F| > {threshold} eV/Å", { threshold: health ? health.extreme_force_threshold : 50 }),
       count: health ? health.extreme_force : null,
+      check: "extreme_force",
+    },
+    {
+      key: "nonphysical",
+      icon: <Search16Regular />,
+      title: t("Non-physical structures"),
+      subtitle: t("Pairs < {coefficient} × covalent radii", {
+        coefficient: health ? health.short_contact_coefficient : 0.7,
+      }),
+      count: health ? health.nonphysical_structures : null,
+      check: "nonphysical_structures",
+    },
+    {
+      key: "netforce",
+      icon: <Flash16Regular />,
+      title: t("Net force"),
+      subtitle: t("|ΣF| > {threshold} eV/Å", { threshold: health ? health.net_force_threshold : 0.001 }),
+      count: health ? health.net_force : null,
+      check: "net_force",
     },
   ];
 
@@ -207,6 +252,7 @@ function DataHealthRail() {
           padding: "12px 14px 14px",
           display: "flex",
           flexDirection: "column",
+          flex: 1,
           minHeight: 0,
         }}
       >
@@ -214,7 +260,7 @@ function DataHealthRail() {
           <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
             {t("Data Health")}
           </Typography.Text>
-          <Tooltip title={t("Quality checks from the last full scan: property values missing on some structures, non-positive or degenerate cells, exact duplicate structures (content hash), and any atom force above the threshold.")}>
+          <Tooltip title={t("Quality checks from the last full scan: property values missing on some structures, non-positive or degenerate cells, exact duplicate structures (content hash), any atom force above the threshold, atom pairs closer than the covalent-radii bound (non-physical structures), and net force above the threshold.")}>
             <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
               <Info16Regular />
             </span>
@@ -227,19 +273,23 @@ function DataHealthRail() {
           </Typography.Text>
         ) : (
           <>
-            {rows.map((row, i) => (
-              <HealthRow
-                key={row.key}
-                icon={row.icon}
-                title={row.title}
-                subtitle={row.subtitle}
-                count={row.count}
-                total={structures}
-                first={i === 0}
-                loading={health === null && scanning === null}
-              />
-            ))}
-            <ScanRow scanning={scanning} lastScanAt={d.last_scan_at} />
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+              {rows.map((row, i) => (
+                <HealthRow
+                  key={row.key}
+                  icon={row.icon}
+                  title={row.title}
+                  subtitle={row.subtitle}
+                  count={row.count}
+                  total={structures}
+                  first={i === 0}
+                  loading={health === null && scanning === null}
+                  clickable={!!health && !!row.count}
+                  onClick={() => openFindings(row.check)}
+                />
+              ))}
+              <ScanRow scanning={scanning} lastScanAt={d.last_scan_at} />
+            </div>
             <Button
               block
               disabled={scanning !== null}
@@ -247,6 +297,7 @@ function DataHealthRail() {
               icon={scanning === null ? <ArrowSync16Regular /> : <ArrowSync16Regular className="rail-spin" />}
               style={{
                 marginTop: 12,
+                flex: "0 0 auto",
                 borderRadius: 8,
                 borderColor: BLUE,
                 color: BLUE,
@@ -422,6 +473,8 @@ function HealthRow({
   total,
   first,
   loading,
+  clickable,
+  onClick,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -430,17 +483,23 @@ function HealthRow({
   total: number | null;
   first: boolean;
   loading: boolean;
+  clickable?: boolean;
+  onClick?: () => void;
 }) {
   const pct = count !== null && total ? (count / total) * 100 : 0;
   return (
     <div
+      onClick={clickable ? onClick : undefined}
       style={{
         display: "flex",
         alignItems: "center",
         gap: 10,
         padding: "11px 0",
         borderTop: first ? "none" : "1px solid #EAECF0",
+        cursor: clickable ? "pointer" : undefined,
+        borderRadius: clickable ? 6 : undefined,
       }}
+      className={clickable ? "health-row-clickable" : undefined}
     >
       <span style={{ color: BLUE, display: "inline-flex", flex: "0 0 auto" }}>{icon}</span>
       <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>

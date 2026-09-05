@@ -4,6 +4,7 @@ export const PROTOCOL_VERSION = 1;
 export interface ErrorFrame {
   code: string;
   message: string;
+  error_id?: string;
   details?: Record<string, unknown>;
 }
 
@@ -41,6 +42,15 @@ export interface Stats {
   structures: number;
   atoms_total: number;
   elements: { symbol: string; count: number }[];
+  /** structures grouped by their exact element combination (unary/binary/…);
+   *  undefined on caches computed before this field existed */
+  compositions?: { elements: string[]; count: number }[];
+  /** structures grouped by exact stoichiometry (Hill-notation formula, actual
+   *  atom counts); most common first; undefined on legacy caches */
+  formulas?: { formula: string; elements: string[]; count: number }[];
+  /** per-element histogram of how many atoms of that element each structure
+   *  contains (integer-aligned bins); undefined on legacy caches */
+  element_atom_counts?: Record<string, Hist | null>;
   atoms_per_structure: Hist | null;
   atoms_per_structure_summary: Summary | null;
   energy_per_atom: Hist | null;
@@ -49,6 +59,8 @@ export interface Stats {
   force_magnitude_summary: Summary | null;
   max_force: Hist | null;
   max_force_summary: Summary | null;
+  min_distance: Hist | null;
+  min_distance_summary: Summary | null;
   volume: Hist | null;
   volume_summary: Summary | null;
   properties: {
@@ -64,11 +76,43 @@ export interface Stats {
   };
   /** present in scans since the data-health pass; undefined on legacy caches */
   health?: DatasetHealth;
+  /** frame indices behind the health counts (original file positions, capped
+   * per check); undefined on caches older than the findings pass */
+  health_findings?: HealthFindings;
+  /** frames soft-deleted by the user; statistics describe the remainder */
+  excluded_frames?: { count: number; indices: number[] };
+}
+
+export interface HealthFindings {
+  cap: number;
+  missing_values: number[];
+  invalid_cell: number[];
+  duplicate_structures: number[];
+  extreme_force: number[];
+  nonphysical_structures: number[];
+  net_force: number[];
+}
+
+/** Per-frame summary behind a health check (dataset.findings). */
+export interface FindingsRow {
+  index: number;
+  natoms: number;
+  formula: string;
+  energy_per_atom: number | null;
+  force_max: number | null;
+  volume: number | null;
+  /** declared properties this frame lacks (missing-values finding) */
+  missing_props?: string[];
+  excluded: boolean;
 }
 
 export interface DatasetHealth {
   /** frames missing at least one property other frames carry */
   missing_values: number;
+  /** frames missing each property the check watches (declared properties
+   * only); present since the missing-values breakdown, undefined on legacy
+   * caches */
+  missing_by_property?: Partial<Record<"energy" | "forces" | "virial", number>>;
   /** frames claiming periodicity with a non-positive/degenerate cell */
   invalid_cell: number;
   /** redundant copies beyond the first, exact content hash */
@@ -76,6 +120,14 @@ export interface DatasetHealth {
   /** frames with any atom |F| above extreme_force_threshold (eV/Å) */
   extreme_force: number;
   extreme_force_threshold: number;
+  /** frames with an atom pair (periodic images included) closer than
+   * short_contact_coefficient × the pair's covalent-radii sum —
+   * non-physical structures (NepTrainKit's bond-length filter) */
+  nonphysical_structures: number;
+  short_contact_coefficient: number;
+  /** frames with net force ‖ΣF‖ above net_force_threshold (eV/Å) */
+  net_force: number;
+  net_force_threshold: number;
 }
 
 export interface Summary {
@@ -104,6 +156,10 @@ export interface FramePayload {
   energy: number | null;
   energy_per_atom: number | null;
   force_max: number | null;
+  /** whether the source frame carries a virial (missing-values transparency) */
+  virial_present?: boolean;
+  /** virial tensor W (eV) flattened row-major [Wxx, Wxy, Wxz, Wyx, …]; null when the frame lacks one */
+  virial: number[] | null;
   volume: number | null;
   pbc: string;
   cell: number[] | null;

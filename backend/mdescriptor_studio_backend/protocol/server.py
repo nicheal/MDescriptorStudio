@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +23,7 @@ class Server:
         self._write_lock = threading.Lock()
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rpc")
         self._closed = threading.Event()
+        self._slots = threading.BoundedSemaphore(64)
 
     # -- output ------------------------------------------------------------
     def emit(self, name: str, data: dict) -> None:
@@ -38,25 +38,55 @@ class Server:
     # -- input loop ----------------------------------------------------------
     def serve_forever(self) -> None:
         log.info("protocol server started (v%s)", frames.PROTOCOL_VERSION)
-        for raw in sys.stdin:
-            line = raw.strip()
+        stream = getattr(sys.stdin, "buffer", sys.stdin)
+        while not self._closed.is_set():
+            raw = stream.readline(frames.MAX_LINE_BYTES + 1)
+            if not raw:
+                break
+            oversized = len(raw) > frames.MAX_LINE_BYTES
+            newline = b"\n" if isinstance(raw, bytes) else "\n"
+            while oversized and raw and not raw.endswith(newline):
+                raw = stream.readline(frames.MAX_LINE_BYTES + 1)
+            if oversized:
+                error = AppError(
+                    INVALID_PARAMS,
+                    "frame exceeds 8 MB limit",
+                    public_message="Request is too large.",
+                )
+                self._write(frames.response_err(None, error))
+                continue
+            if isinstance(raw, bytes):
+                line = raw.decode("utf-8", errors="replace").strip()
+            else:
+                line = raw.strip()
             if not line:
                 continue
-            if self._closed.is_set():
+            if not self._slots.acquire(blocking=False):
+                try:
+                    vid, _method, _params = frames.parse_request(line)
+                    error = AppError("BUSY", "request queue is full", public_message="Backend is busy; try again shortly.")
+                except AppError as exc:
+                    vid, error = None, exc
+                self._write(frames.response_err(vid, error))
+                continue
+            try:
+                self._pool.submit(self._handle_with_slot, line)
+            except RuntimeError:
+                self._slots.release()
                 break
-            self._pool.submit(self._handle, line)
         self.close()
+
+    def _handle_with_slot(self, line: str) -> None:
+        try:
+            self._handle(line)
+        finally:
+            self._slots.release()
 
     def _handle(self, line: str) -> None:
         try:
             vid, method, params = frames.parse_request(line)
         except AppError as exc:
             self._write(frames.response_err(None, exc))
-            if exc.code == "PROTOCOL_VERSION_MISMATCH":
-                # docs/plan/02 §3: incompatible client -> error frame + exit 2.
-                # os._exit: sys.exit is a no-op inside a pool worker thread.
-                log.error("protocol version mismatch, exiting")
-                os._exit(2)
             return
         handler = self.methods.get(method)
         if handler is None:

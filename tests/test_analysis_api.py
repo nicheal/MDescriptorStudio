@@ -353,7 +353,7 @@ def test_structural_perturbation_service_recomputes_descriptor_sweep(tmp_path: P
             return frames[index]
 
     class _ComputeAdapter:
-        def build(self, _name, parameters):
+        def build(self, _name, parameters, device="cpu"):
             return parameters
 
         @staticmethod

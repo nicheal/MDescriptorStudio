@@ -13,9 +13,11 @@ import numpy as np
 
 from ..datasets import (
     compute_fingerprint,
+    compute_legacy_fingerprint,
     compute_statistics,
     create_adapter,
     detect_format,
+    is_v2_fingerprint,
 )
 from ..errors import (
     AppError,
@@ -25,6 +27,7 @@ from ..errors import (
     INVALID_PARAMS,
 )
 from ..mdescriptor_adapter import EngineAdapter
+from ..security import UnsafePathError, escape_like, same_lexical_path, validate_local_path
 from ..storage.database import Database
 from .job_service import JobService
 
@@ -34,6 +37,27 @@ _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa:
 DEFAULT_BOND_CUTOFF = 2.4
 MIN_BOND_CUTOFF = 0.1
 MAX_BOND_CUTOFF = 10.0
+# max per-frame summary rows one dataset.findings call returns (the drawer
+# pages through longer lists)
+FINDINGS_ROW_LIMIT = 1000
+
+
+def _frame_indices(value: object, number_of_frames: int) -> list[int]:
+    """Validate an IPC list of frame indices (dedup, range-checked)."""
+    if not isinstance(value, list) or not value:
+        raise AppError(INVALID_PARAMS, "'indices' must be a non-empty list of frame indices")
+    out: list[int] = []
+    for v in value:
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise AppError(INVALID_PARAMS, "'indices' must contain integers")
+        if not 0 <= v < number_of_frames:
+            raise AppError(
+                INVALID_PARAMS,
+                f"frame index {v} out of range (dataset has {number_of_frames} frames)",
+            )
+        if v not in out:
+            out.append(v)
+    return out
 
 
 def _symbol(z: int) -> str:
@@ -88,8 +112,27 @@ class DatasetService:
         return row
 
     def _meta(self, row: dict, fingerprint_valid: bool | None = None) -> dict:
-        current = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])
-        if current != row["fingerprint"]:
+        try:
+            source = validate_local_path(row["source_path"], field="dataset source path")
+        except (TypeError, UnsafePathError):
+            source = None
+        try:
+            current = (
+                compute_fingerprint(source, row["number_of_frames"])
+                if source is not None
+                else None
+            )
+        except (OSError, TypeError, ValueError):
+            current = None
+        legacy = not is_v2_fingerprint(row.get("fingerprint"))
+        if legacy and source is not None:
+            try:
+                legacy_current = compute_legacy_fingerprint(source, row["number_of_frames"])
+            except (OSError, TypeError, ValueError):
+                legacy_current = None
+            if legacy_current is not None and legacy_current != row["fingerprint"]:
+                self._mark_runs_stale(row["id"], "source metadata changed before fingerprint migration")
+        elif current is not None and current != row["fingerprint"]:
             # Make the invalidation visible as soon as the registry is read;
             # rescan/recompute later updates the dataset fingerprint but never
             # silently resurrects results calculated from the old bytes.
@@ -107,16 +150,35 @@ class DatasetService:
             "file_size": row["file_size"],
             "created_at": row["created_at"],
             "last_scan_at": row["last_scan_at"],
-            "cache_valid": fingerprint_valid if fingerprint_valid is not None else current == row["fingerprint"],
+            "cache_valid": False if legacy or current is None else (fingerprint_valid if fingerprint_valid is not None else current == row["fingerprint"]),
+            "fingerprint_status": (
+                "MIGRATING"
+                if legacy
+                else ("UNAVAILABLE" if current is None else ("CURRENT" if current == row["fingerprint"] else "STALE"))
+            ),
         }
 
     def _adapter_for(self, row: dict):
         # cache keyed by the registry fingerprint: a recompute that converges the
         # fingerprint naturally rebuilds; otherwise entries live for the session
+        try:
+            path = validate_local_path(row["source_path"], field="dataset source path")
+        except UnsafePathError as exc:
+            raise AppError(INVALID_DATASET, "dataset source path is not a safe local path") from exc
         cached = self._adapters.get(row["id"])
-        if cached is not None and cached[0] == row["fingerprint"]:
+        cached_source = getattr(cached[1], "source_path", None) if cached is not None else None
+        if (
+            cached is not None
+            and cached[0] == row["fingerprint"]
+            and (cached_source is None or same_lexical_path(Path(cached_source), path))
+        ):
             return cached[1]
-        adapter = create_adapter(Path(row["source_path"]), row["format"])
+        if not path.exists():
+            raise AppError(INVALID_DATASET, "dataset source path is unavailable")
+        detected = detect_format(path)
+        if detected != row["format"]:
+            raise AppError(INVALID_DATASET, "dataset format no longer matches its source")
+        adapter = create_adapter(path, detected)
         self._adapters[row["id"]] = (row["fingerprint"], adapter)
         return adapter
 
@@ -129,17 +191,25 @@ class DatasetService:
         raw_path = params.get("path")
         if not raw_path or not isinstance(raw_path, str):
             raise AppError(INVALID_PARAMS, "'path' (string) is required")
-        path = Path(raw_path)
-        if not path.exists():
-            raise AppError(INVALID_DATASET, f"path does not exist: {path}")
         try:
-            fmt = params.get("format") or detect_format(path)
+            path = validate_local_path(raw_path, field="dataset path")
+        except UnsafePathError as exc:
+            raise AppError(INVALID_PARAMS, "dataset path must be an absolute local path") from exc
+        if not path.exists():
+            raise AppError(INVALID_DATASET, "dataset path is unavailable")
+        try:
+            # The on-disk layout is authoritative; never let a caller force a
+            # parser for another format.
+            fmt = detect_format(path)
         except AppError:
             raise
         name = params.get("name") or path.stem or path.name
+        if not isinstance(name, str) or not name.strip() or len(name) > 200 or any(ord(ch) < 0x20 for ch in name):
+            raise AppError(INVALID_PARAMS, "dataset name is invalid")
+        name = name.strip()
         dup = self.db.query_one("SELECT id FROM datasets WHERE source_path = ?", (str(path),))
         if dup:
-            raise AppError(INVALID_DATASET, f"already registered: {path}", {"dataset_id": dup["id"]})
+            raise AppError(INVALID_DATASET, "dataset is already registered", {"dataset_id": dup["id"]})
 
         def runner(ctx):
             ctx.progress(0, 1, "scanning dataset")
@@ -171,8 +241,13 @@ class DatasetService:
                     return counting_iter()
 
             stats = compute_statistics(_CountingAdapter())
+            # fresh registration has no exclusions; the key keeps the stats
+            # payload shape stable for the cache-upgrade checks
+            stats["excluded_frames"] = {"count": 0, "indices": []}
             ctx.check_cancelled()
-            fingerprint = compute_fingerprint(path, scan.number_of_frames)
+            # Registration establishes the source identity; do not use the
+            # short-lived UI fingerprint cache at this commit point.
+            fingerprint = compute_fingerprint(path, scan.number_of_frames, use_cache=False)
             ds_id = f"ds_{uuid.uuid4().hex[:12]}"
             if not stats["elements"] and scan.elements:
                 elements = scan.elements
@@ -206,7 +281,7 @@ class DatasetService:
                 # domain error instead of a raw UNIQUE constraint (red-team #5)
                 if "UNIQUE constraint failed: datasets.source_path" in str(exc):
                     raise AppError(
-                        INVALID_DATASET, f"already registered: {path}"
+                        INVALID_DATASET, "dataset is already registered"
                     ) from exc
                 raise
             self.db.execute(
@@ -222,8 +297,13 @@ class DatasetService:
 
     def rename(self, params: dict) -> dict:
         name = params.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise AppError(INVALID_PARAMS, "'name' (non-empty string) is required")
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or len(name.strip()) > 200
+            or any(ord(ch) < 0x20 for ch in name)
+        ):
+            raise AppError(INVALID_PARAMS, "dataset name is invalid")
         row = self._row(params.get("id"))
         self.db.execute(
             "UPDATE datasets SET name = ? WHERE id = ?", (name.strip(), row["id"])
@@ -268,7 +348,15 @@ class DatasetService:
         return {"job_id": self._submit_recompute(row["id"])}
 
     def _cached_stats(self, row: dict) -> dict | None:
-        current = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])
+        try:
+            source = validate_local_path(row["source_path"], field="dataset source path")
+            # Cache is useful for repeated UI reads, but a cache hit must never
+            # decide whether a descriptor/statistics result is still current.
+            current = compute_fingerprint(
+                source, row["number_of_frames"], use_cache=False
+            )
+        except (OSError, TypeError, ValueError, UnsafePathError):
+            return None
         stats_row = self.db.query_one(
             "SELECT fingerprint, stats_json FROM dataset_statistics WHERE dataset_id = ?",
             (row["id"],),
@@ -280,7 +368,210 @@ class DatasetService:
             # pre-health cache (dataset registered before the health pass):
             # one recompute fills it in
             return None
+        health = stats.get("health")
+        if not isinstance(health, dict) or not {
+            "nonphysical_structures",
+            "net_force",
+        } <= health.keys():
+            # pre-short-contact / pre-net-force cache (before the NepTrainKit-
+            # style checks): same upgrade
+            return None
+        if "min_distance" not in stats:
+            # pre-min-distance cache (before the Overview chart): same upgrade
+            return None
+        if "compositions" not in stats:
+            # pre-compositions cache (before the Overview combination chart): same upgrade
+            return None
+        if "formulas" not in stats:
+            # pre-formulas cache (before the Overview exact-composition mode): same upgrade
+            return None
+        if "element_atom_counts" not in stats:
+            # pre-element-atom-counts cache (before the Overview atom-count view): same upgrade
+            return None
+        if "health_findings" not in stats or "excluded_frames" not in stats:
+            # pre-findings cache (before per-check frame indices / exclusions): same upgrade
+            return None
         return stats
+
+    # -- health findings & excluded frames ------------------------------------
+    def _excluded_set(self, ds_id: str) -> set[int]:
+        rows = self.db.query(
+            "SELECT frame_index FROM dataset_excluded_frames WHERE dataset_id = ?",
+            (ds_id,),
+        )
+        return {int(r["frame_index"]) for r in rows}
+
+    def exclude(self, params: dict) -> dict:
+        """Soft-delete frames: statistics and exports skip them; the source
+        file is never modified and frames stay previewable/restorable."""
+        row = self._row(params.get("id"))
+        indices = _frame_indices(params.get("indices"), row["number_of_frames"])
+        if not indices:
+            raise AppError(INVALID_PARAMS, "'indices' must contain at least one frame index")
+        reason = params.get("reason")
+        if reason is not None and (not isinstance(reason, str) or len(reason) > 200):
+            raise AppError(INVALID_PARAMS, "'reason' must be a short string")
+        now = _NOW()
+        self.db.executemany(
+            "INSERT INTO dataset_excluded_frames (dataset_id, frame_index, reason, created_at)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT(dataset_id, frame_index) DO NOTHING",
+            [(row["id"], i, reason or "health", now) for i in indices],
+        )
+        # statistics/histograms describe the effective (non-excluded) dataset
+        return {"excluded": len(indices), "job_id": self._submit_recompute(row["id"])}
+
+    def restore(self, params: dict) -> dict:
+        row = self._row(params.get("id"))
+        indices = _frame_indices(params.get("indices"), row["number_of_frames"])
+        if not indices:
+            raise AppError(INVALID_PARAMS, "'indices' must contain at least one frame index")
+        marks = ",".join("?" for _ in indices)
+        self.db.execute(
+            f"DELETE FROM dataset_excluded_frames WHERE dataset_id = ? AND frame_index IN ({marks})",
+            (row["id"], *indices),
+        )
+        return {"restored": len(indices), "job_id": self._submit_recompute(row["id"])}
+
+    def excluded(self, params: dict) -> dict:
+        row = self._row(params.get("id"))
+        return {
+            "indices": sorted(self._excluded_set(row["id"])),
+            "number_of_frames": row["number_of_frames"],
+        }
+
+    def findings(self, params: dict) -> dict:
+        """Per-frame summary rows behind one health check (or explicit indices).
+
+        Rows carry the original file index, so the UI can preview any flagged
+        frame with dataset.frame and soft-delete it with dataset.exclude.
+        """
+        row = self._row(params.get("id"))
+        check = params.get("check")
+        known = {
+            "missing_values",
+            "invalid_cell",
+            "duplicate_structures",
+            "extreme_force",
+            "nonphysical_structures",
+            "net_force",
+        }
+        if check is not None and check not in known:
+            raise AppError(INVALID_PARAMS, f"'check' must be one of {sorted(known)}")
+        cached = self._cached_stats(row)
+        if cached is None:
+            return {"recalculating": True, "job_id": self._submit_recompute(row["id"]), "rows": [], "total": 0, "returned": 0}
+        excluded = self._excluded_set(row["id"])
+        # declared properties (carried by at least one frame) per the cached
+        # stats — the same set the missing-values check watches
+        props_meta = cached.get("properties") or {}
+        declared_props = [
+            name
+            for name, flag in (
+                ("energy", (props_meta.get("energy") or {}).get("per_structure")),
+                ("forces", (props_meta.get("forces") or {}).get("per_atom")),
+                ("virial", (props_meta.get("virial") or {}).get("per_structure")),
+            )
+            if flag
+        ]
+        if check is not None:
+            indices = list(cached.get("health_findings", {}).get(check) or [])
+        else:
+            params_indices = params.get("indices")
+            if params_indices is None:
+                raise AppError(INVALID_PARAMS, "'check' or 'indices' is required")
+            indices = _frame_indices(params_indices, row["number_of_frames"])
+        limit = params.get("limit", FINDINGS_ROW_LIMIT)
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= FINDINGS_ROW_LIMIT:
+            raise AppError(INVALID_PARAMS, f"'limit' must be an integer in [1, {FINDINGS_ROW_LIMIT}]")
+        adapter = self._adapter_for(row)
+        rows = []
+        for idx in indices[:limit]:
+            try:
+                f = adapter.get_frame(idx)
+            except Exception:  # noqa: BLE001 - unreadable frame: skip the row
+                continue
+            symbols = [_symbol(z) for z in f.numbers.tolist()]
+            force_max = None
+            if f.forces is not None and f.forces.size:
+                mags = np.linalg.norm(np.asarray(f.forces, dtype=np.float64), axis=1)
+                force_max = round(float(mags.max()), 5)
+            cell = np.asarray(f.cell, dtype=np.float64)
+            det = abs(float(np.linalg.det(cell))) if np.isfinite(cell).all() else 0.0
+            present = {
+                "energy": f.energy is not None,
+                "forces": f.forces is not None,
+                "virial": f.virial is not None,
+            }
+            rows.append(
+                {
+                    "index": idx,
+                    "natoms": len(symbols),
+                    "formula": formula_of(symbols),
+                    "energy_per_atom": (
+                        round(float(f.energy) / max(len(symbols), 1), 6)
+                        if f.energy is not None and symbols
+                        else None
+                    ),
+                    "force_max": force_max,
+                    "volume": round(det, 4) if det > 1e-8 else None,
+                    "missing_props": [name for name in declared_props if not present[name]],
+                    "excluded": idx in excluded,
+                }
+            )
+        return {
+            "recalculating": False,
+            "total": len(indices),
+            "returned": len(rows),
+            "rows": rows,
+        }
+
+    def export_cleaned(self, params: dict) -> dict:
+        """Write a new dataset file/dir that skips excluded frames (the source
+        is never modified); the UI registers the result via dataset.register."""
+        row = self._row(params.get("id"))
+        raw_dest = params.get("dest_path")
+        if not raw_dest or not isinstance(raw_dest, str):
+            raise AppError(INVALID_PARAMS, "'dest_path' (string) is required")
+        try:
+            dest = validate_local_path(raw_dest, field="export destination path")
+        except UnsafePathError as exc:
+            raise AppError(INVALID_PARAMS, "export destination must be an absolute local path") from exc
+        if dest.exists():
+            raise AppError(INVALID_DATASET, f"export destination already exists: {dest}")
+        source = validate_local_path(row["source_path"], field="dataset source path")
+        if dest == source or source in dest.parents or dest in source.parents:
+            raise AppError(INVALID_DATASET, "export destination must be outside the source dataset path")
+        fmt = detect_format(source) if source.exists() else row["format"]
+        if fmt == "extxyz":
+            if dest.suffix.lower() not in (".xyz", ".extxyz"):
+                raise AppError(INVALID_DATASET, "exporting an extxyz dataset needs a .xyz / .extxyz destination")
+            from ..datasets.exporters import write_extxyz as writer
+        else:
+            from ..datasets.exporters import write_deepmd as writer
+
+        def runner(ctx):
+            excluded = self._excluded_set(row["id"])
+            adapter = self._adapter_for(row)
+            total = max(len(adapter), 1)
+            count = 0
+
+            def frames():
+                nonlocal count
+                for i in range(len(adapter)):
+                    if i in excluded:
+                        continue
+                    count += 1
+                    if count % 250 == 0:
+                        ctx.progress(count, total, "writing frames")
+                    yield adapter.get_frame(i)
+
+            # the writer consumes lazily, so huge datasets never buffer fully
+            written = writer(dest, frames())
+            ctx.progress(total, total, "done")
+            return {"path": str(dest), "frames_written": written, "format": fmt}
+
+        job_id = self.jobs.submit("dataset.export", runner, dataset_id=row["id"])
+        return {"job_id": job_id, "dest_path": str(dest)}
 
     def _submit_recompute(self, ds_id: str) -> str:
         with self._scan_lock:
@@ -293,14 +584,26 @@ class DatasetService:
             self._adapters.pop(ds_id, None)
 
             def runner(ctx):
-                adapter = create_adapter(Path(row["source_path"]), row["format"])
-                self._adapters[ds_id] = (row["fingerprint"], adapter)
-                total = max(len(adapter), 1)
+                old_fingerprint = row["fingerprint"]
+                try:
+                    source = validate_local_path(row["source_path"], field="dataset source path")
+                except UnsafePathError as exc:
+                    raise AppError(INVALID_DATASET, "dataset source path is not a safe local path") from exc
+                legacy_current = (
+                    compute_legacy_fingerprint(source, row["number_of_frames"])
+                    if not is_v2_fingerprint(old_fingerprint)
+                    else None
+                )
+                adapter = self._adapter_for(row)
+                excluded = self._excluded_set(ds_id)
+                total = max(len(adapter) - len(excluded), 1)
                 count = 0
 
                 def counting_iter():
                     nonlocal count
-                    for frame in adapter.iter_frames():
+                    for pos, frame in enumerate(adapter.iter_frames()):
+                        if pos in excluded:
+                            continue
                         count += 1
                         if count % 250 == 0 or count == total:
                             ctx.progress(count, total, "computing statistics")
@@ -320,7 +623,24 @@ class DatasetService:
                         return counting_iter()
 
                 stats = compute_statistics(_CountingAdapter())
-                fingerprint = compute_fingerprint(Path(row["source_path"]), len(adapter))
+                # exclusions are service state, not file state: the effective
+                # dataset is the scan minus the excluded frames
+                stats["excluded_frames"] = {
+                    "count": len(excluded),
+                    "indices": sorted(excluded),
+                }
+                fingerprint = compute_fingerprint(source, len(adapter), use_cache=False)
+                if (
+                    not is_v2_fingerprint(old_fingerprint)
+                    or fingerprint != old_fingerprint
+                ):
+                    reason = (
+                        "dataset fingerprint upgraded; recompute descriptor results"
+                        if not is_v2_fingerprint(old_fingerprint)
+                        else "source changed while fingerprint was being refreshed"
+                    )
+                    self._mark_runs_stale(ds_id, reason)
+                self._adapters[ds_id] = (fingerprint, adapter)
                 self.db.execute(
                     "INSERT INTO dataset_statistics (dataset_id, fingerprint, stats_json, created_at)"
                     " VALUES (?, ?, ?, ?)"
@@ -346,7 +666,20 @@ class DatasetService:
             return job_id
 
     def refresh_if_changed(self, row: dict) -> None:
-        current = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])
+        try:
+            source = validate_local_path(row["source_path"], field="dataset source path")
+            current = compute_fingerprint(source, row["number_of_frames"], use_cache=False)
+        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(INVALID_DATASET, "dataset source is unavailable for fingerprint verification") from exc
+        if not is_v2_fingerprint(row.get("fingerprint")):
+            try:
+                legacy_current = compute_legacy_fingerprint(source, row["number_of_frames"])
+            except (OSError, TypeError, ValueError) as exc:
+                raise AppError(INVALID_DATASET, "dataset fingerprint migration cannot inspect the source") from exc
+            if legacy_current != row["fingerprint"]:
+                self._mark_runs_stale(row["id"], "source metadata changed before fingerprint migration")
+                raise AppError(DATASET_CHANGED, "dataset changed on disk; rescan it before continuing")
+            raise AppError(DATASET_CHANGED, "dataset fingerprint migration is in progress; rescan it before continuing")
         if current != row["fingerprint"]:
             self._mark_runs_stale(row["id"], f"source fingerprint changed ({row['fingerprint']} -> {current})")
             raise AppError(
@@ -368,14 +701,14 @@ class DatasetService:
         self.db.execute(
             "UPDATE analysis_runs SET status = 'STALE', stale_reason = ?, finished_at = ?, updated_at = ?"
             " WHERE status = 'COMPLETED' AND (descriptor_run_id IN"
-            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?) OR dataset_ids_json LIKE ?)",
-            (reason, now, now, dataset_id, f'%"{dataset_id}"%'),
+            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?) OR dataset_ids_json LIKE ? ESCAPE '!')",
+            (reason, now, now, dataset_id, f'%"{escape_like(dataset_id)}"%'),
         )
 
     # -- frame access (M2) --------------------------------------------------
     def frame(self, params: dict) -> dict:
         ds_id, index = params.get("id"), params.get("index")
-        if not isinstance(index, int):
+        if not isinstance(index, int) or isinstance(index, bool):
             raise AppError(INVALID_PARAMS, "'index' (int) is required")
         bond_cutoff = _bond_cutoff(params.get("bond_cutoff"))
         row = self._row(ds_id)
@@ -434,6 +767,11 @@ class DatasetService:
         if f.forces is not None and len(rows):
             vals = [r["f"] for r in rows if r["f"] is not None]
             force_max = round(max(vals), 5) if vals else None
+        # row-major 3×3 as stored by the source (extxyz comment / deepmd set);
+        # sign conventions differ between ecosystems, so the GUI shows it raw
+        virial = None
+        if f.virial is not None:
+            virial = [round(float(v), 6) for v in np.asarray(f.virial, dtype=np.float64).reshape(-1)]
         return {
             "index": index,
             "natoms": len(symbols),
@@ -443,6 +781,8 @@ class DatasetService:
             "energy": f.energy,
             "energy_per_atom": energy_per_atom,
             "force_max": force_max,
+            "virial_present": f.virial is not None,
+            "virial": virial,
             "volume": round(volume, 4) if volume else None,
             "pbc": "".join("XYZ"[i] for i, v in enumerate(f.pbc) if v) or "—",
             "cell": cell.reshape(-1).tolist() if periodic else None,

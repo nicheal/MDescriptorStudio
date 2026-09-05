@@ -8,6 +8,7 @@ from ..config import PROTOCOL_VERSION
 from ..errors import INVALID_PARAMS, AppError
 
 MAX_LINE_BYTES = 8 * 1024 * 1024
+MAX_REQUEST_ID = (1 << 53) - 1
 
 
 def encode(frame: dict) -> str:
@@ -19,8 +20,8 @@ def parse_request(line: str) -> tuple[int | None, str, dict]:
         raise AppError(INVALID_PARAMS, "frame exceeds 8 MB limit")
     try:
         obj = json.loads(line)
-    except json.JSONDecodeError as exc:
-        raise AppError(INVALID_PARAMS, f"malformed JSON: {exc}") from exc
+    except (json.JSONDecodeError, RecursionError, UnicodeError) as exc:
+        raise AppError(INVALID_PARAMS, f"malformed JSON: {exc}", public_message="Malformed request.") from exc
     if not isinstance(obj, dict):
         raise AppError(INVALID_PARAMS, "frame must be a JSON object")
     version = obj.get("protocol_version")
@@ -30,10 +31,19 @@ def parse_request(line: str) -> tuple[int | None, str, dict]:
             f"protocol_version {version!r} unsupported (want {PROTOCOL_VERSION})",
         )
     vid = obj.get("id")
+    if vid is not None and (
+        isinstance(vid, bool)
+        or not isinstance(vid, int)
+        or vid < 0
+        or vid > MAX_REQUEST_ID
+    ):
+        raise AppError(INVALID_PARAMS, "request id is outside the supported range")
     method = obj.get("method")
     params = obj.get("params", {})
     if not isinstance(method, str) or not method:
         raise AppError(INVALID_PARAMS, "missing string field 'method'")
+    if len(method) > 256 or any(ord(ch) < 0x20 for ch in method):
+        raise AppError(INVALID_PARAMS, "method name is invalid")
     if not isinstance(params, dict):
         raise AppError(INVALID_PARAMS, "'params' must be an object")
     return vid, method, params
@@ -47,7 +57,7 @@ def response_err(request_id: int | None, err: AppError) -> dict:
     return {
         "protocol_version": PROTOCOL_VERSION,
         "id": request_id,
-        "error": {"code": err.code, "message": err.message, "details": err.details},
+        "error": {"code": err.code, "message": err.public_message, "error_id": err.error_id},
     }
 
 

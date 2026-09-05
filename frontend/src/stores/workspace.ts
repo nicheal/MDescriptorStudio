@@ -9,7 +9,8 @@ export type PcaMode = "structure" | "atom";
 
 export interface SelectedSample {
   datasetId: string;
-  runId: string;
+  /** Descriptor run the selection came from; absent for plain browse clicks. */
+  runId?: string;
   mode: PcaMode;
   frame: number;
   atom?: number;
@@ -28,6 +29,10 @@ interface WorkspaceState {
   page: Page;
   // top-right Jobs drawer (the single jobs surface since the Jobs tab was folded into it)
   jobsDrawerOpen: boolean;
+  // data-health findings drawer; findingsCheck selects the active check tab
+  // (null = all checks) when opened from a health-rail row
+  findingsDrawerOpen: boolean;
+  findingsCheck: string | null;
   // bumped after a health rescan completes → pages refetch dataset statistics
   statsTick: number;
 
@@ -42,6 +47,9 @@ interface WorkspaceState {
   setRunningJobs: (n: number) => void;
   setPage: (p: Page) => void;
   setJobsDrawerOpen: (open: boolean) => void;
+  /** Opens the data-health findings drawer, optionally focused on one check. */
+  openFindings: (check?: string | null) => void;
+  closeFindings: () => void;
   bumpStatsTick: () => void;
 }
 
@@ -57,6 +65,8 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   runningJobs: 0,
   page: "overview",
   jobsDrawerOpen: false,
+  findingsDrawerOpen: false,
+  findingsCheck: null,
   statsTick: 0,
 
   setBackendReady: (engineVersion, cpuThreads) =>
@@ -83,6 +93,8 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   setRunningJobs: (n) => set({ runningJobs: n }),
   setPage: (p) => set({ page: p }),
   setJobsDrawerOpen: (open) => set({ jobsDrawerOpen: open }),
+  openFindings: (check) => set({ findingsDrawerOpen: true, findingsCheck: check ?? null }),
+  closeFindings: () => set({ findingsDrawerOpen: false }),
   bumpStatsTick: () => set((st) => ({ statsTick: st.statsTick + 1 })),
 }));
 

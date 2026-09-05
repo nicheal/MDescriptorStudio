@@ -218,7 +218,9 @@ export function SchemaField({
             style={{ flex: 1, minWidth: 0 }}
             placeholder={t("Leave empty to use the bundled model")}
             value={(value as string) ?? ""}
-            onChange={(e) => onChange(e.target.value || undefined)}
+            readOnly
+            allowClear
+            onClear={() => onChange(undefined)}
           />
           {allowExternalModel && (
             <Button

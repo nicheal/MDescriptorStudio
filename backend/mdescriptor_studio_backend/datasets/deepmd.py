@@ -11,13 +11,81 @@ memmap lazy path is gone (documented trade-off of ADR-19).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
 
 from ..errors import AppError, INVALID_DATASET, INVALID_PARAMS
+from ..security import ensure_no_reparse_points
 from .base import DatasetAdapter, DatasetFrame, ScanMeta, pbc_summary
 from .deepmd_symbols import _SYMBOL_TO_Z, _Z_TO_SYMBOL  # noqa: F401 (re-exported)
+
+MAX_DEEPMD_FRAMES = 250_000
+MAX_DEEPMD_ATOMS = 10_000_000
+MAX_DEEPMD_BYTES = 2 * 1024 * 1024 * 1024
+MAX_DEEPMD_FILES = 100_000
+
+
+def _preflight_npy_layout(path: Path, sets: list[Path]) -> None:
+    """Inspect NPY headers before dpdata eagerly materializes the system."""
+    try:
+        ensure_no_reparse_points(path)
+        type_path = path / "type.raw"
+        ensure_no_reparse_points(type_path)
+        type_tokens = type_path.read_text(encoding="utf-8", errors="strict").split()
+        type_count = len(type_tokens)
+        if type_count <= 0 or type_count > MAX_DEEPMD_ATOMS:
+            raise AppError(INVALID_DATASET, "DeepMD atom count is outside the supported limit")
+
+        total_bytes = type_path.stat().st_size
+        total_files = 1
+        total_frames = 0
+        total_atoms = 0
+        for set_path in sets:
+            ensure_no_reparse_points(set_path)
+            coord_path = set_path / "coord.npy"
+            ensure_no_reparse_points(coord_path)
+            if not coord_path.is_file():
+                raise AppError(INVALID_DATASET, "DeepMD coord.npy is missing")
+            total_bytes += coord_path.stat().st_size
+            coord = np.load(coord_path, mmap_mode="r", allow_pickle=False)
+            try:
+                if coord.ndim == 3:
+                    valid_shape = coord.shape[1] == type_count and coord.shape[2] == 3
+                elif coord.ndim == 2:
+                    valid_shape = coord.shape[1] == type_count * 3
+                else:
+                    valid_shape = False
+                if not valid_shape:
+                    raise AppError(INVALID_DATASET, "DeepMD coord.npy shape is invalid")
+                frames = int(coord.shape[0])
+                atoms_per_frame = type_count
+                total_frames += frames
+                total_atoms += frames * atoms_per_frame
+                if total_frames > MAX_DEEPMD_FRAMES or total_atoms > MAX_DEEPMD_ATOMS:
+                    raise AppError(INVALID_DATASET, "DeepMD dataset exceeds the supported size")
+                if frames * type_count * 3 * int(coord.dtype.itemsize) > MAX_DEEPMD_BYTES:
+                    raise AppError(INVALID_DATASET, "DeepMD coordinate array exceeds the supported size")
+            finally:
+                mmap_handle = getattr(coord, "_mmap", None)
+                if mmap_handle is not None:
+                    mmap_handle.close()
+            for child in set_path.iterdir():
+                ensure_no_reparse_points(child)
+                if child.is_file():
+                    total_files += 1
+                    if total_files > MAX_DEEPMD_FILES:
+                        raise AppError(INVALID_DATASET, "DeepMD dataset contains too many files")
+                    total_bytes += child.stat().st_size
+                    if total_bytes > MAX_DEEPMD_BYTES:
+                        raise AppError(INVALID_DATASET, "DeepMD dataset exceeds the supported size")
+        if total_bytes > MAX_DEEPMD_BYTES:
+            raise AppError(INVALID_DATASET, "DeepMD dataset exceeds the supported size")
+    except AppError:
+        raise
+    except (OSError, UnicodeError, TypeError, ValueError) as exc:
+        raise AppError(INVALID_DATASET, "DeepMD NPY layout is invalid or unavailable") from exc
 
 
 class DeepMDAdapter(DatasetAdapter):
@@ -34,6 +102,7 @@ class DeepMDAdapter(DatasetAdapter):
                 INVALID_DATASET,
                 f"no DeepMD frames found (expected type.raw + set.*/coord.npy): {path}",
             )
+        _preflight_npy_layout(path, sets)
         try:
             if any((s / "energy.npy").exists() for s in sets):
                 system = dpdata.LabeledSystem(str(path), fmt="deepmd/npy")
@@ -88,7 +157,31 @@ class DeepMDAdapter(DatasetAdapter):
 
     # -- metadata -----------------------------------------------------------
     def scan(self) -> ScanMeta:
-        file_size = sum(f.stat().st_size for f in self.source_path.rglob("*") if f.is_file())
+        file_size = 0
+        file_count = 0
+        def raise_walk_error(error: OSError) -> None:
+            raise AppError(INVALID_DATASET, "DeepMD source cannot be enumerated safely") from error
+
+        for directory, dirnames, filenames in os.walk(
+            self.source_path,
+            topdown=True,
+            onerror=raise_walk_error,
+            followlinks=False,
+        ):
+            directory_path = Path(directory)
+            for dirname in dirnames:
+                ensure_no_reparse_points(directory_path / dirname)
+            for filename in filenames:
+                child = directory_path / filename
+                ensure_no_reparse_points(child)
+                if not child.is_file():
+                    raise AppError(INVALID_DATASET, "DeepMD source contains a non-regular file")
+                file_count += 1
+                if file_count > MAX_DEEPMD_FILES:
+                    raise AppError(INVALID_DATASET, "DeepMD dataset contains too many files")
+                file_size += child.stat().st_size
+                if file_size > MAX_DEEPMD_BYTES:
+                    raise AppError(INVALID_DATASET, "DeepMD dataset exceeds the supported size")
         symbols = sorted({_Z_TO_SYMBOL[z] for z in self.numbers.tolist()})
         # frames report uniform pbc: periodic iff the system has any valid box
         # (degenerate boxes in a periodic system keep the claim — see get_frame)

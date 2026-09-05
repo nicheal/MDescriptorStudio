@@ -19,6 +19,7 @@ export interface JobState {
 const JOB_TYPE_PAIRS: Record<string, Pair> = {
   "dataset.register": { en: "Dataset scan & statistics", zh: "数据集扫描与统计" },
   "dataset.statistics": { en: "Dataset statistics", zh: "数据集统计" },
+  "dataset.export": { en: "Export cleaned dataset", zh: "导出清理副本" },
   "descriptor.compute": { en: "Descriptor compute", zh: "描述符计算" },
   "analysis.pca": { en: "PCA", zh: "PCA" },
   "analysis.umap": { en: "UMAP", zh: "UMAP" },

@@ -127,11 +127,34 @@ def test_statistics(tmp_path: Path) -> None:
     assert stats["properties"]["energy"]["per_structure"] is True
     assert stats["properties"]["forces"]["per_atom"] is True
     assert stats["properties"]["virial"]["per_structure"] is True
-    for key in ("energy_per_atom", "force_magnitude", "max_force", "volume", "atoms_per_structure"):
+    for key in ("energy_per_atom", "force_magnitude", "max_force", "min_distance", "volume", "atoms_per_structure"):
         hist = stats[key]
         assert hist is not None and len(hist["counts"]) == 40
         assert sum(hist["counts"]) == (6 if key != "force_magnitude" else 6 * 64)
     assert stats["periodicity"]["fully_periodic"] is True
+
+
+def test_min_distance_per_structure(tmp_path: Path) -> None:
+    """min_distance is one value per structure and minimum-image aware."""
+    lat = "5.0 0.0 0.0 0.0 5.0 0.0 0.0 0.0 5.0"
+    header = 'Properties=species:S:1:pos:R:3 pbc="T T T"'
+    p = tmp_path / "md.xyz"
+    p.write_text(
+        # in-cell separation 4.8 Å, but 0.2 Å across the x boundary
+        f'2\nLattice="{lat}" {header}\nSi 0.1 0.0 0.0\nSi 4.9 0.0 0.0\n'
+        # plain in-cell pair
+        f'2\nLattice="{lat}" {header}\nSi 0.0 0.0 0.0\nSi 1.0 0.0 0.0\n'
+        # isolated: direct distance only, no images
+        '2\nProperties=species:S:1:pos:R:3 pbc="F F F"\nSi 0.0 0.0 0.0\nSi 3.0 0.0 0.0\n'
+        # single atom: nearest self-image = lattice constant
+        f'1\nLattice="{lat}" {header}\nSi 0.0 0.0 0.0\n',
+        encoding="utf-8",
+    )
+    stats = compute_statistics(create_adapter(p))
+    hist, summary = stats["min_distance"], stats["min_distance_summary"]
+    assert hist is not None and sum(hist["counts"]) == 4
+    assert abs(summary["min"] - 0.2) < 1e-6
+    assert abs(summary["max"] - 5.0) < 1e-6
 
 
 def test_unsupported_format(tmp_path: Path) -> None:

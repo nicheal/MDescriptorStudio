@@ -13,6 +13,9 @@ Push-Location "$root\backend"
 Pop-Location
 
 Copy-Item "$root\backend\dist\backend.exe" "$root\src-tauri\binaries\backend-x86_64-pc-windows-msvc.exe" -Force
+$sidecar = "$root\src-tauri\binaries\backend-x86_64-pc-windows-msvc.exe"
+$sidecarHash = (Get-FileHash -LiteralPath $sidecar -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath "$sidecar.sha256" -Value "$sidecarHash  $(Split-Path -Leaf $sidecar)" -Encoding ascii
 
 Push-Location $root
 & node "$root\node_modules\@tauri-apps\cli\tauri.js" build

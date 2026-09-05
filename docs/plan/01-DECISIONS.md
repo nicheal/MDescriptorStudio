@@ -14,10 +14,10 @@
 **决策**：代码放工作区根目录，与 `docs/` 并列（frontend / backend / src-tauri / scripts / tests / README.md）；不采用独立子目录；如需迁移可整体挪出。
 **后果**：路径最短，`.venv` 与 `docs/` 天然同仓；设计文档 §47 的目录树按此映射。
 
-## ADR-2 引擎依赖：PyPI 安装，pin `mdescriptor`（当前 0.2.7）
+## ADR-2 引擎依赖：PyPI 安装，pin `mdescriptor`（当前 0.2.8）
 
 **背景**：设计文档 §48/§50 的开发模式假设本地 editable 引擎仓库；实际无本地引擎仓库，PyPI 可达且 cp312 wheel 存在。
-**决策**：开发与 Release 一律从 PyPI 安装并 pin（pin 随引擎更新移动，当前 `==0.2.7`，2026-08-30 由 0.2.6 升级）；按已发布 API 对接（实测完整，见 engine-api-report.md）；升级走 05 文档 §2 四步流程（改 pin → 重跑 probe → diff JSON → 回归）。
+**决策**：开发与 Release 一律从 PyPI 安装并 pin（pin 随引擎更新移动，当前 `==0.2.8`，2026-09-05 由 0.2.7 升级）；按已发布 API 对接（实测完整，见 engine-api-report.md）；升级走 05 文档 §2 四步流程（改 pin → 重跑 probe → diff JSON → 回归）。
 **后果**：不再需要「GUI 侧 schema 兜底」与引擎 Phase 0 需求清单；引擎缺陷走上游 issue。
 
 ## ADR-3 桌面壳：Tauri 2，无浏览器过渡态
@@ -182,3 +182,9 @@
 
 **决策**：Plotly 支持 click 单点与 box/lasso 框选；Sampling 导出 JSON/CSV 身份文件和 DeepMD/extxyz 子集，源文件只读。Compare 在 feature count 相同时做 feature-level 指标；不同描述符只有 sample IDs 对齐时才做 distance/ranking correlation。Parameter Sensitivity 只比较同一描述符的已有 Completed Run；不同描述符使用 Compare。
 **后果**：用户可从散点选择直接回到 Explore，跨描述符不会通过补零/截断伪造 feature-level 可比性。
+
+## ADR-26 计算设备选择（0.2.8 起）
+
+**背景**：mdescriptor 0.2.8 为 28/28 描述符声明 `execution.devices: ["cpu","cuda"]`（0.2.7 及之前全 `["cpu"]`）；设备入口为配置保留键 `execution`（引擎还原为 `ExecutionOptions(device=...)`）。
+**决策**：Descriptor 页 Execution 区的设备下拉按 schema 声明列表渲染（唯一 cpu 时保持禁用单选，不硬编码设备名）；选择经 `descriptor.submit` 的 `device` 提交，服务端按 schema 校验（未声明 → `INVALID_PARAMS`）并计入缓存键与结果 metadata（`descriptor_runs.device` 列，migration 5）；默认 `"cpu"`，`num_threads` 仍用引擎默认。声明了但本机无运行时的设备在计算期报 `DEVICE_UNAVAILABLE`（引擎 `code=device_unavailable` 的映射）。
+**后果**：CPU/CUDA 结果互不命中缓存，可审计；CUDA 计算路径的正确性验收需 CUDA 硬件（开发机无 GPU，仅验证了不可用路径的错误呈现），首次 GPU 验收前 UI 不做任何 CUDA 可用性预判。

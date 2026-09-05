@@ -1,7 +1,7 @@
 """Single boundary to the mdescriptor engine (docs/plan/05-ENGINE_ADAPTER.md).
 
 No other module may `import mdescriptor`. All engine exceptions are converted
-to AppError here. Engine updates via UpdateService (PyPI pin mdescriptor==0.2.7 as of 2026-08-30, ADR-2).
+to AppError here. Engine updates via UpdateService (PyPI pin mdescriptor==0.2.8 as of 2026-09-05, ADR-2).
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import logging
 import numpy as np
 import mdescriptor as md
 
-from .errors import AppError, INTERNAL_ERROR, MODEL_NOT_FOUND
+from .errors import AppError, DEVICE_UNAVAILABLE, INTERNAL_ERROR, MODEL_NOT_FOUND
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +50,18 @@ class EngineAdapter:
         return cached
 
     # -- construction / compute ------------------------------------------
-    def build(self, name: str, parameters: dict):
+    def build(self, name: str, parameters: dict, device: str = "cpu"):
         try:
+            params = dict(parameters)
+            if device != "cpu":
+                # Reserved option key: the engine restores it into
+                # ExecutionOptions (create_descriptor -> _restore_parameters);
+                # schema-declared devices were validated by the caller.
+                params["execution"] = {"device": device}
             cfg = md.DescriptorConfiguration(
                 schema_version=md.CONFIGURATION_SCHEMA_VERSION,
                 descriptor=name,
-                parameters=parameters,
+                parameters=params,
             )
             return md.create_descriptor(cfg)
         except md.MDescriptorError as exc:
@@ -119,7 +125,7 @@ class EngineAdapter:
         create_descriptor lazily imports native extension modules; on 0.2.3/win
         resolving those imports while worker threads (or a stdin reader thread)
         were live deadlocked the import machinery (fixed in 0.2.5 and retained
-        through 0.2.7, re-verified in scripts/verify_known_issues.py). The warmup stays as defense in
+        through 0.2.8, re-verified in scripts/verify_known_issues.py). The warmup stays as defense in
         depth and to pay each descriptor's first-build cost at startup, before
         any job thread exists.
         """
@@ -174,23 +180,28 @@ class EngineAdapter:
     # -- errors ------------------------------------------------------------
     @staticmethod
     def _convert(exc: md.MDescriptorError) -> AppError:
-        # 0.2.7 engine errors carry a structured code (gui-adaptation-baseline.md);
-        # use it to split DescriptorInputError into periodicity vs invalid input.
+        # 0.2.5+ engine errors carry a structured code (gui-adaptation-baseline.md);
+        # use it to split DescriptorInputError into periodicity vs invalid input
+        # and to surface an unavailable CUDA backend as its own code.
+        code = getattr(exc, "code", "")
         if isinstance(exc, md.DescriptorInputError):
-            code = getattr(exc, "code", "")
             if code == "unsupported_periodicity":
                 return AppError("UNSUPPORTED_PERIODICITY", str(exc))
             if code and code != "invalid_input":
                 return AppError("INVALID_DATASET", f"[{code}] {exc}")
             return AppError("INVALID_DATASET", str(exc))
-        for exc_type, code in _ERROR_MAP:
+        if code == "device_unavailable":
+            return AppError(DEVICE_UNAVAILABLE, str(exc))
+        for exc_type, gui_code in _ERROR_MAP:
             if isinstance(exc, exc_type):
-                return AppError(code, str(exc))
+                return AppError(gui_code, str(exc))
         return AppError(INTERNAL_ERROR, f"engine error: {exc}")
 
 
 def engine_exception_to_app_error(exc: Exception) -> AppError:
     """Best-effort conversion for stray engine exceptions escaping compute."""
+    if isinstance(exc, AppError):
+        return exc
     if isinstance(exc, md.MDescriptorError):
         return EngineAdapter._convert(exc)
     if isinstance(exc, MemoryError):

@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -17,9 +19,11 @@ from ..errors import (
     DATASET_NOT_FOUND,
     DESCRIPTOR_CONFIGURATION_ERROR,
     INVALID_PARAMS,
+    OUT_OF_MEMORY,
     UNSUPPORTED_PERIODICITY,
 )
 from ..mdescriptor_adapter import engine_exception_to_app_error
+from ..security import UnsafePathError, ensure_no_reparse_points, open_text_for_write, validate_local_path
 from ..storage.database import Database
 from .dataset_service import DatasetService
 from .job_service import JobService
@@ -34,6 +38,10 @@ _VALIDATE_TYPES = {"integer", "number", "boolean", "string", "enum", "array", "o
 # (mapped from ComputeControl counters by _report_engine_progress). Without
 # this split the load phase drives the bar to 100% before compute even starts.
 _LOAD_BAR_SHARE = 0.1
+_MAX_COMPUTE_FRAMES = 1_000_000
+_MAX_COMPUTE_ATOMS = 10_000_000
+_MAX_COMPUTE_INPUT_BYTES = 2 * 1024 * 1024 * 1024
+_MODEL_SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 
 
 def _process_rss_bytes() -> int | None:
@@ -157,26 +165,37 @@ class DescriptorService:
         if scope not in ("frame", "dataset"):
             raise AppError(INVALID_PARAMS, "scope must be 'frame' or 'dataset'")
         frame_index = params.get("frame_index")
-        if scope == "frame" and not isinstance(frame_index, int):
+        if scope == "frame" and (
+            not isinstance(frame_index, int) or isinstance(frame_index, bool) or frame_index < 0
+        ):
             raise AppError(INVALID_PARAMS, "scope=frame requires integer 'frame_index'")
         row = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (ds_id,))
         if row is None:
             raise AppError(DATASET_NOT_FOUND, f"dataset {ds_id} does not exist")
         # A changed source must be explicitly rescanned before a new run can
-        # be created.  Existing runs remain auditable but are marked STALE by
-        # DatasetService.refresh_if_changed.
-        # A few pre-migration/imported rows may carry a legacy sentinel rather
-        # than a SHA-256 fingerprint; keep those rows diagnosable for the job
-        # lifecycle path and let the normal compute error settle them.
-        if isinstance(row.get("fingerprint"), str) and len(row["fingerprint"]) == 64:
-            self.datasets.refresh_if_changed(row)
+        # be created. Existing lightweight test/dry-run dataset services may
+        # not implement the optional freshness hook.
+        refresh = getattr(self.datasets, "refresh_if_changed", None)
+        if callable(refresh):
+            refresh(row)
         schema = self.adapter.schema(name) if name else None
         if schema is None:
             raise AppError(INVALID_PARAMS, "'descriptor_name' is required")
         self._validate_parameters(schema, parameters)
         self._check_input_capability(schema, row)
+        device = str(params.get("device") or "cpu")
+        declared_devices = (schema.get("execution") or {}).get("devices") or ["cpu"]
+        if device not in declared_devices:
+            raise AppError(
+                INVALID_PARAMS,
+                f"device {device!r} is not declared for {name}; supported: {', '.join(declared_devices)}",
+            )
 
-        fingerprint = compute_fingerprint(Path(row["source_path"]), row["number_of_frames"])
+        try:
+            source = validate_local_path(row["source_path"], field="dataset source path")
+            fingerprint = compute_fingerprint(source, row["number_of_frames"], use_cache=False)
+        except (TypeError, ValueError, OSError, UnsafePathError) as exc:
+            raise AppError(INVALID_PARAMS, "dataset source is unavailable") from exc
         canonical = json.dumps(parameters, sort_keys=True, ensure_ascii=False)
         cache_key = hashlib.sha256(
             "\x1f".join(
@@ -188,6 +207,7 @@ class DescriptorService:
                     scope,
                     str(frame_index),
                     str(params.get("output_dtype") or ""),
+                    device,
                 ]
             ).encode("utf-8")
         ).hexdigest()
@@ -205,9 +225,9 @@ class DescriptorService:
         info = self.adapter.runtime_info()
         self.db.execute(
             "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, descriptor_version,"
-            " engine_version, parameters_json, scope, frame_index, output_dtype, cache_key,"
+            " engine_version, parameters_json, scope, frame_index, output_dtype, device, cache_key,"
             " status, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)",
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)",
             (
                 run_id,
                 ds_id,
@@ -218,21 +238,31 @@ class DescriptorService:
                 scope,
                 frame_index,
                 params.get("output_dtype"),
+                device,
                 cache_key,
                 _NOW(),
             ),
         )
 
         def runner(ctx):
-            return self._run_compute(ctx, run_id, row, name, parameters, scope, frame_index, params.get("output_dtype"))
+            return self._run_compute(ctx, run_id, row, name, parameters, scope, frame_index, params.get("output_dtype"), device)
 
-        job_id = self.jobs.submit(
-            "descriptor.compute", runner, dataset_id=ds_id, descriptor_run_id=run_id
-        )
+        try:
+            job_id = self.jobs.submit(
+                "descriptor.compute", runner, dataset_id=ds_id, descriptor_run_id=run_id
+            )
+        except Exception:
+            # JobService applies backpressure before insertion. If submission
+            # still fails after the run row was created, do not leave a
+            # permanently QUEUED result visible in Results.
+            self.db.execute("DELETE FROM descriptor_runs WHERE id = ?", (run_id,))
+            raise
         return {"job_id": job_id, "cache": None}
 
     # -- validation / compat (ADR-11) ---------------------------------------------
     def _validate_parameters(self, schema: dict, parameters: dict) -> None:
+        if not isinstance(parameters, dict):
+            raise AppError(DESCRIPTOR_CONFIGURATION_ERROR, "descriptor parameters must be an object")
         spec = schema.get("parameters", {})
         for key, value in parameters.items():
             if key not in spec:
@@ -252,7 +282,9 @@ class DescriptorService:
 
     def _check_value(self, key: str, meta: dict, value) -> None:
         ptype = meta.get("type")
-        if ptype == "object" and isinstance(value, dict):
+        if ptype == "object":
+            if not isinstance(value, dict):
+                raise AppError(DESCRIPTOR_CONFIGURATION_ERROR, f"parameter {key}: expected object", {"parameter": key})
             for sub_key, sub_value in value.items():
                 sub_meta = (meta.get("properties") or {}).get(sub_key)
                 if sub_meta is None:
@@ -268,30 +300,101 @@ class DescriptorService:
             if ptype == "integer":
                 if not isinstance(value, int) or isinstance(value, bool):
                     raise ValueError("expected integer")
+                self._check_numeric_bounds(key, meta, value)
             elif ptype == "number":
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     raise ValueError("expected number")
+                if not math.isfinite(float(value)):
+                    raise ValueError("expected a finite number")
+                self._check_numeric_bounds(key, meta, float(value))
             elif ptype == "boolean":
                 if not isinstance(value, bool):
                     raise ValueError("expected boolean")
             elif ptype == "species":
-                if not (isinstance(value, list) and value and all(isinstance(v, int) for v in value)):
+                if not (
+                    isinstance(value, list)
+                    and value
+                    and len(value) <= 118
+                    and all(isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 118 for v in value)
+                ):
                     raise ValueError("expected list of atomic numbers")
             elif ptype in ("array",):
                 if not isinstance(value, list):
                     raise ValueError("expected array")
+                minimum = meta.get("minItems", meta.get("minimum"))
+                maximum = meta.get("maxItems", meta.get("maximum"))
+                if minimum is not None and len(value) < int(minimum):
+                    raise ValueError(f"expected at least {minimum} items")
+                if maximum is not None and len(value) > int(maximum):
+                    raise ValueError(f"expected at most {maximum} items")
+                item_meta = meta.get("items")
+                if isinstance(item_meta, dict):
+                    for index, item in enumerate(value):
+                        self._check_value(f"{key}[{index}]", item_meta, item)
             elif ptype == "enum":
                 if value not in (meta.get("enum") or []):
                     raise ValueError(f"expected one of {meta.get('enum')}")
-            elif ptype in ("string", "model"):
+            elif ptype == "string":
                 if not isinstance(value, str):
-                    raise ValueError("expected string path")
+                    raise ValueError("expected string")
+                if len(value) > int(meta.get("maxLength", 4096)) or any(ord(ch) < 0x20 for ch in value):
+                    raise ValueError("string is too long or contains a control character")
+            elif ptype == "model":
+                self._check_model_value(key, meta, value)
+            elif ptype not in _VALIDATE_TYPES:
+                raise ValueError(f"unsupported schema type {ptype!r}")
         except ValueError as exc:
             raise AppError(
                 DESCRIPTOR_CONFIGURATION_ERROR,
                 f"parameter {key}: {exc}",
                 {"parameter": key},
             ) from exc
+
+    @staticmethod
+    def _check_numeric_bounds(key: str, meta: dict, value: float | int) -> None:
+        minimum = meta.get("minimum")
+        maximum = meta.get("maximum")
+        if minimum is not None and value < minimum:
+            raise ValueError(f"must be at least {minimum}")
+        if maximum is not None and value > maximum:
+            raise ValueError(f"must be at most {maximum}")
+        exclusive_minimum = meta.get("exclusiveMinimum")
+        exclusive_maximum = meta.get("exclusiveMaximum")
+        if exclusive_minimum is not None and value <= exclusive_minimum:
+            raise ValueError(f"must be greater than {exclusive_minimum}")
+        if exclusive_maximum is not None and value >= exclusive_maximum:
+            raise ValueError(f"must be less than {exclusive_maximum}")
+
+    @staticmethod
+    def _check_model_value(key: str, meta: dict, value) -> None:
+        if isinstance(value, str):
+            if len(value) > 4096 or any(ord(ch) < 0x20 for ch in value):
+                raise ValueError("model path is too long or contains a control character")
+            try:
+                path = validate_local_path(value, field=f"{key} model path")
+            except UnsafePathError as exc:
+                raise ValueError("model path must be an absolute local path") from exc
+            if path.exists() and not path.is_file():
+                raise ValueError("model path is not a regular file")
+            extensions = meta.get("file_extensions") or []
+            if extensions and path.suffix.lower() not in {str(item).lower() for item in extensions}:
+                raise ValueError("model file extension is not supported")
+            return
+        if not isinstance(value, dict) or value.get("__type__") != "ModelResource":
+            raise ValueError("expected a local model path or ModelResource object")
+        name = value.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name) > 255 or any(ch in name for ch in ("/", "\\", ":")):
+            raise ValueError("model resource name is invalid")
+        expected = value.get("expected_sha256")
+        if expected is not None and (not isinstance(expected, str) or not _MODEL_SHA256_RE.fullmatch(expected)):
+            raise ValueError("model resource checksum is invalid")
+        identifier = value.get("identifier")
+        if identifier is not None and (
+            not isinstance(identifier, str)
+            or len(identifier) > 255
+            or any(ord(ch) < 0x20 or ch in ("/", "\\", ":") for ch in identifier)
+        ):
+            raise ValueError("model resource identifier is invalid")
 
     def _check_input_capability(self, schema: dict, dataset_row: dict) -> None:
         caps = schema.get("input") or {}
@@ -315,7 +418,28 @@ class DescriptorService:
             )
 
     # -- compute job ------------------------------------------------------------
-    def _run_compute(self, ctx, run_id, row, name, parameters, scope, frame_index, output_dtype):
+    @staticmethod
+    def _frame_memory_bytes(frame) -> int:
+        import numpy as np
+
+        total = 0
+        for name in ("numbers", "positions", "cell", "pbc", "forces", "virial"):
+            value = getattr(frame, name, None)
+            if value is not None:
+                try:
+                    total += int(np.asarray(value).nbytes)
+                except (TypeError, ValueError):
+                    pass
+        return total
+
+    @staticmethod
+    def _check_batch_limits(total_atoms: int, estimated_bytes: int, frames: int) -> None:
+        if frames > _MAX_COMPUTE_FRAMES or total_atoms > _MAX_COMPUTE_ATOMS:
+            raise AppError(OUT_OF_MEMORY, "descriptor input exceeds the supported batch size")
+        if estimated_bytes > _MAX_COMPUTE_INPUT_BYTES:
+            raise AppError(OUT_OF_MEMORY, "descriptor input exceeds the supported memory budget")
+
+    def _run_compute(self, ctx, run_id, row, name, parameters, scope, frame_index, output_dtype, device="cpu"):
         import numpy as np
 
         self.db.execute(
@@ -323,8 +447,8 @@ class DescriptorService:
             (_NOW(), run_id),
         )
         ctx.check_cancelled()
-        log.info("compute %s: building descriptor %s", run_id, name)
-        descriptor = self.adapter.build(name, parameters)
+        log.info("compute %s: building descriptor %s (device=%s)", run_id, name, device)
+        descriptor = self.adapter.build(name, parameters, device=device)
         log.info("compute %s: built, loading frames", run_id)
         if scope == "frame":
             frames = [self.datasets._adapter_for(row).get_frame(frame_index)]
@@ -333,9 +457,29 @@ class DescriptorService:
             adapter = self.datasets._adapter_for(row)
             frames = []
             total = max(len(adapter), 1)
+            if total > _MAX_COMPUTE_FRAMES:
+                raise AppError(OUT_OF_MEMORY, "dataset has too many frames for one descriptor batch")
+        total_atoms = 0
+        estimated_bytes = 0
+        if scope == "frame":
+            try:
+                numbers = getattr(frames[0], "numbers", None)
+                total_atoms = len(numbers) if numbers is not None else 0
+            except TypeError:
+                total_atoms = 0
+            estimated_bytes = self._frame_memory_bytes(frames[0])
+            self._check_batch_limits(total_atoms, estimated_bytes, 1)
+        else:
             for i, frame in enumerate(adapter.iter_frames()):
                 ctx.check_cancelled()
                 frames.append(frame)
+                try:
+                    numbers = getattr(frame, "numbers", None)
+                    total_atoms += len(numbers) if numbers is not None else 0
+                except TypeError:
+                    total_atoms += 0
+                estimated_bytes += self._frame_memory_bytes(frame)
+                self._check_batch_limits(total_atoms, estimated_bytes, i + 1)
                 if (i + 1) % 500 == 0 or (i + 1) == total:
                     ctx.progress(
                         i + 1, total, "loading frames", fraction=(i + 1) / total * _LOAD_BAR_SHARE
@@ -372,9 +516,10 @@ class DescriptorService:
             values = values.astype(np.float32)
         run_dir = self.data_dir / "results" / f"run_{run_id.removeprefix('run_')}"
         run_dir.mkdir(parents=True, exist_ok=True)
-        np.save(run_dir / "values.npy", values)
+        ensure_no_reparse_points(run_dir)
+        np.save(run_dir / "values.npy", values, allow_pickle=False)
         if result.row_offsets is not None:
-            np.save(run_dir / "row_offsets.npy", np.asarray(result.row_offsets))
+            np.save(run_dir / "row_offsets.npy", np.asarray(result.row_offsets), allow_pickle=False)
         metadata = {
             "run_id": run_id,
             "descriptor": name,
@@ -382,8 +527,13 @@ class DescriptorService:
             "descriptor_version": (self.adapter.schema(name).get("descriptor_version") or self.engine_version),
             "descriptor_info_schema": self.adapter.runtime_info().get("descriptor_info_schema_version"),
             "configuration": parameters,
+            "device": device,
             "dataset_id": row["id"],
-            "dataset_fingerprint": compute_fingerprint(Path(row["source_path"]), row["number_of_frames"]),
+            "dataset_fingerprint": compute_fingerprint(
+                validate_local_path(row["source_path"], field="dataset source path"),
+                row["number_of_frames"],
+                use_cache=False,
+            ),
             "scope": scope,
             "frame_index": frame_index,
             "shape": list(values.shape),
@@ -402,9 +552,8 @@ class DescriptorService:
             "structure_ids": list(getattr(result, "structure_ids", []) or []),
             "created_at": _NOW(),
         }
-        (run_dir / "metadata.json").write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        with open_text_for_write(run_dir / "metadata.json") as fh:
+            fh.write(json.dumps(metadata, ensure_ascii=False, indent=2))
         self.db.execute(
             "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ?, memory_peak_bytes = ? WHERE id = ?",
             (_NOW(), str(run_dir), memory_peak_bytes, run_id),

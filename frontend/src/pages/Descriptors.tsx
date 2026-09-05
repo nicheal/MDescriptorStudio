@@ -109,6 +109,10 @@ function SectionHeading({ number, title, description }: { number: number; title:
   );
 }
 
+// Display labels for engine-declared execution devices; unknown values fall
+// back to the raw identifier uppercased in the option list.
+const DEVICE_LABELS: Record<string, string> = { cpu: "CPU", cuda: "CUDA" };
+
 export default function Descriptors() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
@@ -123,6 +127,7 @@ export default function Descriptors() {
   const [frameIndex, setFrameIndex] = useState(0);
   const [threads, setThreads] = useState<number | undefined>(undefined);
   const [dtype, setDtype] = useState<string>("float64");
+  const [device, setDevice] = useState<string>("cpu");
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
@@ -184,6 +189,10 @@ export default function Descriptors() {
   }, [list, query]);
   const availableDtypes = schema?.output.dtypes?.length ? schema.output.dtypes : ["float64"];
   const effectiveDtype = availableDtypes.includes(dtype) ? dtype : availableDtypes[0];
+  // Device choices are always the schema-declared list (Rule 3: nothing hardcoded);
+  // the pick persists across descriptors and is clamped per descriptor.
+  const availableDevices = schema?.execution.devices?.length ? schema.execution.devices : ["cpu"];
+  const effectiveDevice = availableDevices.includes(device) ? device : availableDevices[0];
 
   const submit = async () => {
     if (!schema || !selected) return;
@@ -203,6 +212,7 @@ export default function Descriptors() {
           scope,
           frame_index: scope === "frame" ? frameIndex : undefined,
           output_dtype: effectiveDtype,
+          device: effectiveDevice,
         },
       );
       if (r.cache) {
@@ -219,6 +229,7 @@ export default function Descriptors() {
               scope,
               frame_index: scope === "frame" ? frameIndex : undefined,
               output_dtype: effectiveDtype,
+              device: effectiveDevice,
               force: true,
             });
             if (r2.job_id) {
@@ -427,7 +438,21 @@ export default function Descriptors() {
                   <div style={{ minWidth: 0 }}>
                     <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{t("Device")}</Typography.Text>
                     <div style={{ marginTop: 7 }}>
-                      <Select value="cpu" style={{ width: "100%" }} disabled options={[{ value: "cpu", label: "CPU" }]} />
+                      {availableDevices.length > 1 ? (
+                        <Tooltip title={t("CUDA needs a compatible NVIDIA GPU and drivers; the run fails with DEVICE_UNAVAILABLE otherwise.")}>
+                          <Select
+                            value={effectiveDevice}
+                            style={{ width: "100%" }}
+                            onChange={(v) => setDevice(v)}
+                            options={availableDevices.map((dev) => ({
+                              value: dev,
+                              label: DEVICE_LABELS[dev] ?? dev.toUpperCase(),
+                            }))}
+                          />
+                        </Tooltip>
+                      ) : (
+                        <Select value="cpu" style={{ width: "100%" }} disabled options={[{ value: "cpu", label: "CPU" }]} />
+                      )}
                     </div>
                   </div>
                   {schema.execution.num_threads && (

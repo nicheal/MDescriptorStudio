@@ -1,22 +1,46 @@
 // Explore page (M2): 3Dmol viewer dominant (~70%), Structure Inspector (30%),
 // frame navigation, Atom Table. Design doc §18/§89, ADR-10 perf targets.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Empty, InputNumber, Space, Table, Tooltip, Typography } from "antd";
 import {
   ArrowLeft16Regular,
   ArrowRight16Regular,
   ArrowShuffle16Regular,
   ArrowFit16Regular,
+  Warning16Filled,
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
-import type { FramePayload } from "../types/protocol";
+import { forceArrowGeometry, frameMaxForce } from "../util/forces";
+import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, virialSummary } from "../util/structure";
+import type { DatasetHealth, FramePayload, HealthFindings } from "../types/protocol";
 
 const DEFAULT_BOND_CUTOFF = 2.4;
 const MIN_BOND_CUTOFF = 0.1;
 const MAX_BOND_CUTOFF = 10;
+// data-health severity color for the inspector: rows behind a flagged check
+// (and the banner listing them) render in this red
+const HEALTH_RED = "#D13438";
+// health checks whose per-frame indices can red-flag an inspector row
+const CHECK_KEYS = [
+  "missing_values",
+  "invalid_cell",
+  "duplicate_structures",
+  "extreme_force",
+  "nonphysical_structures",
+  "net_force",
+] as const;
+// localized labels for the per-frame missing-properties inspector row
+const MISSING_PROP_LABELS: Record<string, string> = { energy: "Energy", forces: "Forces", virial: "Virial" };
+// Force arrows are normalized per frame: the strongest force in the frame
+// renders at this length (Å) before the user multiplier applies. The length
+// is measured from the atom center, and ARROW_START_OFFSET keeps the tail
+// outside the highlight sphere so the shaft stays visible.
+const FORCE_ARROW_TARGET_LENGTH = 3.0;
+const FORCE_ARROW_START_OFFSET = 0.75;
+const FORCE_ARROW_COLOR = "#B4009E";
 
 type ViewerAtom = {
   elem: string;
@@ -109,13 +133,21 @@ export default function Explore() {
   const [jumpTo, setJumpTo] = useState<number | null>(null);
   const [bondCutoff, setBondCutoff] = useState(DEFAULT_BOND_CUTOFF);
   const [localCutoff, setLocalCutoff] = useState(3.0);
-  const [showLocalEnvironment, setShowLocalEnvironment] = useState(true);
+  // Local shell is opt-in: a plain selection highlights only the atom itself
+  // (plus its force arrow); neighbors stay uncolored unless the shell is shown.
+  const [showLocalEnvironment, setShowLocalEnvironment] = useState(false);
+  const [showForceArrow, setShowForceArrow] = useState(true);
+  const [forceArrowScale, setForceArrowScale] = useState(1);
+  // "Shortest interatomic distance" row click: highlight the closest atom pair
+  // instead of the single-atom selection (the two are mutually exclusive).
+  const [showDistancePair, setShowDistancePair] = useState(false);
   const viewerDiv = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<
     {
       clear: () => void;
       addModel: () => ViewerModel;
       addLine: (spec: object) => void;
+      addArrow: (spec: object) => void;
       addSphere?: (spec: object) => void;
       setStyle: (sel: object, style: object) => void;
       addStyle: (sel: object, style: object) => void;
@@ -142,6 +174,136 @@ export default function Explore() {
     ? neighborsWithinCutoff(parseViewerAtoms(frame.xyz, Math.max(bondCutoff, localCutoff)), selectedAtom, localCutoff)
     : [];
   const selectedLocalNeighborSet = new Set(showLocalEnvironment ? selectedLocalNeighbors.filter(({ index }) => index < (frame?.natoms ?? 0)).map(({ index }) => index) : []);
+  // Force components live on atom_rows (real atoms only); selection indices
+  // always reference real atoms, so a direct index lookup is safe.
+  const selectedForceRow = frame && selectedAtom != null && selectedAtom < frame.atom_rows.length
+    ? frame.atom_rows[selectedAtom]
+    : undefined;
+  const maxForce = frame ? frameMaxForce(frame) : 0;
+  // The atom carrying the frame's largest |F| — the target behind a red
+  // "Max |F|" row; clicking the row selects it exactly like a table click.
+  const maxForceAtom = useMemo(() => {
+    if (!frame) return null;
+    let best: number | null = null;
+    let bestMagnitude = -1;
+    for (const row of frame.atom_rows) {
+      if (row.fx == null || row.fy == null || row.fz == null) continue;
+      const magnitude = Math.sqrt(row.fx ** 2 + row.fy ** 2 + row.fz ** 2);
+      if (Number.isFinite(magnitude) && magnitude > bestMagnitude) {
+        bestMagnitude = magnitude;
+        best = row.i;
+      }
+    }
+    return best;
+  }, [frame]);
+  const selectedArrow = selectedForceRow
+    ? forceArrowGeometry(selectedForceRow.fx, selectedForceRow.fy, selectedForceRow.fz, maxForce, forceArrowScale, FORCE_ARROW_TARGET_LENGTH)
+    : null;
+  // Frame-level metrics for the inspector; recomputed only when a new frame
+  // (or ghost extent) arrives, not on selection clicks.
+  const cellParams = useMemo(
+    () => (frame?.cell && frame.cell.length === 9 ? cellParameters(frame.cell) : null),
+    [frame],
+  );
+  const minDistancePair = useMemo(() => (frame ? minimumDistancePair(frame.xyz) : null), [frame]);
+  const minAtomDistance = minDistancePair?.distance ?? null;
+  const netForce = useMemo(() => (frame ? netForceMagnitude(frame.atom_rows) : null), [frame]);
+  const density = useMemo(
+    () => (frame ? massDensity(frame.atom_rows.map((row) => row.el), frame.volume) : null),
+    [frame],
+  );
+  // Virial tensor of the frame as stored in the source (eV); sign conventions
+  // differ between extxyz/deepmd ecosystems, so nothing is normalized here.
+  const virial = useMemo(() => (frame ? virialSummary(frame.virial) : null), [frame]);
+
+  // Health-check findings for the red inspector highlights; refetched on
+  // dataset switch and after any exclude/restore/rescan (statsTick).
+  const [health, setHealth] = useState<DatasetHealth | null>(null);
+  const [healthFindings, setHealthFindings] = useState<HealthFindings | null>(null);
+  useEffect(() => {
+    if (!d) return;
+    let disposed = false;
+    const dsId = d.id;
+    (async () => {
+      try {
+        let r = await ipc.request<{ recalculating: boolean; job_id: string | null; stats: { health?: DatasetHealth; health_findings?: HealthFindings } | null }>(
+          "dataset.statistics",
+          { id: dsId },
+        );
+        if (!r.stats && r.job_id) {
+          await new Promise<void>((resolve) => {
+            const off = ipc.on("job.finished", (data) => {
+              const j = data as { job_id: string };
+              if (j.job_id !== r.job_id) return;
+              off();
+              resolve();
+            });
+          });
+          r = await ipc.request("dataset.statistics", { id: dsId });
+        }
+        if (!disposed && r.stats?.health) setHealth(r.stats.health);
+        if (!disposed && r.stats?.health_findings) setHealthFindings(r.stats.health_findings);
+      } catch (e) {
+        console.error("dataset.statistics failed", e);
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [d?.id, st.statsTick]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const idx = frame?.index ?? st.activeFrameIndex;
+  // checks that flag the frame currently shown in the viewer
+  const flaggedChecks = useMemo(() => {
+    if (!healthFindings) return [] as string[];
+    return CHECK_KEYS.filter((k) => healthFindings[k]?.includes(idx));
+  }, [healthFindings, idx]);
+  const flaggedSet = useMemo(() => new Set(flaggedChecks), [flaggedChecks]);
+  // which declared properties the currently shown frame lacks (the "what is
+  // missing" behind a missing_values flag); empty unless the frame is flagged
+  const missingProps = useMemo(() => {
+    if (!frame || !flaggedSet.has("missing_values")) return [] as string[];
+    const declared = health?.missing_by_property
+      ? Object.keys(health.missing_by_property)
+      : ["energy", "forces", "virial"];
+    const absent: string[] = [];
+    if (frame.energy == null) absent.push("energy");
+    if (frame.force_max == null) absent.push("forces");
+    if (frame.virial_present === false) absent.push("virial");
+    return absent.filter((p) => declared.includes(p));
+  }, [frame, flaggedSet, health]);
+
+  // Red "Max |F|" row click: select the offending atom exactly like a table
+  // click (highlight + force arrow, arrow forced on so it is always visible);
+  // clicking it again clears the selection.
+  const selectMaxForceAtom = () => {
+    if (!d || maxForceAtom == null) return;
+    if (selectedAtom === maxForceAtom) {
+      st.setSelectedSample(null);
+      return;
+    }
+    setShowDistancePair(false);
+    setShowForceArrow(true);
+    st.setSelectedSample({
+      datasetId: d.id,
+      ...(st.activeDescriptorRunId ? { runId: st.activeDescriptorRunId } : {}),
+      mode: "atom",
+      frame: idx,
+      atom: maxForceAtom,
+    });
+  };
+
+  // Red "Shortest interatomic distance" row click: highlight the two closest
+  // atoms (the pair may include a periodic ghost image); clicking again hides.
+  const toggleDistancePair = () => {
+    if (!minDistancePair) return;
+    if (showDistancePair) {
+      setShowDistancePair(false);
+      return;
+    }
+    st.setSelectedSample(null);
+    setShowDistancePair(true);
+  };
 
   const fetchFrame = useCallback(
     async (index: number, requestedBondCutoff = bondCutoff) => {
@@ -178,9 +340,20 @@ export default function Explore() {
     renderedFrameRef.current = null;
     fetchedGhostCutoffRef.current = 0;
     setFrame(null);
+    setShowDistancePair(false);
     if (d && total > 0) void fetchFrame(st.activeFrameIndex || 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d?.id]);
+
+  // External frame navigation (e.g. the findings drawer's preview): follow the
+  // shared active-frame pointer while this page is open. Internal navigation
+  // already lands on the pointer, and frame===null defers to the reset above.
+  useEffect(() => {
+    if (!d || loading || !frame) return;
+    if (st.activeFrameIndex === frame.index) return;
+    void fetchFrame(st.activeFrameIndex);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [st.activeFrameIndex, loading]);
 
   // A local-shell cutoff may be larger than the cutoff used for the current
   // frame. Re-fetch only when the cached ghost extent is insufficient; the
@@ -203,6 +376,9 @@ export default function Explore() {
         if (cancelled || !viewerDiv.current) return;
         viewerRef.current = $3Dmol.createViewer(viewerDiv.current, {
           backgroundColor: "white",
+          // Orthographic projection so crystal structures keep parallel cell
+          // edges (no perspective foreshortening) while rotating.
+          orthographic: true,
         }) as never;
         setViewerReady(true);
       } catch (e) {
@@ -228,22 +404,94 @@ export default function Explore() {
       ? Math.max(clampBondCutoff(frame.bond_cutoff), localCutoff)
       : clampBondCutoff(frame.bond_cutoff);
     const atoms = parseViewerAtoms(frame.xyz, displayCutoff);
+    const selected =
+      selectedAtom != null && selectedAtom >= 0 && selectedAtom < atoms.length ? selectedAtom : null;
+    const shellNeighbors = showLocalEnvironment && selected != null
+      ? neighborsWithinCutoff(atoms, selected, localCutoff)
+      : [];
+    // Shell-only rendering: with the local shell shown, atoms beyond the
+    // cutoff are left out of the model entirely. Kept atoms preserve their
+    // original order; bonds and highlight indices are remapped onto the
+    // filtered list. Ghost atoms (periodic images fetched up to this cutoff)
+    // participate like real atoms, so edge atoms keep complete shells across
+    // cell boundaries.
+    const shellNewIndex = showLocalEnvironment && selected != null
+      ? new Map<number, number>(
+          [...shellNeighbors.map((n) => n.index), selected]
+            .sort((left, right) => left - right)
+            .map((orig, newIdx): [number, number] => [orig, newIdx]),
+        )
+      : null;
+    const renderAtoms = shellNewIndex
+      ? [...shellNewIndex.keys()].map((orig) => {
+          const atom = atoms[orig];
+          const bonds: number[] = [];
+          const bondOrder: number[] = [];
+          atom.bonds.forEach((bonded, k) => {
+            const mapped = shellNewIndex.get(bonded);
+            if (mapped != null) {
+              bonds.push(mapped);
+              bondOrder.push(atom.bondOrder[k]);
+            }
+          });
+          return { ...atom, bonds, bondOrder };
+        })
+      : atoms;
     const model = v.addModel();
-    model.addAtoms(atoms);
-    for (const el of new Set(atoms.map((atom) => atom.elem))) {
+    model.addAtoms(renderAtoms);
+    for (const el of new Set(renderAtoms.map((atom) => atom.elem))) {
       const color = elementColor(el);
       v.setStyle({ elem: el }, { sphere: { scale: 0.28, color }, stick: { radius: 0.12, color } });
     }
-    if (selectedAtom != null && selectedAtom >= 0 && selectedAtom < atoms.length) {
-      v.addStyle({ index: selectedAtom }, { sphere: { scale: 0.5, color: "#D13438" }, stick: { radius: 0.17, color: "#D13438" } });
+    if (selected != null) {
+      const selectedIndex = shellNewIndex ? shellNewIndex.get(selected)! : selected;
+      v.addStyle({ index: selectedIndex }, { sphere: { scale: 0.5, color: "#D13438" }, stick: { radius: 0.17, color: "#D13438" } });
       if (showLocalEnvironment) {
-        const neighbors = neighborsWithinCutoff(atoms, selectedAtom, localCutoff);
-        const center = atoms[selectedAtom];
-        for (const neighbor of neighbors) {
-          v.addStyle({ index: neighbor.index }, { sphere: { scale: 0.34, color: "#F7630C" }, stick: { radius: 0.13, color: "#F7630C" } });
+        // Neighbors keep their element colors; only the selected atom is
+        // highlighted. The lines and cutoff sphere still mark the shell.
+        const center = atoms[selected];
+        for (const neighbor of shellNeighbors) {
           v.addLine({ start: center, end: atoms[neighbor.index], color: "#F7630C", opacity: 0.7, linewidth: 2 });
         }
         v.addSphere?.({ center, radius: localCutoff, color: "#F7630C", opacity: 0.12, wireframe: true });
+      }
+      if (showForceArrow) {
+        const row = selected < frame.atom_rows.length ? frame.atom_rows[selected] : undefined;
+        const arrow = row
+          ? forceArrowGeometry(row.fx, row.fy, row.fz, frameMaxForce(frame), forceArrowScale, FORCE_ARROW_TARGET_LENGTH)
+          : null;
+        const atom = atoms[selected];
+        if (arrow && atom) {
+          v.addArrow({
+            start: {
+              x: atom.x + arrow.dir.x * FORCE_ARROW_START_OFFSET,
+              y: atom.y + arrow.dir.y * FORCE_ARROW_START_OFFSET,
+              z: atom.z + arrow.dir.z * FORCE_ARROW_START_OFFSET,
+            },
+            end: {
+              x: atom.x + arrow.dir.x * arrow.length,
+              y: atom.y + arrow.dir.y * arrow.length,
+              z: atom.z + arrow.dir.z * arrow.length,
+            },
+            color: FORCE_ARROW_COLOR,
+            radius: 0.12,
+          });
+        }
+      }
+    }
+    // Shortest-pair highlight: red spheres on both partners plus a dashed line
+    // between them. Indices may point at ghost images (beyond natoms), which
+    // the parsed atoms include, so the pair is visible across cell boundaries.
+    if (showDistancePair && minDistancePair) {
+      for (const index of [minDistancePair.i, minDistancePair.j]) {
+        if (index >= 0 && index < atoms.length) {
+          v.addStyle({ index }, { sphere: { scale: 0.5, color: HEALTH_RED }, stick: { radius: 0.17, color: HEALTH_RED } });
+        }
+      }
+      const a = atoms[minDistancePair.i];
+      const b = atoms[minDistancePair.j];
+      if (a && b) {
+        v.addLine({ start: a, end: b, color: HEALTH_RED, opacity: 0.9, linewidth: 3, dashed: true });
       }
     }
     // unit cell wireframe (12 edges) for periodic frames; cell is row-major a1,a2,a3
@@ -271,18 +519,17 @@ export default function Explore() {
         });
       }
     }
-    if (previousView) v.setView(previousView);
-    else v.zoomTo();
+    if (previousView && !(showLocalEnvironment && selected != null)) v.setView(previousView);
+    else v.zoomTo(); // shell-only view fits the isolated shell instead of the whole cell
     v.render();
     renderedFrameRef.current = frame.index;
     if (frame.ghost_count) console.info(`frame ${frame.index}: +${frame.ghost_count} periodic image atoms`);
     const ms = performance.now() - loadStart.current;
     console.info(`frame ${frame.index} fetched+rendered in ${ms.toFixed(0)}ms`);
-  }, [viewerReady, frame, localCutoff, selectedAtom, showLocalEnvironment]);
+  }, [viewerReady, frame, localCutoff, selectedAtom, showLocalEnvironment, showForceArrow, forceArrowScale, showDistancePair, minDistancePair]);
 
   if (!d) return <Empty description={t("Register a dataset first")} style={{ marginTop: 120 }} />;
 
-  const idx = frame?.index ?? st.activeFrameIndex;
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 8 }}>
       {/* frame navigation bar */}
@@ -383,6 +630,32 @@ export default function Explore() {
             style={{ width: 122 }}
           />}
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Tooltip title={t("Draws an arrow from the selected atom along its force vector.")}>
+            <Button
+              size="small"
+              type={showForceArrow ? "primary" : "default"}
+              disabled={!selectedForceRow}
+              onClick={() => setShowForceArrow((visible) => !visible)}
+            >
+              {showForceArrow ? t("Hide force arrow") : t("Show force arrow")}
+            </Button>
+          </Tooltip>
+          {showForceArrow && selectedForceRow && <InputNumber
+            size="small"
+            min={0.25}
+            max={10}
+            step={0.25}
+            precision={2}
+            value={forceArrowScale}
+            aria-label={t("Force arrow scale")}
+            addonAfter="×"
+            onChange={(value) => {
+              if (value != null && Number.isFinite(value)) setForceArrowScale(Math.max(0.25, Math.min(10, value)));
+            }}
+            style={{ width: 96 }}
+          />}
+        </div>
         <div style={{ width: 56, flexShrink: 0, textAlign: "right" }} aria-live="polite">
           <Typography.Text type="secondary" style={{ visibility: loading ? "visible" : "hidden" }}>
             {t("loading…")}
@@ -431,22 +704,118 @@ export default function Explore() {
           <Typography.Text strong style={{ fontSize: 12, color: "#616161", letterSpacing: 1 }}>
             {t("STRUCTURE")}
           </Typography.Text>
+          {flaggedChecks.length > 0 && (
+            <div
+              style={{
+                marginTop: 8,
+                border: `1px solid ${HEALTH_RED}55`,
+                background: "#FDF3F2",
+                borderRadius: 6,
+                padding: "7px 10px",
+                fontSize: 12,
+                color: HEALTH_RED,
+                display: "flex",
+                gap: 7,
+                alignItems: "flex-start",
+              }}
+            >
+              <Warning16Filled style={{ flex: "0 0 auto", marginTop: 2 }} />
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600 }}>{t("Flagged by data health")}</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 10px", marginTop: 2 }}>
+                  {flaggedChecks.map((check) => (
+                    <a
+                      key={check}
+                      onClick={() => useWorkspace.getState().openFindings(check)}
+                      style={{ color: HEALTH_RED, cursor: "pointer", textDecoration: "underline" }}
+                    >
+                      {t(
+                        {
+                          missing_values: "Missing values",
+                          invalid_cell: "Invalid cell",
+                          duplicate_structures: "Duplicate structures",
+                          extreme_force: "Extreme force",
+                          nonphysical_structures: "Non-physical structures",
+                          net_force: "Net force",
+                        }[check] ?? check,
+                      )}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
           <InspectorRows
             rows={[
               [t("Frame"), String(idx)],
               [t("Formula"), frame?.formula ?? "—"],
               [t("Atoms"), String(frame?.natoms ?? "—")],
               [t("E / atom"), frame?.energy_per_atom != null ? `${frame.energy_per_atom.toFixed(4)} eV` : "—"],
-              [t("Max |F|"), frame?.force_max != null ? `${frame.force_max.toFixed(4)} eV/Å` : "—"],
-              [t("Volume"), frame?.volume != null ? `${frame.volume.toFixed(2)} Å³` : "—"],
-              ["PBC", frame?.pbc ?? "—"],
+              [
+                t("Max |F|"),
+                frame?.force_max != null ? `${frame.force_max.toFixed(4)} eV/Å` : "—",
+                flaggedSet.has("extreme_force") ? HEALTH_RED : undefined,
+                flaggedSet.has("extreme_force") && maxForceAtom != null ? selectMaxForceAtom : undefined,
+                flaggedSet.has("extreme_force") && maxForceAtom != null
+                  ? t("Click to highlight the atom with the largest force and show its force arrow.")
+                  : undefined,
+              ],
+              [t("ΣF (net force)"), netForce != null ? `${netForce.toFixed(4)} eV/Å` : "—", flaggedSet.has("net_force") ? HEALTH_RED : undefined],
+              [
+                t("Virial (eV)"),
+                virial ? (virial.voigt ?? virial.rows.flat()).map((v) => v.toFixed(4)).join("  ") : "—",
+                undefined,
+                undefined,
+                t("Virial tensor as stored in the source frame (eV). Symmetric tensors show Voigt order xx yy zz yz xz xy; asymmetric tensors show the full row-major matrix."),
+              ],
+              [t("Cell volume"), frame?.volume != null ? `${frame.volume.toFixed(2)} Å³` : "—"],
+              [t("Cell parameters"), cellParams
+                ? `${cellParams.a.toFixed(3)} ${cellParams.b.toFixed(3)} ${cellParams.c.toFixed(3)} Å · ${cellParams.alpha.toFixed(1)}° ${cellParams.beta.toFixed(1)}° ${cellParams.gamma.toFixed(1)}°`
+                : "—"],
+              [t("Density"), density != null ? `${density.toFixed(3)} g/cm³` : "—"],
+              [
+                t("Shortest interatomic distance"),
+                minAtomDistance != null ? `${minAtomDistance.toFixed(3)} Å` : "—",
+                flaggedSet.has("nonphysical_structures") ? HEALTH_RED : undefined,
+                flaggedSet.has("nonphysical_structures") && minDistancePair ? toggleDistancePair : undefined,
+                flaggedSet.has("nonphysical_structures") && minDistancePair
+                  ? t("Click to highlight the two atoms that form the shortest interatomic distance.")
+                  : undefined,
+              ],
+              ["PBC", frame?.pbc ?? "—", flaggedSet.has("invalid_cell") ? HEALTH_RED : undefined],
               [t("Selected atom"), selectedAtom != null ? `#${selectedAtom}` : "—"],
-              [t("Local coordination"), selectedAtom != null && showLocalEnvironment ? String(selectedLocalNeighbors.length) : "—"],
-              [t("Neighbor shell"), selectedAtom != null && showLocalEnvironment ? `${localCutoff.toFixed(2)} Å` : "—"],
+              [t("Selected |F|"), selectedForceRow?.f != null ? `${selectedForceRow.f.toFixed(4)} eV/Å` : "—"],
+              [t("Local coordination"), selectedAtom != null ? String(selectedLocalNeighbors.length) : "—"],
+              [t("Neighbor shell"), selectedAtom != null ? `${localCutoff.toFixed(2)} Å` : "—"],
+              ...(missingProps.length > 0
+                ? [[t("Missing"), missingProps.map((p) => t(MISSING_PROP_LABELS[p] ?? p)).join(" · "), HEALTH_RED] as [string, string, string]]
+                : []),
             ]}
           />
+          {showDistancePair && minDistancePair && minAtomDistance != null && (
+            <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginTop: 10, marginBottom: 0 }}>
+              {t("Shortest pair: {pair}", {
+                pair:
+                  [minDistancePair.i, minDistancePair.j]
+                    .map((k) => `#${k}${k >= (frame?.natoms ?? 0) ? "·PBC" : ""}`)
+                    .join(" – ") + ` (${minAtomDistance.toFixed(3)} Å)`,
+              })}
+            </Typography.Paragraph>
+          )}
           {selectedAtom != null && showLocalEnvironment && <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginTop: 10, marginBottom: 0 }}>
-            {t("Neighbors: {list}", { list: selectedLocalNeighbors.length ? selectedLocalNeighbors.map(({ index, distance }) => `#${index} (${distance.toFixed(2)} Å)`).join(", ") : t("none within cutoff") })}
+            {t("Neighbors: {list}", {
+              list: selectedLocalNeighbors.length
+                ? selectedLocalNeighbors.map(({ index, distance }) => `#${index}${index >= (frame?.natoms ?? 0) ? "·PBC" : ""} (${distance.toFixed(2)} Å)`).join(", ")
+                : t("none within cutoff"),
+            })}
+          </Typography.Paragraph>}
+          {showForceArrow && selectedArrow && <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginTop: 10, marginBottom: 0 }}>
+            {t("Force arrow: {magnitude} eV/Å ≈ {length} Å (frame max {max} eV/Å → {target} Å)", {
+              magnitude: selectedArrow.magnitude.toFixed(3),
+              length: selectedArrow.length.toFixed(2),
+              max: maxForce.toFixed(3),
+              target: (FORCE_ARROW_TARGET_LENGTH * forceArrowScale).toFixed(2),
+            })}
           </Typography.Paragraph>}
         </div>
       </div>
@@ -455,14 +824,29 @@ export default function Explore() {
       <div style={{ background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, maxHeight: 260, overflow: "auto" }}>
         <Table
           size="small"
+          tableLayout="fixed"
           pagination={false}
           dataSource={frame?.atom_rows ?? []}
           rowKey="i"
           rowClassName={(row) => row.i === selectedAtom ? "explore-atom-row-selected" : selectedLocalNeighborSet.has(row.i) ? "explore-atom-row-neighbor" : ""}
           onRow={(row) => ({
             onClick: () => {
-              if (!st.activeDescriptorRunId || !d) return;
-              st.setSelectedSample({ datasetId: d.id, runId: st.activeDescriptorRunId, mode: "atom", frame: idx, atom: row.i });
+              if (!d) return;
+              // Clicking the selected atom again clears the selection. Browse
+              // selections work without an active descriptor run; runId is
+              // attached only when one exists so Analysis links still resolve.
+              if (row.i === selectedAtom) {
+                st.setSelectedSample(null);
+                return;
+              }
+              setShowDistancePair(false);
+              st.setSelectedSample({
+                datasetId: d.id,
+                ...(st.activeDescriptorRunId ? { runId: st.activeDescriptorRunId } : {}),
+                mode: "atom",
+                frame: idx,
+                atom: row.i,
+              });
             },
           })}
           columns={[
@@ -486,16 +870,32 @@ function fmt(v: number | null): string {
   return v == null ? "—" : v.toFixed(4);
 }
 
-function InspectorRows({ rows }: { rows: [string, string][] }) {
+// label, value, severity color, click handler + hover tooltip for the
+// health-flagged rows the user can act on
+type InspectorRow = [label: string, value: string, color?: string, onClick?: () => void, title?: string];
+
+function InspectorRows({ rows }: { rows: InspectorRow[] }) {
   return (
     <div style={{ marginTop: 8 }}>
-      {rows.map(([k, v]) => (
+      {rows.map(([k, v, color, onClick, title]) => (
         <div
           key={k}
+          title={title}
+          onClick={onClick}
+          className={onClick ? "explore-inspector-row-clickable" : undefined}
           style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 13 }}
         >
-          <span style={{ color: "#616161" }}>{k}</span>
-          <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 500 }}>{v}</span>
+          <span
+            style={{
+              color: color ?? "#616161",
+              fontWeight: color ? 600 : 400,
+              textDecoration: onClick ? "underline" : undefined,
+              textUnderlineOffset: 2,
+            }}
+          >
+            {k}
+          </span>
+          <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: color ? 600 : 500, color: color ?? undefined }}>{v}</span>
         </div>
       ))}
     </div>

@@ -1,9 +1,17 @@
-# mdescriptor 已知问题清单（基于 0.2.7 实测）
+# mdescriptor 已知问题清单（基于 0.2.8 复核）
 
-> 日期：2026-08-30；环境：Windows x64，cp312 wheel，项目 `.venv`
+> 日期：2026-09-05（0.2.8 复核；初版 2026-08-30 基于 0.2.7）；环境：Windows x64，cp312 wheel，项目 `.venv`
 > 性质：MDescriptor Studio 开发过程中的实测发现，可直接作为上游 issue 素材（github.com/nicheal/MDescriptor）
-> 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ **已于 2026-08-29 升级至 0.2.5 并于 2026-08-30 更新至 0.2.7**；本轮按 `scripts/probe_engine.py` 重建 API 基线，并补测启动预热与参数元数据。
-> 仍需上游修改的项已整理为可开工清单：**`upstream-issues.md`**（5 项：wheel 缺契约文档、GPU 路径、`from_frames`、`list_descriptors` 返回类型、可选错误子类）
+> 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ 已历经 0.2.5（2026-08-29）、0.2.7（2026-08-30）、0.2.8（2026-09-05）三轮升级复核；每轮按 `scripts/probe_engine.py` 重建 API 基线并跑 `scripts/verify_known_issues.py`。
+> 仍需上游修改的项已整理为可开工清单：**`upstream-issues.md`**（0.2.8 复测后无待开工项；原 GPU 路径条目的声明层已落地，剩 CUDA 硬件运行时验收）
+
+## 0.2.8 复核补充（2026-09-05）
+
+- **唯一 schema 变化：28/28 描述符 `execution.devices` 由 `["cpu"]` 扩为 `["cpu", "cuda"]`**——历史 issue 9「全部 devices: ["cpu"]」在声明层已修复；`ExecutionOptions(device=...)` 为设备选择入口（Studio 仍固定 CPU，未实测 CUDA 路径）。
+- `get_runtime_info()` 仅 `version` 升为 `"0.2.8"`；`baseline_version="2"`、`descriptor_info_schema_version=3`、各 schema 版本位均不变。
+- 参数类型统计（8 类 170 个）、display_name/description 覆盖、输入能力矩阵、asset policy、错误类型与 0.2.7 完全一致；`verify_known_issues.py` 十项复核：#1/#2/#3/#5/#6 维持 FIXED?，#4/#10 FIXED，**#7 转 FIXED**（`gui-adaptation-baseline.md` 已随 wheel 发布，`mdescriptor/docs/` 下实测可见），#8 维持 PARTIAL（`string` 类型声明未使用，属契约允许），#9 转 FIXED。
+- `EngineAdapter.warmup()` 在 0.2.8 下成功预热全部 28 个描述符；后端 pytest 127 项全绿。
+- Studio 侧已接线设备选择（ADR-26）：`descriptor.submit` 新增 `device`（默认 cpu、按 schema 校验、计入缓存键），cuda 在无 GPU 开发机上实测以 `DEVICE_UNAVAILABLE` 失败；CUDA 计算路径的正确性验收待有 GPU 的环境执行。
 
 ## 0.2.7 复核补充
 

@@ -100,13 +100,26 @@ MIGRATIONS: dict[int, str] = {
     4: """
     ALTER TABLE descriptor_runs ADD COLUMN memory_peak_bytes INTEGER;
     """,
+    5: """
+    ALTER TABLE descriptor_runs ADD COLUMN device TEXT;
+    """,
+    6: """
+    CREATE TABLE dataset_excluded_frames (
+        dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+        frame_index INTEGER NOT NULL,
+        reason TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (dataset_id, frame_index)
+    );
+    """,
 }
 
 
 class Database:
     def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path), check_same_thread=False)
+        self.path = Path(path).resolve(strict=False)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._write_lock = threading.RLock()
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -141,10 +154,12 @@ class Database:
             self._conn.commit()
 
     def query(self, sql: str, params: tuple = ()) -> list[dict]:
-        return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
+        with self._write_lock:
+            return [dict(r) for r in self._conn.execute(sql, params).fetchall()]
 
     def query_one(self, sql: str, params: tuple = ()) -> dict | None:
-        row = self._conn.execute(sql, params).fetchone()
+        with self._write_lock:
+            row = self._conn.execute(sql, params).fetchone()
         return dict(row) if row else None
 
     def get_setting(self, key: str) -> str | None:

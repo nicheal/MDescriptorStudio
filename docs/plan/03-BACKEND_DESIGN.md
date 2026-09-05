@@ -39,8 +39,8 @@ backend/mdescriptor_studio_backend/
 `datasets / dataset_statistics / jobs / descriptor_runs / analysis_runs / settings / schema_version`
 
 - `datasets.periodicity`：`{fully_periodic, isolated, mixed, flags}` JSON——ADR-11 预检数据源。
-- `descriptor_runs.cache_key = SHA256(fingerprint, name, canonical_params, engine_version, scope, frame_index, dtype)`——§28 缓存键。
-- `descriptor_runs.descriptor_version`：记录 `describe_descriptor()` 返回的 per-descriptor 版本（0.2.7 内置描述符均为 `"1"`；见 engine-api-report）。
+- `descriptor_runs.cache_key = SHA256(fingerprint, name, canonical_params, engine_version, scope, frame_index, dtype, device)`——§28 缓存键（0.2.8 起含设备，CPU/CUDA 结果互不命中）。
+- `descriptor_runs.descriptor_version`：记录 `describe_descriptor()` 返回的 per-descriptor 版本（0.2.8 内置描述符均为 `"1"`；见 engine-api-report）。
 - `analysis_runs` 保存 `input_run_ids_json`、`dataset_ids_json`、规范化 `params_json`、`cache_key`、`schema_version`、`algorithm_version`、`preprocessing_json`、`warnings_json`、`artifact_manifest_json`、`preview_json` 与 `stale_reason`。所有通用分析按输入 Run + 参数 + 算法版本查缓存；legacy PCA 仍兼容旧 `pca.json`。
 - Analysis 结果目录采用 `analysis/<analysis_id>/`，包含 named `.npy`、`metadata.json` 和已完成 `manifest.json`；写入 `.tmp-*` 后使用原子目录替换。
 

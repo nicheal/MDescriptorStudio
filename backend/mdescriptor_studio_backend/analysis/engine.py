@@ -9,10 +9,57 @@ scikit-learn keyword.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import product
 from typing import Any, Callable
+
+# Newer Numba releases may recognize this flag. The runtime guard below is
+# still required for the versions supported by the Studio, which currently do
+# not implement it.
+os.environ["NUMBA_DISABLE_JIT_CACHE"] = "1"
+
+_NUMBA_CACHE_GUARD_INSTALLED = False
+
+
+def _disable_numba_disk_cache() -> bool:
+    """Make Numba's ``cache=True`` decorators use an in-memory no-op cache.
+
+    Numba cache entries contain pickle-bearing data. ``NUMBA_DISABLE_JIT_CACHE``
+    is not understood by all supported Numba versions, so relying on that
+    environment variable alone would leave a writable cache load path. The
+    guard is installed immediately before optional UMAP imports; decorators
+    created afterwards receive ``NullCache`` and never read or write disk.
+
+    Returning ``False`` is fail-closed for callers that are about to import an
+    optional package which may use Numba. This keeps an unknown Numba API from
+    silently re-opening the cache boundary.
+    """
+
+    global _NUMBA_CACHE_GUARD_INSTALLED
+    if _NUMBA_CACHE_GUARD_INSTALLED:
+        return True
+
+    try:
+        from numba.core import caching, dispatcher
+    except ImportError:
+        return False
+
+    enable_caching = getattr(dispatcher.Dispatcher, "enable_caching", None)
+    if not callable(enable_caching):
+        return False
+    if getattr(enable_caching, "_mdescriptor_no_disk_cache", False):
+        _NUMBA_CACHE_GUARD_INSTALLED = True
+        return True
+
+    def _use_null_cache(self) -> None:
+        self._cache = caching.NullCache()
+
+    _use_null_cache._mdescriptor_no_disk_cache = True
+    dispatcher.Dispatcher.enable_caching = _use_null_cache
+    _NUMBA_CACHE_GUARD_INSTALLED = True
+    return True
 
 import numpy as np
 
@@ -150,6 +197,8 @@ def _check_samples(x: np.ndarray, minimum: int = 2) -> None:
 
 def _safe_import(module: str, package: str | None = None):
     try:
+        if module == "umap" and not _disable_numba_disk_cache():
+            raise ImportError("Numba disk-cache guard is unavailable")
         # A non-wildcard fromlist returns the requested module without walking
         # package ``__all__``. sklearn.model_selection deliberately exposes
         # experimental names there that raise during wildcard import.
@@ -586,56 +635,16 @@ class AnalysisEngine:
         still converted to ANALYSIS_DEPENDENCY_MISSING when selected.
         """
         import importlib
-        import os
-        import sys
 
-        if getattr(sys, "frozen", False):
-            # UMAP ships numba decorators with cache=True. In a PyInstaller
-            # onefile executable inspect.getfile() returns a synthetic module
-            # path, so Numba's normal source-backed locators reject it before
-            # the frozen-executable fallback can be used. Install a locator
-            # directly instead of relying on the environment variable: Numba
-            # reads its config during import, which may already have happened
-            # through a bundled native dependency.
-            import numba
-            import tempfile
-            from numba.core import caching
-
-            class _FrozenCacheLocator(caching.UserWideCacheLocator):
-                def __init__(self, py_func, py_file):
-                    self._py_file = py_file
-                    self._lineno = py_func.__code__.co_firstlineno
-                    # Keep the cache beside the Studio data directory (or the
-                    # OS temp directory for a bare protocol smoke test). The
-                    # user-profile cache can be read-only on managed Windows
-                    # installations, which would make every locator reject
-                    # the frozen module.
-                    root = os.environ.get("MDS_DATA_DIR") or tempfile.gettempdir()
-                    subpath = self.get_suitable_cache_subpath(py_file)
-                    self._cache_path = os.path.join(root, "numba-cache", subpath)
-
-                @classmethod
-                def from_function(cls, py_func, py_file):
-                    self = cls(py_func, py_file)
-                    try:
-                        self.ensure_cache_path()
-                    except OSError:
-                        return None
-                    return self
-
-                def get_source_stamp(self):
-                    try:
-                        stat = os.stat(self._py_file)
-                    except OSError:
-                        stat = os.stat(sys.executable)
-                    return stat.st_mtime, stat.st_size
-
-            numba.config.CACHE_LOCATOR_CLASSES = ""
-            caching.CacheImpl._locator_classes = [_FrozenCacheLocator]
-            caching.CompileResultCacheImpl._locator_classes = [_FrozenCacheLocator]
+        # Numba's cache format contains pickle data. Install the runtime guard
+        # before importing UMAP, whose module-level decorators request
+        # ``cache=True``.
 
         availability: dict[str, bool] = {}
         for name in ("sklearn", "umap", "hdbscan"):
+            if name == "umap" and not _disable_numba_disk_cache():
+                availability[name] = False
+                continue
             try:
                 importlib.import_module(name)
             except ImportError:

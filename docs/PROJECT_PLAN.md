@@ -31,8 +31,8 @@ MDescriptor                                         （Descriptor Compute Engine
 | 项目 | 状态 |
 |---|---|
 | Python | 3.12.9（miniforge3 base）；**项目一律使用 `D:\codex\MD\.venv\Scripts\python.exe`，禁用 base/conda**（项目所有者指定） |
-| 项目 .venv | `D:\codex\MD\.venv` 已建立并隔离验证；已装 mdescriptor 0.2.7 + numpy 2.5.2 + pytest 9.1.1，引擎功能实测通过（2026-08-30 复核：runtime_info / 28 描述符 / 参数展示元数据 / NEP 空参数实例化） |
-| MDescriptor 引擎 | 0.2.7（PyPI wheel），GUI 所需 API 与参数展示元数据完整；实测报告见 `docs/plan/engine-api-report.md` |
+| 项目 .venv | `D:\codex\MD\.venv` 已建立并隔离验证；已装 mdescriptor 0.2.8 + numpy 2.5.2 + pytest 9.1.1，引擎功能实测通过（2026-09-05 复核：runtime_info / 28 描述符 / 参数展示元数据 / NEP 空参数实例化 / 全部描述符声明 cpu+cuda） |
+| MDescriptor 引擎 | 0.2.8（PyPI wheel，2026-09-05 由 0.2.7 升级），GUI 所需 API 与参数展示元数据完整；实测报告见 `docs/plan/engine-api-report.md` |
 | Node.js / git / Rust / MSVC / WebView2 | v24.16.0 / 2.53.0 / stable 1.98.0 / VS 生成工具 2026 + SDK 10.0.26100 / v151.0.4129.107 —— **全部已安装** |
 | OS / 硬件 / 磁盘 | Windows 10 22H2 x64；Ryzen 9 7950X / 63.1 GB；C: 剩 449 GB，D: 剩 1.9 TB |
 | 测试数据 | 真实：`D:\Al-Cu\train.xyz`（extxyz，2,000 帧，4 MB）；合成：M1 生成 12,480 帧 DeepMD+extxyz fixture（ADR-9） |
@@ -48,7 +48,7 @@ ADR-1～4 承自 v0.1；ADR-5～17 为 grilling 共识。全文与背景见 `doc
 | ADR | 决策 |
 |---|---|
 | 1 | 仓库位置：`D:\codex\MD` 根目录（frontend / backend / src-tauri / scripts / tests 与 docs/ 并列） |
-| 2 | 引擎依赖：PyPI 安装、pin `mdescriptor==0.2.7`；升级走四步流程（05 文档 §2） |
+| 2 | 引擎依赖：PyPI 安装、pin `mdescriptor==0.2.8`；升级走四步流程（05 文档 §2） |
 | 3 | 桌面壳 Tauri 2；Rust/MSVC 已就绪，M0 直接搭「窗口 + sidecar + backend.ready」通路，无浏览器过渡态 |
 | 4 | UI 以 `UI.png` mockup 为权威基准；冲突以对照表定稿（10 条，见 01-DECISIONS.md §附录） |
 | 5 | 文档一致性：以最新实测为准，过期表述随轮次即时清理（本版已清理：M0 不再含 Rust/MSVC 安装项） |
@@ -70,6 +70,7 @@ ADR-1～4 承自 v0.1；ADR-5～17 为 grilling 共识。全文与背景见 `doc
 | 23 | 源数据 fingerprint 变化时旧 Descriptor/Analysis Run 保留并标记 STALE；可审计但不可作为新分析输入 |
 | 24 | 分析依赖固定为 scikit-learn、umap-learn、hdbscan，随 PyInstaller sidecar 离线打包；Plotly 仅 Analysis 使用 |
 | 25 | Analysis 选择采用 click 单点 + box/lasso 框选；Parameter Sensitivity 只比较已有 Completed Run，不隐式重算 |
+| 26 | 计算设备选择（0.2.8 起）：设备下拉按 schema `execution.devices` 渲染，`descriptor.submit` 新增 `device`（默认 cpu、按 schema 校验、计入缓存键与 metadata）；无运行时的设备报 `DEVICE_UNAVAILABLE` |
 
 ---
 
@@ -85,7 +86,7 @@ venv 建立、0.2.7 API 探测（`engine-api-report.md`）、Rust/MSVC/WebView2 
 |---|---|---|
 | `PROJECT_PLAN.md`（本文件） | ✅ v0.4 | 里程碑、验收、风险 |
 | `plan/01-DECISIONS.md` | ✅ | ADR-1～17 全文 + mockup 对照表定稿 |
-| `plan/engine-api-report.md` + `.json` | ✅ | 0.2.7 实测 API 面与参数展示元数据（`scripts/probe_engine.py` 产出） |
+| `plan/engine-api-report.md` + `.json` | ✅ | 0.2.8 实测 API 面与参数展示元数据（`scripts/probe_engine.py` 产出） |
 | `plan/05-ENGINE_ADAPTER.md` | ✅ | adapter 边界、版本策略、能力/错误映射 |
 | `plan/02-IPC_PROTOCOL.md` | ✅ | protocol_version=1、NDJSON 帧、方法目录、事件、错误码全集、sidecar 生命周期 |
 | `plan/04-FRONTEND_DESIGN.md` | ✅ | 路由与页面、WorkspaceState、AntD tokens（logos.png 色板）、四基准页线框 |
@@ -127,7 +128,7 @@ Analysis 计划已经取代旧的 MVP 暂缓清单：UMAP、t-SNE、聚类、FPS
 |---|---|---|
 | PyInstaller 打包 mdescriptor 原生 `.libs`/pybind11 扩展失败（hidden imports、DLL 捆绑） | 中 | M4 末冒烟构建提前暴露；onedir 模式；必要时补 hook |
 | 3Dmol.js 在 Tauri CSP 下的资源加载 | 低 | 资源本地打包，CSP 白名单收窄 |
-| ~~PyPI 版 mdescriptor 缺少 GUI 所需 API~~ | ~~高~~ 已消除 | 0.2.7 实测 API 与参数展示元数据完整（`engine-api-report.md`） |
+| ~~PyPI 版 mdescriptor 缺少 GUI 所需 API~~ | ~~高~~ 已消除 | 0.2.8 实测 API 与参数展示元数据完整（`engine-api-report.md`） |
 | ~~MSVC + Rust 安装受阻~~ | — 已消除 | 2026-08-28 核验已安装并编译通过 |
 
 ---

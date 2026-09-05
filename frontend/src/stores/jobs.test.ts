@@ -26,7 +26,7 @@ describe("watchJob", () => {
       error: null,
     } as never);
     const pending = watchJob("job-live");
-    ipc.processLine(JSON.stringify({ event: "job.finished", data: { job_id: "job-live", status: "COMPLETED", result: { analysis_id: "ana-1" }, error: null } }));
+    ipc.processLine(JSON.stringify({ protocol_version: 1, event: "job.finished", data: { job_id: "job-live", status: "COMPLETED", result: { analysis_id: "ana-1" }, error: null } }));
 
     await expect(pending).resolves.toMatchObject({ status: "COMPLETED", result: { analysis_id: "ana-1" } });
   });

@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
+      "csp": "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:"
     }
   },
   "bundle": {
@@ -30,7 +30,7 @@
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
     "externalBin": ["binaries/backend"],
-    "resources": [],
+    "resources": ["binaries/backend-x86_64-pc-windows-msvc.exe.sha256"],
     "windows": {
       "nsis": {
         "installMode": "perMachine",

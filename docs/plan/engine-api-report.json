@@ -1,7 +1,7 @@
 {
-  "engine_version": "0.2.7",
+  "engine_version": "0.2.8",
   "runtime_info": {
-    "version": "0.2.7",
+    "version": "0.2.8",
     "api_version": 1,
     "baseline_version": "2",
     "configuration_schema_version": 1,
@@ -269,7 +269,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -363,7 +364,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -424,7 +426,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -583,7 +586,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -657,7 +661,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -720,7 +725,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -794,7 +800,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -882,7 +889,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -989,7 +997,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1112,7 +1121,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1228,7 +1238,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1340,7 +1351,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1455,7 +1467,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1578,7 +1591,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1642,7 +1656,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1717,7 +1732,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1796,7 +1812,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1884,7 +1901,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -1956,7 +1974,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2084,7 +2103,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2287,7 +2307,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2361,7 +2382,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2448,7 +2470,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2536,7 +2559,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2614,7 +2638,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2702,7 +2727,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2790,7 +2816,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true
@@ -2928,7 +2955,8 @@
       },
       "execution": {
         "devices": [
-          "cpu"
+          "cpu",
+          "cuda"
         ],
         "num_threads": true,
         "cooperative_cancel": true

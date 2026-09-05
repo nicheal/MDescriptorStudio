@@ -206,6 +206,7 @@ export default function Sidebar() {
             <Input
               placeholder={t("D:\\datasets\\GaAs  (DeepMD directory or .xyz file)")}
               value={path}
+              readOnly
               onChange={(e) => setPath(e.target.value)}
             />
             <Button

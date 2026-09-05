@@ -4,6 +4,7 @@
 // tiny in-browser mock backend over the same NDJSON protocol. Not part of the
 // production bundle (vite builds only index.html's entry).
 import "./global.css";
+import type { Hist } from "./types/protocol";
 import { setAppIcon } from "./brand";
 
 setAppIcon();
@@ -108,7 +109,101 @@ const DS = [
     last_scan_at: null,
     cache_valid: false,
   },
+  {
+    id: "ds-cho",
+    name: "2026_Zhang_CHO train",
+    format: "extxyz",
+    source_path: "D:\\mlffkit\\mlffkit\\tests\\2026_Zhang_CHO\\train.xyz",
+    number_of_frames: 3813,
+    elements: ["C", "H", "O"],
+    properties: { energy: { per_structure: true }, forces: { per_atom: true } },
+    periodicity: { fully_periodic: false, isolated: true, mixed: false, flags: [] },
+    fingerprint: "mock-cho",
+    file_size: 66 * 1024 ** 2,
+    created_at: "2026-04-12T10:00:00Z",
+    last_scan_at: new Date(NOW - 60000).toISOString(),
+    cache_valid: true,
+  },
 ];
+
+// integer-aligned histogram from [value, count] pairs (half-integer edges)
+function intHist(pairs: [number, number][]): Hist {
+  const lo = pairs[0][0];
+  const hi = pairs[pairs.length - 1][0];
+  const map = new Map(pairs);
+  const counts: number[] = [];
+  for (let v = lo; v <= hi; v++) counts.push(map.get(v) ?? 0);
+  const edges: number[] = [];
+  for (let v = lo - 0.5; v <= hi + 0.5; v++) edges.push(v);
+  return { edges, counts };
+}
+
+// real per-element atom-count distributions measured from the Zhang CHO set
+function choElementCounts(): Record<string, Hist> {
+  const c = intHist([
+    [132, 1], [134, 2], [135, 4], [136, 13], [137, 13], [138, 31], [139, 80],
+    [140, 2728], [141, 136], [142, 204], [143, 218], [144, 148], [145, 119],
+    [146, 51], [147, 65],
+  ]);
+  const o = intHist([
+    [3, 6], [4, 1], [6, 4], [7, 11], [8, 12], [9, 9], [10, 27], [11, 55],
+    [12, 52], [13, 67], [14, 363], [15, 18], [16, 12], [17, 37], [18, 19],
+    [19, 13], [20, 39], [21, 31], [22, 42], [23, 36], [24, 47], [25, 48],
+    [26, 53], [27, 69], [28, 370], [29, 16], [30, 31], [31, 32], [32, 29],
+    [33, 20], [34, 25], [35, 21], [36, 43], [37, 22], [38, 52], [39, 33],
+    [40, 106], [41, 72], [42, 376], [43, 20], [44, 16], [45, 22], [46, 25],
+    [47, 26], [48, 27], [49, 39], [50, 32], [51, 29], [52, 63], [53, 47],
+    [54, 52], [55, 45], [56, 339], [57, 13], [58, 20], [59, 54], [60, 48],
+    [61, 57], [62, 58], [63, 50], [64, 44], [65, 39], [66, 43], [67, 29],
+    [68, 67], [69, 31], [70, 148], [71, 3], [72, 7], [73, 1],
+  ]);
+  const hPairs: [number, number][] = [];
+  for (let v = 1; v <= 70; v++) {
+    const c = Math.round(3813 * (0.018 * Math.exp(-((v - 14) ** 2) / 260) + 0.008 * Math.exp(-((v - 45) ** 2) / 500)) + 4);
+    hPairs.push([v, c]);
+  }
+  return { C: c, H: intHist(hPairs), O: o };
+}
+
+// long-tail exact stoichiometry like the real Zhang CHO set: 794 species over
+// 3813 structures, the largest single species at ~2.7%
+function choFormulas(): { formula: string; elements: string[]; count: number }[] {
+  const top: [string, string[], number][] = [
+    ["C140O42", ["C", "O"], 102],
+    ["C140O56", ["C", "O"], 101],
+    ["C140H10O42", ["C", "H", "O"], 100],
+    ["C140O28", ["C", "O"], 97],
+    ["C140O14", ["C", "O"], 90],
+    ["C140H7O28", ["C", "H", "O"], 84],
+    ["C140H4O14", ["C", "H", "O"], 72],
+    ["C140H21O42", ["C", "H", "O"], 69],
+    ["C140H10O14", ["C", "H", "O"], 65],
+    ["C140H14O28", ["C", "H", "O"], 65],
+    ["C140H14O56", ["C", "H", "O"], 65],
+    ["C140H14O14", ["C", "H", "O"], 61],
+  ];
+  const rows: { formula: string; elements: string[]; count: number }[] = top.map(([formula, elements, count]) => ({
+    formula,
+    elements,
+    count,
+  }));
+  let remaining = 3813 - rows.reduce((s, r) => s + r.count, 0);
+  const TAIL = 782;
+  for (let i = 0; i < TAIL; i++) {
+    const left = TAIL - i;
+    const avg = remaining / left;
+    const h = i % 23;
+    const o = ((i * 7) % 57) + 1;
+    const count = i === TAIL - 1 ? remaining : Math.max(1, Math.min(60 - Math.floor(i / 16), Math.round(avg * 1.6), remaining - (left - 1)));
+    rows.push({
+      formula: h > 0 ? `C140H${h}O${o}` : `C140O${o}`,
+      elements: h > 0 ? ["C", "H", "O"] : ["C", "O"],
+      count,
+    });
+    remaining -= count;
+  }
+  return rows;
+}
 
 const STATS: Record<string, unknown> = {
   "ds-gaas": {
@@ -118,6 +213,20 @@ const STATS: Record<string, unknown> = {
       { symbol: "Ga", count: 397762 },
       { symbol: "As", count: 400958 },
     ],
+    compositions: [
+      { elements: ["Ga", "As"], count: 9600 },
+      { elements: ["Ga"], count: 1600 },
+      { elements: ["As"], count: 1280 },
+    ],
+    formulas: [
+      { formula: "As32Ga32", elements: ["As", "Ga"], count: 9600 },
+      { formula: "Ga64", elements: ["Ga"], count: 1600 },
+      { formula: "As64", elements: ["As"], count: 1280 },
+    ],
+    element_atom_counts: {
+      Ga: intHist([[32, 9600], [64, 1600]]),
+      As: intHist([[32, 9600], [64, 1280]]),
+    },
     atoms_per_structure: hist(56, 72, 16, 64, 2),
     atoms_per_structure_summary: { min: 64, max: 64, mean: 64, median: 64 },
     energy_per_atom: hist(-6, -1, 50, -3.8, 0.45),
@@ -126,17 +235,85 @@ const STATS: Record<string, unknown> = {
     force_magnitude_summary: { min: 0.02, max: 9.4, mean: 2.63, median: 2.5 },
     max_force: hist(0, 10, 50, 2.8, 1.2),
     max_force_summary: { min: 0.3, max: 9.9, mean: 2.9, median: 2.7 },
+    min_distance: hist(0.8, 4, 50, 2.0, 0.4),
+    min_distance_summary: { min: 0.85, max: 3.9, mean: 2.05, median: 2.0 },
     volume: hist(400, 1000, 40, 650, 70),
     volume_summary: { min: 405, max: 995, mean: 651, median: 648 },
     properties: { energy: { per_structure: true, per_atom: true }, forces: { per_atom: true }, virial: { per_structure: true } },
     periodicity: { fully_periodic: true, isolated: false, mixed: false, flags: ["X", "Y", "Z"] },
     health: {
-      missing_values: 0,
+      missing_values: 5,
+      missing_by_property: { energy: 2, virial: 5 },
       invalid_cell: 0,
       duplicate_structures: 2,
       extreme_force: 3,
       extreme_force_threshold: 50,
+      nonphysical_structures: 1,
+      short_contact_coefficient: 0.7,
+      net_force: 4,
+      net_force_threshold: 0.001,
     },
+    health_findings: {
+      cap: 5000,
+      missing_values: [3, 21, 204, 512, 866],
+      invalid_cell: [],
+      duplicate_structures: [17, 421],
+      extreme_force: [3, 88, 902],
+      nonphysical_structures: [155],
+      net_force: [12, 47, 233, 519],
+    },
+    excluded_frames: { count: 0, indices: [] },
+  },
+  "ds-cho": {
+    structures: 3813,
+    atoms_total: 747348,
+    elements: [
+      { symbol: "C", count: 533820 },
+      { symbol: "H", count: 48100 },
+      { symbol: "O", count: 165428 },
+    ],
+    compositions: [
+      { elements: ["C", "O"], count: 547 },
+      { elements: ["C", "H", "O"], count: 3266 },
+    ],
+    formulas: choFormulas(),
+    element_atom_counts: choElementCounts(),
+    atoms_per_structure: hist(140, 250, 40, 196, 16),
+    atoms_per_structure_summary: { min: 154, max: 240, mean: 196, median: 196 },
+    energy_per_atom: hist(-9, -6, 50, -7.6, 0.4),
+    energy_per_atom_summary: { min: -8.9, max: -6.2, mean: -7.62, median: -7.6 },
+    force_magnitude: hist(0, 12, 50, 2.2, 1.0),
+    force_magnitude_summary: { min: 0.01, max: 11.8, mean: 2.24, median: 2.1 },
+    max_force: hist(0, 12, 50, 2.6, 1.2),
+    max_force_summary: { min: 0.2, max: 11.9, mean: 2.7, median: 2.5 },
+    min_distance: hist(0.7, 3, 50, 1.3, 0.35),
+    min_distance_summary: { min: 0.72, max: 2.9, mean: 1.32, median: 1.3 },
+    volume: hist(400, 2200, 40, 1200, 250),
+    volume_summary: { min: 420, max: 2150, mean: 1198, median: 1195 },
+    properties: { energy: { per_structure: true, per_atom: false }, forces: { per_atom: true }, virial: { per_structure: false } },
+    periodicity: { fully_periodic: false, isolated: true, mixed: false, flags: [] },
+    health: {
+      missing_values: 0,
+      missing_by_property: { energy: 0, forces: 0 },
+      invalid_cell: 0,
+      duplicate_structures: 0,
+      extreme_force: 0,
+      extreme_force_threshold: 50,
+      nonphysical_structures: 2,
+      short_contact_coefficient: 0.7,
+      net_force: 0,
+      net_force_threshold: 0.001,
+    },
+    health_findings: {
+      cap: 5000,
+      missing_values: [],
+      invalid_cell: [],
+      duplicate_structures: [],
+      extreme_force: [],
+      nonphysical_structures: [27, 1180],
+      net_force: [],
+    },
+    excluded_frames: { count: 1, indices: [27] },
   },
 };
 
@@ -388,7 +565,11 @@ function mockOverviewPreview() {
   };
 }
 
-function mockFramePayload(index: number) {
+// mock missing-values findings for ds-gaas; must stay consistent with the
+// health mock below (missing_by_property: energy 2, virial 5)
+const MOCK_MISSING_INDICES = new Set([3, 21, 204, 512, 866]);
+
+function mockFramePayload(index: number, bondCutoff = 2.4) {
   // 8-atom zincblende GaAs cell, a=5.65 Å, 2×1×1 supercell
   const a = 5.65;
   const base = [
@@ -410,33 +591,76 @@ function mockFramePayload(index: number) {
   }[] = base.map(([el, x, y, z], i) => ({
     i,
     el,
-    x: x * 2 * a,
-    y: y * a,
-    z: z * a,
+    // 5-decimal rounding matches the backend's frame payload so the atom
+    // table shows compact, fixed-width numbers.
+    x: Number((x * 2 * a).toFixed(5)),
+    y: Number((y * a).toFixed(5)),
+    z: Number((z * a).toFixed(5)),
     fx: gauss(0, 0.3),
     fy: gauss(0, 0.3),
     fz: gauss(0, 0.3),
     f: null,
   }));
   for (const r of rows) r.f = Math.sqrt(r.fx ** 2 + r.fy ** 2 + r.fz ** 2);
+  // Periodic images within the requested cutoff, mirroring the backend's
+  // ghost rule so the Explore local shell shows cross-boundary neighbors.
+  const cellDims = [2 * a, a, a];
+  const cutoff = Math.max(0.1, Math.min(10, bondCutoff || 2.4));
+  const ghosts: { el: string; x: number; y: number; z: number }[] = [];
+  const shiftRange = (dim: number) => {
+    const lim = Math.max(1, Math.ceil(cutoff / dim));
+    const values: number[] = [];
+    for (let s = -lim; s <= lim; s++) values.push(s);
+    return values;
+  };
+  const realPos = rows.map((r) => [r.x, r.y, r.z]);
+  for (const [el, fx, fy, fz] of base) {
+    const px = fx * 2 * a;
+    const py = fy * a;
+    const pz = fz * a;
+    for (const sx of shiftRange(cellDims[0])) {
+      for (const sy of shiftRange(cellDims[1])) {
+        for (const sz of shiftRange(cellDims[2])) {
+          if (!sx && !sy && !sz) continue;
+          const gx = px + sx * cellDims[0];
+          const gy = py + sy * cellDims[1];
+          const gz = pz + sz * cellDims[2];
+          let minD2 = Infinity;
+          for (const [rx, ry, rz] of realPos) {
+            const d2 = (gx - rx) ** 2 + (gy - ry) ** 2 + (gz - rz) ** 2;
+            if (d2 < minD2) minD2 = d2;
+          }
+          if (minD2 > cutoff * cutoff || minD2 < 1e-6) continue;
+          ghosts.push({ el, x: gx, y: gy, z: gz });
+        }
+      }
+    }
+  }
   return {
     index,
     natoms: rows.length,
     formula: "Ga4As4",
     xyz: [
-      "8",
+      String(rows.length + ghosts.length),
       `Lattice="11.3 0.0 0.0 0.0 5.65 0.0 0.0 0.0 5.65" Properties=species:S:1:pos:R:3`,
       ...rows.map((r) => `${r.el} ${r.x.toFixed(4)} ${r.y.toFixed(4)} ${r.z.toFixed(4)}`),
+      ...ghosts.map((g) => `${g.el} ${g.x.toFixed(4)} ${g.y.toFixed(4)} ${g.z.toFixed(4)}`),
     ].join("\n"),
     atom_rows: rows,
-    energy: -28.42,
-    energy_per_atom: -3.55,
+    energy: index === 21 || index === 512 ? null : -28.42,
+    energy_per_atom: index === 21 || index === 512 ? null : -3.55,
     force_max: Math.max(...rows.map((r) => r.f ?? 0)),
+    virial_present: !MOCK_MISSING_INDICES.has(index),
+    // symmetric near-zero-pressure virial (eV) for the 8-atom cell; null on
+    // the frames the missing-values mock flags, matching virial_present
+    virial: MOCK_MISSING_INDICES.has(index)
+      ? null
+      : [0.0123, 0.0008, -0.0004, 0.0008, 0.0091, 0.0005, -0.0004, 0.0005, 0.0147],
     volume: 2 * a ** 3,
     pbc: "XYZ",
     cell: [2 * a, 0, 0, 0, a, 0, 0, 0, a],
-    ghost_count: 0,
-    bond_cutoff: 2.4,
+    ghost_count: ghosts.length,
+    bond_cutoff: Math.min(10, Math.max(0.1, bondCutoff || 2.4)),
   };
 }
 
@@ -506,7 +730,66 @@ const METHODS: Record<string, Handler> = {
     }, 1500);
     return { job_id: "job-rescan" };
   },
-  "dataset.frame": (p) => mockFramePayload(Number(p.index ?? 0)),
+  "dataset.frame": (p) => mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4)),
+  "dataset.findings": (p) => {
+    const stats = STATS[p.id as string] as { health_findings?: { [k: string]: number[] } } | undefined;
+    let indices: number[];
+    if (p.check) indices = stats?.health_findings?.[p.check as string] ?? [];
+    else if (Array.isArray(p.indices)) indices = p.indices as number[];
+    else indices = [];
+    const limit = Math.min(Number(p.limit ?? 1000), 1000);
+    const mockExcluded = new Set(STATS["ds-cho"] && p.id === "ds-cho" ? [27] : []);
+    // per-frame missing properties, consistent with MOCK_MISSING_INDICES and
+    // the ds-gaas health mock (energy 2, virial 5)
+    const mockMissingProps = (i: number): string[] => {
+      if (!MOCK_MISSING_INDICES.has(i)) return [];
+      return i === 21 || i === 512 ? ["energy", "virial"] : ["virial"];
+    };
+    return {
+      recalculating: false,
+      job_id: null,
+      total: indices.length,
+      returned: Math.min(indices.length, limit),
+      rows: indices.slice(0, limit).map((i: number) => ({
+        index: i,
+        natoms: 4 + (i % 6),
+        formula: "Ga2As2",
+        energy_per_atom: -3.2 + (i % 5) * 0.01,
+        force_max: 0.4 + (i % 7) * 0.1,
+        volume: 618.2,
+        missing_props: mockMissingProps(i),
+        excluded: mockExcluded.has(i),
+      })),
+    };
+  },
+  "dataset.excluded": (p) => ({
+    indices: p.id === "ds-cho" ? [27] : [],
+    number_of_frames: 3813,
+  }),
+  "dataset.exclude": (p) => {
+    window.setTimeout(() => {
+      mockEmit("job.finished", { job_id: "job-exclude", status: "COMPLETED", result: null, error: null });
+    }, 600);
+    return { job_id: "job-exclude", excluded: (p.indices as number[]).length };
+  },
+  "dataset.restore": (p) => {
+    window.setTimeout(() => {
+      mockEmit("job.finished", { job_id: "job-restore", status: "COMPLETED", result: null, error: null });
+    }, 600);
+    return { job_id: "job-restore", restored: (p.indices as number[]).length };
+  },
+  "dataset.export_cleaned": () => {
+    window.setTimeout(() => {
+      mockEmit("job.finished", { job_id: "job-export", status: "COMPLETED", result: { path: "D:\preview\cleaned.xyz", frames_written: 3800 }, error: null });
+    }, 900);
+    return { job_id: "job-export", dest_path: "D:\preview\cleaned.xyz" };
+  },
+  "dataset.register": () => {
+    window.setTimeout(() => {
+      mockEmit("job.finished", { job_id: "job-register", status: "COMPLETED", result: { dataset_id: "ds-cleaned" }, error: null });
+    }, 800);
+    return { job_id: "job-register" };
+  },
   "job.list": () => JOB_ROWS,
   "job.get": (p) => {
     const id = String(p.id ?? "");
@@ -562,7 +845,7 @@ const METHODS: Record<string, Handler> = {
               species: { type: "array", items: { type: "string" }, default: [], description: "Species filter (symbols)" },
               precision: { type: "string", enum: ["float32", "float64"], default: "float32" },
             },
-      execution: { devices: ["cpu"], num_threads: true, cooperative_cancel: false },
+      execution: { devices: ["cpu", "cuda"], num_threads: true, cooperative_cancel: false },
       input: { periodicity: ["isolated", "fully_periodic"], mixed_periodicity: false, spin: false, charge_spin: false },
       output: { dtypes: ["float32"], sparse: false },
       asset: {
@@ -714,9 +997,10 @@ const METHODS: Record<string, Handler> = {
 
 // ---------- Tauri internals stub ----------
 const eventListeners: { event: string; fn: (evt: unknown) => void }[] = [];
+let nextMockId = 1;
 
 function mockEmit(event: string, data: Record<string, unknown>) {
-  const line = JSON.stringify({ event, data });
+  const line = JSON.stringify({ protocol_version: 1, event, data });
   for (const l of [...eventListeners]) {
     if (l.event === "backend-message") l.fn({ event: "backend-message", payload: line });
   }
@@ -839,23 +1123,28 @@ function showPreviewError(text: string) {
     }
     if (cmd === "plugin:event|unlisten") return null;
     if (cmd === "backend_ready_line") {
-      return JSON.stringify({ event: "backend.ready", data: null });
+      return JSON.stringify({ protocol_version: 1, event: "backend.ready", data: null });
     }
-    if (cmd === "backend_send") {
-      const frame = JSON.parse((args?.line as string) ?? "{}") as MockFrame;
+    if (cmd === "backend_request") {
+      const frame: MockFrame = {
+        protocol_version: 1,
+        id: nextMockId++,
+        method: args?.method as string,
+        params: (args?.params as Record<string, unknown>) ?? {},
+      };
       window.setTimeout(() => {
         const handler = METHODS[frame.method ?? ""];
         const payload = JSON.stringify(
           handler
-            ? { id: frame.id, result: handler(frame.params ?? {}) }
-            : { id: frame.id, error: { code: "NO_HANDLER", message: `preview mock lacks ${frame.method}` } },
+            ? { protocol_version: 1, id: frame.id, result: handler(frame.params ?? {}) }
+            : { protocol_version: 1, id: frame.id, error: { code: "NO_HANDLER", message: "Preview mock method is unavailable.", error_id: "preview" } },
         );
         // route strictly by event name, like the Tauri event system
         for (const l of [...eventListeners]) {
           if (l.event === "backend-message") l.fn({ event: "backend-message", payload });
         }
       }, 25);
-      return null;
+      return frame.id;
     }
     // backend_restart, plugin:dialog|*, anything else → no-op
     return null;

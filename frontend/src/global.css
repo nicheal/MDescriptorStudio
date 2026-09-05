@@ -143,6 +143,21 @@ body {
   }
 }
 
+/* Health rows with findings open the flagged-frames drawer; the hover tint
+   mirrors the sidebar's active dataset item. */
+.health-row-clickable:hover {
+  background: #f0f4fa;
+}
+
+/* Flagged-frames drawer: the frame being previewed, and soft-deleted rows. */
+.findings-row-current > td {
+  background: #ebf3fc !important;
+}
+.findings-row-excluded > td {
+  color: #8a8a8a;
+  text-decoration: line-through;
+}
+
 /* Results layout: full-width run history, then a plot-first workspace with a
    compact three-card inspection rail. */
 .results-page {
@@ -671,6 +686,15 @@ body {
 
 .explore-atom-row-neighbor > td {
   background: #fff4e9 !important;
+}
+
+/* red inspector rows that react to a click (jump to the offending atom(s)) */
+.explore-inspector-row-clickable {
+  cursor: pointer;
+}
+
+.explore-inspector-row-clickable:hover {
+  background: #fdf3f2;
 }
 
 .analysis-metric-strip {

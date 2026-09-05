@@ -33,7 +33,7 @@ class _BuildBoomAdapter:
     def runtime_info(self):
         return {"version": "test"}
 
-    def build(self, name, parameters):
+    def build(self, name, parameters, device="cpu"):
         raise RuntimeError("engine boom")
 
 
@@ -108,7 +108,7 @@ def test_cancelled_job_settles_descriptor_run(tmp_path: Path) -> None:
     db, jobs, svc = _env(tmp_path)
 
     class _SlowBuildAdapter(_BuildBoomAdapter):
-        def build(self, name, parameters):
+        def build(self, name, parameters, device="cpu"):
             return object()
 
     svc.adapter = _SlowBuildAdapter()

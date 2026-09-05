@@ -11,7 +11,10 @@ import json
 import hashlib
 import os
 import csv
+import logging
+import re
 import threading
+import unicodedata
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -33,11 +36,25 @@ from ..errors import (
 from .result_service import ResultService
 from ..storage.database import Database
 from .job_service import JobService
+from ..security import (
+    UnsafePathError,
+    ensure_no_reparse_points,
+    escape_like,
+    open_text_for_write,
+    remove_managed_tree,
+    validate_local_path,
+    validate_managed_path,
+)
+
+log = logging.getLogger(__name__)
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 _ANALYSIS_SCHEMA_VERSION = 1
 _ALGORITHM_VERSION = "studio-analysis-2"
 _MAX_PREVIEW_POINTS = 20_000
+_ANALYSIS_ID_RE = re.compile(r"^ana_[A-Za-z0-9_-]{1,64}$")
+_ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
+_RESERVED_ARTIFACT_NAME_RE = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE)
 
 
 class AnalysisService:
@@ -46,7 +63,7 @@ class AnalysisService:
         self.jobs = jobs
         self.results = results
         self.datasets = datasets
-        self.data_dir = data_dir
+        self.data_dir = Path(data_dir).resolve(strict=False)
         # RPC requests are handled concurrently. Serialize only the
         # cache-lookup/create section so two identical requests cannot enqueue
         # duplicate PCA jobs; the actual calculation still runs in JobService.
@@ -133,7 +150,8 @@ class AnalysisService:
                 )
                 out_dir = self.data_dir / "analysis" / analysis_id
                 out_dir.mkdir(parents=True, exist_ok=True)
-                np.save(out_dir / "coords.npy", coords)
+                ensure_no_reparse_points(out_dir)
+                np.save(out_dir / "coords.npy", coords, allow_pickle=False)
                 payload = {
                     "analysis_id": analysis_id,
                     "run_id": run_id,
@@ -155,9 +173,8 @@ class AnalysisService:
                     "x_label": f"PC1 ({explained[0] * 100:.1f}%)" if explained.size else "PC1",
                     "y_label": f"PC2 ({explained[1] * 100:.1f}%)" if explained.size > 1 else "PC2",
                 }
-                (out_dir / "pca.json").write_text(
-                    json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-                )
+                with open_text_for_write(out_dir / "pca.json") as fh:
+                    json.dump(payload, fh, ensure_ascii=False)
                 self.db.execute(
                     "UPDATE analysis_runs SET status = 'COMPLETED', result_path = ?, finished_at = ? WHERE id = ?",
                     (str(out_dir), _NOW(), analysis_id),
@@ -165,9 +182,14 @@ class AnalysisService:
                 ctx.progress(1, 1, "done")
                 return {"analysis_id": analysis_id, "n_points": payload["n_points"]}
 
-            job_id = self.jobs.submit(
-                "analysis.pca", runner, dataset_id=row["dataset_id"], analysis_run_id=analysis_id
-            )
+            try:
+                job_id = self.jobs.submit(
+                    "analysis.pca", runner, dataset_id=row["dataset_id"], analysis_run_id=analysis_id
+                )
+            except Exception:
+                if active is None:
+                    self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
+                raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
     def _find_cached_pca(self, run_id: str, mode: str, preprocess: str = "center") -> dict | None:
@@ -220,13 +242,27 @@ class AnalysisService:
             return False
         return saved_mode == mode and saved_seed == 42 and str(saved.get("preprocess") or "center") == preprocess
 
-    @staticmethod
-    def _pca_artifact_exists(row: dict) -> bool:
-        result_path = row.get("result_path")
-        return bool(result_path and (Path(result_path) / "pca.json").is_file())
+    def _pca_artifact_exists(self, row: dict) -> bool:
+        if not row.get("result_path"):
+            return False
+        try:
+            root = self._managed_artifact_path(str(row.get("id") or ""), row["result_path"])
+            target = self._artifact_file(root, "pca.json")
+            return bool(target and target.is_file())
+        except (TypeError, ValueError, UnsafePathError):
+            return False
 
-    @classmethod
-    def _pca_points(cls, values: np.ndarray, run_row: dict, mode: str, preprocess: str = "center"):
+    def _result_root(self, row: dict) -> Path:
+        try:
+            root = self.results._managed_result_path(str(row.get("id") or ""), row.get("result_path"))
+            if not root.is_dir():
+                raise OSError("descriptor result directory is missing")
+            ensure_no_reparse_points(root)
+            return root
+        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(RESULT_INCOMPATIBLE, "descriptor result artifact is unavailable") from exc
+
+    def _pca_points(self, values: np.ndarray, run_row: dict, mode: str, preprocess: str = "center"):
         """Return (coords, explained, frames, atoms|None).
 
         Structure mode: one point per frame (atom/pair rows mean-pooled).
@@ -234,20 +270,21 @@ class AnalysisService:
         in-frame row index for tooltips/reverse-jump. Very large runs are evenly
         subsampled so the IPC payload and chart stay responsive (design doc §25).
         """
-        path = Path(run_row["result_path"])
+        path = self._result_root(run_row)
         offsets_file = path / "row_offsets.npy"
-        offsets = np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64) if offsets_file.exists() else None
-        atom_level = values.ndim == 2 and cls._valid_offsets(offsets, values.shape[0])
+        ensure_no_reparse_points(offsets_file)
+        offsets = np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64) if offsets_file.is_file() else None
+        atom_level = values.ndim == 2 and self._valid_offsets(offsets, values.shape[0])
         if mode == "atom" and not atom_level:
             raise AppError(ANALYSIS_INPUT_INVALID, "atom/local-environment PCA requires verified row_offsets")
         if mode == "structure" or not atom_level:
-            pooled = cls._pool_per_structure(values, run_row)
-            frames = cls._run_frame_values(run_row, pooled.shape[0])
+            pooled = self._pool_per_structure(values, run_row)
+            frames = self._run_frame_values(run_row, pooled.shape[0])
             atoms = None
         else:
             counts = np.diff(offsets).astype(int)
             local_frames = np.repeat(np.arange(counts.size, dtype=np.int64), counts)
-            frame_values = cls._run_frame_values(run_row, counts.size)
+            frame_values = self._run_frame_values(run_row, counts.size)
             frames = frame_values[local_frames]
             atoms = np.arange(values.shape[0], dtype=np.int64) - offsets[local_frames]
             pooled = values
@@ -255,7 +292,7 @@ class AnalysisService:
             if pooled.shape[0] > max_points:
                 keep = np.unique(np.linspace(0, pooled.shape[0] - 1, max_points).astype(int))
                 pooled, frames, atoms = pooled[keep], frames[keep], atoms[keep]
-        coords, explained = cls._pca(pooled, preprocess)
+        coords, explained = self._pca(pooled, preprocess)
         return coords, explained, frames, atoms
 
     @staticmethod
@@ -264,13 +301,13 @@ class AnalysisService:
             return np.full(count, int(run_row.get("frame_index") or 0), dtype=np.int64)
         return np.arange(count, dtype=np.int64)
 
-    @staticmethod
-    def _pool_per_structure(values: np.ndarray, run_row: dict) -> np.ndarray:
-        path = Path(run_row["result_path"])
+    def _pool_per_structure(self, values: np.ndarray, run_row: dict) -> np.ndarray:
+        path = self._result_root(run_row)
         offsets_file = path / "row_offsets.npy"
-        if values.ndim == 2 and offsets_file.exists():
+        ensure_no_reparse_points(offsets_file)
+        if values.ndim == 2 and offsets_file.is_file():
             offsets = np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64)
-            if AnalysisService._valid_offsets(offsets, values.shape[0]):
+            if self._valid_offsets(offsets, values.shape[0]):
                 n_struct = offsets.size - 1
                 dim = values.shape[1]
                 pooled = np.empty((n_struct, dim), dtype=np.float64)
@@ -352,8 +389,9 @@ class AnalysisService:
         conditions: list[str] = []
         args: list[object] = []
         if params.get("run_id"):
-            conditions.append("(descriptor_run_id = ? OR input_run_ids_json LIKE ?)")
-            args.extend([params["run_id"], f'%"{params["run_id"]}"%'])
+            run_id = str(params["run_id"])
+            conditions.append("(descriptor_run_id = ? OR input_run_ids_json LIKE ? ESCAPE '!')")
+            args.extend([run_id, f'%"{escape_like(run_id)}"%'])
         if params.get("analysis_type"):
             conditions.append("analysis_type = ?")
             args.append(params["analysis_type"])
@@ -375,9 +413,13 @@ class AnalysisService:
         row = self._analysis_row(analysis_id)
         if row["status"] in ("QUEUED", "RUNNING"):
             raise AppError(RESULT_INCOMPATIBLE, f"analysis {analysis_id} is {row['status']}")
+        try:
+            artifact_path = self._managed_artifact_path(str(analysis_id), row.get("result_path")) if row.get("result_path") else None
+        except (TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(ARTIFACT_INVALID, "stored analysis artifact path is invalid") from exc
         self.db.execute("DELETE FROM jobs WHERE analysis_run_id = ?", (analysis_id,))
         self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
-        self._rmtree_quiet(row.get("result_path"))
+        self._rmtree_quiet(artifact_path)
         return {"ok": True, "analysis_id": analysis_id}
 
     def preview(self, params: dict) -> dict:
@@ -419,9 +461,13 @@ class AnalysisService:
         file_meta = files.get(name)
         if not isinstance(file_meta, dict):
             raise AppError(ANALYSIS_INPUT_INVALID, f"array {name!r} is not present in analysis artifact")
-        path = Path(row["result_path"]) / file_meta["path"]
-        if not path.is_file():
-            raise AppError(ARTIFACT_INVALID, f"missing analysis artifact array: {path}")
+        try:
+            root = self._managed_artifact_path(str(row["id"]), row.get("result_path"))
+        except (TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(ARTIFACT_INVALID, "stored analysis artifact path is invalid") from exc
+        path = self._artifact_file(root, file_meta.get("path"))
+        if path is None or not path.is_file():
+            raise AppError(ARTIFACT_INVALID, "missing analysis artifact array")
         try:
             array = np.load(path, mmap_mode="r", allow_pickle=False)
             offset = max(0, int(params.get("offset", 0)))
@@ -641,12 +687,17 @@ class AnalysisService:
                 n_points = preview_samples.n_samples if cross_dataset else samples[0].n_samples
                 return {"analysis_id": analysis_id, "n_points": n_points, "analysis_type": analysis_type, "warnings": result.get("warnings", [])}
 
-            job_id = self.jobs.submit(
-                f"analysis.{analysis_type}",
-                runner,
-                dataset_id=primary["dataset_id"],
-                analysis_run_id=analysis_id,
-            )
+            try:
+                job_id = self.jobs.submit(
+                    f"analysis.{analysis_type}",
+                    runner,
+                    dataset_id=primary["dataset_id"],
+                    analysis_run_id=analysis_id,
+                )
+            except Exception:
+                if not active:
+                    self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
+                raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
     def submit_export(self, params: dict) -> dict:
@@ -664,12 +715,17 @@ class AnalysisService:
         selected = params.get("indices")
         if selected is None:
             selected = []
-        if not isinstance(selected, list) or not all(isinstance(i, int) and i >= 0 for i in selected):
+        if not isinstance(selected, list) or not all(
+            isinstance(i, int) and not isinstance(i, bool) and i >= 0 for i in selected
+        ):
             raise AppError(ANALYSIS_INPUT_INVALID, "indices must be a list of non-negative integers")
         target = str(params.get("output_path") or "")
         if not target:
             raise AppError(ANALYSIS_INPUT_INVALID, "output_path is required for export")
-        target = str(Path(target).expanduser())
+        try:
+            target = str(validate_local_path(target, field="export output path"))
+        except UnsafePathError as exc:
+            raise AppError(ANALYSIS_INPUT_INVALID, "export output must be an absolute local path") from exc
         canonical = self._canonical_params({"format": export_format, "indices": sorted(set(selected)), "output_path": target, "mode": mode})
         cache_key = self._analysis_cache_key("export", input_ids, canonical)
 
@@ -714,7 +770,12 @@ class AnalysisService:
                 ctx.progress(1, 1, "export complete")
                 return {"analysis_id": analysis_id, "output_path": str(path), "selected_count": len(selected)}
 
-            job_id = self.jobs.submit("analysis.export", runner, dataset_id=run["dataset_id"], analysis_run_id=analysis_id)
+            try:
+                job_id = self.jobs.submit("analysis.export", runner, dataset_id=run["dataset_id"], analysis_run_id=analysis_id)
+            except Exception:
+                if not active:
+                    self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
+                raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
     def _run_engine(self, analysis_type: str, params: dict, rows: list[dict], samples: list[SampleMatrix], ctx) -> dict:
@@ -842,7 +903,10 @@ class AnalysisService:
             descriptor_parameters = json.loads(run_row.get("parameters_json") or "{}")
         except (TypeError, ValueError):
             descriptor_parameters = {}
-        descriptor = self.datasets.adapter.build(run_row["descriptor_name"], descriptor_parameters)
+        # Sensitivity recomputes the producer descriptor; keep the device the
+        # run originally declared so baselines stay reproducible.
+        run_device = str(run_row.get("device") or "cpu")
+        descriptor = self.datasets.adapter.build(run_row["descriptor_name"], descriptor_parameters, device=run_device)
         control = self.datasets.adapter.make_control()
         ctx.attach_control(control)
         perturbation_results: list[tuple[float, SampleMatrix]] = []
@@ -947,9 +1011,17 @@ class AnalysisService:
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (row["dataset_id"],))
         if dataset is None:
             return
+        refresh = getattr(self.datasets, "refresh_if_changed", None)
+        if callable(refresh):
+            refresh(dataset)
+            return
         from ..datasets import compute_fingerprint
 
-        current = compute_fingerprint(Path(dataset["source_path"]), dataset["number_of_frames"])
+        try:
+            source = validate_local_path(dataset["source_path"], field="dataset source path")
+            current = compute_fingerprint(source, dataset["number_of_frames"], use_cache=False)
+        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(RESULT_INCOMPATIBLE, "dataset source is unavailable") from exc
         if current != dataset["fingerprint"]:
             self._mark_stale(row["dataset_id"], f"source fingerprint changed ({dataset['fingerprint']} -> {current})")
             raise AppError(ANALYSIS_STALE, f"run {row['id']} is stale because the source dataset changed", {"run_id": row["id"], "dataset_id": row["dataset_id"]})
@@ -967,8 +1039,9 @@ class AnalysisService:
             raise AppError(ANALYSIS_INPUT_INVALID, "descriptor result is empty or not a 2D feature matrix")
         if not np.isfinite(values).all():
             raise AppError(ANALYSIS_INPUT_INVALID, "descriptor result contains NaN or Inf")
-        path = Path(row["result_path"])
+        path = self._result_root(row)
         offsets_path = path / "row_offsets.npy"
+        ensure_no_reparse_points(offsets_path)
         offsets = np.asarray(np.load(offsets_path, allow_pickle=False), dtype=np.int64) if offsets_path.is_file() else None
         meta = self._result_metadata(row)
         requested_mode = str(params.get("mode") or "structure")
@@ -1128,11 +1201,13 @@ class AnalysisService:
                     values["volume"][sample_index] = volume
         return {name: array for name, array in values.items() if bool(np.isfinite(array).any())}
 
-    @staticmethod
-    def _result_metadata(row: dict) -> dict:
+    def _result_metadata(self, row: dict) -> dict:
         try:
-            return json.loads((Path(row["result_path"]) / "metadata.json").read_text(encoding="utf-8"))
-        except (OSError, TypeError, ValueError):
+            root = self._result_root(row)
+            metadata = root / "metadata.json"
+            ensure_no_reparse_points(metadata)
+            return json.loads(metadata.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, UnsafePathError):
             return {}
 
     def _build_preview(self, result: dict, samples: SampleMatrix, analysis_type: str, reference_samples: SampleMatrix | None = None) -> dict:
@@ -1270,9 +1345,11 @@ class AnalysisService:
 
         root = self.data_dir / "analysis"
         root.mkdir(parents=True, exist_ok=True)
+        ensure_no_reparse_points(root)
         staging = root / f".{analysis_id}.tmp-{uuid.uuid4().hex[:8]}"
         final = root / analysis_id
         staging.mkdir(parents=True, exist_ok=False)
+        ensure_no_reparse_points(staging)
         manifest = ArtifactManifest(
             analysis_id=analysis_id,
             analysis_type=analysis_type,
@@ -1287,7 +1364,18 @@ class AnalysisService:
                 array = np.asarray(value)
                 if np.issubdtype(array.dtype, np.floating):
                     array = array.astype(np.float64, copy=False)
-                safe_name = name.replace("/", "_")
+                if not isinstance(name, str) or not name:
+                    raise AppError(ARTIFACT_INVALID, "analysis artifact contains an invalid array name")
+                normalized_name = unicodedata.normalize("NFKC", name)
+                safe_name = (
+                    normalized_name
+                    if normalized_name not in (".", "..")
+                    and len(normalized_name) <= 64
+                    and not normalized_name.endswith((".", " "))
+                    and not _RESERVED_ARTIFACT_NAME_RE.fullmatch(normalized_name)
+                    and _ARTIFACT_NAME_RE.fullmatch(normalized_name)
+                    else f"array-{hashlib.sha256(name.encode('utf-8')).hexdigest()[:16]}"
+                )
                 np.save(staging / f"{safe_name}.npy", array, allow_pickle=False)
                 target = staging / f"{safe_name}.npy"
                 manifest["files"][name] = {"path": target.name, "shape": list(array.shape), "dtype": str(array.dtype), "bytes": target.stat().st_size}
@@ -1301,18 +1389,21 @@ class AnalysisService:
                 preview=preview,
             ).to_metadata()
             metadata["created_at"] = _NOW()
-            (staging / "metadata.json").write_text(json.dumps(self._json_safe(metadata), ensure_ascii=False, indent=2), encoding="utf-8")
+            with open_text_for_write(staging / "metadata.json") as fh:
+                json.dump(self._json_safe(metadata), fh, ensure_ascii=False, indent=2)
             manifest["files"]["metadata"] = {"path": "metadata.json", "bytes": (staging / "metadata.json").stat().st_size}
             manifest["completed"] = True
             # The manifest describes the payload and metadata. It is not
             # listed inside itself, which keeps the byte metadata stable.
-            (staging / "manifest.json").write_text(json.dumps(self._json_safe(manifest), ensure_ascii=False, indent=2), encoding="utf-8")
-            if final.exists():
+            with open_text_for_write(staging / "manifest.json") as fh:
+                json.dump(self._json_safe(manifest), fh, ensure_ascii=False, indent=2)
+            ensure_no_reparse_points(final)
+            if final.exists() or final.is_symlink():
                 raise AppError(ARTIFACT_INVALID, f"analysis artifact already exists: {final}")
             os.replace(staging, final)
             return final, manifest
         except Exception:
-            self._rmtree_quiet(str(staging))
+            self._rmtree_quiet(staging)
             raise
 
     def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx) -> Path:
@@ -1332,15 +1423,21 @@ class AnalysisService:
         frames = [frame for frame in frames if 0 <= frame < count]
         if not frames:
             raise AppError(EXPORT_FAILED, "export selection is empty")
-        target = target.expanduser()
+        try:
+            target = validate_local_path(str(target), field="export output path")
+        except UnsafePathError as exc:
+            raise AppError(EXPORT_FAILED, "export output must be an absolute local path") from exc
         if export_format == "json":
             target.parent.mkdir(parents=True, exist_ok=True)
             records = [{"sample_index": i, "frame": frame, "sample_id": f"frame:{frame}"} for i, frame in enumerate(frames)]
-            target.write_text(json.dumps({"dataset_id": dataset["id"], "run_id": run["id"], "format": dataset["format"], "records": records}, ensure_ascii=False, indent=2), encoding="utf-8")
+            ensure_no_reparse_points(target.parent)
+            with open_text_for_write(target) as fh:
+                json.dump({"dataset_id": dataset["id"], "run_id": run["id"], "format": dataset["format"], "records": records}, fh, ensure_ascii=False, indent=2)
             return target
         if export_format == "csv":
             target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open("w", newline="", encoding="utf-8") as fh:
+            ensure_no_reparse_points(target.parent)
+            with open_text_for_write(target, newline="") as fh:
                 writer = csv.DictWriter(fh, fieldnames=["sample_index", "frame", "sample_id"])
                 writer.writeheader()
                 for i, frame in enumerate(frames):
@@ -1352,7 +1449,10 @@ class AnalysisService:
             return target
         if dataset["format"] != "deepmd":
             raise AppError(EXPORT_FAILED, "DeepMD export requires a DeepMD source dataset")
+        if target.exists() and not target.is_dir():
+            raise AppError(EXPORT_FAILED, "DeepMD export requires a directory destination")
         target.mkdir(parents=True, exist_ok=True)
+        ensure_no_reparse_points(target)
         self._write_deepmd(adapter, frames, target, ctx)
         return target
 
@@ -1360,7 +1460,7 @@ class AnalysisService:
     def _write_extxyz(adapter, frames: list[int], target: Path, ctx) -> None:
         from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
 
-        with target.open("w", encoding="utf-8") as fh:
+        with open_text_for_write(target) as fh:
             for pos, frame_index in enumerate(frames):
                 ctx.check_cancelled()
                 frame = adapter.get_frame(frame_index)
@@ -1390,10 +1490,13 @@ class AnalysisService:
         numbers = np.asarray(first.numbers, dtype=np.int64)
         unique = sorted({int(z) for z in numbers.tolist()})
         type_map = {z: i for i, z in enumerate(unique)}
-        (target / "type.raw").write_text(" ".join(str(type_map[int(z)]) for z in numbers) + "\n", encoding="utf-8")
-        (target / "type_map.raw").write_text(" ".join(_Z_TO_SYMBOL.get(z, f"Z{z}") for z in unique) + "\n", encoding="utf-8")
+        with open_text_for_write(target / "type.raw") as fh:
+            fh.write(" ".join(str(type_map[int(z)]) for z in numbers) + "\n")
+        with open_text_for_write(target / "type_map.raw") as fh:
+            fh.write(" ".join(_Z_TO_SYMBOL.get(z, f"Z{z}") for z in unique) + "\n")
         set_dir = target / "set.000"
         set_dir.mkdir(parents=True, exist_ok=True)
+        ensure_no_reparse_points(set_dir)
         coords, cells, energies, forces, virials = [], [], [], [], []
         has_energy = has_forces = has_virial = True
         for frame_index in frames:
@@ -1413,17 +1516,18 @@ class AnalysisService:
                 has_virial = False
             else:
                 virials.append(np.asarray(frame.virial, dtype=np.float64))
-        np.save(set_dir / "coord.npy", np.stack(coords))
+        np.save(set_dir / "coord.npy", np.stack(coords), allow_pickle=False)
         if any(np.abs(cell).sum() > 1e-12 for cell in cells):
-            np.save(set_dir / "box.npy", np.stack(cells))
+            np.save(set_dir / "box.npy", np.stack(cells), allow_pickle=False)
         else:
-            (set_dir / "nopbc").write_text("", encoding="utf-8")
+            with open_text_for_write(set_dir / "nopbc") as fh:
+                fh.write("")
         if has_energy:
-            np.save(set_dir / "energy.npy", np.asarray(energies, dtype=np.float64))
+            np.save(set_dir / "energy.npy", np.asarray(energies, dtype=np.float64), allow_pickle=False)
         if has_forces:
-            np.save(set_dir / "force.npy", np.stack(forces))
+            np.save(set_dir / "force.npy", np.stack(forces), allow_pickle=False)
         if has_virial:
-            np.save(set_dir / "virial.npy", np.stack(virials))
+            np.save(set_dir / "virial.npy", np.stack(virials), allow_pickle=False)
 
     def _analysis_row(self, analysis_id: str | None) -> dict:
         if not analysis_id:
@@ -1455,21 +1559,56 @@ class AnalysisService:
         if not self._artifact_is_complete(row):
             raise AppError(ARTIFACT_INVALID, f"analysis {row['id']} has no complete artifact")
 
+    def _managed_artifact_path(self, analysis_id: str, stored: object) -> Path:
+        if not _ANALYSIS_ID_RE.fullmatch(analysis_id or ""):
+            raise UnsafePathError("invalid analysis id")
+        return validate_managed_path(self.data_dir / "analysis", stored, analysis_id)
+
     @staticmethod
-    def _artifact_is_complete(row: dict) -> bool:
+    def _artifact_file(root: Path, raw_name: object) -> Path | None:
+        if (
+            not isinstance(raw_name, str)
+            or raw_name in (".", "..")
+            or raw_name.endswith((".", " "))
+            or _RESERVED_ARTIFACT_NAME_RE.fullmatch(raw_name)
+            or not _ARTIFACT_NAME_RE.fullmatch(raw_name)
+        ):
+            return None
+        candidate = root / raw_name
+        try:
+            ensure_no_reparse_points(candidate)
+        except UnsafePathError:
+            return None
+        return candidate
+
+    def _artifact_is_complete(self, row: dict) -> bool:
         path = row.get("result_path")
         if not path:
             return False
-        root = Path(path)
-        if not (root / "manifest.json").is_file():
-            # legacy PCA is valid through its compatibility artifact
-            return (root / "pca.json").is_file()
         try:
-            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-            if manifest.get("completed") is not True:
+            root = self._managed_artifact_path(str(row.get("id") or ""), path)
+        except (TypeError, ValueError, UnsafePathError):
+            return False
+        manifest_path = self._artifact_file(root, "manifest.json")
+        if manifest_path is None or not manifest_path.is_file():
+            # legacy PCA is valid through its compatibility artifact
+            target = self._artifact_file(root, "pca.json")
+            return bool(target and target.is_file())
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict) or manifest.get("completed") is not True:
                 return False
-            for file_meta in (manifest.get("files") or {}).values():
-                if isinstance(file_meta, dict) and not (root / str(file_meta.get("path", ""))).is_file():
+            files = manifest.get("files")
+            if not isinstance(files, dict) or not files:
+                return False
+            for file_meta in files.values():
+                if not isinstance(file_meta, dict):
+                    return False
+                target = self._artifact_file(root, file_meta.get("path"))
+                if target is None or not target.is_file():
+                    return False
+                expected_bytes = file_meta.get("bytes")
+                if isinstance(expected_bytes, int) and expected_bytes != target.stat().st_size:
                     return False
             return True
         except (OSError, TypeError, ValueError):
@@ -1518,11 +1657,18 @@ class AnalysisService:
         manifest = self._json_load(row.get("artifact_manifest_json"), {})
         files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
         arrays = {}
+        try:
+            root = self._managed_artifact_path(str(row.get("id") or ""), row.get("result_path"))
+        except (TypeError, ValueError, UnsafePathError):
+            return []
         for name in ("coords", "indices", "labels", "scores", "distances", "similarity", "selected_indices"):
             meta = files.get(name)
             if isinstance(meta, dict):
                 try:
-                    arrays[name] = np.load(Path(row["result_path"]) / meta["path"], mmap_mode="r", allow_pickle=False)
+                    target = self._artifact_file(root, meta.get("path"))
+                    if target is None:
+                        continue
+                    arrays[name] = np.load(target, mmap_mode="r", allow_pickle=False)
                 except (OSError, ValueError):
                     pass
         input_ids = self._json_load(row.get("input_run_ids_json"), [row.get("descriptor_run_id")])
@@ -1549,8 +1695,8 @@ class AnalysisService:
         self.db.execute(
             "UPDATE analysis_runs SET status = 'STALE', stale_reason = ?, finished_at = ?, updated_at = ?"
             " WHERE status = 'COMPLETED' AND (descriptor_run_id IN"
-            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?) OR dataset_ids_json LIKE ?)",
-            (reason, now, now, dataset_id, f'%"{dataset_id}"%'),
+            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?) OR dataset_ids_json LIKE ? ESCAPE '!')",
+            (reason, now, now, dataset_id, f'%"{escape_like(dataset_id)}"%'),
         )
 
     @staticmethod
@@ -1567,9 +1713,15 @@ class AnalysisService:
             return float(value)
         return value
 
-    @staticmethod
-    def _rmtree_quiet(path: str | None) -> None:
-        import shutil
-
-        if path:
-            shutil.rmtree(path, ignore_errors=True)
+    def _rmtree_quiet(self, path: Path | None) -> None:
+        if not path:
+            return
+        try:
+            ensure_no_reparse_points(path)
+            root = self.data_dir / "analysis"
+            if Path(path).parent != root:
+                log.warning("refusing to remove an unmanaged analysis path")
+                return
+            remove_managed_tree(path)
+        except (OSError, UnsafePathError):
+            log.warning("could not remove managed analysis artifact", exc_info=True)

@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
@@ -82,17 +81,14 @@ def test_handshake_system_info_and_errors(tmp_path: Path) -> None:
     bp.send({"protocol_version": 99, "id": 3, "method": "system.info", "params": {}})
     mismatch = bp.read_line()
     assert mismatch["error"]["code"] == "PROTOCOL_VERSION_MISMATCH"
-    # spec: incompatible client -> error frame then exit code 2
-    assert bp.proc.wait(timeout=15) == 2
-    with tempfile.TemporaryDirectory() as tmp2:  # fresh backend for remaining checks
-        bp2 = BackendProcess(Path(tmp2))
-        try:
-            assert bp2.read_line()["event"] == "backend.ready"
-            listing = bp2.request(4, "dataset.list")
-            assert listing["result"] == []
-            st = bp2.request(5, "settings.set", {"key": "workspace.activeDatasetId", "value": "ds_x"})
-            assert st["result"] == {"ok": True}
-            got = bp2.request(6, "settings.get", {"key": "workspace.activeDatasetId"})
-            assert got["result"]["value"] == "ds_x"
-        finally:
-            assert bp2.close() == 0
+    # A malformed/incompatible request is rejected without killing the
+    # long-lived backend process; subsequent valid requests still work.
+    still_alive = bp.request(4, "system.info")
+    assert still_alive["result"]["protocol_version"] == 1
+    listing = bp.request(5, "dataset.list")
+    assert listing["result"] == []
+    st = bp.request(6, "settings.set", {"key": "workspace.activeDatasetId", "value": "ds_x"})
+    assert st["result"] == {"ok": True}
+    got = bp.request(7, "settings.get", {"key": "workspace.activeDatasetId"})
+    assert got["result"]["value"] == "ds_x"
+    assert bp.close() == 0

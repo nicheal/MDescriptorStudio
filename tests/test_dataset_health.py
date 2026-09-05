@@ -1,6 +1,7 @@
 """Data health metrics (health panel): missing values / invalid cell /
-duplicate structures / extreme force, plus dataset.rescan and the one-scan-
-per-dataset dedupe, unit- and IPC-level."""
+duplicate structures / extreme force / non-physical structures (short
+contact) / net force, plus dataset.rescan and the one-scan-per-dataset
+dedupe, unit- and IPC-level."""
 
 import json
 import sqlite3
@@ -50,6 +51,13 @@ def assert_health(health: dict, structures: int) -> None:
     assert health["duplicate_structures"] == 1
     assert health["extreme_force"] == 1
     assert health["extreme_force_threshold"] == 50.0
+    # the fixture's 1.5 Å Si–Si contacts are themselves non-physical (below
+    # 0.7 × 2 × r_Si = 1.554 Å), and its unbalanced forces give |ΣF| ≈ 0.14
+    # eV/Å — every frame trips both NepTrainKit-style checks
+    assert health["nonphysical_structures"] == 5
+    assert health["short_contact_coefficient"] == 0.7
+    assert health["net_force"] == 5
+    assert health["net_force_threshold"] == 0.001
     assert structures == 5
 
 
@@ -98,6 +106,57 @@ def test_health_nopbc_not_flagged(tmp_path: Path) -> None:
     assert stats["health"]["invalid_cell"] == 0
     assert stats["periodicity"]["isolated"] is True
     assert stats["health"]["duplicate_structures"] == 0
+
+
+def write_physics_xyz(path: Path) -> None:
+    """3 frames engineering the NepTrainKit-style checks in isolation:
+    f0 is clean (real 2.35 Å Si–Si bond, nearest image 2.15 Å, forces cancel
+    pairwise), f1 has a short contact (1.2 Å < 0.7 × 2 × r_Si = 1.554 Å) with
+    balanced forces, f2 keeps f0's geometry but |ΣF| = 0.6 eV/Å."""
+    lat = "4.5 0.0 0.0 0.0 4.5 0.0 0.0 0.0 4.5"
+    header = 'Properties=species:S:1:pos:R:3:forces:R:3 pbc="T T T" '
+    rows = [
+        f'2\nLattice="{lat}" {header}energy=-10.0\n'
+        "Si 0.0 0.0 0.0 0.50 0.00 0.00\nSi 2.35 0.0 0.0 -0.50 0.00 0.00\n",
+        f'2\nLattice="{lat}" {header}energy=-10.1\n'
+        "Si 0.0 0.0 0.0 0.00 0.30 0.00\nSi 1.2 0.0 0.0 0.00 -0.30 0.00\n",
+        f'2\nLattice="{lat}" {header}energy=-10.2\n'
+        "Si 0.0 0.0 0.0 0.60 0.00 0.00\nSi 2.35 0.0 0.0 0.00 0.00 0.00\n",
+    ]
+    path.write_text("".join(rows), encoding="utf-8")
+
+
+def test_health_nonphysical_and_net_force(tmp_path: Path) -> None:
+    p = tmp_path / "physics.xyz"
+    write_physics_xyz(p)
+    stats = compute_statistics(create_adapter(p))
+    health = stats["health"]
+    assert health["nonphysical_structures"] == 1
+    assert health["short_contact_coefficient"] == 0.7
+    assert health["net_force"] == 1
+    assert health["net_force_threshold"] == 0.001
+    # findings carry the original file positions behind the counts
+    assert stats["health_findings"]["nonphysical_structures"] == [1]
+    assert stats["health_findings"]["net_force"] == [2]
+    assert stats["health_findings"]["invalid_cell"] == []
+    assert stats["health_findings"]["cap"] >= 1
+
+
+def test_health_nonphysical_own_image(tmp_path: Path) -> None:
+    """An atom overlapping its own periodic image is non-physical; the same
+    atom in a comfortably sized cell is not."""
+    header = 'Properties=species:S:1:pos:R:3 pbc="T T T"'
+    rows = [
+        '1\nLattice="1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0" '
+        f"{header}\nSi 0.0 0.0 0.0\n",
+        '1\nLattice="4.0 0.0 0.0 0.0 4.0 0.0 0.0 0.0 4.0" '
+        f"{header}\nSi 0.0 0.0 0.0\n",
+    ]
+    p = tmp_path / "image.xyz"
+    p.write_text("".join(rows), encoding="utf-8")
+    stats = compute_statistics(create_adapter(p))
+    assert stats["health"]["nonphysical_structures"] == 1
+    assert stats["health_findings"]["nonphysical_structures"] == [0]
 
 
 def test_health_ipc_rescan_and_dedupe(tmp_path: Path) -> None:
@@ -163,5 +222,148 @@ def test_health_ipc_rescan_and_dedupe(tmp_path: Path) -> None:
         fresh = bp.request(9, "dataset.statistics", {"id": ds_id})
         assert fresh["result"]["recalculating"] is False
         assert_health(fresh["result"]["stats"]["health"], fresh["result"]["stats"]["structures"])
+
+        # a cache from before the min-distance pass upgrades the same way
+        con = sqlite3.connect(db_path)
+        try:
+            (raw,) = con.execute("SELECT stats_json FROM dataset_statistics").fetchone()
+            legacy = json.loads(raw)
+            legacy.pop("min_distance", None)
+            con.execute(
+                "UPDATE dataset_statistics SET stats_json = ?", (json.dumps(legacy),)
+            )
+            con.commit()
+        finally:
+            con.close()
+        stale_md = bp.request(10, "dataset.statistics", {"id": ds_id})
+        assert stale_md["result"]["recalculating"] is True
+        assert stale_md["result"]["stats"] is None
+        done = wait_job(bp, stale_md["result"]["job_id"])
+        assert done["status"] == "COMPLETED", done
+        fresh_md = bp.request(11, "dataset.statistics", {"id": ds_id})
+        assert fresh_md["result"]["recalculating"] is False
+        assert fresh_md["result"]["stats"]["min_distance_summary"] is not None
+
+        # a cache from before the nonphysical/net-force checks upgrades too
+        con = sqlite3.connect(db_path)
+        try:
+            (raw,) = con.execute("SELECT stats_json FROM dataset_statistics").fetchone()
+            legacy = json.loads(raw)
+            legacy["health"].pop("nonphysical_structures", None)
+            legacy["health"].pop("net_force", None)
+            con.execute(
+                "UPDATE dataset_statistics SET stats_json = ?", (json.dumps(legacy),)
+            )
+            con.commit()
+        finally:
+            con.close()
+        stale_nf = bp.request(12, "dataset.statistics", {"id": ds_id})
+        assert stale_nf["result"]["recalculating"] is True
+        assert stale_nf["result"]["stats"] is None
+        done = wait_job(bp, stale_nf["result"]["job_id"])
+        assert done["status"] == "COMPLETED", done
+        fresh_nf = bp.request(13, "dataset.statistics", {"id": ds_id})
+        assert fresh_nf["result"]["recalculating"] is False
+        assert_health(
+            fresh_nf["result"]["stats"]["health"],
+            fresh_nf["result"]["stats"]["structures"],
+        )
+    finally:
+        assert bp.close() == 0
+
+
+def test_health_findings_exclude_and_export(tmp_path: Path) -> None:
+    """The curation loop end-to-end: findings rows behind a health check,
+    preview-grade summaries, soft-delete (exclude) with a statistics recompute
+    that skips excluded frames, restore, and a cleaned-copy export that
+    registers as a fresh dataset."""
+    xyz = tmp_path / "physics.xyz"
+    write_physics_xyz(xyz)
+    bp = BackendProcess(tmp_path)
+    try:
+        assert bp.read_line()["event"] == "backend.ready"
+        resp = bp.request(1, "dataset.register", {"path": str(xyz)})
+        done = wait_job(bp, resp["result"]["job_id"])
+        ds_id = done["result"]["dataset_id"]
+
+        stats = bp.request(2, "dataset.statistics", {"id": ds_id})["result"]["stats"]
+        assert stats["health_findings"]["nonphysical_structures"] == [1]
+        assert stats["health_findings"]["net_force"] == [2]
+        assert stats["excluded_frames"] == {"count": 0, "indices": []}
+
+        rows = bp.request(3, "dataset.findings", {"id": ds_id, "check": "nonphysical_structures"})["result"]
+        assert rows["recalculating"] is False
+        assert rows["total"] == 1
+        assert rows["rows"][0]["index"] == 1
+        assert rows["rows"][0]["formula"] == "Si2"
+        assert rows["rows"][0]["excluded"] is False
+
+        # explicit-indices mode (drawer "all"/excluded tabs)
+        rows2 = bp.request(4, "dataset.findings", {"id": ds_id, "indices": [0, 1, 2]})["result"]
+        assert [r["index"] for r in rows2["rows"]] == [0, 1, 2]
+
+        # exclude the short-contact frame: statistics describe the remainder,
+        # findings no longer flag it, remaining indices stay stable
+        ex = bp.request(5, "dataset.exclude", {"id": ds_id, "indices": [1]})
+        wait_job(bp, ex["result"]["job_id"])
+        stats2 = bp.request(6, "dataset.statistics", {"id": ds_id})["result"]["stats"]
+        assert stats2["structures"] == 2
+        assert stats2["health"]["nonphysical_structures"] == 0
+        assert stats2["health_findings"]["net_force"] == [2]
+        assert stats2["excluded_frames"] == {"count": 1, "indices": [1]}
+        rows3 = bp.request(7, "dataset.findings", {"id": ds_id, "check": "nonphysical_structures"})["result"]
+        assert rows3["total"] == 0
+
+        exc = bp.request(8, "dataset.excluded", {"id": ds_id})["result"]
+        assert exc["indices"] == [1]
+
+        rs = bp.request(9, "dataset.restore", {"id": ds_id, "indices": [1]})
+        wait_job(bp, rs["result"]["job_id"])
+        stats3 = bp.request(10, "dataset.statistics", {"id": ds_id})["result"]["stats"]
+        assert stats3["structures"] == 3
+        assert stats3["health"]["nonphysical_structures"] == 1
+
+        # out-of-range indices are a params error, never a partial write
+        err = bp.request(11, "dataset.exclude", {"id": ds_id, "indices": [99]})
+        assert err["error"]["code"] == "INVALID_PARAMS"
+
+        # cleaned-copy export: frame 1 dropped, registered as a new dataset
+        ex2 = bp.request(12, "dataset.exclude", {"id": ds_id, "indices": [1]})
+        wait_job(bp, ex2["result"]["job_id"])
+        dest = tmp_path / "cleaned.xyz"
+        exp = bp.request(13, "dataset.export_cleaned", {"id": ds_id, "dest_path": str(dest)})
+        done_exp = wait_job(bp, exp["result"]["job_id"])
+        assert done_exp["status"] == "COMPLETED", done_exp
+        assert done_exp["result"]["frames_written"] == 2
+        reg = bp.request(14, "dataset.register", {"path": str(dest), "name": "cleaned"})
+        done_reg = wait_job(bp, reg["result"]["job_id"])
+        new_id = done_reg["result"]["dataset_id"]
+        st_new = bp.request(15, "dataset.statistics", {"id": new_id})["result"]["stats"]
+        assert st_new["structures"] == 2
+        assert st_new["health"]["nonphysical_structures"] == 0
+        # the source dataset keeps its own exclusions
+        assert bp.request(16, "dataset.excluded", {"id": ds_id})["result"]["indices"] == [1]
+
+        # refusing to overwrite an existing destination
+        err2 = bp.request(17, "dataset.export_cleaned", {"id": ds_id, "dest_path": str(dest)})
+        assert err2["error"]["code"] == "INVALID_DATASET"
+
+        # a pre-findings cache upgrades the same way as the older health passes
+        db_path = tmp_path / "database.sqlite"
+        con = sqlite3.connect(db_path)
+        try:
+            (raw,) = con.execute("SELECT stats_json FROM dataset_statistics WHERE dataset_id = ?", (ds_id,)).fetchone()
+            legacy = json.loads(raw)
+            legacy.pop("health_findings", None)
+            con.execute("UPDATE dataset_statistics SET stats_json = ?", (json.dumps(legacy),))
+            con.commit()
+        finally:
+            con.close()
+        stale = bp.request(18, "dataset.statistics", {"id": ds_id})
+        assert stale["result"]["recalculating"] is True
+        done_st = wait_job(bp, stale["result"]["job_id"])
+        assert done_st["status"] == "COMPLETED", done_st
+        fresh = bp.request(19, "dataset.statistics", {"id": ds_id})["result"]["stats"]
+        assert fresh["health_findings"]["net_force"] == [2]
     finally:
         assert bp.close() == 0

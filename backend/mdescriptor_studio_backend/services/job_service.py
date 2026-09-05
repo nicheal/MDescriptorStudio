@@ -86,6 +86,7 @@ class JobService:
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="job")
         self._contexts: dict[str, JobContext] = {}
         self._lock = threading.Lock()
+        self._queue_slots = threading.BoundedSemaphore(64)
         # jobs left non-terminal by a previous session can never finish: close them.
         # Their run rows are zombies too — nothing will ever settle them.
         self._sweep_zombie_runs("backend_restart")
@@ -105,15 +106,27 @@ class JobService:
         analysis_run_id: str | None = None,
     ) -> str:
         job_id = f"job_{uuid.uuid4().hex[:12]}"
-        self.db.execute(
-            "INSERT INTO jobs (id, job_type, dataset_id, descriptor_run_id, analysis_run_id, status, progress, created_at)"
-            " VALUES (?, ?, ?, ?, ?, 'QUEUED', 0, ?)",
-            (job_id, job_type, dataset_id, descriptor_run_id, analysis_run_id, _NOW()),
-        )
-        with self._lock:
-            self._contexts[job_id] = JobContext(self, job_id)
-        self._executor.submit(self._run, job_id, job_type, runner)
-        return job_id
+        if not self._queue_slots.acquire(blocking=False):
+            raise AppError("BUSY", "job queue is full", public_message="Backend is busy; try again shortly.")
+        inserted = False
+        try:
+            self.db.execute(
+                "INSERT INTO jobs (id, job_type, dataset_id, descriptor_run_id, analysis_run_id, status, progress, created_at)"
+                " VALUES (?, ?, ?, ?, ?, 'QUEUED', 0, ?)",
+                (job_id, job_type, dataset_id, descriptor_run_id, analysis_run_id, _NOW()),
+            )
+            inserted = True
+            with self._lock:
+                self._contexts[job_id] = JobContext(self, job_id)
+            self._executor.submit(self._run, job_id, job_type, runner)
+            return job_id
+        except Exception:
+            with self._lock:
+                self._contexts.pop(job_id, None)
+            if inserted:
+                self.db.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            self._queue_slots.release()
+            raise
 
     def _sweep_zombie_runs(self, reason: str) -> None:
         """Settle run rows abandoned non-terminal (crash/restart/shutdown)."""
@@ -140,10 +153,12 @@ class JobService:
             self._finish(job_id, "COMPLETED", error=None, result=result)
         except AppError as exc:
             status = "CANCELLED" if exc.code == JOB_CANCELLED else "FAILED"
-            self._finish(job_id, status, error={"code": exc.code, "message": exc.message})
+            self._finish(job_id, status, error={"code": exc.code, "message": exc.public_message, "error_id": exc.error_id})
         except Exception as exc:  # noqa: BLE001
             log.exception("job %s crashed", job_id)
-            self._finish(job_id, "FAILED", error={"code": "INTERNAL_ERROR", "message": str(exc)})
+            self._finish(job_id, "FAILED", error={"code": "INTERNAL_ERROR", "message": "The backend failed to complete the job."})
+        finally:
+            self._queue_slots.release()
 
     def _finish(self, job_id: str, status: str, error, result=None) -> None:
         self.db.execute(

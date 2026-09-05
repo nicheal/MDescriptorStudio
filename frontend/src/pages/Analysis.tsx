@@ -32,6 +32,7 @@ import {
   Info16Regular,
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { activeDataset, useWorkspace, type PcaMode } from "../stores/workspace";
 import { jobStatusLabel, trackJob, watchJob } from "../stores/jobs";
 import { useT, type Pair } from "../i18n";
@@ -782,6 +783,22 @@ export default function Analysis() {
     }
   };
 
+  const chooseExportPath = async () => {
+    try {
+      const selected =
+        exportFormat === "deepmd"
+          ? await openDialog({ title: t("Choose export directory"), directory: true, multiple: false })
+          : await saveDialog({
+              title: t("Choose export file"),
+              defaultPath: `analysis_subset.${exportFormat}`,
+              filters: [{ name: exportFormat.toUpperCase(), extensions: [exportFormat] }],
+            });
+      if (typeof selected === "string") setExportPath(selected);
+    } catch {
+      message.error(t("Could not open the export chooser"));
+    }
+  };
+
   const deleteAnalysis = async (row: AnalysisRow) => {
     try {
       await ipc.request("analysis.delete", { analysis_id: row.id });
@@ -911,7 +928,7 @@ export default function Analysis() {
             handlePoint({ i: index, frame, row: row.row == null ? undefined : Number(row.row), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, label: row.labels == null ? undefined : Number(row.labels), score: row.scores == null ? undefined : Number(row.scores), distance: row.distances == null ? undefined : Number(row.distances), element: row.element == null ? undefined : Number(row.element), cluster: row.cluster_labels == null ? undefined : Number(row.cluster_labels), coordination: row.coordination == null ? undefined : Number(row.coordination), novelty: row.novelty == null ? undefined : Number(row.novelty), uncertainty: row.uncertainty == null ? undefined : Number(row.uncertainty), diversity: row.diversity == null ? undefined : Number(row.diversity) });
           }} />}
 
-          {tab === "sampling" && <section className="analysis-card"><SectionHeading title={t("EXPORT SELECTED SET")} meta={t("Source data is never modified")} /><Space.Compact style={{ width: "100%" }}><Select value={exportFormat} onChange={setExportFormat} options={["json", "csv", "extxyz", "deepmd"].map((value) => ({ value, label: value.toUpperCase() }))} style={{ width: 120 }} /><Input placeholder={t("D:\\exports\\analysis_subset.csv")} value={exportPath} onChange={(event) => setExportPath(event.target.value)} /><Button icon={<ArrowDownload16Regular />} onClick={() => void exportSelection()}>{t("Export")}</Button></Space.Compact></section>}
+          {tab === "sampling" && <section className="analysis-card"><SectionHeading title={t("EXPORT SELECTED SET")} meta={t("Source data is never modified")} /><Space.Compact style={{ width: "100%" }}><Select value={exportFormat} onChange={setExportFormat} options={["json", "csv", "extxyz", "deepmd"].map((value) => ({ value, label: value.toUpperCase() }))} style={{ width: 120 }} /><Input readOnly placeholder={t("Choose an export destination")} value={exportPath} aria-label={t("Export destination")} /><Button onClick={() => void chooseExportPath()}>{t("Choose…")}</Button><Button icon={<ArrowDownload16Regular />} onClick={() => void exportSelection()}>{t("Export")}</Button></Space.Compact></section>}
         </main>
 
         <aside className="analysis-inspector">

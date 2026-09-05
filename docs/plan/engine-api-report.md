@@ -1,11 +1,16 @@
-# Engine API 探测报告（mdescriptor 0.2.7）
+# Engine API 探测报告（mdescriptor 0.2.8）
 
-> 日期：2026-08-30（当日 0.2.6 → 0.2.7 升级后重测；历史 0.2.3/0.2.5 报告见 git 历史）
-> 探测环境：`D:\codex\MD\.venv`（Python 3.12.9）；mdescriptor 0.2.7（cp312 win_amd64 wheel）+ numpy 2.5.2
+> 日期：2026-09-05（当日 0.2.7 → 0.2.8 升级后重测；历史 0.2.3/0.2.5/0.2.6/0.2.7 报告见 git 历史）
+> 探测环境：`D:\codex\MD\.venv`（Python 3.12.9）；mdescriptor 0.2.8（cp312 win_amd64 wheel）+ numpy 2.5.2
 > 探测方式：`scripts/probe_engine.py`（只读，不实例化描述符、不加载模型）
 > 原始数据：`docs/plan/engine-api-report.json`（升级版本 pin 后重跑脚本 diff 此文件）
 > 结论效力：本报告为 GUI 侧 schema 的事实基线（ADR-4、ADR-2）
-> 升级复核：逐条问题复核结论见 `engine-known-issues.md`；0.2.6→0.2.7 schema diff 要点：
+> 升级复核：逐条问题复核结论见 `engine-known-issues.md`；0.2.7→0.2.8 schema diff 要点：
+> - **唯一 schema 变化：28 个描述符的 `execution.devices` 全部由 `["cpu"]` 扩为 `["cpu", "cuda"]`**（上游 GPU 路径条目落地声明层）
+> - `get_runtime_info().version` 随之升为 `"0.2.8"`；`baseline_version="2"`、`descriptor_info_schema_version=3` 等版本位不变
+> - 参数类型统计（8 类 170 个）、输入能力矩阵、asset policy、错误类型、符号表与 0.2.7 完全一致
+>
+> 历史 0.2.6→0.2.7 diff 要点：
 > - 每描述符 `schema_version` 2→3，`get_runtime_info().baseline_version` 升为 `"2"`，`descriptor_info_schema_version` 2→3
 > - 28 个内置描述符的 170 个参数全部新增 GUI-facing `display_name` 与 `description`，包括 ACE `trans`/`D` 的嵌套属性
 > - 新增 `list_descriptors(detailed=True)`、`StructureBatch.from_frames()` 和 `UnsupportedPeriodicityError`；默认 `list_descriptors()` 仍返回名字 tuple
@@ -20,7 +25,7 @@
 
 ```json
 {
-  "version": "0.2.7",
+  "version": "0.2.8",
   "api_version": 1,
   "baseline_version": "2",
   "configuration_schema_version": 1,
@@ -65,13 +70,13 @@ parameters, execution, input, output, asset
 | object | 21 | 嵌套子表单（见 3.2） |
 | enum | 14 | Select |
 | array | 11 | 数字列表输入（ Tags/动态行） |
-| model | 4 | Model picker（§95；0.2.7 仍无 string 类型参数） |
+| model | 4 | Model picker（§95；0.2.8 仍无 string 类型参数） |
 
-注意：设计文档 §8.2 列出了 `string` 类型，**0.2.7 实测仍未使用**；form 生成器按上表 8 种实现，`string` 作为兼容性兜底渲染（单行文本）。
+注意：设计文档 §8.2 列出了 `string` 类型，**0.2.8 实测仍未使用**；form 生成器按上表 8 种实现，`string` 作为兼容性兜底渲染（单行文本）。
 
 ### 3.2 Parameter presentation metadata
 
-0.2.7 的每一个内置参数（170/170）都提供：
+0.2.8 的每一个内置参数（170/170）都提供：
 
 ```json
 {
@@ -84,12 +89,12 @@ GUI 必须用 `display_name` 作为字段标题、用 `description` 作为说明
 
 ### 3.3 嵌套 object 参数（重要）
 
-0.2.7 存在 21 处 `type: "object"` 参数，其中 10 处带 `properties` 子 schema（如 ACE 的 `trans`、`D`），其余对象保留为 JSON-safe 的自由对象默认值。
+0.2.8 存在 21 处 `type: "object"` 参数，其中 10 处带 `properties` 子 schema（如 ACE 的 `trans`、`D`），其余对象保留为 JSON-safe 的自由对象默认值。
 **动态表单生成器必须支持一层嵌套子表单**（子字段类型同样受限上表），这是设计文档 §8.2 受控字段清单之外的真实需求。
 
 ### 3.4 Input Capability（§8.4）
 
-实测 3 种变体（0.2.7：`mixed_periodicity` 为能力位——true 表示接受同一批次内混合孤立/周期结构）：
+实测 3 种变体（0.2.8：`mixed_periodicity` 为能力位——true 表示接受同一批次内混合孤立/周期结构）：
 
 ```json
 {"periodicity": ["isolated", "fully_periodic"], "mixed_periodicity": true,  "spin": false, "charge_spin": false}
@@ -98,12 +103,12 @@ GUI 必须用 `display_name` 作为字段标题、用 `description` 作为说明
 ```
 
 - 第一、三类合计 22/28（mixed_periodicity=true）；第二类为 6 个仅周期描述符（EwaldSumMatrix、LMBTR、LodeSphericalExpansion、MBTR、SineMatrix、ValleOganov）；第三类为 DPA4/DPA4C。
-- **0.2.3→0.2.5 行为变化**：mixed_periodicity 从整体拒绝变为逐描述符能力位；LodeSphericalExpansion 的 periodicity 由 `["isolated", "fully_periodic"]` 收窄为 `["fully_periodic"]`；0.2.7 保持该能力矩阵。
+- **0.2.3→0.2.5 行为变化**：mixed_periodicity 从整体拒绝变为逐描述符能力位；LodeSphericalExpansion 的 periodicity 由 `["isolated", "fully_periodic"]` 收窄为 `["fully_periodic"]`；0.2.8 保持该能力矩阵。
 - 含「仅 fully_periodic」的描述符 → ADR-11 兼容性预检（M1 存周期性汇总，M3 禁用不兼容项）有真实触发场景。
 
 ### 3.5 Execution Capability
 
-**0.2.7 的 28 个描述符均 `devices: ["cpu"]`**（无 CUDA 条目）。v0.1 设备选择固定 CPU，UI 不渲染 GPU 选项；`num_threads` / `cooperative_cancel` 逐 descriptor 以 schema 为准；DPA4/DPA4C 的 `cooperative_cancel` 自 0.2.5 起 true。
+**0.2.8 起 28 个描述符均声明 `devices: ["cpu", "cuda"]`**（0.2.7 及之前为 `["cpu"]`，无 CUDA 条目）。Descriptor 页 Execution 区设备下拉按 schema 声明列表渲染；选择经 `descriptor.submit` 的 `device` 提交，adapter 在 `device != "cpu"` 时以保留键 `execution: {"device": ...}` 注入配置参数（引擎还原为 `ExecutionOptions`），并计入缓存键；无效设备名在建构期被引擎拒绝（`DescriptorConfigError`，`code=invalid_device`），schema 未声明的设备在 submit 时以 `INVALID_PARAMS` 拒绝；声明了但本机无运行时（无 NVIDIA GPU/driver）在计算期报 `DEVICE_UNAVAILABLE`（引擎 `code=device_unavailable`）。默认 `"cpu"`；`num_threads` 仍用引擎默认。`num_threads` / `cooperative_cancel` 逐 descriptor 以 schema 为准；DPA4/DPA4C 的 `cooperative_cancel` 自 0.2.5 起 true。
 
 ### 3.6 Asset / Model（§95 相关）
 
@@ -136,9 +141,9 @@ descriptor = md.create_descriptor(cfg)
 |---|---|---|
 | 1 | schema 多 `display_name / description / category / capabilities`，参数也提供 `display_name / description` | 信息面板与参数表单直接展示（§19.2） |
 | 2 | `object` 嵌套参数真实存在（21 处） | form 生成器须支持一层嵌套（04 文档硬性要求） |
-| 3 | `string` 类型 0.2.7 未使用 | 按兼容性兜底渲染 |
-| 4 | devices 全为 `["cpu"]` | v0.1 不渲染 GPU 选项 |
+| 3 | `string` 类型 0.2.8 未使用 | 按兼容性兜底渲染 |
+| 4 | ~~devices 全为 `["cpu"]`~~ **0.2.8 已声明 CUDA**：28/28 `devices: ["cpu","cuda"]` | Descriptor 页按 schema 渲染设备下拉；`device` 计入缓存键与结果 metadata；GPU 验收需 CUDA 硬件（开发机未实测，见 05 文档） |
 | 5 | asset 多 `bundled_resources / file_extensions`，bundled 自动解析 | Model picker 区分「内置 / 自定义路径」两态 |
-| 6 | ~~无 per-descriptor version 字段~~ **0.2.5 已修复**：新增 `descriptor_version`，`descriptor_runs.descriptor_version` 已接线记录；0.2.7 保持 | 结果溯源可用真实版本 |
-| 7 | ~~DPA4/DPA4C 的 `backend: "numpy"` 标注与实际执行路径不一致~~ **0.2.5 已修复**：新增 `execution_engine`（全 `"cpp"`）承载真实执行路径；`backend` 保留适配器族语义（DPA4/DPA4C 仍 `numpy`）。0.2.7 保持 | 信息面板展示 `backend` + `execution_engine` 两字段 |
-| 8 | **LodeSphericalExpansion 输入能力收窄**（0.2.3 `["isolated","fully_periodic"]` → 0.2.5 `["fully_periodic"]`），mixed_periodicity 亦为能力位化；0.2.7 保持 | 周期性预检按 schema 动态工作，无需改码；仅升级说明需记录 |
+| 6 | ~~无 per-descriptor version 字段~~ **0.2.5 已修复**：新增 `descriptor_version`，`descriptor_runs.descriptor_version` 已接线记录；0.2.8 保持 | 结果溯源可用真实版本 |
+| 7 | ~~DPA4/DPA4C 的 `backend: "numpy"` 标注与实际执行路径不一致~~ **0.2.5 已修复**：新增 `execution_engine`（全 `"cpp"`）承载真实执行路径；`backend` 保留适配器族语义（DPA4/DPA4C 仍 `numpy`）。0.2.8 保持 | 信息面板展示 `backend` + `execution_engine` 两字段 |
+| 8 | **LodeSphericalExpansion 输入能力收窄**（0.2.3 `["isolated","fully_periodic"]` → 0.2.5 `["fully_periodic"]`），mixed_periodicity 亦为能力位化；0.2.8 保持 | 周期性预检按 schema 动态工作，无需改码；仅升级说明需记录 |

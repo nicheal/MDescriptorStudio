@@ -13,6 +13,7 @@ import ContextBar from "./components/layout/ContextBar";
 import StatusBar from "./components/layout/StatusBar";
 import RightRail from "./components/layout/RightRail";
 import TitleBar from "./components/layout/TitleBar";
+import HealthFindingsDrawer from "./components/HealthFindingsDrawer";
 import Overview from "./pages/Overview";
 import Explore from "./pages/Explore";
 import Descriptors from "./pages/Descriptors";
@@ -296,6 +297,7 @@ export default function App() {
         </div>
       </div>
       <StatusBar />
+      <HealthFindingsDrawer />
       <span style={{ display: "none" }}>{activeDatasetId}</span>
     </div>
   );

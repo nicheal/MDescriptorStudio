@@ -1,6 +1,6 @@
-// NDJSON IPC client over Tauri (docs/plan/04 §5).
-// Requests: invoke("backend_send", { line }) -> Rust writes to backend stdin.
-// Output: Rust forwards each stdout line as "backend-message" event.
+// Typed IPC client over Tauri (docs/plan/04 §5).
+// The Rust bridge serializes the protocol frame; the webview never writes raw
+// bytes to the backend pipe.
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { PROTOCOL_VERSION, type ErrorFrame } from "../types/protocol";
@@ -21,10 +21,11 @@ interface ProtocolFrame {
 
 export const BACKEND_MESSAGE_EVENT = "backend-message";
 export const BACKEND_EXIT_EVENT = "backend-exit";
+const MAX_ORPHAN_FRAMES = 128;
 
 class IpcClient {
-  private nextId = 1;
   private pending = new Map<number, Pending>();
+  private orphanFrames = new Map<number, ProtocolFrame>();
   private eventHandlers = new Map<string, Set<(data: unknown) => void>>();
   private connected = false;
 
@@ -38,6 +39,7 @@ class IpcClient {
       this.connected = false;
       for (const [, p] of this.pending) p.reject({ code: "BACKEND_DOWN", message: "backend exited" });
       this.pending.clear();
+      this.orphanFrames.clear();
       onExit?.();
     });
     this.connected = true;
@@ -48,36 +50,55 @@ class IpcClient {
     try {
       frame = JSON.parse(line);
     } catch {
-      console.error("unparseable backend frame:", line);
+      console.error("unparseable backend frame");
       return;
     }
-    if (frame.event) {
-      this.eventHandlers.get(frame.event)?.forEach((h) => h(frame.data));
+    if (!frame || typeof frame !== "object" || frame.protocol_version !== PROTOCOL_VERSION) return;
+    if (typeof frame.event === "string") {
+        this.eventHandlers.get(frame.event)?.forEach((h) => h(frame.data));
+        return;
+    }
+    if (typeof frame.id !== "number" || !Number.isSafeInteger(frame.id)) return;
+    const p = this.pending.get(frame.id);
+    if (!p) {
+      if (this.orphanFrames.size >= MAX_ORPHAN_FRAMES) {
+        const oldest = this.orphanFrames.keys().next().value;
+        if (typeof oldest === "number") this.orphanFrames.delete(oldest);
+      }
+      this.orphanFrames.set(frame.id, frame);
       return;
     }
-    if (typeof frame.id === "number" && this.pending.has(frame.id)) {
-      const p = this.pending.get(frame.id)!;
-      this.pending.delete(frame.id);
-      if (frame.error) p.reject(frame.error);
-      else p.resolve(frame.result);
-    }
+    this.pending.delete(frame.id);
+    if (frame.error) p.reject(frame.error);
+    else p.resolve(frame.result);
   }
 
   request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     if (!this.connected) {
       return Promise.reject({ code: "BACKEND_DOWN", message: "backend not running" });
     }
-    const id = this.nextId++;
-    const frame = { protocol_version: PROTOCOL_VERSION, id, method, params };
     return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: resolve as (v: unknown) => void,
-        reject,
-      });
-      invoke("backend_send", { line: JSON.stringify(frame) }).catch((e) => {
-        this.pending.delete(id);
-        reject({ code: "BACKEND_DOWN", message: String(e) });
-      });
+      invoke<number>("backend_request", { method, params })
+        .then((id) => {
+          if (!Number.isSafeInteger(id) || id < 0) {
+            reject({ code: "BACKEND_DOWN", message: "backend returned an invalid request id" });
+            return;
+          }
+          const frame = this.orphanFrames.get(id);
+          if (frame) {
+            this.orphanFrames.delete(id);
+            if (frame.error) reject(frame.error);
+            else resolve(frame.result as T);
+            return;
+          }
+          this.pending.set(id, {
+            resolve: resolve as (v: unknown) => void,
+            reject,
+          });
+        })
+        .catch(() => {
+          reject({ code: "BACKEND_DOWN", message: "backend request failed" });
+        });
     });
   }
 

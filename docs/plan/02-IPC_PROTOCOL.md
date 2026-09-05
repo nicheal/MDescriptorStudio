@@ -14,7 +14,7 @@
 backend 初始化完成后，**第一帧**输出：
 
 ```json
-{"protocol_version":1,"event":"backend.ready","data":{"backend_version":"0.1.0","mdescriptor_version":"0.2.7","mdescriptor_api_version":1,"mdescriptor_baseline_version":"2","mdescriptor_descriptor_info_schema_version":3}}
+{"protocol_version":1,"event":"backend.ready","data":{"backend_version":"0.1.0","mdescriptor_version":"0.2.8","mdescriptor_api_version":1,"mdescriptor_baseline_version":"2","mdescriptor_descriptor_info_schema_version":3}}
 ```
 
 前端收到前，计算相关 UI 保持 disabled。`system.info` 可随时查询同等信息。
@@ -57,12 +57,17 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `dataset.remove` | {id} → {ok}；级联删除统计缓存与 descriptor runs/results，不碰源文件 | 否 |
 | `dataset.rename` | {id, name} → DatasetMeta（仅改显示名，name 首尾空白被裁剪） | 否 |
 | `dataset.get` | {id} → Dataset + {fingerprint_valid, stats} | 否 |
-| `dataset.statistics` | {id} → stats（直方图 bins + 摘要 + property availability + health：missing_values/invalid_cell/duplicate_structures/extreme_force 帧；百分比前端按 structures 计算）；缓存失效**或缓存缺 health**（旧版缓存）时自动触发重算 job；同数据集进行中的扫描 job 会被复用（Overview/健康栏并发调用共享一个 job） | 否/是 |
+| `dataset.statistics` | {id} → stats（直方图 bins + 摘要 + property availability + compositions（元素组合分布：structures 按精确元素集合分组计数，一元/二元/三元/多元，按元数升序、组内按计数降序）+ formulas（精确组分：Hill 记法化学式（实际原子数，不做比例约简，C2H4≠C4H8）计数的结构数，按计数降序） + element_atom_counts（逐元素原子数分布：每元素一个直方图，统计每个结构含该元素的原子数，整数对齐 bin，未含该元素的结构计 0）+ health：missing_values/invalid_cell/duplicate_structures/extreme_force/nonphysical_structures（任意原子对——含周期镜像——间距 < 0.7×共价半径和，判据同 NepTrainKit「查找非物理结构」，半径表与 ase.data.covalent_radii 一致）/net_force（‖ΣF‖ > 1e-3 eV/Å，同 NepTrainKit「检查净力」）帧，附 extreme_force_threshold/short_contact_coefficient/net_force_threshold，另附 health_findings（每检查项命中的源文件帧号列表，封顶 5000/项，列表短于计数即截断）与 excluded_frames（{count,indices}，用户软删除的帧，统计只描述未排除帧）；百分比前端按 structures 计算；精确组分模式前端只画 Top-N + “其他”）；缓存失效**或缓存缺 health（含 nonphysical_structures/net_force）/health_findings/excluded_frames/compositions/formulas**（旧版缓存）时自动触发重算 job；同数据集进行中的扫描 job 会被复用（Overview/健康栏并发调用共享一个 job） | 否/是 |
 | `dataset.rescan` | {id} → {job_id}；无视缓存有效性强制全量重扫（右侧 Data Health 面板 Rescan 按钮）；与进行中的扫描 job 去重 | 是 |
-| `dataset.frame` | {id, index, bond_cutoff?} → {index,natoms,formula,xyz,atom_rows,energy,energy_per_atom,force_max,volume,pbc,cell,ghost_count,bond_cutoff}；`bond_cutoff` 为 0.1–10 Å，缺省 2.4 Å | 否 |
+| `dataset.frame` | {id, index, bond_cutoff?} → {index,natoms,formula,xyz,atom_rows,energy,energy_per_atom,force_max,virial_present,virial,volume,pbc,cell,ghost_count,bond_cutoff}；`virial` 为源帧原样记录的位力张量（eV，展平行主序 9 值，缺失为 null，不统一各生态的符号约定）；`bond_cutoff` 为 0.1–10 Å，缺省 2.4 Å | 否 |
+| `dataset.findings` | {id, check?\|indices?, limit?} → {recalculating,total,returned,rows:[{index,natoms,formula,energy_per_atom,force_max,volume,excluded}]}；`check` 从 stats 的 health_findings 解析帧号（missing_values/invalid_cell/duplicate_structures/extreme_force/nonphysical_structures/net_force），或直接给 `indices`（显式模式，供"全部/已排除"页签）；行数封顶 limit（≤1000）；`index` 为源文件原始帧号，供 dataset.frame 预览与 dataset.exclude 排除；缓存缺 health_findings 时返回 recalculating=true + job_id | 否 |
+| `dataset.exclude` | {id, indices:[int]} → {excluded,job_id}；软删除：写入 dataset_excluded_frames 表（带 reason），随后自动重算统计（统计/直方图/health_findings 均只描述未排除帧；帧号保持源文件原始编号不变）。**不修改源文件**，被排除帧仍可 dataset.frame 预览与 dataset.restore 恢复；描述符计算不受排除影响（在干净数据上训练请用 dataset.export_cleaned） | 否/是 |
+| `dataset.restore` | {id, indices:[int]} → {restored,job_id}；从排除清单移除并自动重算统计 | 否/是 |
+| `dataset.excluded` | {id} → {indices:[int],number_of_frames}；当前排除清单（升序） | 否 |
+| `dataset.export_cleaned` | {id, dest_path} → {job_id,dest_path}；job 结果 {path,frames_written,format}。把未排除帧写出为新数据集副本（extxyz→.xyz/.extxyz 文件；deepmd→目录 type.raw/type_map.raw/set.000/*.npy，要求各帧原子数一致）；目标必须不存在且在源路径之外；完成后前端以 dataset.register 注册副本。stats 内 `health_findings`（每检查项帧号，封顶 5000/项）与 `excluded_frames`（{count,indices}）随 statistics 返回 | 否/是 |
 | `descriptor.list` | {} → [{name,display_name,description,schema_version,descriptor_version,level,backend,execution_engine,category,capabilities,input}] | 否 |
 | `descriptor.describe` | {name} → schema 全文（含 input/execution/asset/parameters） | 否 |
-| `descriptor.submit` | {dataset_id, descriptor_name, parameters, scope: "frame"\|"dataset", frame_index?, output_dtype?} → {job_id, cache?: {existing_run_id, cache_key}} | 是 |
+| `descriptor.submit` | {dataset_id, descriptor_name, parameters, scope: "frame"\|"dataset", frame_index?, output_dtype?, device?} → {job_id, cache?: {existing_run_id, cache_key}}；`device` 须在该描述符 schema `execution.devices` 声明内（默认 `"cpu"`），并参与缓存键 | 是 |
 | `result.list` | {dataset_id?, descriptor_name?} → [runs]（含已生成结果的 `shape`） | 否 |
 | `result.get` | {run_id} → metadata + 摘要（不含大数组） | 否 |
 | `result.remove` | {run_id} → {ok}；级联删除该 run 的 analysis_runs 与关联 jobs 行，并尽力删除磁盘结果/分析目录；run 处于 QUEUED/RUNNING 时拒绝（`RESULT_INCOMPATIBLE`，先取消 job） | 否 |
@@ -104,12 +109,13 @@ Analysis API 统一使用同一结果模型：计算型方法立即返回
 空输入、样本不足、未声明且未验证的 atom row_offsets 返回结构化错误；
 zero-variance 特征可确定性忽略并记录 warnings。完整数组以 float64 落盘。
 
-## 6. 错误码全集（24）
+## 6. 错误码全集（25）
 
 ```text
 DATASET_NOT_FOUND        DATASET_CHANGED         INVALID_DATASET
 UNSUPPORTED_FORMAT       UNSUPPORTED_PERIODICITY MDESCRIPTOR_INCOMPATIBLE
 DESCRIPTOR_CONFIGURATION_ERROR                   MODEL_NOT_FOUND
+DEVICE_UNAVAILABLE
 OUT_OF_MEMORY            JOB_CANCELLED           RESULT_INCOMPATIBLE
 INTERNAL_ERROR           PROTOCOL_VERSION_MISMATCH       JOB_NOT_FOUND
 INVALID_PARAMS           ENGINE_UPDATE_UNSUPPORTED
@@ -119,7 +125,7 @@ ANALYSIS_STALE           ARTIFACT_INVALID
 EXPORT_FAILED
 ```
 
-（`JOB_CANCEL_UNSUPPORTED` 由 job.cancel 以 `INVALID_PARAMS` 携带 details 表达，不单列。）
+（`JOB_CANCEL_UNSUPPORTED` 由 job.cancel 以 `INVALID_PARAMS` 携带 details 表达，不单列。`DEVICE_UNAVAILABLE` 为引擎 `code=device_unavailable` 的映射：请求的设备未随 wheel 提供运行时（如无 NVIDIA GPU/driver 的机器）。）
 
 错误帧 `message` 为面向开发者的英文；用户友好文案由前端按 code 映射；traceback 只进日志。
 

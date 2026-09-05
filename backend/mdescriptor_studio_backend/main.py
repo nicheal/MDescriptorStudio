@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 import logging
+import math
+import os
 import platform
 import sys
+
+# Numba cache entries are pickle-bearing. Keep this defense-in-depth flag for
+# releases that recognize it; AnalysisEngine also installs a runtime NullCache
+# guard because the supported Numba version does not.
+os.environ["NUMBA_DISABLE_JIT_CACHE"] = "1"
 
 from . import __version__
 from .analysis import AnalysisEngine
@@ -23,6 +30,9 @@ from .services.update_service import UpdateService
 from .storage.database import Database
 
 log = logging.getLogger(__name__)
+
+_ALLOWED_SETTINGS = {"workspace.activeDatasetId", "ui.language", "compute.default_threads"}
+_MAX_SETTING_VALUE = 4096
 
 
 def _configure_stdio() -> None:
@@ -67,14 +77,20 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
 
     def settings_get(params):
         key = params.get("key")
-        if not key:
+        if not isinstance(key, str) or key not in _ALLOWED_SETTINGS:
             raise AppError(INVALID_PARAMS, "'key' is required")
         return {"key": key, "value": settings_kv.get_setting(key)}
 
     def settings_set(params):
         key, value = params.get("key"), params.get("value")
-        if not key or value is None:
+        if not isinstance(key, str) or key not in _ALLOWED_SETTINGS or value is None:
             raise AppError(INVALID_PARAMS, "'key' and 'value' are required")
+        if (
+            not isinstance(value, (str, int, float, bool))
+            or isinstance(value, float) and not math.isfinite(value)
+            or len(str(value)) > _MAX_SETTING_VALUE
+        ):
+            raise AppError(INVALID_PARAMS, "setting value is invalid")
         settings_kv.set_setting(key, str(value))
         return {"ok": True}
 
@@ -96,6 +112,11 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         "dataset.statistics": datasets.statistics,
         "dataset.rescan": datasets.rescan,
         "dataset.frame": datasets.frame,
+        "dataset.findings": datasets.findings,
+        "dataset.exclude": datasets.exclude,
+        "dataset.restore": datasets.restore,
+        "dataset.excluded": datasets.excluded,
+        "dataset.export_cleaned": datasets.export_cleaned,
         "descriptor.list": descriptors.list,
         "descriptor.describe": descriptors.describe,
         "descriptor.submit": descriptors.submit,
@@ -149,8 +170,8 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
 
 def main() -> int:
     _configure_stdio()
-    setup_logging()
     root = data_dir()
+    setup_logging(root)
     log.info("backend %s starting; data dir %s", __version__, root)
 
     db = Database(root / "database.sqlite")
@@ -168,7 +189,7 @@ def main() -> int:
     server = Server(methods={})
     jobs = JobService(db, server.emit)
     datasets = DatasetService(db, adapter, jobs)
-    results = ResultService(db)
+    results = ResultService(db, root)
     descriptors = DescriptorService(
         db, adapter, jobs, datasets, root, info.get("version", "unknown")
     )

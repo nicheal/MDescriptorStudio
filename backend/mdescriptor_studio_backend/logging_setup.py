@@ -9,12 +9,13 @@ from __future__ import annotations
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from .config import data_dir
 
 
-def setup_logging() -> None:
-    log_file = data_dir() / "logs" / "backend.log"
+def setup_logging(root: Path | None = None) -> None:
+    log_file = (root or data_dir()) / "logs" / "backend.log"
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     if root.handlers:  # idempotent for tests
