@@ -19,6 +19,12 @@ class Server:
     """Reads request lines from stdin, dispatches on a thread pool, writes
     responses/events to stdout under a lock."""
 
+    # Methods that must execute even when the general request queue is jammed:
+    # during a long native compute the RPC workers crawl, the 64 general slots
+    # fill with status polls, and without a reserved lane a job.cancel would
+    # sit behind them — the user could not stop the very jobs causing the jam.
+    CONTROL_METHODS = frozenset({"job.cancel"})
+
     def __init__(self, methods: dict, on_stop=None):
         self.methods = methods
         self.on_stop = on_stop
@@ -29,6 +35,8 @@ class Server:
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rpc")
         self._closed = threading.Event()
         self._slots = threading.BoundedSemaphore(64)
+        self._control_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="control")
+        self._control_slots = threading.BoundedSemaphore(8)
 
     # -- output ------------------------------------------------------------
     def emit(self, name: str, data: dict) -> None:
@@ -130,20 +138,56 @@ class Server:
         line = raw.decode("utf-8", errors="replace").strip() if isinstance(raw, bytes) else raw.strip()
         if not line:
             return True
-        if not self._slots.acquire(blocking=False):
-            try:
-                vid, _method, _params = frames.parse_request(line)
-                error = AppError("BUSY", "request queue is full", public_message="Backend is busy; try again shortly.")
-            except AppError as exc:
-                vid, error = None, exc
+        try:
+            vid, method, params = frames.parse_request(line)
+        except AppError as exc:
+            self._write(frames.response_err(None, exc))
+            return True
+        if method in self.CONTROL_METHODS:
+            return self._dispatch(vid, method, params, self._control_pool, self._control_slots)
+        return self._dispatch(vid, method, params, self._pool, self._slots)
+
+    def _dispatch(self, vid, method, params, pool: ThreadPoolExecutor, slots: threading.BoundedSemaphore) -> bool:
+        if not slots.acquire(blocking=False):
+            error = AppError("BUSY", "request queue is full", public_message="Backend is busy; try again shortly.")
             self._write(frames.response_err(vid, error))
             return True
         try:
-            self._pool.submit(self._handle_with_slot, line)
+            pool.submit(self._handle, vid, method, params, slots)
         except RuntimeError:
-            self._slots.release()
+            slots.release()
             return False
         return True
+
+    def _handle(self, vid, method: str, params, slots: threading.BoundedSemaphore) -> None:
+        try:
+            handler = self.methods.get(method)
+            if handler is None:
+                self._write(
+                    frames.response_err(vid, AppError(INVALID_PARAMS, f"unknown method {method!r}"))
+                )
+                return
+            try:
+                result = handler(params)
+                self._write(frames.response_ok(vid, result))
+            except AppError as exc:
+                self._write(frames.response_err(vid, exc))
+            except Exception as exc:  # noqa: BLE001 - top-level guard
+                log.exception("unhandled error in %s", method)
+                self._write(
+                    frames.response_err(vid, AppError("INTERNAL_ERROR", f"{type(exc).__name__}: {exc}"))
+                )
+        finally:
+            slots.release()
+
+    def close(self) -> None:
+        if self._closed.is_set():
+            return
+        self._closed.set()
+        self._pool.shutdown(wait=True, cancel_futures=True)
+        self._control_pool.shutdown(wait=True, cancel_futures=True)
+        if self.on_stop is not None:
+            self.on_stop()
 
     def _stdin_available_probe(self):
         """Non-blocking stdin availability probe for Windows pipe stdin, or None.
@@ -192,40 +236,3 @@ class Server:
             return available
         except Exception:  # noqa: BLE001 - fall back to blocking read
             return None
-
-    def _handle_with_slot(self, line: str) -> None:
-        try:
-            self._handle(line)
-        finally:
-            self._slots.release()
-
-    def _handle(self, line: str) -> None:
-        try:
-            vid, method, params = frames.parse_request(line)
-        except AppError as exc:
-            self._write(frames.response_err(None, exc))
-            return
-        handler = self.methods.get(method)
-        if handler is None:
-            self._write(
-                frames.response_err(vid, AppError(INVALID_PARAMS, f"unknown method {method!r}"))
-            )
-            return
-        try:
-            result = handler(params)
-            self._write(frames.response_ok(vid, result))
-        except AppError as exc:
-            self._write(frames.response_err(vid, exc))
-        except Exception as exc:  # noqa: BLE001 - top-level guard
-            log.exception("unhandled error in %s", method)
-            self._write(
-                frames.response_err(vid, AppError("INTERNAL_ERROR", f"{type(exc).__name__}: {exc}"))
-            )
-
-    def close(self) -> None:
-        if self._closed.is_set():
-            return
-        self._closed.set()
-        self._pool.shutdown(wait=True, cancel_futures=True)
-        if self.on_stop is not None:
-            self.on_stop()

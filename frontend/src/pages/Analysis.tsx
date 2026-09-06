@@ -35,7 +35,17 @@ import { ipc } from "../ipc/client";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { activeDataset, useWorkspace, type PcaMode } from "../stores/workspace";
 import { jobStatusLabel, trackJob, watchJob } from "../stores/jobs";
-import { useAnalysisUi, type OverviewAnalysis, type ProjectionName, type TabKey } from "../stores/analysisUi";
+import {
+  buildParamsKey,
+  latestSlotForTab,
+  slotForParams,
+  slotKey,
+  useAnalysisUi,
+  type AnalysisParams,
+  type OverviewAnalysis,
+  type ProjectionName,
+  type TabKey,
+} from "../stores/analysisUi";
 import { useT, type Pair } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
@@ -86,6 +96,23 @@ function AnalysisRunLabel({ name, shape }: { name: string; shape: string }) {
       <span className="analysis-run-shape">{shape}</span>
     </span>
   );
+}
+
+// Green dot marking a parameter value whose analysis result is already
+// computed (and can be re-displayed without rerunning).
+function CacheDot() {
+  return <span aria-hidden title="cached result available" style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#107C10", marginInlineEnd: 6, flex: "none" }} />;
+}
+
+// Parameter label with the cache dot when its current value is computed.
+function ParamLabel({ label, cached }: { label: string; cached: boolean }) {
+  return <Typography.Text>{cached ? <CacheDot /> : null}{label}</Typography.Text>;
+}
+
+// Prepend the cache dot to every select option that has a computed result.
+type CacheOption = { value: string; label: ReactNode };
+function withCacheMarks(isCached: (value: string) => boolean, options: CacheOption[]): CacheOption[] {
+  return options.map((option) => (isCached(option.value) ? { ...option, label: <><CacheDot />{option.label}</> } : option));
 }
 
 const TAB_LABELS: Record<TabKey, Pair> = {
@@ -194,22 +221,28 @@ export default function Analysis() {
   // the page, and remounting (or restarting the app) restores it together with
   // the last displayed analysis.
   const view = useAnalysisUi((s) => s.view);
-  const { tab, projection, overviewAnalysis, mode, preprocess } = view;
+  const slots = useAnalysisUi((s) => s.slots);
+  const { tab, projection, overviewAnalysis, mode, preprocess, colorBy } = view;
   const setTab = useAnalysisUi((s) => s.setTab);
   const setProjection = useAnalysisUi((s) => s.setProjection);
   const setOverviewAnalysis = useAnalysisUi((s) => s.setOverviewAnalysis);
   const setMode = useAnalysisUi((s) => s.setMode);
   const setPreprocess = useAnalysisUi((s) => s.setPreprocess);
+  const setColorBy = useAnalysisUi((s) => s.setColorBy);
   const [points, setPoints] = useState<Point[]>([]);
   const [preview, setPreview] = useState<AnalysisPreview | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // What is actually running: module label + originating tab + method. The
+  // toolbar names it explicitly and Run buttons only spin for their own
+  // module — a background t-SNE must not read as "PCA is running" after the
+  // user switches methods or tabs mid-job.
+  const [runningInfo, setRunningInfo] = useState<{ label: string; tab: TabKey; method: string | null } | null>(null);
   const [lastJobProgress, setLastJobProgress] = useState<number | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [inspectedPoint, setInspectedPoint] = useState<Point | null>(null);
   const [selectedFrame, setSelectedFrame] = useState<FramePayload | null>(null);
   const [selectedFrameBusy, setSelectedFrameBusy] = useState(false);
-  const [colorBy, setColorBy] = useState<"none" | "energy" | "force_max" | "volume">("none");
   const [clusterAlgorithm, setClusterAlgorithm] = useState("kmeans");
   const [outlierAlgorithm, setOutlierAlgorithm] = useState("lof");
   const [samplingAlgorithm, setSamplingAlgorithm] = useState("fps");
@@ -244,10 +277,49 @@ export default function Analysis() {
   // Analysis ids already auto-restored in this mount/run window, so a
   // persistent fetch error cannot loop the restore effect.
   const restoreAttemptedRef = useRef<string | null>(null);
+  // Tab the restore effect last processed, so a tab switch can fall back to
+  // the tab's most recent result while a same-tab parameter change cannot.
+  const lastLookedTabRef = useRef<TabKey | null>(null);
+
+  // Stable key of every parameter that changes what the current tab computes.
+  const analysisParams: AnalysisParams = {
+    projection, mode, preprocess, tsnePerplexity, similarityMode, k, queryIndex,
+    clusterAlgorithm, nClusters, outlierAlgorithm, contamination, samplingAlgorithm,
+    nSamples, uncertaintyK, coverageMode, compareMode, mantelMethod, mantelPermutations,
+    localCutoff, kernelName, overviewAnalysis, trajectoryStep, propertyName,
+    perturbationType, perturbationCount, perturbationMaximum, perturbationMetric,
+  };
+  const paramsKey = buildParamsKey(tab, analysisParams);
+  // {tab, paramsKey, params} as of the latest render. Runs capture this when
+  // they start so their slots always record the context the run belongs to,
+  // never whatever the user has navigated to by completion time.
+  const runContextRef = useRef<{ tab: TabKey; paramsKey: string; params: AnalysisParams }>({ tab, paramsKey, params: analysisParams });
+  runContextRef.current = { tab, paramsKey, params: analysisParams };
+
+  const clearDisplayedAnalysis = useCallback(() => {
+    setAnalysisId(null);
+    setPreview(null);
+    setPoints([]);
+    setSelectedIndices([]);
+    setInspectedPoint(null);
+    setOverviewArrays({});
+  }, []);
 
   const selectedRun = st.activeDescriptorRunId;
   const setSelectedRun = st.setActiveRun;
   const selectedPoint = inspectedPoint ?? points.find((point) => point.i === selectedIndices[0]) ?? null;
+
+  // Whether the (tab, run, parameter combination) result is already computed
+  // and can be re-displayed without rerunning. One parameter can be probed
+  // with a candidate value; the others stay at their current value.
+  const isCached = useCallback(
+    (param: string, value: string | number) =>
+      !!selectedRun && slotForParams(slots, tab, selectedRun, buildParamsKey(tab, { ...analysisParams, [param]: value } as AnalysisParams)) !== null,
+    [analysisParams, selectedRun, slots, tab],
+  );
+  // Cache dot helpers: select options marked per value, numeric labels per current value.
+  const markOptions = (param: string, options: CacheOption[]) => withCacheMarks((value) => isCached(param, value), options);
+  const cachedParam = (param: keyof AnalysisParams) => isCached(param, analysisParams[param]);
 
   const refresh = useCallback(async () => {
     if (!dataset) {
@@ -279,6 +351,7 @@ export default function Analysis() {
     operationRef.current += 1;
     restoreAttemptedRef.current = null;
     setBusy(false);
+    setRunningInfo(null);
     setLastJobProgress(null);
     setPoints([]);
     setPreview(null);
@@ -384,12 +457,18 @@ export default function Analysis() {
     }
     const requestRunId = selectedRun;
     const requestDatasetId = dataset?.id;
+    // The (tab, parameters) context the run was started under: the result and
+    // its cache slot belong there even if the user navigates while the job is
+    // in flight.
+    const requestContext = { ...runContextRef.current };
     const operation = ++operationRef.current;
     const isCurrent = () => operationRef.current === operation
       && useWorkspace.getState().activeDescriptorRunId === requestRunId
-      && useWorkspace.getState().activeDatasetId === requestDatasetId;
+      && useWorkspace.getState().activeDatasetId === requestDatasetId
+      && useAnalysisUi.getState().view.tab === requestContext.tab;
     setLoadingAnalysisId(null);
     setBusy(true);
+    setRunningInfo({ label, tab: requestContext.tab, method });
     setLastJobProgress(0);
     setPoints([]);
     setPreview(null);
@@ -417,6 +496,10 @@ export default function Analysis() {
         if (typeof done.result?.analysis_id === "string") id = done.result.analysis_id;
       }
       if (!id) throw new Error(`${method} returned no analysis_id`);
+      // Record the slot under the request context before the display checks:
+      // the computed artifacts stay restorable even when the user has moved to
+      // another tab and the result will not land on screen.
+      useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: id, tab: requestContext.tab, paramsKey: requestContext.paramsKey });
       if (!isCurrent()) return null;
       const frontendCached = response.job_id ? undefined : analysisCache.get(id);
       if (frontendCached) {
@@ -425,7 +508,6 @@ export default function Analysis() {
         setPoints(frontendCached.points);
         setSelectedIndices(frontendCached.selectedIndices);
         setOverviewArrays(frontendCached.arrays);
-        useAnalysisUi.getState().rememberResult(requestRunId, id);
         setLastJobProgress(1);
         message.success(t("{label} loaded from cache", { label }));
         return id;
@@ -445,7 +527,6 @@ export default function Analysis() {
       setPreview(result);
       setPoints(nextPoints);
       setSelectedIndices(nextSelectedIndices);
-      useAnalysisUi.getState().rememberResult(requestRunId, id);
       setLastJobProgress(1);
       message.success(response.job_id ? t("{label} complete", { label }) : t("{label} loaded from cache", { label }));
       return id;
@@ -454,7 +535,10 @@ export default function Analysis() {
       if (isCurrent()) message.error(`${err.code ?? label}: ${err.message ?? t("analysis failed")}`);
       return null;
     } finally {
-      if (operationRef.current === operation) setBusy(false);
+      if (operationRef.current === operation) {
+        setBusy(false);
+        setRunningInfo(null);
+      }
     }
   }, [dataset?.id, message, selectedRun, t, tr]);
 
@@ -467,10 +551,19 @@ export default function Analysis() {
     setLoadingAnalysisId(null);
     if (projection === "pca") {
       const operation = ++operationRef.current;
+      // PCA is the one run that can start before a re-render (the preprocess
+      // select reruns it directly), so build the context from the effective
+      // mode/preprocess instead of the captured render state.
+      const requestContext = {
+        tab: "projection" as TabKey,
+        paramsKey: buildParamsKey("projection", { ...runContextRef.current.params, projection: "pca", mode: activeMode, preprocess: activePreprocess }),
+      };
       const isCurrent = () => operationRef.current === operation
         && useWorkspace.getState().activeDescriptorRunId === requestRunId
-        && useWorkspace.getState().activeDatasetId === requestDatasetId;
+        && useWorkspace.getState().activeDatasetId === requestDatasetId
+        && useAnalysisUi.getState().view.tab === requestContext.tab;
       setBusy(true);
+      setRunningInfo({ label: "PCA", tab: "projection", method: "analysis.pca" });
       setLastJobProgress(0);
       setPoints([]);
       setPreview(null);
@@ -498,6 +591,7 @@ export default function Analysis() {
           if (typeof done.result?.analysis_id === "string") id = done.result.analysis_id;
         }
         if (!isCurrent()) return;
+        useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: id, tab: requestContext.tab, paramsKey: requestContext.paramsKey });
         const frontendCached = response.job_id ? undefined : analysisCache.get(id);
         if (frontendCached) {
           setAnalysisId(id);
@@ -505,7 +599,6 @@ export default function Analysis() {
           setPoints(frontendCached.points);
           setSelectedIndices(frontendCached.selectedIndices);
           setOverviewArrays(frontendCached.arrays);
-          useAnalysisUi.getState().rememberResult(requestRunId, id);
           setLastJobProgress(1);
           message.success(t("PCA loaded from cache"));
           return;
@@ -524,14 +617,16 @@ export default function Analysis() {
         setPreview(null);
         setPoints(nextPoints);
         setSelectedIndices([]);
-        useAnalysisUi.getState().rememberResult(requestRunId, id);
         setLastJobProgress(1);
         message.success(response.job_id ? t("PCA complete") : t("PCA loaded from cache"));
       } catch (error) {
         const err = error as { code?: string; message?: string };
         if (isCurrent()) message.error(`${err.code ?? "PCA"}: ${err.message ?? t("analysis failed")}`);
       } finally {
-        if (operationRef.current === operation) setBusy(false);
+        if (operationRef.current === operation) {
+          setBusy(false);
+          setRunningInfo(null);
+        }
       }
       return;
     }
@@ -559,25 +654,38 @@ export default function Analysis() {
     const operation = ++operationRef.current;
     const requestRunId = selectedRun;
     const requestDatasetId = dataset.id;
+    // `tab` guards against a tab switch while a slow restore fetch is in
+    // flight — the stale result must not land on (or yank back) another tab.
     const isCurrent = () => operationRef.current === operation
       && useWorkspace.getState().activeDescriptorRunId === requestRunId
-      && useWorkspace.getState().activeDatasetId === requestDatasetId;
+      && useWorkspace.getState().activeDatasetId === requestDatasetId
+      && useAnalysisUi.getState().view.tab === analysisTab;
     const analysisType = row.analysis_type.toLowerCase();
     const analysisTab = tabForAnalysisType(analysisType);
+    // Slot context for the loaded analysis, derived from the row itself. The
+    // cached path below records before React re-renders, so the live
+    // runContextRef would still describe the tab the user is leaving and
+    // would file this analysis under another tab's parameters.
+    const loadedParams: AnalysisParams = { ...runContextRef.current.params };
     setTab(analysisTab);
     if (analysisTab === "overview" && ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"].includes(analysisType)) {
       setOverviewAnalysis(analysisType as OverviewAnalysis);
+      loadedParams.overviewAnalysis = analysisType as OverviewAnalysis;
     }
     if (analysisTab === "projection") {
       setProjection(analysisType as ProjectionName);
+      loadedParams.projection = analysisType as ProjectionName;
       if (analysisType === "pca") {
         const savedMode: PcaMode = row.parameters?.mode === "atom" ? "atom" : "structure";
         const savedPreprocess = row.parameters?.preprocess;
         const savedPreprocessValue = savedPreprocess === "raw" || savedPreprocess === "standardized" ? savedPreprocess : "center";
         setMode(savedMode);
         setPreprocess(savedPreprocessValue);
+        loadedParams.mode = savedMode;
+        loadedParams.preprocess = savedPreprocessValue;
       }
     }
+    const loadedContext = { tab: analysisTab, paramsKey: buildParamsKey(analysisTab, loadedParams) };
     if (analysisType === "pairwise" || analysisType === "pairwise_similarity") setSimilarityMode("pairwise");
     if (analysisType === "overlap") setCoverageMode("overlap");
     if (analysisType === "acquisition") setSamplingAlgorithm(row.parameters?.acquisition_method === "uncertainty_diversity" ? "uncertainty_diversity" : "novelty_fps");
@@ -585,6 +693,7 @@ export default function Analysis() {
 
     setLoadingAnalysisId(row.id);
     setBusy(true);
+    setRunningInfo({ label: analysisType.toUpperCase(), tab: analysisTab, method: null });
     setLastJobProgress(null);
     setPoints([]);
     setPreview(null);
@@ -604,7 +713,7 @@ export default function Analysis() {
         setPoints(cached.points);
         setSelectedIndices(cached.selectedIndices);
         setOverviewArrays(cached.arrays);
-        useAnalysisUi.getState().rememberResult(requestRunId, row.id);
+        useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: row.id, ...loadedContext });
         setLastJobProgress(1);
         if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
         return;
@@ -634,7 +743,7 @@ export default function Analysis() {
         setSelectedIndices(nextSelectedIndices);
         setOverviewArrays({});
       }
-      useAnalysisUi.getState().rememberResult(requestRunId, row.id);
+      useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: row.id, ...loadedContext });
       setLastJobProgress(1);
       if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
     } catch (error) {
@@ -643,27 +752,67 @@ export default function Analysis() {
     } finally {
       if (operationRef.current === operation) {
         setBusy(false);
+        setRunningInfo(null);
         setLoadingAnalysisId(null);
       }
     }
   }, [dataset, message, selectedRun, t]);
 
-  // Auto-restore the analysis that was on screen when the page was last left
-  // (page switch or app restart): the backend persists the artifacts, so this
-  // re-fetches instead of recomputing. One attempt per analysis id (reset when
-  // the dataset/run changes) so a persistent fetch error cannot loop.
+  // Keep the displayed result in step with the current tab + parameters: an
+  // exact slot match (same tab, run, parameters) is re-displayed from the
+  // backend artifacts instead of recomputing; switching tabs falls back to
+  // that tab's most recent result; anything else clears the stale display.
+  // One load attempt per analysis id (reset when the dataset/run changes) so
+  // a persistent fetch error cannot loop.
   useEffect(() => {
-    const wanted = useAnalysisUi.getState().view;
-    if (!wanted.analysisId || !selectedRun || wanted.runId !== selectedRun) return;
-    if (restoreAttemptedRef.current === wanted.analysisId) return;
-    if (!analyses.length || busy || loadingAnalysisId || analysisId) return;
-    restoreAttemptedRef.current = wanted.analysisId;
-    const row = analyses.find((item) => item.id === wanted.analysisId);
-    if (!row || row.status !== "COMPLETED") return;
-    const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
-    if (!inputRunIds.includes(selectedRun)) return;
+    if (busy || loadingAnalysisId) return;
+    const slotMap = useAnalysisUi.getState().slots;
+    const exact = slotForParams(slotMap, tab, selectedRun, paramsKey);
+    const tabChanged = lastLookedTabRef.current !== tab;
+    lastLookedTabRef.current = tab;
+    const slot = exact ?? (tabChanged ? latestSlotForTab(slotMap, tab, selectedRun) : null);
+    const wantedId = slot?.analysisId ?? null;
+    if (analysisId === wantedId) return;
+    if (!wantedId) {
+      restoreAttemptedRef.current = null;
+      clearDisplayedAnalysis();
+      return;
+    }
+    if (restoreAttemptedRef.current === wantedId) return;
+    if (!analyses.length) return;
+    restoreAttemptedRef.current = wantedId;
+    const row = analyses.find((item) => item.id === wantedId);
+    if (!row) {
+      // The history listing lost this analysis (filtered out or not listed
+      // yet), but the in-memory cache still holds the computed chart —
+      // restore from it instead of dropping the result.
+      const cached = selectedRun ? analysisCache.get(wantedId) : undefined;
+      if (cached) {
+        setAnalysisId(wantedId);
+        setPreview(cached.preview);
+        setPoints(cached.points);
+        setSelectedIndices(cached.selectedIndices);
+        setOverviewArrays(cached.arrays);
+        return;
+      }
+    }
+    const inputRunIds = row?.input_run_ids?.length ? row.input_run_ids : row ? [row.descriptor_run_id] : [];
+    if (!row || row.status !== "COMPLETED" || !inputRunIds.includes(selectedRun ?? "")) {
+      restoreAttemptedRef.current = null;
+      clearDisplayedAnalysis();
+      return;
+    }
+    // A slot whose row belongs to another tab was recorded under the wrong
+    // context; restoring it would navigate the page. Forget the bad slot and
+    // stay put instead.
+    if (tabForAnalysisType(row.analysis_type.toLowerCase()) !== tab) {
+      if (slot) useAnalysisUi.getState().forgetSlot(slotKey(slot));
+      restoreAttemptedRef.current = null;
+      clearDisplayedAnalysis();
+      return;
+    }
     void loadAnalysis(row, { silent: true });
-  }, [analyses, analysisId, busy, loadAnalysis, loadingAnalysisId, selectedRun]);
+  }, [analyses, analysisId, busy, clearDisplayedAnalysis, loadAnalysis, loadingAnalysisId, paramsKey, selectedRun, tab]);
 
   const runTabAnalysis = useCallback(async () => {
     if (tab === "projection") return runProjection();
@@ -856,7 +1005,7 @@ export default function Analysis() {
         setPoints([]);
         setSelectedIndices([]);
         setOverviewArrays({});
-        useAnalysisUi.getState().clearResult();
+        useAnalysisUi.getState().clearResult(row.id);
       }
       await refresh();
     } catch (error) {
@@ -895,7 +1044,8 @@ export default function Analysis() {
                     ? `kernel.${kernelName}`
                     : `overview.${overviewAnalysis}`;
   const methodGuide = getAnalysisMethodGuide(methodGuideKey);
-  const overviewModuleControl = <Space wrap><Typography.Text>{t("Module")}</Typography.Text><Select value={overviewAnalysis} onChange={setOverviewAnalysis} options={[{ value: "feature_variance", label: t("Feature variance") }, { value: "feature_correlation", label: t("Feature correlation") }, { value: "effective_dimension", label: t("Effective dimension") }, { value: "property_correlation", label: t("Property correlation") }, { value: "trajectory", label: t("Trajectory") }, { value: "drift", label: t("Dataset drift") }, { value: "sensitivity", label: t("Parameter sensitivity") }, { value: "perturbation_sensitivity", label: t("Structural perturbation") }]} /><Typography.Text type="secondary">{overviewAnalysis === "sensitivity" ? t("Compare parameter variants of the same descriptor; use Compare for different descriptors.") : overviewAnalysis === "perturbation_sensitivity" ? t("Recompute the selected descriptor after controlled atomic jitter or strain.") : t("All results stay on the backend as bounded artifacts.")}</Typography.Text></Space>;
+  const overviewModuleControl = <Space wrap><Typography.Text>{t("Module")}</Typography.Text><Select value={overviewAnalysis} style={{ width: 220 }} onChange={setOverviewAnalysis} options={markOptions("overviewAnalysis", [{ value: "feature_variance", label: t("Feature variance") }, { value: "feature_correlation", label: t("Feature correlation") }, { value: "effective_dimension", label: t("Effective dimension") }, { value: "property_correlation", label: t("Property correlation") }, { value: "trajectory", label: t("Trajectory") }, { value: "drift", label: t("Dataset drift") }, { value: "sensitivity", label: t("Parameter sensitivity") }, { value: "perturbation_sensitivity", label: t("Structural perturbation") }])} /></Space>;
+  const overviewModuleHint = tab === "overview" && (overviewAnalysis === "sensitivity" || overviewAnalysis === "perturbation_sensitivity") && <Typography.Text type="secondary">{overviewAnalysis === "sensitivity" ? t("Compare parameter variants of the same descriptor; use Compare for different descriptors.") : t("Recompute the selected descriptor after controlled atomic jitter or strain.")}</Typography.Text>;
   const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension");
 
   return (
@@ -918,7 +1068,12 @@ export default function Analysis() {
           <Tag color={selectedRunRow?.status === "COMPLETED" ? "green" : "orange"}>{selectedRunRow ? jobStatusLabel(tr, selectedRunRow.status) : t("No run")}</Tag>
           <Button size="small" icon={<ArrowSync16Regular />} onClick={() => void refresh()}>{t("Refresh")}</Button>
         </Space>
-        {busy && <Progress percent={Math.round((lastJobProgress ?? 0) * 100)} size="small" style={{ width: 180, marginLeft: "auto" }} />}
+        {busy && runningInfo && (
+          <Space size={8} style={{ marginLeft: "auto", flexWrap: "wrap" }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{t("{label} running", { label: runningInfo.label })}</Typography.Text>
+            <Progress percent={Math.round((lastJobProgress ?? 0) * 100)} size="small" style={{ width: 140 }} />
+          </Space>
+        )}
       </section>
 
       <Tabs
@@ -930,26 +1085,26 @@ export default function Analysis() {
       <div className="analysis-workspace">
         <main className="analysis-main">
           <section className="analysis-card analysis-controls">
-            {tab === "projection" && <ProjectionControls projection={projection} setProjection={setProjection} mode={mode} setMode={setMode} preprocess={preprocess} onPreprocessChange={handlePreprocessChange} tsnePerplexity={tsnePerplexity} setTsnePerplexity={setTsnePerplexity} />}
-            {tab === "similarity" && <Space wrap><Typography.Text>{t("View")}</Typography.Text><Select value={similarityMode} onChange={setSimilarityMode} options={[{ value: "query", label: t("Query neighbors") }, { value: "all_neighbors", label: t("All-neighbor graph") }, { value: "pairwise", label: t("Pairwise matrix") }]} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
-            {tab === "clusters" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>{t("Clusters")}</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
-            {tab === "outliers" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>{t("Contamination")}</Typography.Text><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
-            {tab === "sampling" && <Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: tr(SAMPLING_LABELS[value] ?? { en: value, zh: value }) }))} /><Typography.Text>{t("Target")}</Typography.Text><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom") }]} />{samplingAlgorithm === "uncertainty_diversity" && <><Typography.Text>kNN</Typography.Text><InputNumber min={2} value={uncertaintyK} onChange={(value) => setUncertaintyK(value ?? 8)} /></>}</Space>}
-            {tab === "coverage" && <Space wrap><Typography.Text>{t("Analysis")}</Typography.Text><Select value={coverageMode} onChange={setCoverageMode} options={[{ value: "coverage", label: t("Coverage") }, { value: "overlap", label: t("Train / test overlap") }]} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
-            {tab === "local" && <Space wrap><Typography.Text>{t("Clusters / element")}</Typography.Text><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Typography.Text>{t("Descriptor kNN")}</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><Typography.Text>{t("Neighbor cutoff")}</Typography.Text><InputNumber min={0.1} max={10} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value == null ? 3 : Math.max(0.1, Math.min(10, value)))} addonAfter="Å" /><Typography.Text type="secondary">{t("Coordinates and periodic images determine coordination.")}</Typography.Text></Space>}
-            {tab === "kernel" && <Space wrap><Typography.Text>{t("Kernel")}</Typography.Text><Select value={kernelName} onChange={setKernelName} options={["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() }))} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
-            {tab === "overview" && overviewAnalysis === "sensitivity" && overviewModuleControl}
-            {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap><Typography.Text>{t("Perturbation")}</Typography.Text><Select value={perturbationType} onChange={setPerturbationType} options={[{ value: "jitter", label: t("Atomic jitter (Å)") }, { value: "strain", label: t("Isotropic strain") }]} /><Typography.Text>{t("Steps")}</Typography.Text><InputNumber min={2} max={32} value={perturbationCount} onChange={(value) => setPerturbationCount(value ?? 8)} /><Typography.Text>{t("Maximum")}</Typography.Text><InputNumber min={0.001} step={0.01} precision={3} value={perturbationMaximum} onChange={(value) => setPerturbationMaximum(value ?? 0.2)} /><Typography.Text>{t("Metric")}</Typography.Text><Select value={perturbationMetric} onChange={setPerturbationMetric} options={["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value }))} /></Space>}
+            {tab === "projection" && <ProjectionControls projection={projection} setProjection={setProjection} mode={mode} setMode={setMode} preprocess={preprocess} onPreprocessChange={handlePreprocessChange} tsnePerplexity={tsnePerplexity} setTsnePerplexity={setTsnePerplexity} markOptions={markOptions} cachedParam={cachedParam} />}
+            {tab === "similarity" && <Space wrap><Typography.Text>{t("View")}</Typography.Text><Select value={similarityMode} onChange={setSimilarityMode} options={markOptions("similarityMode", [{ value: "query", label: t("Query neighbors") }, { value: "all_neighbors", label: t("All-neighbor graph") }, { value: "pairwise", label: t("Pairwise matrix") }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
+            {tab === "clusters" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={markOptions("clusterAlgorithm", ["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() })))} /><ParamLabel label={t("Clusters")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
+            {tab === "outliers" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={markOptions("outlierAlgorithm", ["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() })))} /><ParamLabel label={t("Contamination")} cached={cachedParam("contamination")} /><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
+            {tab === "sampling" && <Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={markOptions("samplingAlgorithm", ["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: tr(SAMPLING_LABELS[value] ?? { en: value, zh: value }) })))} /><ParamLabel label={t("Target")} cached={cachedParam("nSamples")} /><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom") }])} />{samplingAlgorithm === "uncertainty_diversity" && <><ParamLabel label="kNN" cached={cachedParam("uncertaintyK")} /><InputNumber min={2} value={uncertaintyK} onChange={(value) => setUncertaintyK(value ?? 8)} /></>}</Space>}
+            {tab === "coverage" && <Space wrap><Typography.Text>{t("Analysis")}</Typography.Text><Select value={coverageMode} onChange={setCoverageMode} options={markOptions("coverageMode", [{ value: "coverage", label: t("Coverage") }, { value: "overlap", label: t("Train / test overlap") }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
+            {tab === "local" && <Space wrap><ParamLabel label={t("Clusters / element")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><ParamLabel label={t("Descriptor kNN")} cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><ParamLabel label={t("Neighbor cutoff")} cached={cachedParam("localCutoff")} /><InputNumber min={0.1} max={10} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value == null ? 3 : Math.max(0.1, Math.min(10, value)))} addonAfter="Å" /><Typography.Text type="secondary">{t("Coordinates and periodic images determine coordination.")}</Typography.Text></Space>}
+            {tab === "kernel" && <Space wrap><Typography.Text>{t("Kernel")}</Typography.Text><Select value={kernelName} onChange={setKernelName} options={markOptions("kernelName", ["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() })))} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
+            {tab === "overview" && overviewModuleControl}
+            {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap><Typography.Text>{t("Perturbation")}</Typography.Text><Select value={perturbationType} onChange={setPerturbationType} options={markOptions("perturbationType", [{ value: "jitter", label: t("Atomic jitter (Å)") }, { value: "strain", label: t("Isotropic strain") }])} /><ParamLabel label={t("Steps")} cached={cachedParam("perturbationCount")} /><InputNumber min={2} max={32} value={perturbationCount} onChange={(value) => setPerturbationCount(value ?? 8)} /><ParamLabel label={t("Maximum")} cached={cachedParam("perturbationMaximum")} /><InputNumber min={0.001} step={0.01} precision={3} value={perturbationMaximum} onChange={(value) => setPerturbationMaximum(value ?? 0.2)} /><Typography.Text>{t("Metric")}</Typography.Text><Select value={perturbationMetric} onChange={setPerturbationMetric} options={markOptions("perturbationMetric", ["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value })))} /></Space>}
             {(tab === "coverage" || tab === "compare" || (tab === "sampling" && (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity")) || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? t("Left") : tab === "sampling" ? t("Query") : t("Reference")}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? t("Right") : tab === "sampling" ? t("Reference") : t("Query")}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} notFoundContent={sensitivityPair ? t("No other completed run for this descriptor") : undefined} options={pairRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
-            {tab === "compare" && <Space wrap><Typography.Text>{t("Test")}</Typography.Text><Select value={compareMode} onChange={setCompareMode} options={[{ value: "geometry", label: t("Geometry comparison") }, { value: "mantel", label: t("Mantel permutation test") }]} />{compareMode === "mantel" && <><Typography.Text>{t("Statistic")}</Typography.Text><Select value={mantelMethod} onChange={setMantelMethod} options={[{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }]} /><Typography.Text>{t("Permutations")}</Typography.Text><InputNumber min={1} max={5000} value={mantelPermutations} onChange={(value) => setMantelPermutations(value ?? 999)} /></>}</Space>}
-            {tab === "similarity" && similarityMode !== "pairwise" && <Space wrap>{similarityMode === "query" && <><Typography.Text>{t("Query index")}</Typography.Text><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /></>}<Typography.Text>k</Typography.Text><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
-            {tab === "overview" && overviewAnalysis !== "sensitivity" && overviewModuleControl}
-            {tab === "overview" && overviewAnalysis === "trajectory" && <Space wrap><Typography.Text>{t("Frame step")}</Typography.Text><InputNumber min={1} value={trajectoryStep} onChange={(value) => setTrajectoryStep(value ?? 1)} /></Space>}
-            {tab === "overview" && overviewAnalysis === "property_correlation" && <Space wrap><Typography.Text>{t("Property")}</Typography.Text><Select value={propertyName} onChange={(value) => { setPropertyName(value); if (value === "force_magnitude") setMode("atom"); }} options={[{ value: "energy_per_atom", label: t("Energy / atom") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "force_magnitude", label: t("Atom |F|") }, { value: "volume", label: t("Volume") }]} /><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /></Space>}
+            {tab === "compare" && <Space wrap><Typography.Text>{t("Test")}</Typography.Text><Select value={compareMode} onChange={setCompareMode} options={markOptions("compareMode", [{ value: "geometry", label: t("Geometry comparison") }, { value: "mantel", label: t("Mantel permutation test") }])} />{compareMode === "mantel" && <><Typography.Text>{t("Statistic")}</Typography.Text><Select value={mantelMethod} onChange={setMantelMethod} options={markOptions("mantelMethod", [{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }])} /><ParamLabel label={t("Permutations")} cached={cachedParam("mantelPermutations")} /><InputNumber min={1} max={5000} value={mantelPermutations} onChange={(value) => setMantelPermutations(value ?? 999)} /></>}</Space>}
+            {tab === "similarity" && similarityMode !== "pairwise" && <Space wrap>{similarityMode === "query" && <><ParamLabel label={t("Query index")} cached={cachedParam("queryIndex")} /><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /></>}<ParamLabel label="k" cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
+            {tab === "overview" && overviewAnalysis === "trajectory" && <Space wrap><ParamLabel label={t("Frame step")} cached={cachedParam("trajectoryStep")} /><InputNumber min={1} value={trajectoryStep} onChange={(value) => setTrajectoryStep(value ?? 1)} /></Space>}
+            {tab === "overview" && overviewAnalysis === "property_correlation" && <Space wrap><Typography.Text>{t("Property")}</Typography.Text><Select value={propertyName} onChange={(value) => { setPropertyName(value); if (value === "force_magnitude") setMode("atom"); }} options={markOptions("propertyName", [{ value: "energy_per_atom", label: t("Energy / atom") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "force_magnitude", label: t("Atom |F|") }, { value: "volume", label: t("Volume") }])} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
             <div className="analysis-controls-actions">
               <Space wrap>
-                <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy} disabled={!selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
+                <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.tab === tab && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={!selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
                 {points.length > 0 && <Select size="small" value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
+                {overviewModuleHint}
               </Space>
               <Button
                 className="analysis-method-guide-button"
@@ -1356,9 +1511,9 @@ function AnalysisMethodGuideModal({ guide, open, onClose }: { guide: AnalysisMet
   );
 }
 
-function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, onPreprocessChange, tsnePerplexity, setTsnePerplexity }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; onPreprocessChange: (value: string) => void; tsnePerplexity: number; setTsnePerplexity: (value: number) => void }) {
+function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, onPreprocessChange, tsnePerplexity, setTsnePerplexity, markOptions, cachedParam }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; onPreprocessChange: (value: string) => void; tsnePerplexity: number; setTsnePerplexity: (value: number) => void; markOptions: (param: string, options: CacheOption[]) => CacheOption[]; cachedParam: (param: keyof AnalysisParams) => boolean }) {
   const { t } = useT();
-  return <Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={projection} onChange={setProjection} options={[{ value: "pca", label: "PCA" }, { value: "umap", label: "UMAP" }, { value: "tsne", label: "t-SNE" }]} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={[{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }]} /><Typography.Text>{t("Preprocess")}</Typography.Text><Select value={preprocess} onChange={onPreprocessChange} options={[{ value: "raw", label: t("Raw scale") }, { value: "center", label: t("Centered") }, { value: "standardized", label: t("Standardized") }]} />{projection === "tsne" && <><Typography.Text>{t("Perplexity")}</Typography.Text><InputNumber min={2} step={1} value={tsnePerplexity} onChange={(value) => setTsnePerplexity(value ?? 30)} /></>}</Space>;
+  return <Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={projection} onChange={setProjection} options={markOptions("projection", [{ value: "pca", label: "PCA" }, { value: "umap", label: "UMAP" }, { value: "tsne", label: "t-SNE" }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /><Typography.Text>{t("Preprocess")}</Typography.Text><Select value={preprocess} onChange={onPreprocessChange} options={markOptions("preprocess", [{ value: "raw", label: t("Raw scale") }, { value: "center", label: t("Centered") }, { value: "standardized", label: t("Standardized") }])} />{projection === "tsne" && <><ParamLabel label={t("Perplexity")} cached={cachedParam("tsnePerplexity")} /><InputNumber min={2} step={1} value={tsnePerplexity} onChange={(value) => setTsnePerplexity(value ?? 30)} /></>}</Space>;
 }
 
 function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPreview | null; points: Point[]; onSelect?: (row: Record<string, unknown>) => void }) {

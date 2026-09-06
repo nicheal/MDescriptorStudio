@@ -435,6 +435,12 @@ body {
   min-width: 0;
 }
 
+/* Keep every selector in the analysis control cards at one fixed width so
+   switching tabs or options never reshuffles the toolbar layout. */
+.analysis-controls .ant-select:not(.ant-select-sm) {
+  width: 220px;
+}
+
 .descriptor-results-page {
   display: flex;
   flex-direction: column;

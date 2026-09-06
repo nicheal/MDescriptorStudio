@@ -27,9 +27,16 @@ class JobContext:
         self.job_id = job_id
         self.control = None  # engine ComputeControl, attached by compute jobs
         self._cancelled = threading.Event()
+        # cancel() settles the job rows immediately; a runner stuck in a long
+        # native call (t-SNE fit, SVD) keeps the thread alive until it returns,
+        # so a detached context must not write progress or resurrect the rows.
+        self.detached = False
         self._last_emit = 0.0
         self._last_fraction = -1.0
         self._last_message = None
+
+    def detach(self) -> None:
+        self.detached = True
 
     def attach_control(self, control) -> None:
         self.control = control
@@ -61,6 +68,8 @@ class JobContext:
         then be None so the UI shows only the message (no stale counters)."""
         if fraction is None:
             fraction = (completed / total) if total else 0.0
+        if self.detached:
+            return
         now = time.monotonic()
         # throttle: >=1% jump, every 200ms, or a phase change (message change
         # or fraction decrease) — without the phase-change clause a downward
@@ -142,13 +151,19 @@ class JobService:
         )
 
     def _run(self, job_id: str, job_type: str, runner) -> None:
-        with self._lock:
-            ctx = self._contexts[job_id]
-        self.db.execute(
-            "UPDATE jobs SET status = 'RUNNING', started_at = ? WHERE id = ?", (_NOW(), job_id)
-        )
-        log.info("job %s (%s) started", job_id, job_type)
         try:
+            with self._lock:
+                ctx = self._contexts.get(job_id)
+            if ctx is None:
+                # cancelled while queued: cancel() settled the rows already
+                log.info("job %s (%s) skipped: cancelled before start", job_id, job_type)
+                return
+            if not (ctx.detached or ctx._cancelled.is_set()):
+                self.db.execute(
+                    "UPDATE jobs SET status = 'RUNNING', started_at = ? WHERE id = ?", (_NOW(), job_id)
+                )
+                log.info("job %s (%s) started", job_id, job_type)
+            ctx.check_cancelled()
             result = runner(ctx)
             self._finish(job_id, "COMPLETED", error=None, result=result)
         except AppError as exc:
@@ -161,10 +176,22 @@ class JobService:
             self._queue_slots.release()
 
     def _finish(self, job_id: str, status: str, error, result=None) -> None:
-        self.db.execute(
-            "UPDATE jobs SET status = ?, finished_at = ?, error = ? WHERE id = ?",
+        self._finalize(job_id, status, error, result)
+        with self._lock:
+            self._contexts.pop(job_id, None)
+
+    def _finalize(self, job_id: str, status: str, error, result=None) -> bool:
+        """Settle a job row exactly once — the WHERE guard makes the first
+        finalization win. cancel() finalizes up front (the runner may be stuck
+        in a native call with no checkpoint for minutes), so a detached
+        runner's eventual COMPLETED/CANCELLED must neither overwrite nor
+        re-emit the settled state."""
+        changed = self.db.execute(
+            "UPDATE jobs SET status = ?, finished_at = ?, error = ? WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
             (status, _NOW(), error["code"] if error else None, job_id),
         )
+        if not changed:
+            return False
         if status in ("FAILED", "CANCELLED"):
             self._settle_linked_runs(job_id, status, error)
         self.emit(
@@ -176,9 +203,8 @@ class JobService:
                 "error": error,
             },
         )
-        with self._lock:
-            self._contexts.pop(job_id, None)
         log.info("job %s -> %s", job_id, status)
+        return True
 
     def _settle_linked_runs(self, job_id: str, status: str, error) -> None:
         """A failed/cancelled job must settle its run rows: the COMPLETED path is
@@ -231,6 +257,16 @@ class JobService:
         if ctx is None:
             raise AppError(INVALID_PARAMS, f"job {job_id} is queued but has no context yet")
         ctx.cancel()
+        # Long native calls (t-SNE fit, SVD, umap) only hit the cooperative
+        # checkpoint when they return, so waiting for the runner to notice the
+        # flag looks like "stop does nothing" for minutes. Settle the job now:
+        # rows flip to CANCELLED, job.finished is emitted, and the detached
+        # runner's eventual output is discarded (progress no-ops, its next
+        # check_cancelled raises before any commit).
+        ctx.detach()
+        with self._lock:
+            self._contexts.pop(job_id, None)
+        self._finalize(job_id, "CANCELLED", error={"code": JOB_CANCELLED, "message": "The job was cancelled."})
         return {"ok": True, "already_finished": False}
 
     def get_job(self, job_id: str) -> dict | None:

@@ -37,6 +37,7 @@ _ALLOWED_SETTINGS = {
     "workspace.activeDatasetId",
     "workspace.activeDescriptorRunId",
     "workspace.analysisUi",
+    "workspace.analysisSlots",
     "ui.language",
     "compute.default_threads",
 }

@@ -412,13 +412,13 @@ export const zhDict: Record<string, string> = {
   "Structural perturbation": "结构扰动",
   "Compare parameter variants of the same descriptor; use Compare for different descriptors.": "比较同一描述符的不同参数变体；不同描述符请使用“对比”。",
   "Recompute the selected descriptor after controlled atomic jitter or strain.": "对受控原子抖动或应变后的结构重新计算所选描述符。",
-  "All results stay on the backend as bounded artifacts.": "所有结果均作为有界工件保留在后端。",
 
   // Analysis — messages
   "Could not load analysis runs": "无法加载分析记录",
   "Select a completed descriptor run first": "请先选择一个已完成的描述符计算",
   "analysis failed": "分析失败",
   "{label} complete": "{label} 完成",
+  "{label} running": "{label} 运行中",
   "{label} loaded from cache": "{label} 已从缓存加载",
   "PCA complete": "PCA 完成",
   "PCA loaded from cache": "PCA 已从缓存加载",

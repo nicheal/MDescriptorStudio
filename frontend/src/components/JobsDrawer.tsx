@@ -2,7 +2,7 @@
 // the old Jobs tab was folded into it. Lists persisted history (job.list)
 // merged with the live session jobs, newest first, with cancel for active jobs.
 import { useEffect, useState } from "react";
-import { Badge, Button, Drawer, Empty, Popconfirm, Progress, Typography } from "antd";
+import { Badge, Button, Drawer, Empty, Popconfirm, Progress, Space, Typography } from "antd";
 import { Clock16Regular, Dismiss16Regular } from "@fluentui/react-icons";
 import SettingsDrawer from "./SettingsDrawer";
 import { ipc } from "../ipc/client";
@@ -54,6 +54,9 @@ export default function JobsDrawer() {
 function JobCard({ job }: { job: JobState }) {
   const { t, tr } = useT();
   const running = job.status === "RUNNING" || job.status === "QUEUED";
+  // A QUEUED job has no progress events yet — a bare 0% bar reads as a stuck
+  // job, so say "queued" outright and only show the bar once it is RUNNING.
+  const queued = job.status === "QUEUED";
   const statusColor =
     job.status === "COMPLETED" ? "#107C10" : job.status === "FAILED" ? "#C42B1C" : job.status === "CANCELLED" ? "#8A8A8A" : "#0F6CBD";
   return (
@@ -63,30 +66,39 @@ function JobCard({ job }: { job: JobState }) {
           {jobTypeLabel(tr, job.job_type)}
         </Typography.Text>
         {running ? (
-          <Popconfirm
-            title={t("Stop this job?")}
-            onConfirm={() => void ipc.request("job.cancel", { id: job.id })}
-            okText={t("Stop job")}
-            cancelText={t("Keep running")}
-            okButtonProps={{ danger: true }}
-          >
-            <Button size="small" icon={<Dismiss16Regular />}>
-              {t("Stop")}
-            </Button>
-          </Popconfirm>
+          <Space size={8}>
+            {queued && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                {jobStatusLabel(tr, job.status)}
+              </Typography.Text>
+            )}
+            <Popconfirm
+              title={t("Stop this job?")}
+              onConfirm={() => void ipc.request("job.cancel", { id: job.id })}
+              okText={t("Stop job")}
+              cancelText={t("Keep running")}
+              okButtonProps={{ danger: true }}
+            >
+              <Button size="small" icon={<Dismiss16Regular />}>
+                {t("Stop")}
+              </Button>
+            </Popconfirm>
+          </Space>
         ) : (
           <Typography.Text style={{ color: statusColor, fontSize: 12, fontWeight: 600 }}>
             {jobStatusLabel(tr, job.status)}
           </Typography.Text>
         )}
       </div>
-      <Progress
-        percent={Math.round(job.progress * 100)}
-        size="small"
-        showInfo={false}
-        strokeColor={running ? "#0F6CBD" : statusColor}
-        style={{ margin: "6px 0 2px" }}
-      />
+      {!queued && (
+        <Progress
+          percent={Math.round(job.progress * 100)}
+          size="small"
+          showInfo={false}
+          strokeColor={running ? "#0F6CBD" : statusColor}
+          style={{ margin: "6px 0 2px" }}
+        />
+      )}
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         {job.completed != null && job.total != null
           ? `${job.completed.toLocaleString()} / ${job.total.toLocaleString()} · ${job.message ?? ""}`

@@ -139,6 +139,7 @@ class AnalysisService:
                 )
 
             def runner(ctx):
+                self._mark_run_running(analysis_id)
                 ctx.progress(0, 1, "loading values")
                 values, run_row = self.results.load_values(run_id)
                 ctx.check_cancelled()
@@ -648,6 +649,7 @@ class AnalysisService:
                 )
 
             def runner(ctx):
+                self._mark_run_running(analysis_id)
                 ctx.progress(0, 1, "loading descriptor results")
                 samples = [self._load_samples(row, params, analysis_type) for row in run_rows]
                 ctx.check_cancelled()
@@ -752,6 +754,7 @@ class AnalysisService:
                 )
 
             def runner(ctx):
+                self._mark_run_running(analysis_id)
                 ctx.progress(0, 1, "writing export")
                 path = self._write_export(run, selected, export_format, mode, Path(target), ctx)
                 out_dir, manifest = self._commit_artifact(
@@ -777,6 +780,16 @@ class AnalysisService:
                     self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
                 raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
+
+    def _mark_run_running(self, analysis_id: str) -> None:
+        """Flip the analysis run to RUNNING when its job actually starts.
+        Without this the row sits at QUEUED for the whole computation and the
+        history shows 排队中 for a result that is being computed right now.
+        The WHERE guard keeps a cancel-settled row from being resurrected."""
+        self.db.execute(
+            "UPDATE analysis_runs SET status = 'RUNNING', updated_at = ? WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
+            (_NOW(), analysis_id),
+        )
 
     def _run_engine(self, analysis_type: str, params: dict, rows: list[dict], samples: list[SampleMatrix], ctx) -> dict:
         progress = lambda fraction, message: (ctx.check_cancelled(), ctx.progress(None, None, message, fraction=0.1 + 0.85 * float(fraction)))

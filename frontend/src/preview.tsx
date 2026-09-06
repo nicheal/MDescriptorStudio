@@ -389,15 +389,33 @@ let mockLatestPcaMode = "structure";
 let mockLatestPcaPreprocess = "raw";
 let mockLatestAcquisitionMethod = "novelty_fps";
 
-function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kind = "projection") {
+function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kind = "projection", rowType: string | null = kind) {
   mockLatestAnalysisId = analysisId;
   mockLatestAnalysisKind = kind;
   mockAnalysisArrays = {};
+  if (rowType) mockRecordAnalysisRow(analysisId, rowType);
   window.setTimeout(() => {
     mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { analysis_id: analysisId }, error: null });
   }, 800);
   return { job_id: jobId, analysis_id: analysisId, cache: null };
 }
+
+// Completed analysis rows the mock analysis.list serves; every submit
+// registers one so computed results stay restorable and visible in history.
+const mockAnalysisRows = new Map<string, Record<string, unknown>>();
+function mockRecordAnalysisRow(id: string, type: string, parameters: Record<string, unknown> = {}) {
+  mockAnalysisRows.set(id, {
+    id,
+    descriptor_run_id: "run-dpa2",
+    analysis_type: type,
+    status: "COMPLETED",
+    parameters,
+    dataset_ids: ["ds-gaas"],
+    input_run_ids: ["run-dpa2"],
+    created_at: new Date().toISOString(),
+  });
+}
+mockRecordAnalysisRow("ana-mock-pca", "pca", { mode: mockLatestPcaMode, preprocess: mockLatestPcaPreprocess });
 
 function mockAnalysisPoints(kind: string, count = 180) {
   return Array.from({ length: count }, (_, i) => {
@@ -895,23 +913,13 @@ const METHODS: Record<string, Handler> = {
     mockLatestPcaMode = String(_p.mode ?? "structure");
     mockLatestPcaPreprocess = String(_p.preprocess ?? "center");
     mockAnalysisArrays = {};
+    mockRecordAnalysisRow("ana-mock-pca", "pca", { mode: mockLatestPcaMode, preprocess: mockLatestPcaPreprocess });
     window.setTimeout(() => {
       mockEmit("job.finished", { job_id: "job-pca-live", status: "COMPLETED", result: { analysis_id: "ana-mock-pca" }, error: null });
     }, 800);
     return { job_id: "job-pca-live", analysis_id: "ana-mock-pca" };
   },
-  "analysis.list": () => [
-    {
-      id: "ana-mock-pca",
-      descriptor_run_id: "run-dpa2",
-      analysis_type: "pca",
-      status: "COMPLETED",
-      parameters: { mode: mockLatestPcaMode, preprocess: mockLatestPcaPreprocess },
-      dataset_ids: ["ds-gaas"],
-      input_run_ids: ["run-dpa2"],
-      created_at: new Date(NOW - 58 * 60000).toISOString(),
-    },
-  ],
+  "analysis.list": () => Array.from(mockAnalysisRows.values()),
   "analysis.preview": () => mockOverviewPreview(),
   "analysis.chunk": (p) => {
     const array = String(p.array ?? "");
@@ -922,16 +930,12 @@ const METHODS: Record<string, Handler> = {
     const columns = Array.isArray(values[0]) ? (values[0] as unknown[]).length : undefined;
     return { analysis_id: mockLatestAnalysisId, array, offset, next_offset: offset + data.length, shape: columns == null ? [values.length] : [values.length, columns], dtype: "float64", data };
   },
-  "analysis.umap": (_p) => {
-    mockLatestAnalysisId = "ana-mock-analysis";
-    mockLatestAnalysisKind = "projection";
-    mockAnalysisArrays = {};
-    window.setTimeout(() => mockEmit("job.finished", { job_id: "job-umap-live", status: "COMPLETED", result: { analysis_id: "ana-mock-analysis" }, error: null }), 800);
-    return { job_id: "job-umap-live", analysis_id: "ana-mock-analysis", cache: null };
+  "analysis.umap": (p) => {
+    mockLatestPcaMode = String(p.mode ?? mockLatestPcaMode);
+    mockLatestPcaPreprocess = String(p.preprocess ?? mockLatestPcaPreprocess);
+    return mockAnalysisSubmit("job-umap-live", "ana-mock-umap", "projection", "umap");
   },
-  "analysis.tsne": (_p) => {
-    return mockAnalysisSubmit("job-tsne-live");
-  },
+  "analysis.tsne": (_p) => mockAnalysisSubmit("job-tsne-live", "ana-mock-tsne", "projection", "tsne"),
   "analysis.neighbors": (_p) => mockAnalysisSubmit("job-neighbors-live"),
   "analysis.similarity": (_p) => mockAnalysisSubmit("job-similarity-live", "ana-mock-similarity", "similarity"),
   "analysis.pairwise": (_p) => mockAnalysisSubmit("job-pairwise-live", "ana-mock-pairwise", "pairwise_similarity"),
@@ -957,7 +961,7 @@ const METHODS: Record<string, Handler> = {
   "analysis.drift": (_p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift"),
   "analysis.sensitivity": (_p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity"),
   "analysis.perturbation_sensitivity": (_p) => mockAnalysisSubmit("job-perturbation-live", "ana-mock-perturbation", "perturbation_sensitivity"),
-  "analysis.export": (_p) => mockAnalysisSubmit("job-export-live", "ana-mock-export"),
+  "analysis.export": (_p) => mockAnalysisSubmit("job-export-live", "ana-mock-export", "projection", null),
   "result.get_pca": (p) => {
     const scale = mockLatestPcaPreprocess === "standardized" ? 1.35 : mockLatestPcaPreprocess === "center" ? 1 : 0.78;
     const rawShift = mockLatestPcaPreprocess === "raw" ? 1.6 : 0;

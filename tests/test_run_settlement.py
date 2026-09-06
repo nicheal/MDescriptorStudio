@@ -59,7 +59,7 @@ def _env(tmp_path: Path):
         (str(tmp_path / "src.txt"), '{"isolated": true, "fully_periodic": false}'),
     )
     (tmp_path / "src.txt").write_text("x")
-    jobs = JobService(db, emit=lambda _e: None)
+    jobs = JobService(db, emit=lambda *_args: None)
     svc = DescriptorService(
         db,
         adapter=_BuildBoomAdapter(),
@@ -160,7 +160,7 @@ def test_restart_settles_zombie_runs(tmp_path: Path) -> None:
         " VALUES ('job_z', 'descriptor.compute', 'run_z', 'ana_z', 'RUNNING', 0, '2026-01-01T00:00:00+00:00')"
     )
 
-    jobs = JobService(db, emit=lambda _e: None)  # restart: constructor sweeps zombies
+    jobs = JobService(db, emit=lambda *_args: None)  # restart: constructor sweeps zombies
     assert jobs.get_job("job_z")["status"] == "CANCELLED"
     run = db.query_one("SELECT status FROM descriptor_runs WHERE id = 'run_z'")
     assert run["status"] == "CANCELLED", run

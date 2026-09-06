@@ -118,7 +118,8 @@ export function watchJob(jobId: string): Promise<{
   return new Promise((resolve) => {
     let settled = false;
     let off = () => {};
-    let poller: ReturnType<typeof setInterval> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
     const finish = (data: {
       status: string;
       result: Record<string, unknown> | null;
@@ -127,14 +128,21 @@ export function watchJob(jobId: string): Promise<{
       if (settled) return;
       settled = true;
       off();
-      if (poller) clearInterval(poller);
+      if (timer) clearTimeout(timer);
       resolve(data);
     };
     const terminal = (status: string) => status === "COMPLETED" || status === "FAILED" || status === "CANCELLED";
+    const schedule = (delay: number) => {
+      if (settled) return;
+      timer = setTimeout(() => void inspect(), delay);
+    };
     const inspect = async () => {
       try {
         const row = await ipc.request<JobRow>("job.get", { id: jobId });
-        if (!terminal(row.status)) return;
+        if (!terminal(row.status)) {
+          schedule(500);
+          return;
+        }
         finish({
           status: row.status,
           result: null,
@@ -142,11 +150,24 @@ export function watchJob(jobId: string): Promise<{
         });
       } catch (error) {
         const err = error as { code?: string; message?: string };
-        finish({
-          status: "FAILED",
-          result: null,
-          error: { code: err.code ?? "BACKEND_DOWN", message: err.message ?? "backend unavailable" },
-        });
+        // BUSY means the backend answered but its request queue is jammed (a
+        // long native compute stalls the RPC workers until the poll slots
+        // fill) — the job itself is alive, so back off and keep waiting
+        // instead of failing the watch and popping a bogus error.
+        if (err.code === "BUSY") {
+          schedule(2000);
+          return;
+        }
+        failures += 1;
+        if (failures >= 20) {
+          finish({
+            status: "FAILED",
+            result: null,
+            error: { code: err.code ?? "BACKEND_DOWN", message: err.message ?? "backend unavailable" },
+          });
+          return;
+        }
+        schedule(Math.min(500 * 2 ** failures, 4000));
       }
     };
 
@@ -159,7 +180,6 @@ export function watchJob(jobId: string): Promise<{
       finish({ status: d.status, result: d.result ?? null, error: d.error ?? null });
     });
     void inspect();
-    if (!settled) poller = setInterval(() => void inspect(), 500);
   });
 }
 
