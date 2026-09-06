@@ -255,14 +255,23 @@ def main() -> int:
 
     threading.Thread(target=_warmup, name="warmup", daemon=True).start()
     log.info("backend ready; warmup continues in background")
+    exit_code = 0
     try:
         server.serve_forever()
+    except Exception:  # noqa: BLE001 - the sidecar must never die with a traceback only a log sees
+        log.exception("protocol server crashed")
+        exit_code = 1
     finally:
         # job pool first (it finalizes rows), then the database (red-team #3)
         jobs.shutdown()
         db.close()
     log.info("backend stopped")
-    return 0
+    logging.shutdown()
+    # Executor threads are non-daemon and would be joined at interpreter exit;
+    # a runner stuck in a long native call (t-SNE fit, SVD) would hang the
+    # process here. shutdown() already cancelled what it could and settled all
+    # durable rows, so exit hard instead of joining.
+    os._exit(exit_code)
 
 
 if __name__ == "__main__":

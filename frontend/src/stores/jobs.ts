@@ -14,6 +14,8 @@ export interface JobState {
   message: string | null;
   error: { code: string; message: string } | null;
   created_at?: string;
+  /** 1-based position within its category pool; only known from persisted rows while QUEUED. */
+  queue_position?: number;
 }
 
 const JOB_TYPE_PAIRS: Record<string, Pair> = {
@@ -234,6 +236,9 @@ export function fromJobRow(row: JobRow): JobState {
     message: row.message,
     error: row.error ? { code: row.error, message: row.error } : null,
     created_at: row.created_at,
+    // live events never carry a position; dropping the key (vs. setting
+    // undefined) keeps mergeJobRows from clobbering a persisted value
+    ...(row.queue_position != null ? { queue_position: row.queue_position } : {}),
   };
 }
 

@@ -108,6 +108,9 @@ export default function SettingsDrawer() {
               {t("Save")}
             </Button>
           </Space>
+          <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+            {t("Caps BLAS/OpenMP threads for analysis compute; descriptor runs are managed by the engine.")}
+          </Typography.Text>
         </div>
 
         <Typography.Text strong style={{ fontSize: 12, color: "#616161" }}>

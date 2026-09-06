@@ -1,6 +1,45 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ipc } from "../ipc/client";
-import { watchJob } from "./jobs";
+import { fromJobRow, mergeJobRows, trackJob, useJobs, watchJob } from "./jobs";
+import type { JobRow } from "../types/protocol";
+
+const baseRow = (overrides: Partial<JobRow>): JobRow => ({
+  id: "job-1",
+  job_type: "descriptor.compute",
+  dataset_id: null,
+  descriptor_run_id: null,
+  status: "QUEUED",
+  progress: 0,
+  completed: null,
+  total: null,
+  message: null,
+  error: null,
+  created_at: "2026-09-06T00:00:00+00:00",
+  started_at: null,
+  finished_at: null,
+  ...overrides,
+});
+
+describe("queue_position", () => {
+  afterEach(() => {
+    useJobs.setState({ jobs: {}, order: [] });
+    vi.restoreAllMocks();
+  });
+
+  it("fromJobRow keeps the persisted position", () => {
+    expect(fromJobRow(baseRow({ queue_position: 2 })).queue_position).toBe(2);
+    // absent for running jobs — the key must not even exist, so the live
+    // overlay in mergeJobRows cannot clobber a persisted value
+    expect("queue_position" in fromJobRow(baseRow({ status: "RUNNING" }))).toBe(false);
+  });
+
+  it("mergeJobRows keeps the persisted position when the live job has none", () => {
+    trackJob("job-1", "descriptor.compute");
+    const live = useJobs.getState().jobs["job-1"];
+    const merged = mergeJobRows([baseRow({ queue_position: 3 })], [live]);
+    expect(merged[0].queue_position).toBe(3);
+  });
+});
 
 describe("watchJob", () => {
   afterEach(() => {

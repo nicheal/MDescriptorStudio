@@ -188,3 +188,9 @@
 **背景**：mdescriptor 0.2.8 为 28/28 描述符声明 `execution.devices: ["cpu","cuda"]`（0.2.7 及之前全 `["cpu"]`）；设备入口为配置保留键 `execution`（引擎还原为 `ExecutionOptions(device=...)`）。
 **决策**：Descriptor 页 Execution 区的设备下拉按 schema 声明列表渲染（唯一 cpu 时保持禁用单选，不硬编码设备名）；选择经 `descriptor.submit` 的 `device` 提交，服务端按 schema 校验（未声明 → `INVALID_PARAMS`）并计入缓存键与结果 metadata（`descriptor_runs.device` 列，migration 5）；默认 `"cpu"`，`num_threads` 仍用引擎默认。声明了但本机无运行时的设备在计算期报 `DEVICE_UNAVAILABLE`（引擎 `code=device_unavailable` 的映射）。
 **后果**：CPU/CUDA 结果互不命中缓存，可审计；CUDA 计算路径的正确性验收需 CUDA 硬件（开发机无 GPU，仅验证了不可用路径的错误呈现），首次 GPU 验收前 UI 不做任何 CUDA 可用性预判。
+
+## ADR-27 Job 类别线程池与协作式关停（2026-09-06）
+
+**背景**：JobService 此前为全局 2 线程 FIFO：被取消但仍卡在原生调用里的「僵尸计算」可占满全部工作线程；`shutdown()` 不协作取消且非 daemon 线程会在解释器退出时 join，卡住的原生调用可挂住后端进程；`engine.update` 的 pip 安装可与 `descriptor.compute` 并行（Windows 锁定已加载的原生扩展）；`compute.default_threads` 设置无任何后端读取。
+**决策**：JobService 改为按类别的三个线程池——`engine`（1 线程，承载 `descriptor.compute` 与 `engine.update`，共享单 worker 天然实现互斥）、`analysis`（2）、`dataset`（2，兜底未知类型）；`submit` 签名与队列背压不变。`shutdown()` 先对所有存活 context 调 `cancel()`（触发引擎 ComputeControl 取消并结算 run 行）再关池，`main()` 在清理完成后 `os._exit` 绕过 atexit join。RUNNING 状态更新补 `AND status='QUEUED'` 守卫。`job.get`/`job.list` 加入 RPC 控制通道；`descriptor.submit` 增加在途去重（`_submit_lock` + cache_key JOIN 查询，`force` 绕过）；`_load_samples`/`_pool_per_structure` 增加取消检查点并改用 `np.add.reduceat` 向量化池化；`result.heatmap` 改 mmap 读取；`compute.default_threads` 经 threadpoolctl 作用于分析计算（进程级、不恢复，描述符引擎线程仍由引擎管理）。QUEUED 任务在 `job.get`/`job.list` 附带 `queue_position`（按类别池内排队序，created_at 秒级精度下用 rowid 次级排序），前端 JobsDrawer 显示「第 N 位」。
+**后果**：最坏并发从全局 2 变为按类别 1+2+2；类别内 FIFO 不变。僵尸计算的最坏影响被限制在 engine 池内；关停不再依赖「计算及时返回」；values 结果 LRU 缓存与僵尸池占用可视化暂缓（见 docs/plan/scheduling-fix-plan.md）。

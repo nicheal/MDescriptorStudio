@@ -203,7 +203,7 @@ export default function Descriptors() {
     }
     setSubmitting(true);
     try {
-      const r = await ipc.request<{ job_id: string | null; cache: { existing_run_id: string } | null }>(
+      const r = await ipc.request<{ job_id: string | null; cache: { existing_run_id: string; in_flight?: boolean } | null }>(
         "descriptor.submit",
         {
           dataset_id: d.id,
@@ -215,6 +215,20 @@ export default function Descriptors() {
           device: effectiveDevice,
         },
       );
+      const watchCompute = (jobId: string) => {
+        void watchJob(jobId).then((done) => {
+          if (done.status === "COMPLETED") message.success(t("Run {id} completed", { id: String(done.result?.run_id ?? "") }));
+          else message.error(t("Compute {status}: {message}", { status: done.status, message: done.error?.message ?? "" }));
+        });
+      };
+      if (r.cache?.in_flight && r.job_id) {
+        // An identical compute is already queued/running: attach to the live
+        // job instead of offering a recalculation of the same input.
+        trackJob(r.job_id, "descriptor.compute");
+        message.info(t("Identical compute already in progress — attached to it"));
+        watchCompute(r.job_id);
+        return;
+      }
       if (r.cache) {
         Modal.confirm({
           title: t("Existing compatible result found"),
@@ -234,10 +248,7 @@ export default function Descriptors() {
             });
             if (r2.job_id) {
               trackJob(r2.job_id, "descriptor.compute");
-              void watchJob(r2.job_id).then((done) => {
-                if (done.status === "COMPLETED") message.success(t("Run {id} completed", { id: String(done.result?.run_id ?? "") }));
-                else message.error(t("Compute {status}: {message}", { status: done.status, message: done.error?.message ?? "" }));
-              });
+              watchCompute(r2.job_id);
             }
           },
           onCancel: () => message.info(t("Using existing run {id}", { id: r.cache!.existing_run_id })),

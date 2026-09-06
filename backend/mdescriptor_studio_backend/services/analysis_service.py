@@ -57,6 +57,30 @@ _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
 _RESERVED_ARTIFACT_NAME_RE = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE)
 
 
+def _pool_rows(values: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+    """Mean-pool atom/pair rows per structure in one vectorized pass.
+
+    Equivalent to the historical per-structure Python loop (which held the GIL
+    for seconds on large atom-level runs), but each pool step also runs with
+    the GIL released. Empty structures pool to zero; np.add.reduceat needs two
+    quirks handled explicitly: a start index equal to len(values) (trailing
+    empty structures) is out of bounds, and repeated indices (empty groups)
+    return a single element instead of zero — both are masked below.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    counts = np.diff(offsets).astype(np.int64)
+    pooled = np.zeros((counts.size, values.shape[1]), dtype=np.float64)
+    starts = offsets[:-1]
+    # offsets are monotonic and end at len(values), so starts >= len(values)
+    # can only be a run of trailing empty structures — trim them.
+    k = int(np.searchsorted(starts, values.shape[0], side="left"))
+    if k > 0:
+        sums = np.add.reduceat(values, starts[:k], axis=0)
+        pooled[:k] = sums / np.maximum(counts[:k], 1)[:, None]
+    pooled[counts == 0] = 0.0
+    return pooled
+
+
 class AnalysisService:
     def __init__(self, db: Database, jobs: JobService, results: ResultService, datasets, data_dir: Path):
         self.db = db
@@ -141,9 +165,11 @@ class AnalysisService:
             def runner(ctx):
                 self._mark_run_running(analysis_id)
                 ctx.progress(0, 1, "loading values")
+                self._apply_thread_limit()
                 values, run_row = self.results.load_values(run_id)
                 ctx.check_cancelled()
                 coords, explained, frames, atoms = self._pca_points(values, run_row, mode, preprocess)
+                ctx.check_cancelled()
                 n_points = coords.shape[0]
                 ctx.progress(0.7, 1, "assembling points")
                 frame_props = self._frame_properties(
@@ -309,16 +335,7 @@ class AnalysisService:
         if values.ndim == 2 and offsets_file.is_file():
             offsets = np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64)
             if self._valid_offsets(offsets, values.shape[0]):
-                n_struct = offsets.size - 1
-                dim = values.shape[1]
-                pooled = np.empty((n_struct, dim), dtype=np.float64)
-                for i in range(n_struct):
-                    lo, hi = int(offsets[i]), int(offsets[i + 1])
-                    if hi > lo:
-                        pooled[i] = values[lo:hi].mean(axis=0)
-                    else:
-                        pooled[i] = 0.0
-                return pooled
+                return _pool_rows(values, offsets)
         return values.reshape(values.shape[0], -1)
 
     @staticmethod
@@ -651,7 +668,7 @@ class AnalysisService:
             def runner(ctx):
                 self._mark_run_running(analysis_id)
                 ctx.progress(0, 1, "loading descriptor results")
-                samples = [self._load_samples(row, params, analysis_type) for row in run_rows]
+                samples = [self._load_samples(row, params, analysis_type, check=ctx.check_cancelled) for row in run_rows]
                 ctx.check_cancelled()
                 result = self._run_engine(analysis_type, params, run_rows, samples, ctx)
                 ctx.check_cancelled()
@@ -791,8 +808,32 @@ class AnalysisService:
             (_NOW(), analysis_id),
         )
 
+    def _apply_thread_limit(self) -> None:
+        """Apply the user's `compute.default_threads` setting to the numeric
+        stack used by analysis compute (BLAS/OpenMP pools via threadpoolctl).
+
+        Applied process-wide and deliberately left in place: the setting is a
+        user preference for analysis parallelism, not a per-job override, and
+        concurrent analysis jobs all read the same value. Descriptor engine
+        threads are managed by the engine itself and unaffected. Missing,
+        invalid, or non-positive values mean "engine default" (no change).
+        """
+        raw = self.db.get_setting("compute.default_threads")
+        if not raw:
+            return
+        try:
+            limit = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return
+        if limit <= 0:
+            return
+        from threadpoolctl import threadpool_limits
+
+        threadpool_limits(limits=limit)
+
     def _run_engine(self, analysis_type: str, params: dict, rows: list[dict], samples: list[SampleMatrix], ctx) -> dict:
         progress = lambda fraction, message: (ctx.check_cancelled(), ctx.progress(None, None, message, fraction=0.1 + 0.85 * float(fraction)))
+        self._apply_thread_limit()
         if analysis_type == "pca":
             return AnalysisEngine.pca(samples[0], params, progress)
         if analysis_type == "umap":
@@ -1039,10 +1080,15 @@ class AnalysisService:
             self._mark_stale(row["dataset_id"], f"source fingerprint changed ({dataset['fingerprint']} -> {current})")
             raise AppError(ANALYSIS_STALE, f"run {row['id']} is stale because the source dataset changed", {"run_id": row["id"], "dataset_id": row["dataset_id"]})
 
-    def _load_samples(self, run_row: dict, params: dict, analysis_type: str) -> SampleMatrix:
+    def _load_samples(self, run_row: dict, params: dict, analysis_type: str, check=None) -> SampleMatrix:
         import numpy as np
 
+        # Cooperative-cancellation checkpoints between the load/pool stages:
+        # without them a cancel during a multi-GB load waits for the whole
+        # phase to finish before it takes effect.
+        check = check or (lambda: None)
         values, row = self.results.load_values(run_row["id"])
+        check()
         values = np.asarray(values, dtype=np.float64)
         if values.ndim > 2:
             values = values.reshape(values.shape[0], -1)
@@ -1052,6 +1098,7 @@ class AnalysisService:
             raise AppError(ANALYSIS_INPUT_INVALID, "descriptor result is empty or not a 2D feature matrix")
         if not np.isfinite(values).all():
             raise AppError(ANALYSIS_INPUT_INVALID, "descriptor result contains NaN or Inf")
+        check()
         path = self._result_root(row)
         offsets_path = path / "row_offsets.npy"
         ensure_no_reparse_points(offsets_path)
@@ -1071,6 +1118,7 @@ class AnalysisService:
                 raise AppError(ANALYSIS_INPUT_INVALID, "atom/local-environment analysis requires verified row_offsets")
             if not declared_atom:
                 raise AppError(ANALYSIS_INPUT_INVALID, "descriptor metadata does not declare atom/local-environment rows")
+            check()
             local_frames = np.repeat(np.arange(len(offsets) - 1, dtype=np.int64), np.diff(offsets).astype(np.int64))
             frame_values = self._run_frame_values(row, len(offsets) - 1)
             frames = frame_values[local_frames]
@@ -1081,11 +1129,9 @@ class AnalysisService:
             positions, cells, pbc = self._atom_geometry(row, offsets, local_frames)
             mode = "atom"
         elif valid_offsets and declared_atom:
-            n_frames = len(offsets) - 1
-            used = np.empty((n_frames, values.shape[1]), dtype=np.float64)
-            for i in range(n_frames):
-                lo, hi = int(offsets[i]), int(offsets[i + 1])
-                used[i] = values[lo:hi].mean(axis=0) if hi > lo else 0.0
+            used = _pool_rows(values, offsets)
+            check()
+            n_frames = used.shape[0]
             frame_value = int(row.get("frame_index") or 0) if row.get("scope") == "frame" else 0
             frames = np.arange(n_frames, dtype=np.int64) + frame_value if row.get("scope") == "frame" else np.arange(n_frames, dtype=np.int64)
             rows = None

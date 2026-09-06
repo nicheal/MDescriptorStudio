@@ -127,6 +127,11 @@ class DescriptorService:
         self.datasets = datasets
         self.data_dir = data_dir
         self.engine_version = engine_version
+        # RPC requests run concurrently: serialize the cache-check → insert →
+        # submit section of descriptor.submit so two identical requests cannot
+        # enqueue duplicate engine computes (the analysis service does the
+        # same for its cache).
+        self._submit_lock = threading.Lock()
 
     # -- registry / describe --------------------------------------------------
     def list(self, params: dict) -> list[dict]:
@@ -211,53 +216,78 @@ class DescriptorService:
                 ]
             ).encode("utf-8")
         ).hexdigest()
-        hit = self.db.query_one(
-            "SELECT id FROM descriptor_runs WHERE cache_key = ? AND status = 'COMPLETED'",
-            (cache_key,),
-        )
-        if hit and not params.get("force"):
-            return {
-                "job_id": None,
-                "cache": {"existing_run_id": hit["id"], "cache_key": cache_key},
-            }
-
-        run_id = f"run_{uuid.uuid4().hex[:12]}"
-        info = self.adapter.runtime_info()
-        self.db.execute(
-            "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, descriptor_version,"
-            " engine_version, parameters_json, scope, frame_index, output_dtype, device, cache_key,"
-            " status, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)",
-            (
-                run_id,
-                ds_id,
-                name,
-                (schema or {}).get("descriptor_version") or info.get("version"),
-                info.get("version"),
-                canonical,
-                scope,
-                frame_index,
-                params.get("output_dtype"),
-                device,
-                cache_key,
-                _NOW(),
-            ),
-        )
-
-        def runner(ctx):
-            return self._run_compute(ctx, run_id, row, name, parameters, scope, frame_index, params.get("output_dtype"), device)
-
-        try:
-            job_id = self.jobs.submit(
-                "descriptor.compute", runner, dataset_id=ds_id, descriptor_run_id=run_id
+        force = bool(params.get("force"))
+        with self._submit_lock:
+            hit = self.db.query_one(
+                "SELECT id FROM descriptor_runs WHERE cache_key = ? AND status = 'COMPLETED'",
+                (cache_key,),
             )
-        except Exception:
-            # JobService applies backpressure before insertion. If submission
-            # still fails after the run row was created, do not leave a
-            # permanently QUEUED result visible in Results.
-            self.db.execute("DELETE FROM descriptor_runs WHERE id = ?", (run_id,))
-            raise
-        return {"job_id": job_id, "cache": None}
+            if hit and not force:
+                return {
+                    "job_id": None,
+                    "cache": {"existing_run_id": hit["id"], "cache_key": cache_key},
+                }
+            if not force:
+                # An identical compute may already be queued or running (double
+                # click, Overview + submit panel). Reuse the live job instead
+                # of running the engine twice on the same input. The join with
+                # jobs excludes orphaned run rows, which the restart sweep has
+                # already settled to CANCELLED anyway.
+                active = self.db.query_one(
+                    "SELECT r.id AS run_id, j.id AS job_id FROM descriptor_runs r"
+                    " JOIN jobs j ON j.descriptor_run_id = r.id"
+                    " WHERE r.cache_key = ? AND r.status IN ('QUEUED', 'RUNNING')"
+                    " AND j.status IN ('QUEUED', 'RUNNING')"
+                    " ORDER BY j.created_at DESC, j.id DESC LIMIT 1",
+                    (cache_key,),
+                )
+                if active:
+                    return {
+                        "job_id": active["job_id"],
+                        "cache": {
+                            "existing_run_id": active["run_id"],
+                            "cache_key": cache_key,
+                            "in_flight": True,
+                        },
+                    }
+
+            run_id = f"run_{uuid.uuid4().hex[:12]}"
+            info = self.adapter.runtime_info()
+            self.db.execute(
+                "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, descriptor_version,"
+                " engine_version, parameters_json, scope, frame_index, output_dtype, device, cache_key,"
+                " status, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?)",
+                (
+                    run_id,
+                    ds_id,
+                    name,
+                    (schema or {}).get("descriptor_version") or info.get("version"),
+                    info.get("version"),
+                    canonical,
+                    scope,
+                    frame_index,
+                    params.get("output_dtype"),
+                    device,
+                    cache_key,
+                    _NOW(),
+                ),
+            )
+
+            def runner(ctx):
+                return self._run_compute(ctx, run_id, row, name, parameters, scope, frame_index, params.get("output_dtype"), device)
+
+            try:
+                job_id = self.jobs.submit(
+                    "descriptor.compute", runner, dataset_id=ds_id, descriptor_run_id=run_id
+                )
+            except Exception:
+                # JobService applies backpressure before insertion. If submission
+                # still fails after the run row was created, do not leave a
+                # permanently QUEUED result visible in Results.
+                self.db.execute("DELETE FROM descriptor_runs WHERE id = ?", (run_id,))
+                raise
+            return {"job_id": job_id, "cache": None}
 
     # -- validation / compat (ADR-11) ---------------------------------------------
     def _validate_parameters(self, schema: dict, parameters: dict) -> None:

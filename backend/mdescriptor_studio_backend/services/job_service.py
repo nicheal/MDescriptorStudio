@@ -20,6 +20,21 @@ log = logging.getLogger(__name__)
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 
+# Pool sizes per job category. The engine pool is deliberately size 1:
+# descriptor compute is the heaviest work in the process, and engine.update's
+# pip install must never run while a compute holds the engine's native
+# extensions open (Windows locks loaded DLLs) — sharing one single-worker
+# pool serializes exactly those two without any extra locking.
+_POOL_SIZES = {"engine": 1, "analysis": 2, "dataset": 2}
+
+
+def _category(job_type: str) -> str:
+    if job_type.startswith(("descriptor.", "engine.")):
+        return "engine"
+    if job_type.startswith("analysis."):
+        return "analysis"
+    return "dataset"
+
 
 class JobContext:
     def __init__(self, service: "JobService", job_id: str):
@@ -92,7 +107,10 @@ class JobService:
     def __init__(self, db: Database, emit):
         self.db = db
         self.emit = emit
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="job")
+        self._pools = {
+            name: ThreadPoolExecutor(max_workers=size, thread_name_prefix=f"job-{name}")
+            for name, size in _POOL_SIZES.items()
+        }
         self._contexts: dict[str, JobContext] = {}
         self._lock = threading.Lock()
         self._queue_slots = threading.BoundedSemaphore(64)
@@ -127,7 +145,7 @@ class JobService:
             inserted = True
             with self._lock:
                 self._contexts[job_id] = JobContext(self, job_id)
-            self._executor.submit(self._run, job_id, job_type, runner)
+            self._pools[_category(job_type)].submit(self._run, job_id, job_type, runner)
             return job_id
         except Exception:
             with self._lock:
@@ -159,8 +177,12 @@ class JobService:
                 log.info("job %s (%s) skipped: cancelled before start", job_id, job_type)
                 return
             if not (ctx.detached or ctx._cancelled.is_set()):
+                # The status guard keeps a cancel() that landed between the
+                # context lookup above and this write from being overwritten
+                # (CANCELLED -> RUNNING resurrect + duplicate job.finished).
                 self.db.execute(
-                    "UPDATE jobs SET status = 'RUNNING', started_at = ? WHERE id = ?", (_NOW(), job_id)
+                    "UPDATE jobs SET status = 'RUNNING', started_at = ? WHERE id = ? AND status = 'QUEUED'",
+                    (_NOW(), job_id),
                 )
                 log.info("job %s (%s) started", job_id, job_type)
             ctx.check_cancelled()
@@ -269,8 +291,32 @@ class JobService:
         self._finalize(job_id, "CANCELLED", error={"code": JOB_CANCELLED, "message": "The job was cancelled."})
         return {"ok": True, "already_finished": False}
 
+    def _queue_positions(self) -> dict[str, int]:
+        """1-based position of every QUEUED job within its category pool.
+
+        Pool assignment is derived from job_type, so the number reflects the
+        pool the job is actually waiting on. Cheap enough for per-poll use:
+        submit backpressure caps QUEUED jobs far below this table's size.
+        """
+        rows = self.db.query(
+            # rowid = insertion order: created_at has second precision, so
+            # same-second submissions would otherwise tie-break on the random
+            # id instead of the actual pool queue order
+            "SELECT id, job_type FROM jobs WHERE status = 'QUEUED' ORDER BY created_at, rowid"
+        )
+        per_category: dict[str, int] = {}
+        positions: dict[str, int] = {}
+        for row in rows:
+            category = _category(row["job_type"])
+            per_category[category] = per_category.get(category, 0) + 1
+            positions[row["id"]] = per_category[category]
+        return positions
+
     def get_job(self, job_id: str) -> dict | None:
-        return self.db.query_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+        row = self.db.query_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+        if row is not None and row["status"] == "QUEUED":
+            row["queue_position"] = self._queue_positions().get(job_id)
+        return row
 
     def list_jobs(self, params: dict) -> list[dict]:
         sql = "SELECT * FROM jobs"
@@ -284,10 +330,27 @@ class JobService:
         if cond:
             sql += " WHERE " + " AND ".join(cond)
         sql += " ORDER BY created_at DESC LIMIT 200"
-        return self.db.query(sql, tuple(args))
+        rows = self.db.query(sql, tuple(args))
+        positions = self._queue_positions()
+        for row in rows:
+            if row["status"] == "QUEUED" and row["id"] in positions:
+                row["queue_position"] = positions[row["id"]]
+        return rows
 
     def shutdown(self, wait_seconds: float = 3.0) -> None:
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        # Cooperatively cancel live jobs first: cancel() settles the job rows
+        # AND its linked run rows, detaches the runner, and (for compute jobs)
+        # cancels the engine ComputeControl so the native call unwinds at its
+        # next checkpoint instead of blocking this shutdown until it returns.
+        with self._lock:
+            job_ids = list(self._contexts)
+        for job_id in job_ids:
+            try:
+                self.cancel(job_id)
+            except Exception:  # noqa: BLE001 - shutdown must settle everything
+                log.exception("cancel during shutdown failed for job %s", job_id)
+        for pool in self._pools.values():
+            pool.shutdown(wait=False, cancel_futures=True)
         deadline = time.monotonic() + wait_seconds
         while time.monotonic() < deadline:
             with self._lock:

@@ -70,6 +70,7 @@ function JobCard({ job }: { job: JobState }) {
             {queued && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 {jobStatusLabel(tr, job.status)}
+                {job.queue_position != null ? ` · ${t("#{n} in queue", { n: job.queue_position })}` : ""}
               </Typography.Text>
             )}
             <Popconfirm

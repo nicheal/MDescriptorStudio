@@ -88,9 +88,11 @@ analysis.sensitivity、analysis.export。
 
 PCA/UMAP/t-SNE 结果为 preview points；cluster/outlier/coverage 结果为
 preview rows；large arrays 通过 chunk 访问，preview 与单次 chunk 均受
-20,000 行硬上限。计算中的自有循环调用 ctx.check_cancelled()，JobService
-默认并发为 2。距离/coverage 使用分块 nearest-neighbour，避免默认构造完整
-N×N 矩阵。Analysis 依赖由 backend/requirements.txt 和 backend.spec 一起发布。
+20,000 行硬上限。计算中的自有循环调用 ctx.check_cancelled()。JobService
+按类别分池并发（ADR-27）：engine 1（descriptor.compute 与 engine.update
+互斥）、analysis 2、dataset 2。距离/coverage 使用分块 nearest-neighbour，
+避免默认构造完整 N×N 矩阵。Analysis 依赖由 backend/requirements.txt 和
+backend.spec 一起发布。
 
 ```bash
 .venv\Scripts\python.exe -m mdescriptor_studio_backend   # cwd=backend/，stdin/stdout NDJSON

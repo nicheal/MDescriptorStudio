@@ -23,7 +23,10 @@ class Server:
     # during a long native compute the RPC workers crawl, the 64 general slots
     # fill with status polls, and without a reserved lane a job.cancel would
     # sit behind them — the user could not stop the very jobs causing the jam.
-    CONTROL_METHODS = frozenset({"job.cancel"})
+    # job.get/job.list belong here too: watchJob polls job.get every 500ms, so
+    # a jam otherwise also freezes progress reporting and makes running jobs
+    # look hung. All three are fast DB reads/row updates.
+    CONTROL_METHODS = frozenset({"job.cancel", "job.get", "job.list"})
 
     def __init__(self, methods: dict, on_stop=None):
         self.methods = methods

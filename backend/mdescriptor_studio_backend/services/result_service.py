@@ -105,8 +105,13 @@ class ResultService:
         dataset = self.db.query_one("SELECT name FROM datasets WHERE id = ?", (row["dataset_id"],))
         return {**row, "dataset_name": dataset["name"] if dataset else None, "metadata": meta}
 
-    def load_values(self, run_id: str):
-        """Internal helper for analysis (never serialized to IPC)."""
+    def load_values(self, run_id: str, *, mmap: bool = False):
+        """Internal helper for analysis (never serialized to IPC).
+
+        `mmap=True` returns a read-only memory map for callers that only slice
+        a few rows (heatmap per frame) instead of loading the whole matrix on
+        an RPC worker per request.
+        """
         import numpy as np
 
         row = self.get({"run_id": run_id})
@@ -114,7 +119,8 @@ class ResultService:
             values_path = self._managed_result_file(str(run_id), row["result_path"], "values.npy")
         except (OSError, TypeError, ValueError, UnsafePathError) as exc:
             raise AppError(RESULT_INCOMPATIBLE, "descriptor result values are unavailable") from exc
-        return np.load(values_path, allow_pickle=False), {**row, "result_path": str(values_path.parent)}
+        values = np.load(values_path, mmap_mode="r" if mmap else None, allow_pickle=False)
+        return values, {**row, "result_path": str(values_path.parent)}
 
     def remove(self, params: dict) -> dict:
         """Delete ONE run: DB rows (runs, analyses, linked jobs) + result dirs."""
@@ -191,7 +197,7 @@ class ResultService:
 
         run_id = params.get("run_id")
         frame_index = params.get("frame_index")
-        values, row = self.load_values(run_id)
+        values, row = self.load_values(run_id, mmap=True)
         try:
             offsets_file = self._managed_result_file(
                 str(run_id), row["result_path"], "row_offsets.npy"

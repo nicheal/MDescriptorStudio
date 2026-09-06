@@ -255,6 +255,8 @@ export interface JobRow {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** 1-based position within its category pool; only present while QUEUED. */
+  queue_position?: number;
 }
 
 export interface JobFinishedData {
