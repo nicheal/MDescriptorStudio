@@ -20,7 +20,8 @@ import Descriptors from "./pages/Descriptors";
 import Results from "./pages/Results";
 import Analysis from "./pages/Analysis";
 import { ipc } from "./ipc/client";
-import { useWorkspace } from "./stores/workspace";
+import { useWorkspace, hydrateActiveRun } from "./stores/workspace";
+import { hydrateAnalysisUi } from "./stores/analysisUi";
 import { wireJobEvents } from "./stores/jobs";
 import { useEngineUpdate, wireEngineUpdate } from "./stores/engineUpdate";
 import { getT, initLanguage, useT } from "./i18n";
@@ -157,6 +158,9 @@ export default function App() {
             mdescriptor_descriptor_info_schema_version?: number;
             cpu_threads?: number;
           }>("system.info");
+          // restore the persisted analysis view + active run before any page
+          // renders so the Analysis page mounts on what was last on screen
+          await Promise.all([hydrateActiveRun(), hydrateAnalysisUi()]);
           setBackendReady(info.mdescriptor_version, info.cpu_threads ?? null);
           await refreshDatasets();
           // engine update check (PyPI) — non-blocking, UI notifies when available

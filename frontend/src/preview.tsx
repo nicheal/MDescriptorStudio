@@ -814,7 +814,7 @@ const METHODS: Record<string, Handler> = {
       finished_at: null,
     };
   },
-  "settings.get": () => ({ value: "ds-gaas" }),
+  "settings.get": (p) => ({ value: p?.key === "workspace.activeDatasetId" ? "ds-gaas" : null }),
   "settings.set": () => ({}),
   "engine.check_update": () => ({
     installed: "0.3.2",

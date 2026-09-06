@@ -33,7 +33,13 @@ from .storage.database import Database
 
 log = logging.getLogger(__name__)
 
-_ALLOWED_SETTINGS = {"workspace.activeDatasetId", "ui.language", "compute.default_threads"}
+_ALLOWED_SETTINGS = {
+    "workspace.activeDatasetId",
+    "workspace.activeDescriptorRunId",
+    "workspace.analysisUi",
+    "ui.language",
+    "compute.default_threads",
+}
 _MAX_SETTING_VALUE = 4096
 
 

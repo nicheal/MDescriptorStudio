@@ -61,7 +61,8 @@ interface WorkspaceState {
 }
 ```
 
-- 持久化：`activeDatasetId` 存 backend `settings` 表（`workspace.activeDatasetId`），启动恢复；`activeFrameIndex` 不恢复。
+- 持久化：`activeDatasetId` 存 backend `settings` 表（`workspace.activeDatasetId`），启动恢复；`activeDescriptorRunId` 同样持久化（`workspace.activeDescriptorRunId`，切换数据集时置空不写入）；`activeFrameIndex` 不恢复。
+- Analysis 页视图（当前子页、投影方法、总览模块、粒度/预处理、末次展示的分析 id 及其 run）持久化为 `workspace.analysisUi`（JSON）；重进页面或重启 APP 时按 analysis id 从后端工件（`analysis.preview` / `result.get_pca`）重新展示，不重算。
 - 切换数据集 → 全部页面刷新（Overview 重新拉统计、Explore 重置帧、Descriptors 重算预检、Analysis 过滤）。
 
 ## 4. AntD tokens（logos.png 色板，融合 §124）

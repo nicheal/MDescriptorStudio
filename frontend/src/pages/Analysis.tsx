@@ -230,7 +230,6 @@ export default function Analysis() {
   const [uncertaintyK, setUncertaintyK] = useState(8);
   const [contamination, setContamination] = useState(0.01);
   const [queryIndex, setQueryIndex] = useState(0);
-  const [overviewAnalysis, setOverviewAnalysis] = useState<OverviewAnalysis>("feature_variance");
   const [methodGuideOpen, setMethodGuideOpen] = useState(false);
   const [trajectoryStep, setTrajectoryStep] = useState(1);
   const [perturbationType, setPerturbationType] = useState<"jitter" | "strain">("jitter");
@@ -242,7 +241,9 @@ export default function Analysis() {
   const [overviewArraysBusy, setOverviewArraysBusy] = useState(false);
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
   const operationRef = useRef(0);
-  const analysisCacheRef = useRef(new Map<string, CachedAnalysis>());
+  // Analysis ids already auto-restored in this mount/run window, so a
+  // persistent fetch error cannot loop the restore effect.
+  const restoreAttemptedRef = useRef<string | null>(null);
 
   const selectedRun = st.activeDescriptorRunId;
   const setSelectedRun = st.setActiveRun;
@@ -276,6 +277,7 @@ export default function Analysis() {
 
   useEffect(() => {
     operationRef.current += 1;
+    restoreAttemptedRef.current = null;
     setBusy(false);
     setLastJobProgress(null);
     setPoints([]);
@@ -333,7 +335,7 @@ export default function Analysis() {
       return;
     }
 
-    const cached = analysisCacheRef.current.get(analysisId);
+    const cached = analysisCache.get(analysisId);
     const cachedArrays = cached?.arrays ?? {};
     const missingArrays = arrayNames.filter((name) => !Object.prototype.hasOwnProperty.call(cachedArrays, name));
     if (!missingArrays.length) {
@@ -360,8 +362,8 @@ export default function Analysis() {
     })).then((entries) => {
       if (disposed) return;
       const arrays = { ...cachedArrays, ...Object.fromEntries(entries) };
-      const current = analysisCacheRef.current.get(analysisId);
-      analysisCacheRef.current.set(analysisId, {
+      const current = analysisCache.get(analysisId);
+      analysisCache.set(analysisId, {
         preview: current?.preview ?? cached?.preview ?? preview,
         points: current?.points ?? cached?.points ?? normalizePoints(preview ?? { analysis_id: analysisId }),
         selectedIndices: current?.selectedIndices ?? cached?.selectedIndices ?? selectedIndicesFromPreview(preview ?? { analysis_id: analysisId }),
@@ -416,13 +418,14 @@ export default function Analysis() {
       }
       if (!id) throw new Error(`${method} returned no analysis_id`);
       if (!isCurrent()) return null;
-      const frontendCached = response.job_id ? undefined : analysisCacheRef.current.get(id);
+      const frontendCached = response.job_id ? undefined : analysisCache.get(id);
       if (frontendCached) {
         setAnalysisId(id);
         setPreview(frontendCached.preview);
         setPoints(frontendCached.points);
         setSelectedIndices(frontendCached.selectedIndices);
         setOverviewArrays(frontendCached.arrays);
+        useAnalysisUi.getState().rememberResult(requestRunId, id);
         setLastJobProgress(1);
         message.success(t("{label} loaded from cache", { label }));
         return id;
@@ -431,8 +434,8 @@ export default function Analysis() {
       if (!isCurrent()) return null;
       const nextPoints = normalizePoints(result);
       const nextSelectedIndices = selectedIndicesFromPreview(result);
-      const cached = analysisCacheRef.current.get(id);
-      analysisCacheRef.current.set(id, {
+      const cached = analysisCache.get(id);
+      analysisCache.set(id, {
         preview: result,
         points: nextPoints,
         selectedIndices: nextSelectedIndices,
@@ -442,6 +445,7 @@ export default function Analysis() {
       setPreview(result);
       setPoints(nextPoints);
       setSelectedIndices(nextSelectedIndices);
+      useAnalysisUi.getState().rememberResult(requestRunId, id);
       setLastJobProgress(1);
       message.success(response.job_id ? t("{label} complete", { label }) : t("{label} loaded from cache", { label }));
       return id;
@@ -494,13 +498,14 @@ export default function Analysis() {
           if (typeof done.result?.analysis_id === "string") id = done.result.analysis_id;
         }
         if (!isCurrent()) return;
-        const frontendCached = response.job_id ? undefined : analysisCacheRef.current.get(id);
+        const frontendCached = response.job_id ? undefined : analysisCache.get(id);
         if (frontendCached) {
           setAnalysisId(id);
           setPreview(frontendCached.preview);
           setPoints(frontendCached.points);
           setSelectedIndices(frontendCached.selectedIndices);
           setOverviewArrays(frontendCached.arrays);
+          useAnalysisUi.getState().rememberResult(requestRunId, id);
           setLastJobProgress(1);
           message.success(t("PCA loaded from cache"));
           return;
@@ -508,8 +513,8 @@ export default function Analysis() {
         const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: id });
         if (!isCurrent()) return;
         const nextPoints = pcaPayloadPoints(payload);
-        const cached = analysisCacheRef.current.get(id);
-        analysisCacheRef.current.set(id, {
+        const cached = analysisCache.get(id);
+        analysisCache.set(id, {
           preview: null,
           points: nextPoints,
           selectedIndices: [],
@@ -519,6 +524,7 @@ export default function Analysis() {
         setPreview(null);
         setPoints(nextPoints);
         setSelectedIndices([]);
+        useAnalysisUi.getState().rememberResult(requestRunId, id);
         setLastJobProgress(1);
         message.success(response.job_id ? t("PCA complete") : t("PCA loaded from cache"));
       } catch (error) {
@@ -542,7 +548,7 @@ export default function Analysis() {
     }
   }, [preprocess, projection, runProjection, selectedRun]);
 
-  const loadAnalysis = useCallback(async (row: AnalysisRow) => {
+  const loadAnalysis = useCallback(async (row: AnalysisRow, opts?: { silent?: boolean }) => {
     if (!dataset || !selectedRun || row.status !== "COMPLETED") return;
     const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
     if (!inputRunIds.includes(selectedRun)) {
@@ -590,7 +596,7 @@ export default function Analysis() {
     useWorkspace.getState().setSelectedSample(null);
 
     try {
-      const cached = analysisCacheRef.current.get(row.id);
+      const cached = analysisCache.get(row.id);
       if (cached) {
         if (!isCurrent()) return;
         setAnalysisId(row.id);
@@ -598,8 +604,9 @@ export default function Analysis() {
         setPoints(cached.points);
         setSelectedIndices(cached.selectedIndices);
         setOverviewArrays(cached.arrays);
+        useAnalysisUi.getState().rememberResult(requestRunId, row.id);
         setLastJobProgress(1);
-        message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
+        if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
         return;
       }
 
@@ -608,7 +615,7 @@ export default function Analysis() {
         if (!isCurrent()) return;
         const nextPoints = pcaPayloadPoints(payload);
         const nextCached: CachedAnalysis = { preview: null, points: nextPoints, selectedIndices: [], arrays: {} };
-        analysisCacheRef.current.set(row.id, nextCached);
+        analysisCache.set(row.id, nextCached);
         setAnalysisId(row.id);
         setPreview(null);
         setPoints(nextPoints);
@@ -620,15 +627,16 @@ export default function Analysis() {
         const nextPoints = normalizePoints(result);
         const nextSelectedIndices = selectedIndicesFromPreview(result);
         const nextCached: CachedAnalysis = { preview: result, points: nextPoints, selectedIndices: nextSelectedIndices, arrays: {} };
-        analysisCacheRef.current.set(row.id, nextCached);
+        analysisCache.set(row.id, nextCached);
         setAnalysisId(row.id);
         setPreview(result);
         setPoints(nextPoints);
         setSelectedIndices(nextSelectedIndices);
         setOverviewArrays({});
       }
+      useAnalysisUi.getState().rememberResult(requestRunId, row.id);
       setLastJobProgress(1);
-      message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
+      if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
     } catch (error) {
       const err = error as { code?: string; message?: string };
       if (isCurrent()) message.error(`${err.code ?? "ANALYSIS"}: ${err.message ?? t("could not load analysis")}`);
@@ -639,6 +647,23 @@ export default function Analysis() {
       }
     }
   }, [dataset, message, selectedRun, t]);
+
+  // Auto-restore the analysis that was on screen when the page was last left
+  // (page switch or app restart): the backend persists the artifacts, so this
+  // re-fetches instead of recomputing. One attempt per analysis id (reset when
+  // the dataset/run changes) so a persistent fetch error cannot loop.
+  useEffect(() => {
+    const wanted = useAnalysisUi.getState().view;
+    if (!wanted.analysisId || !selectedRun || wanted.runId !== selectedRun) return;
+    if (restoreAttemptedRef.current === wanted.analysisId) return;
+    if (!analyses.length || busy || loadingAnalysisId || analysisId) return;
+    restoreAttemptedRef.current = wanted.analysisId;
+    const row = analyses.find((item) => item.id === wanted.analysisId);
+    if (!row || row.status !== "COMPLETED") return;
+    const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
+    if (!inputRunIds.includes(selectedRun)) return;
+    void loadAnalysis(row, { silent: true });
+  }, [analyses, analysisId, busy, loadAnalysis, loadingAnalysisId, selectedRun]);
 
   const runTabAnalysis = useCallback(async () => {
     if (tab === "projection") return runProjection();
@@ -723,10 +748,22 @@ export default function Analysis() {
     }
   }, [dataset, mode, selectedRun]);
 
+  // Keep the cached entry in sync with the on-chart selection so leaving the
+  // page and coming back restores it together with the chart.
+  const updateCachedSelection = useCallback(
+    (indices: number[]) => {
+      if (!analysisId) return;
+      const entry = analysisCache.get(analysisId);
+      if (entry) analysisCache.set(analysisId, { ...entry, selectedIndices: indices });
+    },
+    [analysisId],
+  );
+
   const handlePoint = useCallback((point: Point) => {
     setSelectedIndices([point.i]);
+    updateCachedSelection([point.i]);
     inspectPoint(point);
-  }, [inspectPoint]);
+  }, [inspectPoint, updateCachedSelection]);
 
   const plot = useMemo(() => {
     if (!points.length) return null;
@@ -759,6 +796,7 @@ export default function Analysis() {
           const displayIndices = (event?.points ?? []).map((point) => point.pointIndex).filter((index): index is number => typeof index === "number");
           const indices = displayIndices.map((index) => points[index]?.i).filter((index): index is number => typeof index === "number");
           setSelectedIndices(indices);
+          updateCachedSelection(indices);
           const first = displayIndices[0];
           if (first != null && points[first]) inspectPoint(points[first]);
           else {
@@ -768,7 +806,7 @@ export default function Analysis() {
         }}
       />
     );
-  }, [analysisId, colorBy, handlePoint, inspectPoint, mode, points, preprocess, projection, selectedIndices, t]);
+  }, [analysisId, colorBy, handlePoint, inspectPoint, mode, points, preprocess, projection, selectedIndices, t, updateCachedSelection]);
 
   const exportSelection = async () => {
     if (!selectedRun || !exportPath.trim()) {
@@ -811,13 +849,14 @@ export default function Analysis() {
   const deleteAnalysis = async (row: AnalysisRow) => {
     try {
       await ipc.request("analysis.delete", { analysis_id: row.id });
-      analysisCacheRef.current.delete(row.id);
+      analysisCache.delete(row.id);
       if (analysisId === row.id) {
         setAnalysisId(null);
         setPreview(null);
         setPoints([]);
         setSelectedIndices([]);
         setOverviewArrays({});
+        useAnalysisUi.getState().clearResult();
       }
       await refresh();
     } catch (error) {
