@@ -89,7 +89,7 @@ export default function HealthFindingsDrawer() {
     setRows([]);
     setSelected([]);
     setCurrent(null);
-    setActiveTab(st.findingsCheck ?? "all");
+    setActiveTab(st.findingsCheck ?? CHECK_KEYS[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, d?.id]);
 
@@ -124,16 +124,11 @@ export default function HealthFindingsDrawer() {
         const exc = await ipc.request<{ indices: number[] }>("dataset.excluded", { id: dsId });
         indices = exc.indices;
         if (useWorkspace.getState().activeDatasetId !== dsId) return;
-      } else if (tab !== "all") {
-        indices = null; // resolved server-side from health_findings[check]
       } else {
-        const f = s.health_findings;
-        const union = new Set<number>();
-        CHECK_KEYS.forEach((k) => (f?.[k] ?? []).forEach((i) => union.add(i)));
-        indices = [...union].sort((a, b) => a - b);
+        indices = null; // resolved server-side from health_findings[check]
       }
       const params: Record<string, unknown> = { id: dsId, limit: 1000 };
-      if (tab !== "all" && tab !== EXCLUDED_TAB) params.check = tab;
+      if (tab !== EXCLUDED_TAB) params.check = tab;
       if (indices !== null) params.indices = indices;
       let r = await ipc.request<{ recalculating: boolean; job_id: string | null; total: number; returned: number; rows: FindingsRow[] }>(
         "dataset.findings",
@@ -158,7 +153,21 @@ export default function HealthFindingsDrawer() {
       setLoading(true);
       try {
         const s = await fetchStats();
-        if (!disposed && s) await fetchRows(s, tabRef.current);
+        if (!disposed && s) {
+          // the check behind the rail click may have lost its findings since
+          // (or the drawer may have opened without one): snap to the first
+          // tab that actually has rows instead of rendering a headless table
+          const countFor = (k: (typeof CHECK_KEYS)[number]) => s.health_findings?.[k]?.length ?? 0;
+          const known = new Set([
+            ...CHECK_KEYS.filter((k) => countFor(k) > 0),
+            ...((s.excluded_frames?.count ?? 0) > 0 ? [EXCLUDED_TAB] : []),
+          ]);
+          if (!known.has(tabRef.current)) {
+            const first = CHECK_KEYS.find((k) => countFor(k) > 0);
+            if (first) setActiveTab(first);
+          }
+          await fetchRows(s, tabRef.current);
+        }
       } catch (e) {
         console.error("dataset.findings failed", e);
       } finally {
@@ -267,11 +276,20 @@ export default function HealthFindingsDrawer() {
 
   const findings = stats?.health_findings;
   const excludedCount = stats?.excluded_frames?.count ?? 0;
-  // the Missing column only pays for itself when some rows actually miss a
-  // property (always on the missing-values tab)
-  const showMissing = activeTab === "missing_values" || rows.some((r) => r.missing_props?.length);
+  // duplicate → first-occurrence mapping behind the "Duplicate of" column
+  // (absent on caches from before the mapping existed)
+  const dupOf = new Map<number, number>();
+  const dupList = findings?.duplicate_structures ?? [];
+  (findings?.duplicate_structures_of ?? []).forEach((orig, i) => {
+    if (dupList[i] != null) dupOf.set(dupList[i], orig);
+  });
+  // every check keeps its own table lean: the shared Frame/Formula/Atoms
+  // columns plus the single column behind that check's finding
+  const showDupOf = activeTab === "duplicate_structures" && dupOf.size > 0;
+  const showMissing = activeTab === "missing_values";
+  const showMaxForce = activeTab === "extreme_force";
+  const showMinDistance = activeTab === "nonphysical_structures";
   const tabItems = [
-    { key: "all", label: t("All checks") },
     ...CHECK_KEYS.filter((k) => (findings?.[k]?.length ?? 0) > 0).map((k) => ({
       key: k,
       label: `${title(k)} ${(findings?.[k]?.length ?? 0).toLocaleString()}`,
@@ -317,7 +335,7 @@ export default function HealthFindingsDrawer() {
           style={{ marginBottom: 4 }}
         />
       )}
-      {stats && findings && tabItems.length <= 1 ? (
+      {stats && findings && tabItems.length === 0 ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={t("No flagged frames — this dataset passed every check.")}
@@ -356,34 +374,76 @@ export default function HealthFindingsDrawer() {
             }}
             onRow={(row) => ({ onClick: () => preview(row.index), style: { cursor: "pointer" } })}
             columns={[
-              // widths sum with the 32px selection column to ≤ the 560px
-              // drawer's usable width, so the table never scrolls sideways
-              { title: t("Frame"), dataIndex: "index", key: "index", width: 56 },
-              { title: t("Formula"), dataIndex: "formula", key: "formula", width: 78, ellipsis: true },
-              { title: t("Atoms"), dataIndex: "natoms", key: "natoms", width: 58, align: "right" },
-              {
-                title: t("E / atom"),
-                dataIndex: "energy_per_atom",
-                key: "energy_per_atom",
-                width: 70,
-                align: "right",
-                render: (v: number | null) => (v == null ? "—" : v.toFixed(4)),
-              },
-              {
-                title: "max |F|",
-                dataIndex: "force_max",
-                key: "force_max",
-                width: 62,
-                align: "right",
-                render: (v: number | null) => (v == null ? "—" : v.toFixed(3)),
-              },
+              // Fixed px widths on the shared trio + one widthless LAST column
+              // that absorbs the drawer's leftover space: the trio renders
+              // pixel-identical on every card, whether that card's extra
+              // column exists (the four metric checks) or not (invalid cell /
+              // net force / excluded, and legacy caches without the duplicate
+              // mapping — a blank filler, invisible on the borderless table).
+              // The specified widths (+32px selection) stay well under the
+              // 560px drawer, so it never scrolls sideways; excluded rows are
+              // marked by the strikethrough row style, not a column
+              { title: t("Frame"), dataIndex: "index", key: "index", width: 64 },
+              { title: t("Formula"), dataIndex: "formula", key: "formula", width: 140, ellipsis: true },
+              { title: t("Atoms"), dataIndex: "natoms", key: "natoms", width: 64, align: "right" },
+              ...(showDupOf
+                ? [
+                    {
+                      title: t("Duplicate of"),
+                      key: "duplicate_of",
+                      render: (_: unknown, row: FindingsRow) => {
+                        const orig = dupOf.get(row.index);
+                        if (orig == null) return null;
+                        return (
+                          <Tooltip title={t("Identical geometry (positions, cell, composition); only the labels (e.g. forces) may differ.")}>
+                            <Button
+                              type="link"
+                              size="small"
+                              style={{ padding: 0, height: "auto", fontSize: 12, lineHeight: "18px" }}
+                              onClick={(e) => {
+                                // the row click previews the copy; the link
+                                // jumps straight to the frame it repeats
+                                e.stopPropagation();
+                                useWorkspace.getState().setActiveFrame(orig);
+                                useWorkspace.getState().setPage("explore");
+                              }}
+                            >
+                              {orig}
+                            </Button>
+                          </Tooltip>
+                        );
+                      },
+                    },
+                  ]
+                : []),
+              ...(showMaxForce
+                ? [
+                    {
+                      title: "max |F|",
+                      dataIndex: "force_max",
+                      key: "force_max",
+                      align: "right" as const,
+                      render: (v: number | null) => (v == null ? "—" : v.toFixed(3)),
+                    },
+                  ]
+                : []),
+              ...(showMinDistance
+                ? [
+                    {
+                      title: t("Min distance"),
+                      dataIndex: "min_distance",
+                      key: "min_distance",
+                      align: "right" as const,
+                      render: (v: number | null) => (v == null ? "—" : `${v.toFixed(3)} Å`),
+                    },
+                  ]
+                : []),
               ...(showMissing
                 ? [
                     {
                       title: t("Missing"),
                       dataIndex: "missing_props",
                       key: "missing_props",
-                      width: 94,
                       render: (_: unknown, row: FindingsRow) => (
                         <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 2 }}>
                           {(row.missing_props ?? []).map((p) => (
@@ -396,12 +456,9 @@ export default function HealthFindingsDrawer() {
                     },
                   ]
                 : []),
-              {
-                title: "",
-                key: "state",
-                width: 48,
-                render: (_: unknown, row: FindingsRow) => (row.excluded ? <Tag color="default">{t("excluded")}</Tag> : null),
-              },
+              ...(!showDupOf && !showMaxForce && !showMinDistance && !showMissing
+                ? [{ title: "", key: "filler" }]
+                : []),
             ]}
           />
           <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>

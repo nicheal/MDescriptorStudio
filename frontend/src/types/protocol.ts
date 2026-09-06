@@ -88,6 +88,9 @@ export interface HealthFindings {
   missing_values: number[];
   invalid_cell: number[];
   duplicate_structures: number[];
+  /** parallel to duplicate_structures: first-occurrence frame behind each
+   * flagged copy; absent on caches from before the mapping existed */
+  duplicate_structures_of?: number[];
   extreme_force: number[];
   nonphysical_structures: number[];
   net_force: number[];
@@ -98,9 +101,11 @@ export interface FindingsRow {
   index: number;
   natoms: number;
   formula: string;
-  energy_per_atom: number | null;
   force_max: number | null;
   volume: number | null;
+  /** shortest interatomic distance (Å); computed only for the
+   * non-physical-structures check, null elsewhere */
+  min_distance: number | null;
   /** declared properties this frame lacks (missing-values finding) */
   missing_props?: string[];
   excluded: boolean;

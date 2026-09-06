@@ -39,6 +39,17 @@ for pkg in (
     hiddenimports += h
 hiddenimports += ["numpy", "joblib", "numba", "llvmlite"]
 
+# Native statistics geometry kernel (optional at runtime — datasets.native
+# falls back to scipy when absent).  Bundled at its package-relative location
+# so datasets/native.py's lookup works unchanged in the frozen sidecar.
+import os
+
+_mds_native_dll = os.path.join(
+    SPECPATH, "mdescriptor_studio_backend", "datasets", "_native", "mds_native.dll"
+)
+if os.path.exists(_mds_native_dll):
+    binaries.append((_mds_native_dll, "mdescriptor_studio_backend/datasets/_native"))
+
 a = Analysis(
     ["run_backend.py"],
     pathex=["."],

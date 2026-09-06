@@ -1,12 +1,16 @@
 # Full release packaging for MDescriptor Studio (M5).
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts\package.ps1
 # Steps:
-#   1. PyInstaller backend sidecar (onefile)
-#   2. Copy to src-tauri\binaries\backend-x86_64-pc-windows-msvc.exe
-#   3. tauri build  ->  NSIS setup.exe under src-tauri\target\release\bundle\nsis\
+#   1. Native statistics kernel (optional; best-effort)
+#   2. PyInstaller backend sidecar (onefile)
+#   3. Copy to src-tauri\binaries\backend-x86_64-pc-windows-msvc.exe
+#   4. tauri build  ->  NSIS setup.exe under src-tauri\target\release\bundle\nsis\
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+
+& powershell -ExecutionPolicy Bypass -File "$root\scripts\build_native.ps1"
+if ($LASTEXITCODE -ne 0) { throw "native kernel build failed" }
 
 Push-Location "$root\backend"
 & "$root\.venv\Scripts\python.exe" -m PyInstaller backend.spec --noconfirm --log-level ERROR

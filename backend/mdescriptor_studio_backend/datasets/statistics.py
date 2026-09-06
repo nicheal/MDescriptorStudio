@@ -9,9 +9,18 @@ from itertools import product
 
 import numpy as np
 
+from . import native as _native
 from .base import DatasetAdapter, pbc_summary
-from .covalent_radii import radii_for
+from .covalent_radii import _ARRAY as _RADII_TABLE, radii_for
 from .deepmd_symbols import _Z_TO_SYMBOL as _Z_LOOKUP
+
+if not _native.native_available():
+    # Without the compiled kernel the scan below runs the scipy reference
+    # implementation inside a job thread.  scipy must then be imported up
+    # front (main thread, before the deferred engine warmup starts): a first
+    # scipy import concurrent with warmup's native-kernel compute deadlocks
+    # extension-module initialization on Windows.
+    from scipy.spatial import cKDTree  # noqa: F401
 
 BINS = 40
 EXTREME_FORCE_EV_A = 50.0  # per-atom |F| above this flags the frame (health panel)
@@ -291,6 +300,32 @@ def _int_hist(values: list[int]) -> dict | None:
     return {"edges": [round(e, 6) for e in edges], "counts": [int(c) for c in counts]}
 
 
+def _frame_geometry(
+    positions: np.ndarray, numbers: np.ndarray, cell: np.ndarray, pbc: np.ndarray
+) -> tuple[float | None, bool]:
+    """Minimum interatomic distance and short-contact flag in one pass.
+
+    The compiled kernel (datasets/_native) fuses what used to be two cKDTree
+    passes per frame — the dominant cost of the Overview/Health statistics —
+    and falls back to the scipy reference implementation below when it is not
+    available, so results never depend on the faster path being present.
+    """
+    fast = _native.frame_geometry(
+        positions,
+        numbers,
+        cell,
+        pbc,
+        _RADII_TABLE,
+        SHORT_CONTACT_COEFFICIENT,
+        _CELL_DET_TOL,
+        _MIN_DISTANCE_IMAGE_LIMIT,
+    )
+    if fast is not None:
+        return fast
+    min_d = _frame_min_distance(positions, cell, pbc)
+    return min_d, _frame_short_contact(positions, numbers, cell, pbc, min_d)
+
+
 def compute_statistics(adapter: DatasetAdapter) -> dict:
     natoms: list[float] = []
     energy_per_atom: list[float] = []
@@ -320,6 +355,9 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         "missing_values": [],
         "invalid_cell": [],
         "duplicate_structures": [],
+        # parallel to duplicate_structures: the first-occurrence frame each
+        # flagged copy repeats (same order, same cap, so the alignment holds)
+        "duplicate_structures_of": [],
         "extreme_force": [],
         "nonphysical_structures": [],
         "net_force": [],
@@ -331,9 +369,9 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         n = int(frame.numbers.size)
         natoms.append(float(n))
         symbols = [_Z_LOOKUP.get(int(z), f"Z{z}") for z in frame.numbers]
-        elements.update(symbols)
-        compositions[tuple(sorted(set(symbols)))] += 1
         counts = Counter(symbols)
+        elements.update(counts)
+        compositions[tuple(sorted(set(symbols)))] += 1
         formula = _hill_formula(counts)
         if formula in formulas:
             prev_counts, prev_count = formulas[formula]
@@ -379,18 +417,19 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         if any(bool(v) for v in frame.pbc) and (not finite or det <= _CELL_DET_TOL):
             invalid_cell += 1
             findings["invalid_cell"].append(pos)
-        min_d = _frame_min_distance(frame.positions, frame.cell, frame.pbc)
+        min_d, frame_nonphysical = _frame_geometry(
+            frame.positions, frame.numbers, frame.cell, frame.pbc
+        )
         if min_d is not None:
             min_distance.append(min_d)
-        if _frame_short_contact(
-            frame.positions, frame.numbers, frame.cell, frame.pbc, min_d
-        ):
+        if frame_nonphysical:
             nonphysical += 1
             findings["nonphysical_structures"].append(pos)
         content_hash = _frame_hash(frame.numbers, frame.positions, cell)
         if content_hash in first_seen_hash:
             # extra copy beyond the first occurrence
             findings["duplicate_structures"].append(pos)
+            findings["duplicate_structures_of"].append(first_seen_hash[content_hash])
         else:
             first_seen_hash[content_hash] = pos
 
@@ -475,7 +514,8 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
             "net_force_threshold": NET_FORCE_EV_A,
         },
         # frame indices behind the counts above (original file positions,
-        # capped per check; a shorter list than its count means truncation)
+        # capped per check; a shorter list than its count means truncation;
+        # duplicate_structures_of runs parallel to duplicate_structures)
         "health_findings": {
             "cap": HEALTH_FINDINGS_CAP,
             **{k: v[:HEALTH_FINDINGS_CAP] for k, v in findings.items()},

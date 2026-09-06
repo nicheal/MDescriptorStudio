@@ -7,6 +7,7 @@ to AppError here. Engine updates via UpdateService (PyPI pin mdescriptor==0.2.8 
 from __future__ import annotations
 
 import logging
+import threading
 
 import numpy as np
 import mdescriptor as md
@@ -31,6 +32,17 @@ class EngineAdapter:
 
     def __init__(self) -> None:
         self._schema_cache: dict[str, dict] = {}
+        # Deferred-warmup gate: while a warmup runs on the background thread,
+        # build() waits until it finishes so the engine's lazy native imports
+        # are still resolved exactly once and never race a user job. The event
+        # starts set, so direct users (tests, scripts) are unaffected.
+        self._warm_gate = threading.Event()
+        self._warm_gate.set()
+        self._warming = False
+
+    def arm_deferred_warmup(self) -> None:
+        """Switch build() into wait-for-warmup mode before the warmup thread starts."""
+        self._warm_gate.clear()
 
     # -- info / registry -------------------------------------------------
     def runtime_info(self) -> dict:
@@ -51,6 +63,11 @@ class EngineAdapter:
 
     # -- construction / compute ------------------------------------------
     def build(self, name: str, parameters: dict, device: str = "cpu"):
+        # create_descriptor lazily imports the engine's native extensions;
+        # during deferred background warmup this must not race it. The warmup
+        # thread itself bypasses the gate (it is the producer).
+        if not self._warming:
+            self._warm_gate.wait()
         try:
             params = dict(parameters)
             if device != "cpu":
@@ -120,15 +137,25 @@ class EngineAdapter:
 
     # -- warmup --------------------------------------------------------------
     def warmup(self) -> None:
-        """Build every registered descriptor once on the calling (main) thread.
+        """Build every registered descriptor once on the warmup thread.
 
         create_descriptor lazily imports native extension modules; on 0.2.3/win
         resolving those imports while worker threads (or a stdin reader thread)
         were live deadlocked the import machinery (fixed in 0.2.5 and retained
-        through 0.2.8, re-verified in scripts/verify_known_issues.py). The warmup stays as defense in
-        depth and to pay each descriptor's first-build cost at startup, before
-        any job thread exists.
+        through 0.2.8, re-verified in scripts/verify_known_issues.py). The
+        warmup stays as defense in depth and to pay each descriptor's
+        first-build cost once, ahead of any user job. Since backend.ready is
+        now emitted before warmup, this runs on a background thread and
+        build() gates on completion so imports stay single-threaded.
         """
+        self._warming = True
+        try:
+            self._warmup_locked()
+        finally:
+            self._warming = False
+            self._warm_gate.set()
+
+    def _warmup_locked(self) -> None:
         import numpy as np
 
         preload_native = getattr(md, "preload_native", None)

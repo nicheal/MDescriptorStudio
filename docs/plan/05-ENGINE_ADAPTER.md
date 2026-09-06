@@ -79,7 +79,7 @@ convert errors            → 引擎异常 → GUI 错误码
 
 ## 6. 约束
 
-- **启动预热（保留，0.2.3 实测 / 0.2.8 复核）**：0.2.3 中 `create_descriptor` 会懒加载原生扩展模块，若在存在工作线程/stdin 读取线程时触发该 import，会与 import 机制死锁（构建永久阻塞直到 stdin EOF）；**0.2.5 已修复**并自该版提供 `preload_native()`（0.2.8 保留）。预热仍保留作为纵深防御，并把首次构建开销付在启动期——main() 在启动任何线程之前，于主线程调用 `adapter.warmup()`（先显式预加载原生模块，再逐个构建全部 28 个描述符并做一次微计算），`backend.ready` 在预热完成后才发出。新增描述符注册路径（如有）不得绕过该预热。
+- **启动预热（保留，0.2.3 实测 / 0.2.8 复核）**：0.2.3 中 `create_descriptor` 会懒加载原生扩展模块，若在存在工作线程/stdin 读取线程时触发该 import，会与 import 机制死锁（构建永久阻塞直到 stdin EOF）；**0.2.5 已修复**并自该版提供 `preload_native()`（0.2.8 保留）。预热仍保留作为纵深防御，并把首次构建开销付在启动期——main() 发出 `backend.ready` 后在后台 warmup 线程调用 `adapter.warmup()`（先显式预加载原生模块，再逐个构建全部 28 个描述符并做一次微计算），使 UI 不必等待预热；期间 `EngineAdapter.build()` 以事件门控等待预热完成（预热线程自身旁路），保证懒加载 import 仍只发生一次且不与用户 job 并发。配套约束：serve_forever 在 Windows 管道 stdin 上使用 PeekNamedPipe 轮询 + os.read 直读（1ms 间隔）而非阻塞 ReadFile——实测阻塞中的 stdin 读取与后台线程导入 sklearn/numba（torch 驻留后的 DLL 加载）并发会死锁 Windows DLL 加载器（scipy.linalg.blas create_module 永久挂起）；warmup 完成后自动切回历史阻塞读取（零延迟、零空闲 CPU）。轮询模式必须绕开 Python 的缓冲 stdin：BufferedReader 会把一次 ReadFile 预取的多行滞留在用户态缓冲，PeekNamedPipe 看到的 OS 队列为空，导致后续帧永久饥饿。main() 在启动预热线程前还会在主线程串行预加载剩余的 DLL 承载包（scipy.spatial、dpdata），因为并发的首次原生导入同样会死锁。控制台 stdin 与非 Windows 平台回退为历史阻塞读取。新增描述符注册路径（如有）不得绕过该预热。
 - 只写 canonical 字段（schema 的 `name` 键），不使用历史 Python aliases（§8.2）。
 - 参数表单直接使用 schema 参数的 `display_name` 和 `description`；canonical 键名仅用于状态、序列化和提交，不在 GUI 侧维护参数名映射表。
 - 大数组不经过本模块进 IPC（Rule 6）：`compute` 返回的 `DescriptorResult` 由 ResultService 直接落盘 values.npy。

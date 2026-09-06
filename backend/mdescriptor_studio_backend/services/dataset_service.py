@@ -19,6 +19,7 @@ from ..datasets import (
     detect_format,
     is_v2_fingerprint,
 )
+from ..datasets.statistics import _frame_geometry
 from ..errors import (
     AppError,
     DATASET_CHANGED,
@@ -391,6 +392,10 @@ class DatasetService:
         if "health_findings" not in stats or "excluded_frames" not in stats:
             # pre-findings cache (before per-check frame indices / exclusions): same upgrade
             return None
+        if "duplicate_structures_of" not in (stats.get("health_findings") or {}):
+            # pre-duplicate-origin cache (before the per-copy first-occurrence
+            # mapping behind the findings table's "duplicate of" column)
+            return None
         return stats
 
     # -- health findings & excluded frames ------------------------------------
@@ -484,6 +489,9 @@ class DatasetService:
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= FINDINGS_ROW_LIMIT:
             raise AppError(INVALID_PARAMS, f"'limit' must be an integer in [1, {FINDINGS_ROW_LIMIT}]")
         adapter = self._adapter_for(row)
+        # the shortest interatomic distance only pays for itself on the
+        # non-physical tab (the check's metric); other tabs skip the NN pass
+        want_min_distance = check == "nonphysical_structures"
         rows = []
         for idx in indices[:limit]:
             try:
@@ -502,18 +510,19 @@ class DatasetService:
                 "forces": f.forces is not None,
                 "virial": f.virial is not None,
             }
+            min_distance = None
+            if want_min_distance:
+                min_d, _ = _frame_geometry(f.positions, f.numbers, cell, f.pbc)
+                if min_d is not None:
+                    min_distance = round(float(min_d), 5)
             rows.append(
                 {
                     "index": idx,
                     "natoms": len(symbols),
                     "formula": formula_of(symbols),
-                    "energy_per_atom": (
-                        round(float(f.energy) / max(len(symbols), 1), 6)
-                        if f.energy is not None and symbols
-                        else None
-                    ),
                     "force_max": force_max,
                     "volume": round(det, 4) if det > 1e-8 else None,
+                    "min_distance": min_distance,
                     "missing_props": [name for name in declared_props if not present[name]],
                     "excluded": idx in excluded,
                 }

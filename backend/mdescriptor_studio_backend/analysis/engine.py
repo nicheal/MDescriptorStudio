@@ -10,6 +10,7 @@ scikit-learn keyword.
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import product
@@ -72,6 +73,19 @@ from ..errors import (
 
 
 MAX_PREVIEW_POINTS = 20_000
+
+# Deferred-warmup gate. backend.ready is emitted before the background warmup
+# thread imports sklearn/umap/hdbscan, so _safe_import waits until that import
+# pass has finished: the heavy modules are still imported exactly once and
+# never race a request, but they no longer block startup. The event starts set
+# so direct users (tests, scripts) are unaffected.
+_warmup_gate = threading.Event()
+_warmup_gate.set()
+
+
+def arm_analysis_warmup_gate() -> None:
+    """Switch _safe_import into wait-for-warmup mode before warmup starts."""
+    _warmup_gate.clear()
 
 
 @dataclass
@@ -197,6 +211,9 @@ def _check_samples(x: np.ndarray, minimum: int = 2) -> None:
 
 def _safe_import(module: str, package: str | None = None):
     try:
+        # Hold heavy-module imports until the background warmup pass is done
+        # (no-op once warm; see module docstring of the warmup gate).
+        _warmup_gate.wait()
         if module == "umap" and not _disable_numba_disk_cache():
             raise ImportError("Numba disk-cache guard is unavailable")
         # A non-wildcard fromlist returns the requested module without walking
@@ -625,14 +642,16 @@ class AnalysisEngine:
 
     @staticmethod
     def warmup() -> dict[str, bool]:
-        """Import optional numeric backends on the backend main thread.
+        """Import optional numeric backends on the background warmup thread.
 
         UMAP/numba and some native sklearn dependencies can acquire process
         import locks or initialize DLL state during their first import. Doing
-        that work before JobService starts worker threads prevents a Windows
-        sidecar from hanging at ``loading descriptor results`` on its first
-        UMAP/HDBSCAN request. Missing optional packages are reported and are
-        still converted to ANALYSIS_DEPENDENCY_MISSING when selected.
+        that work in a single dedicated thread before any request touches
+        these modules (gated via ``_safe_import``) keeps a Windows sidecar
+        from hanging at ``loading descriptor results`` on its first
+        UMAP/HDBSCAN request while no longer blocking ``backend.ready``.
+        Missing optional packages are reported and are still converted to
+        ANALYSIS_DEPENDENCY_MISSING when selected.
         """
         import importlib
 
@@ -640,18 +659,21 @@ class AnalysisEngine:
         # before importing UMAP, whose module-level decorators request
         # ``cache=True``.
 
-        availability: dict[str, bool] = {}
-        for name in ("sklearn", "umap", "hdbscan"):
-            if name == "umap" and not _disable_numba_disk_cache():
-                availability[name] = False
-                continue
-            try:
-                importlib.import_module(name)
-            except ImportError:
-                availability[name] = False
-            else:
-                availability[name] = True
-        return availability
+        try:
+            availability: dict[str, bool] = {}
+            for name in ("sklearn", "umap", "hdbscan"):
+                if name == "umap" and not _disable_numba_disk_cache():
+                    availability[name] = False
+                    continue
+                try:
+                    importlib.import_module(name)
+                except ImportError:
+                    availability[name] = False
+                else:
+                    availability[name] = True
+            return availability
+        finally:
+            _warmup_gate.set()
 
     @staticmethod
     def pca(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:

@@ -7,6 +7,8 @@ import math
 import os
 import platform
 import sys
+import threading
+import time
 
 # Numba cache entries are pickle-bearing. Keep this defense-in-depth flag for
 # releases that recognize it; AnalysisEngine also installs a runtime NullCache
@@ -14,7 +16,7 @@ import sys
 os.environ["NUMBA_DISABLE_JIT_CACHE"] = "1"
 
 from . import __version__
-from .analysis import AnalysisEngine
+from .analysis import AnalysisEngine, arm_analysis_warmup_gate
 from .config import data_dir
 from .errors import AppError, INVALID_PARAMS, JOB_NOT_FOUND
 from .logging_setup import setup_logging
@@ -178,15 +180,10 @@ def main() -> int:
     adapter = EngineAdapter()
     info = adapter.runtime_info()
     log.info("engine %s (api v%s)", info.get("version"), info.get("api_version"))
-    # resolve every lazy native import on the main thread BEFORE any worker /
-    # stdin reader thread exists (engine lazy-import deadlock, see adapter.warmup)
-    adapter.warmup()
-    log.info("engine warmup complete")
-    analysis_dependencies = AnalysisEngine.warmup()
-    log.info("analysis dependencies: %s", analysis_dependencies)
 
     # note: no on_stop here — the db must outlive the job pool; main() closes it
     server = Server(methods={})
+    server.warmup_finished = threading.Event()
     jobs = JobService(db, server.emit)
     datasets = DatasetService(db, adapter, jobs)
     results = ResultService(db, root)
@@ -199,7 +196,29 @@ def main() -> int:
         db, jobs, datasets, descriptors, results, analysis, db, info, root, updates
     )
 
-    # handshake must be the first frame (docs/plan/02 §2)
+    # Arm both warmup gates before the handshake: the heavy warmups below run
+    # on a background thread, and gated entry points (EngineAdapter.build,
+    # analysis engine _safe_import) hold requests until that import pass is
+    # done instead of racing it.
+    adapter.arm_deferred_warmup()
+    arm_analysis_warmup_gate()
+
+    # First-import every remaining DLL-bearing package here, serially, before
+    # any request can run: concurrent first-imports of native packages
+    # deadlock the Windows DLL loader on this platform (observed between the
+    # sklearn/numba chain and scipy.spatial cKDTree). Runtime paths — dataset
+    # scan jobs, DeepMD reads — only touch these preloaded modules afterwards;
+    # the numeric stack itself is imported by the background warmup pass,
+    # whose analysis consumers wait on the gate above.
+    t_preload = time.perf_counter()
+    import scipy.spatial  # noqa: F401  (cKDTree for dataset scan jobs)
+    import dpdata  # noqa: F401  (DeepMD dataset reader)
+
+    log.info("native preloads done in %.2fs", time.perf_counter() - t_preload)
+
+    # handshake must be the first frame (docs/plan/02 §2). It deliberately
+    # precedes the warmups so the UI opens immediately; the warmups continue
+    # on the background thread below.
     server.emit(
         "backend.ready",
         {
@@ -214,6 +233,21 @@ def main() -> int:
     )
     # non-blocking PyPI check so the UI can offer an engine update (ADR-2)
     updates.start_check()
+
+    def _warmup() -> None:
+        # Engine first, then analysis dependencies: one thread, one import
+        # pass. Safe alongside serve_forever only because the stdin loop
+        # polls instead of blocking in ReadFile (see Server.serve_forever —
+        # a blocking stdin read concurrent with these imports deadlocks the
+        # Windows DLL loader).
+        adapter.warmup()
+        log.info("engine warmup complete")
+        analysis_dependencies = AnalysisEngine.warmup()
+        log.info("analysis dependencies: %s", analysis_dependencies)
+        server.warmup_finished.set()
+
+    threading.Thread(target=_warmup, name="warmup", daemon=True).start()
+    log.info("backend ready; warmup continues in background")
     try:
         server.serve_forever()
     finally:

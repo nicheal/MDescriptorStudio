@@ -6,7 +6,7 @@ service; this keeps the analysis layer replaceable and makes it possible to
 test every algorithm with synthetic runs.
 """
 
-from .engine import AnalysisEngine, SampleMatrix
+from .engine import AnalysisEngine, SampleMatrix, arm_analysis_warmup_gate
 from .models import AnalysisResult, ArtifactManifest
 
-__all__ = ["AnalysisEngine", "SampleMatrix", "AnalysisResult", "ArtifactManifest"]
+__all__ = ["AnalysisEngine", "SampleMatrix", "AnalysisResult", "ArtifactManifest", "arm_analysis_warmup_gate"]

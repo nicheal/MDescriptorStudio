@@ -22,3 +22,6 @@ src-tauri/binaries/*.exe
 # OS / IDE
 Thumbs.db
 .DS_Store
+
+# Native statistics kernel (built by scripts/build_native.ps1)
+backend/mdescriptor_studio_backend/datasets/_native/

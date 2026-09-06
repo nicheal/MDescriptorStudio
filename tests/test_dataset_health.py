@@ -68,6 +68,22 @@ def test_health_statistics_extxyz(tmp_path: Path) -> None:
     assert_health(stats["health"], stats["structures"])
 
 
+def test_duplicate_structures_of_mapping(tmp_path: Path) -> None:
+    """health_findings.duplicate_structures_of runs parallel to
+    duplicate_structures: every flagged copy maps to the first frame with
+    that content, no matter how many copies follow it."""
+    p = tmp_path / "dups.xyz"
+    lat = "4.5 0.0 0.0 0.0 4.5 0.0 0.0 0.0 4.5"
+    header = 'Properties=species:S:1:pos:R:3 pbc="T T T" '
+    frame = f'2\nLattice="{lat}" {header}energy=-10.0\nSi 0.0 0.0 0.0\nSi 2.35 0.0 0.0\n'
+    other = f'2\nLattice="{lat}" {header}energy=-11.0\nSi 0.1 0.0 0.0\nSi 2.35 0.1 0.0\n'
+    p.write_text(frame + other + frame + frame, encoding="utf-8")
+    stats = compute_statistics(create_adapter(p))
+    findings = stats["health_findings"]
+    assert findings["duplicate_structures"] == [2, 3]
+    assert findings["duplicate_structures_of"] == [0, 0]
+
+
 def write_deepmd_degenerate_box(d: Path) -> None:
     """3 frames, 2 atoms; frame 1 has an all-zero box inside a periodic set."""
     d.mkdir(parents=True)
@@ -139,6 +155,11 @@ def test_health_nonphysical_and_net_force(tmp_path: Path) -> None:
     assert stats["health_findings"]["nonphysical_structures"] == [1]
     assert stats["health_findings"]["net_force"] == [2]
     assert stats["health_findings"]["invalid_cell"] == []
+    # f2 repeats f0's geometry with different labels: flagged as a copy of
+    # f0 — exactly the same-geometry/different-label case the "Duplicate of"
+    # column exists to explain
+    assert stats["health_findings"]["duplicate_structures"] == [2]
+    assert stats["health_findings"]["duplicate_structures_of"] == [0]
     assert stats["health_findings"]["cap"] >= 1
 
 
@@ -268,6 +289,28 @@ def test_health_ipc_rescan_and_dedupe(tmp_path: Path) -> None:
             fresh_nf["result"]["stats"]["health"],
             fresh_nf["result"]["stats"]["structures"],
         )
+
+        # a cache from before the duplicate-origin mapping upgrades too
+        con = sqlite3.connect(db_path)
+        try:
+            (raw,) = con.execute("SELECT stats_json FROM dataset_statistics").fetchone()
+            legacy = json.loads(raw)
+            legacy["health_findings"].pop("duplicate_structures_of", None)
+            con.execute(
+                "UPDATE dataset_statistics SET stats_json = ?", (json.dumps(legacy),)
+            )
+            con.commit()
+        finally:
+            con.close()
+        stale_dup = bp.request(14, "dataset.statistics", {"id": ds_id})
+        assert stale_dup["result"]["recalculating"] is True
+        done = wait_job(bp, stale_dup["result"]["job_id"])
+        assert done["status"] == "COMPLETED", done
+        fresh_dup = bp.request(15, "dataset.statistics", {"id": ds_id})
+        assert fresh_dup["result"]["recalculating"] is False
+        dup_findings = fresh_dup["result"]["stats"]["health_findings"]
+        assert dup_findings["duplicate_structures"] == [1]
+        assert dup_findings["duplicate_structures_of"] == [0]
     finally:
         assert bp.close() == 0
 
@@ -296,11 +339,14 @@ def test_health_findings_exclude_and_export(tmp_path: Path) -> None:
         assert rows["total"] == 1
         assert rows["rows"][0]["index"] == 1
         assert rows["rows"][0]["formula"] == "Si2"
+        # the non-physical tab's metric: the 1.2 Å short contact behind the flag
+        assert rows["rows"][0]["min_distance"] == 1.2
         assert rows["rows"][0]["excluded"] is False
 
-        # explicit-indices mode (drawer "all"/excluded tabs)
+        # explicit-indices mode (drawer excluded tab): no min-distance pass
         rows2 = bp.request(4, "dataset.findings", {"id": ds_id, "indices": [0, 1, 2]})["result"]
         assert [r["index"] for r in rows2["rows"]] == [0, 1, 2]
+        assert rows2["rows"][0]["min_distance"] is None
 
         # exclude the short-contact frame: statistics describe the remainder,
         # findings no longer flag it, remaining indices stay stable

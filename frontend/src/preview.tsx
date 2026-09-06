@@ -258,6 +258,8 @@ const STATS: Record<string, unknown> = {
       missing_values: [3, 21, 204, 512, 866],
       invalid_cell: [],
       duplicate_structures: [17, 421],
+      // parallel to duplicate_structures: the first-occurrence frames
+      duplicate_structures_of: [4, 420],
       extreme_force: [3, 88, 902],
       nonphysical_structures: [155],
       net_force: [12, 47, 233, 519],
@@ -754,9 +756,11 @@ const METHODS: Record<string, Handler> = {
         index: i,
         natoms: 4 + (i % 6),
         formula: "Ga2As2",
-        energy_per_atom: -3.2 + (i % 5) * 0.01,
         force_max: 0.4 + (i % 7) * 0.1,
         volume: 618.2,
+        // plausible only on the non-physical tab (the sole consumer); a couple
+        // of rows dip below the short-contact bound, the rest sit at ~2 Å
+        min_distance: i % 9 === 0 ? 0.72 + (i % 3) * 0.05 : 1.9 + (i % 5) * 0.08,
         missing_props: mockMissingProps(i),
         excluded: mockExcluded.has(i),
       })),

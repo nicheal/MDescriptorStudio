@@ -61,7 +61,7 @@
 
 ## 实现中发现并修复的关键问题
 
-1. **引擎懒加载 import 死锁**（0.2.3）：`create_descriptor` 在存在 stdin 读取线程时构建会永久阻塞。修复：main 线程启动即 warmup 全部 28 个描述符，`backend.ready` 在预热后发出（05 文档 §6 已记录约束）。
+1. **引擎懒加载 import 死锁**（0.2.3）：`create_descriptor` 在存在 stdin 读取线程时构建会永久阻塞。修复：启动即 warmup 全部 28 个描述符（0.2.5+ 死锁已修复，预热保留为纵深防御；现为 `backend.ready` 后的后台线程，`build()` 门控保证 import 单线程化；serve_forever 在 Windows 管道 stdin 上改为 PeekNamedPipe 轮询，避免阻塞读取与后台导入并发触发 DLL 加载器死锁，05 文档 §6 已记录约束）。
 2. **Histogram 柱落在值轴外**：series 用裸 counts（类目坐标 0..39）配 [min,max] 值轴 → 改 `[binCenter, count]`。
 3. **tauri dev 前端监听与 backend.ready 竞态**：Rust 侧缓存 ready 行，前端快照拉取兜底。
 4. **PyInstaller `__main__.py` 相对导入失败**：新增 run_backend.py 绝对导入入口。

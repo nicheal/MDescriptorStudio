@@ -35,6 +35,7 @@ import { ipc } from "../ipc/client";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { activeDataset, useWorkspace, type PcaMode } from "../stores/workspace";
 import { jobStatusLabel, trackJob, watchJob } from "../stores/jobs";
+import { useAnalysisUi, type OverviewAnalysis, type ProjectionName, type TabKey } from "../stores/analysisUi";
 import { useT, type Pair } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
@@ -51,9 +52,6 @@ import type {
   RunRow,
 } from "../types/protocol";
 
-type TabKey = "overview" | "projection" | "similarity" | "clusters" | "outliers" | "sampling" | "coverage" | "compare" | "local" | "kernel";
-type ProjectionName = "pca" | "umap" | "tsne";
-type OverviewAnalysis = "feature_variance" | "feature_correlation" | "effective_dimension" | "property_correlation" | "trajectory" | "drift" | "sensitivity" | "perturbation_sensitivity";
 type CompareMode = "geometry" | "mantel";
 
 type Point = AnalysisPoint;
@@ -65,6 +63,11 @@ type CachedAnalysis = {
   selectedIndices: number[];
   arrays: NumericArrays;
 };
+
+// Module-level so computed charts survive leaving the Analysis page. After an
+// app restart the backend re-serves the artifacts (analysis.preview /
+// result.get_pca), so nothing is recomputed either way.
+const analysisCache = new Map<string, CachedAnalysis>();
 
 type ProjectionOverrides = {
   mode?: PcaMode;
@@ -187,10 +190,16 @@ export default function Analysis() {
   const { t, tr, locale } = useT();
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [analyses, setAnalyses] = useState<AnalysisRow[]>([]);
-  const [tab, setTab] = useState<TabKey>("overview");
-  const [projection, setProjection] = useState<ProjectionName>("pca");
-  const [mode, setMode] = useState<PcaMode>("structure");
-  const [preprocess, setPreprocess] = useState("raw");
+  // Tab / module selection lives in a module-level store: it survives leaving
+  // the page, and remounting (or restarting the app) restores it together with
+  // the last displayed analysis.
+  const view = useAnalysisUi((s) => s.view);
+  const { tab, projection, overviewAnalysis, mode, preprocess } = view;
+  const setTab = useAnalysisUi((s) => s.setTab);
+  const setProjection = useAnalysisUi((s) => s.setProjection);
+  const setOverviewAnalysis = useAnalysisUi((s) => s.setOverviewAnalysis);
+  const setMode = useAnalysisUi((s) => s.setMode);
+  const setPreprocess = useAnalysisUi((s) => s.setPreprocess);
   const [points, setPoints] = useState<Point[]>([]);
   const [preview, setPreview] = useState<AnalysisPreview | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);

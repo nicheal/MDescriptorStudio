@@ -86,9 +86,13 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
     }),
   setActiveFrame: (index) => set({ activeFrameIndex: index }),
   setActiveRun: (id) =>
-    set((st) =>
-      st.activeDescriptorRunId === id ? st : { activeDescriptorRunId: id, selectedSample: null },
-    ),
+    set((st) => {
+      if (st.activeDescriptorRunId === id) return st;
+      if (id) {
+        void ipc.request("settings.set", { key: "workspace.activeDescriptorRunId", value: id }).catch(() => {});
+      }
+      return { activeDescriptorRunId: id, selectedSample: null };
+    }),
   setSelectedSample: (sample) => set({ selectedSample: sample }),
   setRunningJobs: (n) => set({ runningJobs: n }),
   setPage: (p) => set({ page: p }),
@@ -100,6 +104,24 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
 
 export const activeDataset = (st: WorkspaceState): DatasetMeta | undefined =>
   st.datasets.find((d) => d.id === st.activeDatasetId);
+
+/**
+ * Restore the persisted active descriptor run before the pages render
+ * (backend.ready path). Analysis.refresh validates it against the completed
+ * runs and falls back to the first one when it no longer exists.
+ */
+export async function hydrateActiveRun(): Promise<void> {
+  try {
+    const r = await ipc.request<{ value: string | null }>("settings.get", {
+      key: "workspace.activeDescriptorRunId",
+    });
+    if (typeof r.value === "string" && r.value) {
+      useWorkspace.setState({ activeDescriptorRunId: r.value });
+    }
+  } catch {
+    /* backend not reachable yet — keep the default */
+  }
+}
 
 /** Re-pull dataset.list; falls back to the first dataset when the active one is gone. */
 export async function refetchDatasets(): Promise<void> {
