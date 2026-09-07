@@ -10,7 +10,16 @@ type ViewerAtom = {
   z: number;
   bonds: number[];
   bondOrder: number[];
+  // Index in the parsed payload (real atoms 0..natoms-1, periodic images
+  // after), kept on the atom so a viewer click can identify it.
+  i: number;
+  // For periodic images: the real atom this image mirrors.
+  parent?: number;
 };
+
+// Atom record 3Dmol hands back from a click callback; only the custom
+// identity fields attached in parseViewerAtoms matter here.
+type ClickedAtom = Pick<ViewerAtom, "i" | "parent">;
 
 type ViewerModel = {
   addAtoms: (atoms: ViewerAtom[]) => void;
@@ -23,6 +32,7 @@ type Viewer = {
   addSphere?: (spec: object) => void;
   setStyle: (sel: object, style: object) => void;
   addStyle: (sel: object, style: object) => void;
+  setClickable: (sel: object, clickable: boolean, callback: (atom: ClickedAtom) => void) => void;
   zoomTo: () => void;
   render: () => void;
 };
@@ -36,6 +46,7 @@ function parseViewerAtoms(frame: FramePayload): ViewerAtom[] {
     z: row.z,
     bonds: [],
     bondOrder: [],
+    i: row.i,
   }));
   // ``atom_rows`` intentionally contains only real atoms because its indices
   // are used for navigation. The XYZ payload additionally contains periodic
@@ -50,9 +61,15 @@ function parseViewerAtoms(frame: FramePayload): ViewerAtom[] {
       const y = Number(yText);
       const z = Number(zText);
       if (!elem || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-      atoms.push({ elem, x, y, z, bonds: [], bondOrder: [] });
+      atoms.push({ elem, x, y, z, bonds: [], bondOrder: [], i: atoms.length });
     }
   }
+  // Periodic images sit at indices >= natoms in payload order; record which
+  // real atom each mirrors so a click on an image selects the real atom.
+  frame.ghost_parents?.forEach((parent, k) => {
+    const atom = atoms[frame.natoms + k];
+    if (atom) atom.parent = parent;
+  });
   const cells = new Map<string, number[]>();
   const cellKey = (x: number, y: number, z: number) =>
     `${Math.floor(x / cutoff)},${Math.floor(y / cutoff)},${Math.floor(z / cutoff)}`;
@@ -134,14 +151,20 @@ interface StructurePreviewProps {
   onOpen: () => void;
   selectedAtom?: number;
   localCutoff?: number;
+  /** Click-to-select on the viewer; receives the clicked real-atom index. */
+  onSelectAtom?: (atom: number) => void;
 }
 
-export default function StructurePreview({ frame, onOpen, selectedAtom, localCutoff }: StructurePreviewProps) {
+export default function StructurePreview({ frame, onOpen, selectedAtom, localCutoff, onSelectAtom }: StructurePreviewProps) {
   const { t } = useT();
   const viewerDiv = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
+  // The 3Dmol click callback is registered inside the render effect; route it
+  // through a ref so every click dispatches to the latest handler.
+  const selectHandlerRef = useRef(onSelectAtom);
+  selectHandlerRef.current = onSelectAtom;
 
   useEffect(() => {
     let cancelled = false;
@@ -196,6 +219,13 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
       }
     }
     addUnitCell(viewer, frame.cell);
+    // Click-to-select: atoms report their payload index; periodic images map
+    // back to their parent real atom. Registered before render() so 3Dmol
+    // builds the picking intersection shapes.
+    viewer.setClickable({}, true, (atom) => {
+      const target = atom.parent ?? atom.i;
+      if (target != null && target >= 0 && target < frame.natoms) selectHandlerRef.current?.(target);
+    });
     viewer.zoomTo();
     viewer.render();
   }, [frame, localCutoff, selectedAtom, viewerReady]);

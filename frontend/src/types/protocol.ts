@@ -169,6 +169,8 @@ export interface FramePayload {
   pbc: string;
   cell: number[] | null;
   ghost_count: number;
+  /** parent real-atom index for each periodic image appended to xyz (click-to-select); empty when there are none */
+  ghost_parents?: number[];
   bond_cutoff: number;
 }
 

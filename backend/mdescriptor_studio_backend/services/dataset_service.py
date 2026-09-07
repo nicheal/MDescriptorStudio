@@ -796,6 +796,7 @@ class DatasetService:
             "pbc": "".join("XYZ"[i] for i, v in enumerate(f.pbc) if v) or "—",
             "cell": cell.reshape(-1).tolist() if periodic else None,
             "ghost_count": len(ghosts),
+            "ghost_parents": [g[2] for g in ghosts],
             "bond_cutoff": bond_cutoff,
         }
 
@@ -803,7 +804,7 @@ class DatasetService:
 def periodic_boundary_ghosts(
     symbols: list[str], positions: np.ndarray, cell: np.ndarray,
     cutoff: float = DEFAULT_BOND_CUTOFF, max_ghosts: int = 3000,
-) -> list[tuple[str, np.ndarray]]:
+) -> list[tuple[str, np.ndarray, int]]:
     """Periodic-image atoms that complete bonds cut by the cell boundary.
 
     An atom whose *wrapped* fractional position lies within `cutoff` of a
@@ -813,7 +814,8 @@ def periodic_boundary_ghosts(
     bond-completing images survive. The distance check is what keeps unwrapped
     frames (deepmd sets are often centered on the origin, with negative
     coordinates) from spraying stray atoms outside the structure. Returns
-    (element, position) pairs, capped at max_ghosts.
+    (element, position, parent_index) triples — parent_index is the real atom
+    the image mirrors — capped at max_ghosts.
     """
     pos = np.asarray(positions, dtype=np.float64)
     if len(symbols) == 0:
@@ -858,7 +860,9 @@ def periodic_boundary_ghosts(
             continue
         src = np.repeat(idx, len(shifts))[keep]
         for i, p in zip(src, imgs[keep]):
-            out.append((symbols[i], p))
+            # parent index lets the GUI map a click on an image atom back to
+            # the real atom it mirrors (real atoms occupy 0..len(symbols)-1).
+            out.append((symbols[i], p, int(i)))
             if len(out) >= max_ghosts:
                 return out
     return out

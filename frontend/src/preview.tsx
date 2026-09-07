@@ -627,6 +627,7 @@ function mockFramePayload(index: number, bondCutoff = 2.4) {
   const cellDims = [2 * a, a, a];
   const cutoff = Math.max(0.1, Math.min(10, bondCutoff || 2.4));
   const ghosts: { el: string; x: number; y: number; z: number }[] = [];
+  const ghostParents: number[] = [];
   const shiftRange = (dim: number) => {
     const lim = Math.max(1, Math.ceil(cutoff / dim));
     const values: number[] = [];
@@ -634,7 +635,7 @@ function mockFramePayload(index: number, bondCutoff = 2.4) {
     return values;
   };
   const realPos = rows.map((r) => [r.x, r.y, r.z]);
-  for (const [el, fx, fy, fz] of base) {
+  base.forEach(([el, fx, fy, fz], parent) => {
     const px = fx * 2 * a;
     const py = fy * a;
     const pz = fz * a;
@@ -652,10 +653,11 @@ function mockFramePayload(index: number, bondCutoff = 2.4) {
           }
           if (minD2 > cutoff * cutoff || minD2 < 1e-6) continue;
           ghosts.push({ el, x: gx, y: gy, z: gz });
+          ghostParents.push(parent);
         }
       }
     }
-  }
+  });
   return {
     index,
     natoms: rows.length,

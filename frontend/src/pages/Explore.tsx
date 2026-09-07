@@ -49,14 +49,23 @@ type ViewerAtom = {
   z: number;
   bonds: number[];
   bondOrder: number[];
+  // Index in the parsed payload (real atoms 0..natoms-1, periodic images
+  // after), kept on the atom so a viewer click can identify it.
+  i: number;
+  // For periodic images: the real atom this image mirrors.
+  parent?: number;
 };
+
+// Atom record 3Dmol hands back from a click callback; only the custom
+// identity fields attached in parseViewerAtoms matter here.
+type ClickedAtom = Pick<ViewerAtom, "i" | "parent">;
 
 type ViewerModel = {
   addAtoms: (atoms: ViewerAtom[]) => void;
 };
 
-function parseViewerAtoms(xyz: string, cutoff: number): ViewerAtom[] {
-  const lines = xyz.trim().split(/\r?\n/);
+function parseViewerAtoms(frame: FramePayload, cutoff: number): ViewerAtom[] {
+  const lines = frame.xyz.trim().split(/\r?\n/);
   const atomCount = Number(lines[0]);
   if (!Number.isInteger(atomCount) || atomCount <= 0) return [];
 
@@ -68,8 +77,14 @@ function parseViewerAtoms(xyz: string, cutoff: number): ViewerAtom[] {
     const y = Number(yText);
     const z = Number(zText);
     if (!elem || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-    atoms.push({ elem, x, y, z, bonds: [], bondOrder: [] });
+    atoms.push({ elem, x, y, z, bonds: [], bondOrder: [], i: atoms.length });
   }
+  // Periodic images sit at indices >= natoms in payload order; record which
+  // real atom each mirrors so a click on an image selects the real atom.
+  frame.ghost_parents?.forEach((parent, k) => {
+    const atom = atoms[frame.natoms + k];
+    if (atom) atom.parent = parent;
+  });
 
   // Use a spatial hash so large frames do not require an O(N²) pair scan.
   const cells = new Map<string, number[]>();
@@ -151,6 +166,7 @@ export default function Explore() {
       addSphere?: (spec: object) => void;
       setStyle: (sel: object, style: object) => void;
       addStyle: (sel: object, style: object) => void;
+      setClickable: (sel: object, clickable: boolean, callback: (atom: ClickedAtom) => void) => void;
       getView: () => number[];
       setView: (view: number[]) => void;
       zoomTo: () => void;
@@ -171,7 +187,7 @@ export default function Explore() {
     ? selectedSample.atom
     : undefined;
   const selectedLocalNeighbors = frame && selectedAtom != null
-    ? neighborsWithinCutoff(parseViewerAtoms(frame.xyz, Math.max(bondCutoff, localCutoff)), selectedAtom, localCutoff)
+    ? neighborsWithinCutoff(parseViewerAtoms(frame, Math.max(bondCutoff, localCutoff)), selectedAtom, localCutoff)
     : [];
   const selectedLocalNeighborSet = new Set(showLocalEnvironment ? selectedLocalNeighbors.filter(({ index }) => index < (frame?.natoms ?? 0)).map(({ index }) => index) : []);
   // Force components live on atom_rows (real atoms only); selection indices
@@ -273,24 +289,37 @@ export default function Explore() {
     return absent.filter((p) => declared.includes(p));
   }, [frame, flaggedSet, health]);
 
-  // Red "Max |F|" row click: select the offending atom exactly like a table
-  // click (highlight + force arrow, arrow forced on so it is always visible);
-  // clicking it again clears the selection.
-  const selectMaxForceAtom = () => {
-    if (!d || maxForceAtom == null) return;
-    if (selectedAtom === maxForceAtom) {
+  // Shared selection logic for the atom table and viewer click-to-select:
+  // clicking the selected atom again clears the selection. Browse selections
+  // work without an active descriptor run; runId is attached only when one
+  // exists so Analysis links still resolve.
+  const selectAtom = (atomIndex: number) => {
+    if (!d) return;
+    if (atomIndex === selectedAtom) {
       st.setSelectedSample(null);
       return;
     }
     setShowDistancePair(false);
-    setShowForceArrow(true);
     st.setSelectedSample({
       datasetId: d.id,
       ...(st.activeDescriptorRunId ? { runId: st.activeDescriptorRunId } : {}),
       mode: "atom",
       frame: idx,
-      atom: maxForceAtom,
+      atom: atomIndex,
     });
+  };
+  // The 3Dmol click callback is registered inside the render effect; route it
+  // through a ref so every click dispatches to the latest selection logic.
+  const atomClickRef = useRef(selectAtom);
+  atomClickRef.current = selectAtom;
+
+  // Red "Max |F|" row click: select the offending atom exactly like a table
+  // click (highlight + force arrow, arrow forced on so it is always visible);
+  // clicking it again clears the selection.
+  const selectMaxForceAtom = () => {
+    if (!d || maxForceAtom == null) return;
+    setShowForceArrow(true);
+    selectAtom(maxForceAtom);
   };
 
   // Red "Shortest interatomic distance" row click: highlight the two closest
@@ -403,7 +432,7 @@ export default function Explore() {
     const displayCutoff = showLocalEnvironment && selectedAtom != null
       ? Math.max(clampBondCutoff(frame.bond_cutoff), localCutoff)
       : clampBondCutoff(frame.bond_cutoff);
-    const atoms = parseViewerAtoms(frame.xyz, displayCutoff);
+    const atoms = parseViewerAtoms(frame, displayCutoff);
     const selected =
       selectedAtom != null && selectedAtom >= 0 && selectedAtom < atoms.length ? selectedAtom : null;
     const shellNeighbors = showLocalEnvironment && selected != null
@@ -519,6 +548,13 @@ export default function Explore() {
         });
       }
     }
+    // Click-to-select: every atom (periodic images included) reports its
+    // payload index; images map back to their parent real atom. Registered
+    // before render() so 3Dmol builds the picking intersection shapes.
+    v.setClickable({}, true, (atom) => {
+      const target = atom.parent ?? atom.i;
+      if (target != null && target >= 0 && target < frame.natoms) atomClickRef.current(target);
+    });
     if (previousView && !(showLocalEnvironment && selected != null)) v.setView(previousView);
     else v.zoomTo(); // shell-only view fits the isolated shell instead of the whole cell
     v.render();
@@ -830,24 +866,7 @@ export default function Explore() {
           rowKey="i"
           rowClassName={(row) => row.i === selectedAtom ? "explore-atom-row-selected" : selectedLocalNeighborSet.has(row.i) ? "explore-atom-row-neighbor" : ""}
           onRow={(row) => ({
-            onClick: () => {
-              if (!d) return;
-              // Clicking the selected atom again clears the selection. Browse
-              // selections work without an active descriptor run; runId is
-              // attached only when one exists so Analysis links still resolve.
-              if (row.i === selectedAtom) {
-                st.setSelectedSample(null);
-                return;
-              }
-              setShowDistancePair(false);
-              st.setSelectedSample({
-                datasetId: d.id,
-                ...(st.activeDescriptorRunId ? { runId: st.activeDescriptorRunId } : {}),
-                mode: "atom",
-                frame: idx,
-                atom: row.i,
-              });
-            },
+            onClick: () => selectAtom(row.i),
           })}
           columns={[
             { title: "#", dataIndex: "i", key: "i", width: 60 },

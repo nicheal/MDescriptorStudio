@@ -77,6 +77,9 @@ def test_register_statistics_frame_flow(tmp_path: Path) -> None:
         assert 'Lattice="' in payload["xyz"].splitlines()[1]
         assert payload["ghost_count"] > 0
         assert int(payload["xyz"].splitlines()[0]) == 64 + payload["ghost_count"]
+        # each boundary image carries its parent real-atom index for click-to-select
+        assert len(payload["ghost_parents"]) == payload["ghost_count"]
+        assert all(0 <= p < 64 for p in payload["ghost_parents"])
         assert payload["energy_per_atom"] is not None
         assert payload["bond_cutoff"] == 2.4
 
