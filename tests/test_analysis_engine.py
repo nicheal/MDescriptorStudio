@@ -145,6 +145,42 @@ def test_invalid_numeric_inputs_are_structured(samples: SampleMatrix) -> None:
     assert exc.value.code == ANALYSIS_INSUFFICIENT_SAMPLES
 
 
+def test_feature_variance_reports_full_stats_robustness_and_invalid_counts() -> None:
+    rng = np.random.default_rng(7)
+    normal = rng.normal(size=8)
+    values = np.column_stack(
+        [
+            np.ones(8),
+            np.linspace(-1e-8, 1e-8, 8),
+            normal,
+            100.0 * normal,
+            np.array([0.0, 1.0, -1.0, 0.0, 0.5, -0.5, 1000.0, 0.0]),
+            np.array([0.0, np.nan, 1.0, np.inf, 2.0, 3.0, 4.0, 5.0]),
+        ]
+    )
+
+    result = AnalysisEngine.feature_variance(SampleMatrix(values, np.arange(values.shape[0])), {})
+    preview = result["preview"]
+    features = {row["index"]: row for row in preview["features"]}
+
+    assert preview["schema_version"] == 2
+    assert preview["ddof"] == 0
+    assert len(preview["features"]) == values.shape[1]
+    assert features[0]["status"] == "constant"
+    assert features[1]["status"] == "near_zero"
+    assert features[4]["std_robust_ratio"] > 1.0
+    assert features[5]["finite_count"] == 6
+    assert features[5]["invalid_count"] == 2
+    assert result["arrays"]["histogram_edges"].shape == (6, 33)
+    assert result["arrays"]["histogram_counts"].shape == (6, 32)
+    assert not any(np.isnan(np.asarray(array, dtype=np.float64)).any() for array in result["arrays"].values())
+    assert any("non-finite" in warning for warning in result["warnings"])
+
+    zero = AnalysisEngine.feature_variance(SampleMatrix(np.zeros((4, 2)), np.arange(4)), {})
+    assert zero["preview"]["summary"]["max_variance"] == 0.0
+    assert all(row["status"] == "constant" for row in zero["preview"]["features"])
+
+
 def test_wide_correlation_keeps_heatmap_bounded(samples: SampleMatrix) -> None:
     rng = np.random.default_rng(7)
     wide = SampleMatrix(rng.normal(size=(48, 1_000)), samples.frame)

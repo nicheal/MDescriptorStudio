@@ -68,6 +68,8 @@ export interface AnalysisView {
   mode: PcaMode;
   preprocess: string;
   colorBy: ColorBy;
+  nearZeroThreshold: number;
+  lowVariationThreshold: number;
 }
 
 export const DEFAULT_ANALYSIS_VIEW: AnalysisView = {
@@ -77,6 +79,8 @@ export const DEFAULT_ANALYSIS_VIEW: AnalysisView = {
   mode: "structure",
   preprocess: "raw",
   colorBy: "none",
+  nearZeroThreshold: 1e-4,
+  lowVariationThreshold: 1e-2,
 };
 
 /** One remembered computed result: which tab + parameters produced it. */
@@ -123,6 +127,8 @@ export interface AnalysisParams {
   perturbationCount: number;
   perturbationMaximum: number;
   perturbationMetric: string;
+  nearZeroThreshold: number;
+  lowVariationThreshold: number;
 }
 
 /**
@@ -152,12 +158,19 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
     case "kernel":
       return [p.kernelName, p.mode].join("|");
     case "overview":
-      return [
-        p.overviewAnalysis,
-        p.overviewAnalysis === "trajectory" ? p.trajectoryStep : "",
-        p.overviewAnalysis === "property_correlation" ? p.propertyName : "",
-        p.overviewAnalysis === "perturbation_sensitivity" ? `${p.perturbationType}|${p.perturbationCount}|${p.perturbationMaximum}|${p.perturbationMetric}` : "",
-      ].join("|");
+      {
+        const keyParts = [
+          p.overviewAnalysis,
+          p.overviewAnalysis === "trajectory" ? p.trajectoryStep : "",
+          p.overviewAnalysis === "property_correlation" ? p.propertyName : "",
+          p.overviewAnalysis === "perturbation_sensitivity"
+            ? `${p.perturbationType}|${p.perturbationCount}|${p.perturbationMaximum}|${p.perturbationMetric}`
+            : p.overviewAnalysis === "feature_variance"
+              ? `${p.nearZeroThreshold}|${p.lowVariationThreshold}`
+              : "",
+        ];
+        return keyParts.join("|");
+      }
     default:
       return "";
   }
@@ -201,6 +214,11 @@ export function parseAnalysisView(raw: unknown): AnalysisView | null {
   }
   if (typeof data !== "object" || data === null) return null;
   const rec = data as Record<string, unknown>;
+  const nearZeroThreshold = persistedThreshold(rec.nearZeroThreshold, DEFAULT_ANALYSIS_VIEW.nearZeroThreshold);
+  const lowVariationThreshold = Math.max(
+    nearZeroThreshold,
+    persistedThreshold(rec.lowVariationThreshold, DEFAULT_ANALYSIS_VIEW.lowVariationThreshold),
+  );
   return {
     tab: TAB_KEYS.includes(rec.tab as TabKey) ? (rec.tab as TabKey) : DEFAULT_ANALYSIS_VIEW.tab,
     projection: PROJECTION_NAMES.includes(rec.projection as ProjectionName)
@@ -212,7 +230,19 @@ export function parseAnalysisView(raw: unknown): AnalysisView | null {
     mode: rec.mode === "atom" ? "atom" : "structure",
     preprocess: typeof rec.preprocess === "string" && rec.preprocess ? rec.preprocess : DEFAULT_ANALYSIS_VIEW.preprocess,
     colorBy: COLOR_BY.includes(rec.colorBy as ColorBy) ? (rec.colorBy as ColorBy) : DEFAULT_ANALYSIS_VIEW.colorBy,
+    nearZeroThreshold,
+    lowVariationThreshold,
   };
+}
+
+function persistedThreshold(value: unknown, fallback: number): number {
+  if (typeof value !== "number" && typeof value !== "string") return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : fallback;
+}
+
+function normalizeThreshold(value: number): number {
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
 }
 
 /** Parse the persisted slot map; invalid entries are dropped and the cap enforced. */
@@ -284,6 +314,8 @@ interface AnalysisUiState {
   setMode: (mode: PcaMode) => void;
   setPreprocess: (preprocess: string) => void;
   setColorBy: (colorBy: ColorBy) => void;
+  setNearZeroThreshold: (value: number) => void;
+  setLowVariationThreshold: (value: number) => void;
   /** Records the analysis currently displayed for its tab + parameter combination. */
   rememberResult: (entry: AnalysisSlotInput) => void;
   /** Forgets one slot, e.g. one recorded under an inconsistent context. */
@@ -301,6 +333,16 @@ export const useAnalysisUi = create<AnalysisUiState>()(() => ({
   setMode: (mode) => applyView({ mode }),
   setPreprocess: (preprocess) => applyView({ preprocess }),
   setColorBy: (colorBy) => applyView({ colorBy }),
+  setNearZeroThreshold: (value) => {
+    const nearZeroThreshold = normalizeThreshold(value);
+    const current = useAnalysisUi.getState().view;
+    applyView({ nearZeroThreshold, lowVariationThreshold: Math.max(nearZeroThreshold, current.lowVariationThreshold) });
+  },
+  setLowVariationThreshold: (value) => {
+    const lowVariationThreshold = normalizeThreshold(value);
+    const current = useAnalysisUi.getState().view;
+    applyView({ lowVariationThreshold: Math.max(current.nearZeroThreshold, lowVariationThreshold) });
+  },
   rememberResult: (entry) => {
     const slots = pruneSlots({
       ...useAnalysisUi.getState().slots,

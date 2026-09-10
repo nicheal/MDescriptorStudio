@@ -32,6 +32,8 @@ const persistedView = {
   mode: "atom",
   preprocess: "standardized",
   colorBy: "energy",
+  nearZeroThreshold: 0.0002,
+  lowVariationThreshold: 0.02,
 };
 
 const slotA: AnalysisSlot = { runId: "run-1", analysisId: "ana-a", tab: "similarity", paramsKey: "query|structure|10|0", updatedAt: 100, seq: 1 };
@@ -49,6 +51,7 @@ const baseParams: AnalysisParams = {
   localCutoff: 3, kernelName: "rbf",
   overviewAnalysis: "feature_variance", trajectoryStep: 1, propertyName: "energy_per_atom",
   perturbationType: "jitter", perturbationCount: 8, perturbationMaximum: 0.2, perturbationMetric: "euclidean",
+  nearZeroThreshold: 1e-4, lowVariationThreshold: 1e-2,
 };
 
 describe("buildParamsKey", () => {
@@ -63,7 +66,7 @@ describe("buildParamsKey", () => {
   it("keys module-specific parameters only for their module", () => {
     expect(buildParamsKey("similarity", baseParams)).toBe("query|structure|10|0");
     expect(buildParamsKey("similarity", { ...baseParams, similarityMode: "all_neighbors" })).toBe("all_neighbors|structure|10|");
-    expect(buildParamsKey("overview", baseParams)).toBe("feature_variance|||");
+    expect(buildParamsKey("overview", baseParams)).toBe("feature_variance|||0.0001|0.01");
     expect(buildParamsKey("overview", {
       ...baseParams,
       overviewAnalysis: "perturbation_sensitivity",
@@ -83,10 +86,16 @@ describe("parseAnalysisView", () => {
     expect(parseAnalysisView(JSON.stringify(persistedView))).toEqual(persistedView);
   });
 
+  it("bounds threshold settings and keeps the near-zero threshold below low variation", () => {
+    expect(parseAnalysisView(JSON.stringify({ ...persistedView, nearZeroThreshold: 2, lowVariationThreshold: -1 }))).toMatchObject({ nearZeroThreshold: 1, lowVariationThreshold: 1 });
+  });
+
   it("falls back to defaults for unknown fields", () => {
     expect(parseAnalysisView(JSON.stringify({ ...persistedView, tab: "nope", projection: 3, mode: "quantum", preprocess: 0, colorBy: "rainbow" }))).toEqual({
       ...DEFAULT_ANALYSIS_VIEW,
       overviewAnalysis: "feature_correlation",
+      nearZeroThreshold: persistedView.nearZeroThreshold,
+      lowVariationThreshold: persistedView.lowVariationThreshold,
     });
   });
 
@@ -152,6 +161,13 @@ describe("useAnalysisUi", () => {
       key: "workspace.analysisUi",
       value: JSON.stringify({ ...DEFAULT_ANALYSIS_VIEW, colorBy: "energy" }),
     });
+  });
+
+  it("keeps threshold setters ordered and bounded", () => {
+    useAnalysisUi.getState().setNearZeroThreshold(0.4);
+    expect(useAnalysisUi.getState().view).toMatchObject({ nearZeroThreshold: 0.4, lowVariationThreshold: 0.4 });
+    useAnalysisUi.getState().setLowVariationThreshold(-1);
+    expect(useAnalysisUi.getState().view).toMatchObject({ nearZeroThreshold: 0.4, lowVariationThreshold: 0.4 });
   });
 
   it("rememberResult keys by tab + run + parameters and prunes to the cap", () => {

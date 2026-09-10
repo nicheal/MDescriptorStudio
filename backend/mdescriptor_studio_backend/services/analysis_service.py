@@ -460,6 +460,12 @@ class AnalysisService:
         if isinstance(preview.get("rows"), list):
             preview = {**preview, "rows": preview["rows"][offset : offset + limit]}
             has_bounded_data = True
+        # Feature-variance previews are feature-oriented rather than row-
+        # oriented.  Their complete scalar records are already persisted in
+        # ``features``; rebuilding generic rows here would reload the entire
+        # descriptor matrix just to produce an unused empty table.
+        if row.get("analysis_type") == "feature_variance" and isinstance(preview.get("features"), list):
+            has_bounded_data = True
         if not has_bounded_data:
             # Rebuild a row-oriented preview when a result was written by an
             # earlier generic backend that only stored arrays.
@@ -561,6 +567,11 @@ class AnalysisService:
         return self.submit_generic("compare", params)
 
     def feature_variance(self, params: dict) -> dict:
+        # The richer per-feature contract supersedes the legacy top-K-only
+        # artifact. Keep this revision in the canonical parameters so old
+        # feature-variance artifacts cannot be mistaken for the new schema,
+        # without invalidating caches for unrelated analysis modules.
+        params = {**dict(params or {}), "feature_variance_schema": 2}
         return self.submit_generic("feature_variance", params)
 
     def feature_correlation(self, params: dict) -> dict:
@@ -1096,7 +1107,10 @@ class AnalysisService:
             values = values.reshape(-1, 1)
         if values.ndim != 2 or values.shape[0] == 0 or values.shape[1] == 0:
             raise AppError(ANALYSIS_INPUT_INVALID, "descriptor result is empty or not a 2D feature matrix")
-        if not np.isfinite(values).all():
+        # Feature variance is a diagnostic: it keeps finite values per column
+        # and reports invalid counts. Every other analysis remains strict so a
+        # bad descriptor cannot be silently hidden by preprocessing.
+        if analysis_type != "feature_variance" and not np.isfinite(values).all():
             raise AppError(ANALYSIS_INPUT_INVALID, "descriptor result contains NaN or Inf")
         check()
         path = self._result_root(row)
@@ -1397,6 +1411,8 @@ class AnalysisService:
                 rows.append(item)
             preview["rows"] = rows
             preview["total_rows"] = n
+        if analysis_type == "feature_variance" and result.get("warnings"):
+            preview["warnings"] = list(result["warnings"])
         return self._json_safe(preview)
 
     def _commit_artifact(self, analysis_id: str, analysis_type: str, input_ids: list[str], params: dict, result: dict, preview: dict, ctx) -> tuple[Path, dict]:

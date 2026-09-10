@@ -101,6 +101,26 @@ test("browser preview renders an Overview chart after a module run", async ({ pa
   await expect(page.getByText("FEATURE VARIANCE", { exact: true })).toBeVisible();
 });
 
+test("browser preview exposes feature variance filters and distribution detail", async ({ page }) => {
+  await page.goto("/preview.html");
+  await page.getByRole("button", { name: "Analysis" }).click();
+  await page.getByRole("button", { name: "Run feature variance" }).click();
+  await expect(page.locator(".feature-variance-layout")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("combobox", { name: "Variance metric" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Feature display filter" })).toBeVisible();
+  await expect(page.getByText("35", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Constant 1" }).click();
+  await expect(page.getByRole("button", { name: "Constant 1" })).toHaveAttribute("aria-pressed", "true");
+  const featurePicker = page.getByRole("combobox", { name: "Select feature for detail" });
+  await featurePicker.click();
+  await page.locator(".ant-select-dropdown .ant-select-item-option").filter({ hasText: "Feature 0 ·" }).last().click();
+  await expect(page.locator(".feature-variance-detail").getByText("Feature detail", { exact: true })).toBeVisible();
+  await expect(page.getByText("Constant feature; KDE omitted.", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Feature value histogram and KDE")).toBeVisible();
+  await expect(page.getByLabel("Feature value box plot")).toBeVisible();
+});
+
 test("browser preview places the sensitivity run pair after Module", async ({ page }) => {
   await page.goto("/preview.html");
   await page.getByRole("button", { name: "Analysis" }).click();

@@ -388,6 +388,10 @@ let mockAnalysisArrays: Record<string, unknown[]> = {};
 let mockLatestPcaMode = "structure";
 let mockLatestPcaPreprocess = "raw";
 let mockLatestAcquisitionMethod = "novelty_fps";
+let mockFeatureVarianceSettings = {
+  near_zero_relative_threshold: 1e-4,
+  low_variance_relative_threshold: 1e-2,
+};
 
 function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kind = "projection", rowType: string | null = kind) {
   mockLatestAnalysisId = analysisId;
@@ -443,7 +447,105 @@ function mockAnalysisPoints(kind: string, count = 180) {
 
 function mockOverviewPreview() {
   if (mockLatestAnalysisKind === "feature_variance") {
-    return { analysis_id: mockLatestAnalysisId, kind: "feature_variance", top_k: 12, top_indices: [12, 3, 41, 7, 28, 16, 55, 2, 36, 19, 64, 8], top_values: [2.84, 2.17, 1.92, 1.68, 1.51, 1.34, 1.18, 1.04, 0.92, 0.81, 0.74, 0.68] };
+    const variances = Array.from({ length: 35 }, (_, index) => 0.00045 + Math.abs(Math.sin(index / 4.3)) * 0.0064);
+    variances[0] = 0;
+    variances[1] = 0.00000012;
+    variances[2] = 0.000025;
+    const maxVariance = Math.max(...variances);
+    const features = variances.map((variance, index) => {
+      const standardDeviation = Math.sqrt(variance);
+      const sample = Array.from({ length: index === 34 ? 78 : 80 }, (_, sampleIndex) => (index === 0 ? 1 : Math.sin(sampleIndex / 7 + index) * standardDeviation * 1.7));
+      const minimum = Math.min(...sample);
+      const maximum = Math.max(...sample);
+      const median = (minimum + maximum) / 2;
+      const q25 = minimum + (maximum - minimum) * 0.25;
+      const q75 = minimum + (maximum - minimum) * 0.75;
+      const relativeVariance = maxVariance > 0 ? variance / maxVariance : 0;
+      const status = index === 0
+        ? "constant"
+        : relativeVariance < mockFeatureVarianceSettings.near_zero_relative_threshold
+          ? "near_zero"
+          : relativeVariance < mockFeatureVarianceSettings.low_variance_relative_threshold
+            ? "low_variation"
+            : "active";
+      return {
+        index,
+        mean: index === 0 ? 1 : 0,
+        variance,
+        relative_variance: relativeVariance,
+        std: standardDeviation,
+        min: minimum,
+        max: maximum,
+        p05: minimum,
+        p25: q25,
+        median,
+        p75: q75,
+        p95: maximum,
+        iqr: q75 - q25,
+        mad: (q75 - q25) / 2,
+        robust_sigma: ((q75 - q25) / 2) * 1.4826,
+        std_robust_ratio: standardDeviation > 0 ? standardDeviation / Math.max(((q75 - q25) / 2) * 1.4826, 1e-12) : null,
+        finite_count: sample.length,
+        invalid_count: index === 34 ? 2 : 0,
+        missing_count: index === 34 ? 2 : 0,
+        distribution_sample_count: sample.length,
+        status,
+      };
+    });
+    const sampleFor = (feature: { std: number | null }, index: number) => Array.from({ length: index === 34 ? 78 : 80 }, (_, sampleIndex) => index === 0 ? 1 : Math.sin(sampleIndex / 7 + index) * (feature.std ?? 0) * 1.7);
+    const histogramEdges = features.map((feature, index) => {
+      const sample = sampleFor(feature, index);
+      const minimum = Math.min(...sample);
+      const maximum = Math.max(...sample);
+      const width = maximum > minimum ? (maximum - minimum) / 16 : 0.5;
+      return Array.from({ length: 17 }, (_, edge) => (maximum > minimum ? minimum : minimum - width / 2) + edge * width);
+    });
+    const histogramCounts = histogramEdges.map((edges, index) => {
+      const feature = features[index];
+      const sample = sampleFor(feature, index);
+      const width = edges[1] - edges[0];
+      const counts = Array.from({ length: 16 }, () => 0);
+      sample.forEach((value) => counts[Math.min(15, Math.max(0, Math.floor((value - edges[0]) / Math.max(width, 1e-12))))] += 1);
+      return counts;
+    });
+    mockAnalysisArrays = {
+      variance: variances,
+      relative_variance: variances.map((value) => value / Math.max(...variances)),
+      std: variances.map(Math.sqrt),
+      iqr: features.map((feature) => feature.iqr),
+      mad: features.map((feature) => feature.mad),
+      histogram_edges: histogramEdges,
+      histogram_counts: histogramCounts,
+      distribution_samples: features.map(sampleFor),
+      distribution_sample_counts: features.map((feature) => feature.distribution_sample_count),
+    };
+    const order = variances.map((_, index) => index).sort((left, right) => variances[right] - variances[left]);
+    return {
+      analysis_id: mockLatestAnalysisId,
+      kind: "feature_variance",
+      schema_version: 2,
+      sample_count: 80,
+      feature_count: features.length,
+      ddof: 0,
+      settings: { ...mockFeatureVarianceSettings, constant_tolerance: 1e-12, histogram_bins: 16, distribution_sample_limit: 80 },
+      summary: {
+        max_variance: maxVariance,
+        median_variance: [...variances].sort((left, right) => left - right)[Math.floor(variances.length / 2)],
+        min_variance: Math.min(...variances),
+        near_zero_count: features.filter((feature) => feature.status === "near_zero").length,
+        constant_count: 1,
+        low_variation_count: features.filter((feature) => feature.status === "low_variation").length,
+        active_count: features.filter((feature) => feature.status === "active").length,
+        invalid_count: 1,
+        invalid_value_count: 2,
+        effective_nonzero_dimensions: 33,
+      },
+      warnings: ["ignored 2 non-finite feature value(s) across 1 feature(s)"],
+      top_k: 20,
+      top_indices: order.slice(0, 20),
+      top_values: order.slice(0, 20).map((index) => variances[index]),
+      features,
+    };
   }
   if (mockLatestAnalysisKind === "feature_correlation") {
     const featureIndices = [2, 3, 7, 8, 12, 16, 28, 41];
@@ -954,7 +1056,18 @@ const METHODS: Record<string, Handler> = {
   },
   "analysis.compare": (_p) => mockAnalysisSubmit("job-compare-live", "ana-mock-compare", "compare"),
   "analysis.mantel": (_p) => mockAnalysisSubmit("job-mantel-live", "ana-mock-mantel", "mantel"),
-  "analysis.feature_variance": (_p) => mockAnalysisSubmit("job-feature-variance-live", "ana-mock-feature-variance", "feature_variance"),
+  "analysis.feature_variance": (p) => {
+    const near = Number(p.near_zero_relative_threshold);
+    const low = Number(p.low_variance_relative_threshold);
+    const normalizedNear = Number.isFinite(near) ? Math.min(1, Math.max(0, near)) : 1e-4;
+    mockFeatureVarianceSettings = {
+      near_zero_relative_threshold: normalizedNear,
+      low_variance_relative_threshold: Number.isFinite(low) ? Math.min(1, Math.max(normalizedNear, low)) : Math.max(normalizedNear, 1e-2),
+    };
+    const response = mockAnalysisSubmit("job-feature-variance-live", "ana-mock-feature-variance", "feature_variance");
+    mockRecordAnalysisRow("ana-mock-feature-variance", "feature_variance", { ...mockFeatureVarianceSettings, feature_variance_schema: 2, top_k: p.top_k ?? 20 });
+    return response;
+  },
   "analysis.feature_correlation": (_p) => mockAnalysisSubmit("job-feature-correlation-live", "ana-mock-feature-correlation", "feature_correlation"),
   "analysis.effective_dimension": (_p) => mockAnalysisSubmit("job-effective-dimension-live", "ana-mock-effective-dimension", "effective_dimension"),
   "analysis.property_correlation": (_p) => mockAnalysisSubmit("job-property-live", "ana-mock-property", "property_correlation"),

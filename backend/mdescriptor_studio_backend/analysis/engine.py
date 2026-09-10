@@ -116,7 +116,7 @@ class SampleMatrix:
         return int(self.values.shape[1])
 
 
-def _as_float64(values: Any) -> np.ndarray:
+def _as_float64(values: Any, *, allow_nonfinite: bool = False) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64)
     if array.ndim == 1:
         array = array.reshape(-1, 1)
@@ -128,10 +128,12 @@ def _as_float64(values: Any) -> np.ndarray:
             "analysis input cannot be empty",
             {"shape": list(array.shape)},
         )
-    # Do not silently drop bad rows: a NaN/Inf descriptor usually indicates a
-    # broken upstream calculation and hiding it would destroy reproducibility.
+    # Do not silently drop bad rows for ordinary analyses: a NaN/Inf descriptor
+    # usually indicates a broken upstream calculation and hiding it would
+    # destroy reproducibility. Feature-variance is the one diagnostic that
+    # deliberately handles them per column and reports the invalid counts.
     finite = np.isfinite(array)
-    if not bool(finite.all()):
+    if not allow_nonfinite and not bool(finite.all()):
         bad = np.argwhere(~finite)
         raise AppError(
             ANALYSIS_INPUT_INVALID,
@@ -1385,15 +1387,229 @@ class AnalysisEngine:
 
     @staticmethod
     def feature_variance(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
-        x = _as_float64(samples.values)
-        variance = x.var(axis=0)
+        x = _as_float64(samples.values, allow_nonfinite=True)
+        feature_count = int(x.shape[1])
+        sample_count = int(x.shape[0])
+        near_zero_threshold = _float_param(params, "near_zero_relative_threshold", 1e-4, 0.0)
+        low_variation_threshold = _float_param(params, "low_variance_relative_threshold", 1e-2, 0.0)
+        if low_variation_threshold < near_zero_threshold:
+            raise AppError(
+                ANALYSIS_INPUT_INVALID,
+                "low_variance_relative_threshold must be >= near_zero_relative_threshold",
+            )
+        constant_tolerance = _float_param(params, "constant_tolerance", 1e-12, 0.0)
+        histogram_bins = _int_param(params, "histogram_bins", 32, 8)
+        if histogram_bins > 128:
+            raise AppError(ANALYSIS_INPUT_INVALID, "histogram_bins must be <= 128")
+        distribution_sample_size = _int_param(params, "distribution_sample_size", 20_000, 1)
+        distribution_sample_size = min(distribution_sample_size, 20_000)
+        # Bound the total sample artifact as descriptor width grows. The
+        # sample is only for KDE/box visualisation; all scalar statistics below
+        # use every finite value.
+        distribution_capacity = min(
+            sample_count,
+            distribution_sample_size,
+            max(1, 2_000_000 // max(feature_count, 1)),
+        )
+
+        finite_counts = np.isfinite(x).sum(axis=0).astype(np.int64)
+        invalid_counts = (sample_count - finite_counts).astype(np.int64)
+        variance = np.zeros(feature_count, dtype=np.float64)
+        std = np.zeros(feature_count, dtype=np.float64)
+        means = np.zeros(feature_count, dtype=np.float64)
+        minima = np.zeros(feature_count, dtype=np.float64)
+        maxima = np.zeros(feature_count, dtype=np.float64)
+        percentiles = np.zeros((feature_count, 5), dtype=np.float64)
+        iqr = np.zeros(feature_count, dtype=np.float64)
+        mad = np.zeros(feature_count, dtype=np.float64)
+        robust_sigma = np.zeros(feature_count, dtype=np.float64)
+        # Persist finite arrays only. A missing ratio is represented as None
+        # in the feature record and as zero in this companion array.
+        std_robust_ratio = np.zeros(feature_count, dtype=np.float64)
+        histogram_edges = np.zeros((feature_count, histogram_bins + 1), dtype=np.float64)
+        histogram_counts = np.zeros((feature_count, histogram_bins), dtype=np.int64)
+        distribution_samples = np.zeros((feature_count, distribution_capacity), dtype=np.float64)
+        distribution_sample_counts = np.zeros(feature_count, dtype=np.int64)
+        feature_records: list[dict[str, Any]] = []
+
+        for index in range(feature_count):
+            values = x[:, index]
+            finite_values = values[np.isfinite(values)]
+            count = int(finite_values.size)
+            record: dict[str, Any] = {
+                "index": index,
+                "mean": None,
+                "variance": None,
+                "relative_variance": None,
+                "std": None,
+                "min": None,
+                "max": None,
+                "p05": None,
+                "p25": None,
+                "median": None,
+                "p75": None,
+                "p95": None,
+                "iqr": None,
+                "mad": None,
+                "robust_sigma": None,
+                "std_robust_ratio": None,
+                "finite_count": count,
+                "invalid_count": int(invalid_counts[index]),
+                # Keep the name used by the original development plan as a
+                # compatibility alias; invalid_count is the canonical field.
+                "missing_count": int(invalid_counts[index]),
+                "distribution_sample_count": 0,
+                "status": "invalid",
+            }
+            if count:
+                mean = float(np.mean(finite_values))
+                centered = finite_values - mean
+                feature_variance = float(np.mean(centered * centered))
+                feature_std = float(np.sqrt(feature_variance))
+                quantile_values = np.percentile(finite_values, [5, 25, 50, 75, 95])
+                median = float(quantile_values[2])
+                feature_iqr = float(quantile_values[3] - quantile_values[1])
+                feature_mad = float(np.median(np.abs(finite_values - median)))
+                feature_robust_sigma = float(1.4826 * feature_mad)
+                ratio = (
+                    float(feature_std / feature_robust_sigma)
+                    if feature_robust_sigma > np.finfo(np.float64).eps
+                    else None
+                )
+                means[index] = mean
+                variance[index] = feature_variance
+                std[index] = feature_std
+                minima[index] = float(np.min(finite_values))
+                maxima[index] = float(np.max(finite_values))
+                percentiles[index] = quantile_values
+                iqr[index] = feature_iqr
+                mad[index] = feature_mad
+                robust_sigma[index] = feature_robust_sigma
+                if ratio is not None:
+                    std_robust_ratio[index] = ratio
+
+                edges: np.ndarray
+                counts: np.ndarray
+                counts, edges = np.histogram(finite_values, bins=histogram_bins)
+                histogram_counts[index] = counts.astype(np.int64, copy=False)
+                histogram_edges[index] = edges.astype(np.float64, copy=False)
+                sample_count_for_feature = min(count, distribution_capacity)
+                if sample_count_for_feature:
+                    sample_indices = np.linspace(0, count - 1, sample_count_for_feature, dtype=np.int64)
+                    distribution_samples[index, :sample_count_for_feature] = finite_values[sample_indices]
+                    distribution_sample_counts[index] = sample_count_for_feature
+                scale = max(1.0, float(np.max(np.abs(finite_values))))
+                is_constant = float(np.ptp(finite_values)) <= max(constant_tolerance, np.finfo(np.float64).eps * scale)
+                record.update(
+                    {
+                        "mean": mean,
+                        "variance": feature_variance,
+                        "std": feature_std,
+                        "min": float(minima[index]),
+                        "max": float(maxima[index]),
+                        "p05": float(quantile_values[0]),
+                        "p25": float(quantile_values[1]),
+                        "median": median,
+                        "p75": float(quantile_values[3]),
+                        "p95": float(quantile_values[4]),
+                        "iqr": feature_iqr,
+                        "mad": feature_mad,
+                        "robust_sigma": feature_robust_sigma,
+                        "std_robust_ratio": ratio,
+                        "distribution_sample_count": int(sample_count_for_feature),
+                        "status": "constant" if is_constant else "pending",
+                    }
+                )
+            feature_records.append(record)
+
+        finite_variances = variance[finite_counts > 0]
+        max_variance = float(np.max(finite_variances)) if finite_variances.size else 0.0
+        relative_variance = variance / max_variance if max_variance > 0 else np.zeros(feature_count, dtype=np.float64)
+        for index, record in enumerate(feature_records):
+            if record["status"] == "invalid":
+                continue
+            if record["status"] == "constant":
+                continue
+            relative = float(relative_variance[index])
+            record["status"] = (
+                "near_zero"
+                if relative < near_zero_threshold
+                else "low_variation"
+                if relative < low_variation_threshold
+                else "active"
+            )
+            record["relative_variance"] = relative
+        for index, record in enumerate(feature_records):
+            if record["status"] == "constant":
+                record["relative_variance"] = float(relative_variance[index])
+
         order = np.argsort(-variance, kind="stable")
-        top_k = min(_int_param(params, "top_k", 20, 1), x.shape[1])
-        threshold = _float_param(params, "variance_threshold", 1e-12, 0.0)
-        near_zero = variance <= threshold
+        top_k = min(_int_param(params, "top_k", 20, 1), feature_count)
+        status_values = np.asarray([record["status"] for record in feature_records], dtype=object)
+        near_zero = status_values == "near_zero"
+        constant = status_values == "constant"
+        low_variation = status_values == "low_variation"
+        active = status_values == "active"
+        invalid = status_values == "invalid"
+        summary_variances = finite_variances if finite_variances.size else np.asarray([0.0])
+        warnings: list[str] = []
+        invalid_total = int(invalid_counts.sum())
+        if invalid_total:
+            warnings.append(
+                f"ignored {invalid_total} non-finite feature value(s) across {int(np.count_nonzero(invalid_counts))} feature(s)"
+            )
         if progress:
+            progress(0.8, "feature variance statistics complete")
             progress(1.0, "feature variance complete")
-        return {"arrays": {"variance": variance, "top_indices": order[:top_k].astype(np.int64), "near_zero_mask": near_zero.astype(np.int64)}, "preview": {"kind": "feature_variance", "feature_count": int(x.shape[1]), "top_k": top_k, "top_indices": order[:top_k].tolist(), "top_values": variance[order[:top_k]].tolist(), "variance_threshold": threshold, "near_zero_count": int(near_zero.sum()), "effective_nonzero_dimensions": int((~near_zero).sum())}, "warnings": []}
+        return {
+            "arrays": {
+                "variance": variance,
+                "relative_variance": relative_variance,
+                "std": std,
+                "iqr": iqr,
+                "mad": mad,
+                "std_robust_ratio": std_robust_ratio,
+                "near_zero_mask": near_zero.astype(np.int64),
+                "constant_mask": constant.astype(np.int64),
+                "finite_count": finite_counts,
+                "invalid_count": invalid_counts,
+                "histogram_edges": histogram_edges,
+                "histogram_counts": histogram_counts,
+                "distribution_samples": distribution_samples,
+                "distribution_sample_counts": distribution_sample_counts,
+            },
+            "preview": {
+                "kind": "feature_variance",
+                "schema_version": 2,
+                "sample_count": sample_count,
+                "feature_count": feature_count,
+                "ddof": 0,
+                "settings": {
+                    "near_zero_relative_threshold": near_zero_threshold,
+                    "low_variance_relative_threshold": low_variation_threshold,
+                    "constant_tolerance": constant_tolerance,
+                    "histogram_bins": histogram_bins,
+                    "distribution_sample_limit": distribution_sample_size,
+                },
+                "summary": {
+                    "max_variance": max_variance,
+                    "median_variance": float(np.median(summary_variances)),
+                    "min_variance": float(np.min(summary_variances)),
+                    "near_zero_count": int(near_zero.sum()),
+                    "constant_count": int(constant.sum()),
+                    "low_variation_count": int(low_variation.sum()),
+                    "active_count": int(active.sum()),
+                    "invalid_count": int(invalid.sum()),
+                    "invalid_value_count": invalid_total,
+                    "effective_nonzero_dimensions": int((active | low_variation).sum()),
+                },
+                "top_k": top_k,
+                "top_indices": order[:top_k].astype(np.int64).tolist(),
+                "top_values": variance[order[:top_k]].astype(np.float64).tolist(),
+                "features": feature_records,
+            },
+            "warnings": warnings,
+        }
 
     @staticmethod
     def feature_correlation(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:

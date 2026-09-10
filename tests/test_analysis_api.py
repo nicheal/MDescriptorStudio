@@ -123,6 +123,33 @@ def test_generic_analysis_is_cached_and_chunked(tmp_path: Path) -> None:
     db.close()
 
 
+def test_feature_variance_persists_full_schema_and_invalid_warning(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    values = np.arange(96, dtype=np.float64).reshape(12, 8)
+    values[1, 0] = np.nan
+    values[3, 4] = np.inf
+    np.save(tmp_path / "results" / "run_1" / "values.npy", values)
+
+    response = service.feature_variance({"run_id": "run_1", "top_k": 4, "near_zero_relative_threshold": 0.002, "low_variance_relative_threshold": 0.02})
+    assert response["job_id"] == "job_1"
+    analysis = service.get({"analysis_id": response["analysis_id"]})
+    assert analysis["parameters"]["feature_variance_schema"] == 2
+    assert analysis["parameters"]["near_zero_relative_threshold"] == 0.002
+
+    preview = service.preview({"analysis_id": response["analysis_id"], "limit": 20})
+    assert preview["schema_version"] == 2
+    assert preview["settings"]["low_variance_relative_threshold"] == 0.02
+    assert len(preview["features"]) == 8
+    assert "rows" not in preview
+    assert preview["features"][0]["invalid_count"] == 1
+    assert preview["features"][4]["invalid_count"] == 1
+    assert any("non-finite" in warning for warning in preview["warnings"])
+
+    chunk = service.chunk({"analysis_id": response["analysis_id"], "array": "histogram_counts", "offset": 4, "limit": 1})
+    assert chunk["data"] and len(chunk["data"][0]) == 32
+    db.close()
+
+
 def test_stale_artifacts_remain_auditable_but_cannot_feed_new_work(tmp_path: Path) -> None:
     db, jobs, service = _service(tmp_path)
     created = service.cluster({"run_id": "run_1", "algorithm": "kmeans", "n_clusters": 2, "seed": 42})

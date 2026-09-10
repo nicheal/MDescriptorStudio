@@ -173,8 +173,8 @@ export const ANALYSIS_METHOD_GUIDES: Readonly<Record<string, AnalysisMethodGuide
 
   "overview.feature_variance": {
     title: { en: "Feature variance", zh: "特征方差" },
-    theory: { en: "Feature variance measures how much each descriptor dimension changes across samples. It is a scale-dependent first-order diagnostic: large variance indicates change, not necessarily usefulness.", zh: "特征方差衡量每个描述符维度在样本之间的变化程度。这是一个依赖尺度的一阶诊断：方差大表示变化明显，但不一定表示特征有用。" },
-    application: { en: "Use it to find near-constant dimensions, prioritize descriptor inspection, and decide which features need scaling or further redundancy analysis.", zh: "可用它发现近似常量维度，确定描述符检查重点，并判断哪些特征需要缩放或进一步做冗余分析。" },
+    theory: { en: "Feature variance measures how much each descriptor dimension changes across the current dataset using population variance (ddof=0). Relative variance is only a display normalization; absolute variance remains sensitive to feature scale and outliers. Robust IQR/MAD values help distinguish a broad distribution from an outlier-driven one.", zh: "特征方差使用总体方差（ddof=0）衡量每个描述符维度在当前数据集中的变化程度。相对方差仅用于展示归一化；绝对方差仍受特征尺度和异常值影响。稳健的 IQR/MAD 有助于区分宽分布与异常值驱动的高方差。" },
+    application: { en: "Use the overview to inspect the full variance distribution, find Constant/Near-zero dimensions, and open a feature detail panel with histogram, KDE, box plot, and complete statistics. Treat low variation as a dataset diagnostic, not proof that a descriptor is invalid.", zh: "可在总览中检查完整方差分布，发现常量/近零方差维度，并打开特征详情查看直方图、KDE、箱线图和完整统计量。低变化是数据集诊断信号，不应直接解释为描述符无效。" },
   },
   "overview.feature_correlation": {
     title: { en: "Feature correlation", zh: "特征相关性" },
