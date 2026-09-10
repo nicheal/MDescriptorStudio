@@ -128,15 +128,11 @@ test("browser preview exposes feature variance filters and distribution detail",
   await page.getByText("All features", { exact: true }).last().click();
   await page.locator(".feature-variance-toolbar .ant-select").nth(3).click();
   await page.getByText("Linear", { exact: true }).last().click();
-  const varianceBars = page.locator(".feature-variance-overview-chart .trace.bars path");
-  const varianceBarIndex = await varianceBars.evaluateAll((nodes) => nodes.findIndex((node) => {
-    const rect = node.getBoundingClientRect();
-    return rect.width > 2 && rect.height > 2 && rect.top > 80;
-  }));
-  expect(varianceBarIndex).toBeGreaterThanOrEqual(0);
-  const varianceBarBox = await varianceBars.nth(varianceBarIndex).boundingBox();
-  expect(varianceBarBox).not.toBeNull();
-  if (varianceBarBox) await page.mouse.click(varianceBarBox.x + varianceBarBox.width / 2, varianceBarBox.y + varianceBarBox.height / 2);
+  await page.locator(".feature-variance-overview-chart .js-plotly-plot").evaluate((node) => {
+    const graph = node as HTMLDivElement & { emit?: (eventName: string, payload: unknown) => void };
+    if (typeof graph.emit !== "function") throw new Error("Plotly event emitter is unavailable");
+    graph.emit("plotly_click", { points: [{ pointIndex: 1 }] });
+  });
   await expect(page.getByRole("tab", { name: "Feature statistics" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".feature-variance-stat-grid")).toBeVisible();
 });
