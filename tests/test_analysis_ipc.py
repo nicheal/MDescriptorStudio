@@ -124,15 +124,19 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
             {"left_run_id": run_id, "right_run_id": run_id, "method": "spearman", "permutations": 19, "max_samples": 8, "seed": 42},
         )
         quality_id = run("analysis.feature_variance", {"run_id": run_id, "top_k": 4})
-        run("analysis.feature_correlation", {"run_id": run_id, "top_k": 4, "heatmap_features": 4})
-        run("analysis.effective_dimension", {"run_id": run_id})
+        correlation_id = run("analysis.feature_correlation", {"run_id": run_id, "method": "spearman", "top_k": 4, "heatmap_features": 4})
+        effective_id = run("analysis.effective_dimension", {"run_id": run_id})
+        effective_cached = bp.request(sequence, "analysis.effective_dimension", {"run_id": run_id, "preprocess": "standardized"})
+        sequence += 1
+        assert effective_cached["result"]["job_id"] is None
+        assert effective_cached["result"]["analysis_id"] == effective_id
         run(
             "analysis.property_correlation",
             {"run_id": run_id, "property": "energy_per_atom", "folds": 3, "top_k": 4},
         )
         local_id = run("analysis.local_diversity", {"run_id": run_id, "mode": "atom", "n_clusters": 3, "k": 3, "cutoff": 3.0})
         run("analysis.kernel", {"run_id": run_id, "kernel": "rbf", "max_samples": 8})
-        run("analysis.trajectory", {"run_id": run_id, "frame_start": 0, "frame_end": 7, "frame_step": 1})
+        trajectory_id = run("analysis.trajectory", {"run_id": run_id, "frame_start": 0, "frame_end": 7, "frame_step": 1})
         run("analysis.drift", {"reference_run_id": run_id, "query_run_id": run_id, "chunk_size": 3, "reference_chunk_size": 3})
         run("analysis.sensitivity", {"run_ids": [run_id, run_id]})
         perturbation_id = run(
@@ -143,11 +147,30 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
         listed = bp.request(sequence, "analysis.list", {"run_id": run_id})
         sequence += 1
         assert listed["result"]
-        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (perturbation_id, "perturbation_sensitivity")):
+        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (effective_id, "effective_dimension"), (trajectory_id, "trajectory"), (perturbation_id, "perturbation_sensitivity")):
             checked = bp.request(sequence, "analysis.get", {"analysis_id": analysis_id})
             sequence += 1
             assert checked["result"]["status"] == "COMPLETED"
             assert checked["result"]["preview"]["kind"] == kind
+            if kind == "effective_dimension":
+                assert checked["result"]["preview"]["preprocess"] == "standardized"
+                assert checked["result"]["preview"]["pca_basis"] == "correlation"
+                assert checked["result"]["preview"]["pca_feature_count"] > 0
+            if kind == "trajectory":
+                # The trajectory view derives thresholds live, so the artifact
+                # must carry the robust statistics, the detection space and the
+                # visual PCA variance next to the per-frame series.
+                preview = checked["result"]["preview"]
+                assert preview["event_method"] == "mad"
+                assert preview["event_space"] == "descriptor"
+                assert preview["pc1_explained_variance"] >= 0
+                files = checked["result"]["artifact_manifest"]["files"]
+                for name in ("coords", "pc_explained_variance", "step_distance", "reference_distance", "cumulative_distance", "sample_indices"):
+                    assert name in files
+        correlation = bp.request(sequence, "analysis.get", {"analysis_id": correlation_id})
+        sequence += 1
+        assert correlation["result"]["parameters"]["method"] == "spearman"
+        assert correlation["result"]["preview"]["correlation_metric"] == "spearman"
         got = bp.request(sequence, "analysis.get", {"analysis_id": quality_id})
         sequence += 1
         assert got["result"]["status"] == "COMPLETED"

@@ -203,6 +203,61 @@ def test_feature_correlation_is_bounded_and_keeps_unit_diagonal() -> None:
     assert np.allclose(np.diag(matrix), 1.0)
     assert np.all(np.abs(matrix) <= 1.0 + 1e-12)
     assert np.isclose(result["arrays"]["correlations"][0], 1.0)
+    assert result["preview"]["correlation_metric"] == "pearson"
+    assert result["preview"]["correlation_threshold"] == 0.95
+    assert result["preview"]["clustered_feature_order"]
+
+
+def test_feature_correlation_supports_spearman_rank_correlation() -> None:
+    x = np.linspace(-2.0, 2.0, 25)
+    values = np.column_stack([x, x**3, np.cos(x)])
+    pearson = AnalysisEngine.feature_correlation(SampleMatrix(values, np.arange(x.size)), {"method": "pearson"})
+    spearman = AnalysisEngine.feature_correlation(SampleMatrix(values, np.arange(x.size)), {"method": "spearman"})
+
+    assert pearson["preview"]["correlation_metric"] == "pearson"
+    assert spearman["preview"]["correlation_metric"] == "spearman"
+    assert spearman["arrays"]["correlation_matrix"][0, 1] > 0.999999
+    assert spearman["arrays"]["correlation_matrix"][0, 1] > pearson["arrays"]["correlation_matrix"][0, 1]
+
+    with pytest.raises(AppError, match="pearson or spearman") as exc:
+        AnalysisEngine.feature_correlation(SampleMatrix(values, np.arange(x.size)), {"method": "kendall"})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+
+
+def test_property_correlation_reports_oof_encoding_association_and_reliability() -> None:
+    rng = np.random.default_rng(42)
+    values = rng.normal(size=(36, 6))
+    target = values[:, 0] * 1.8 - values[:, 2] * 0.7 + rng.normal(scale=0.08, size=36)
+    result = AnalysisEngine.property_correlation(
+        SampleMatrix(values, np.arange(values.shape[0]), properties={"energy_per_atom": target}),
+        {
+            "property": "energy_per_atom",
+            "folds": 4,
+            "reliability_k": 3,
+            "distance_metric": "cosine",
+            "sparse_quantile": 0.85,
+            "ood_quantile": 0.95,
+        },
+    )
+
+    arrays = result["arrays"]
+    preview = result["preview"]
+    assert np.allclose(arrays["residuals"], arrays["predictions"] - arrays["targets"])
+    assert arrays["oof_distances"].shape == target.shape
+    assert np.array_equal(arrays["sample_frames"], np.arange(values.shape[0]))
+    assert np.all(arrays["sample_rows"] == -1)
+    assert arrays["absolute_errors"].shape == target.shape
+    assert arrays["pearson_correlations"].shape == (values.shape[1],)
+    assert arrays["spearman_correlations"].shape == (values.shape[1],)
+    assert arrays["mutual_information"].shape == (values.shape[1],)
+    assert preview["model"] == "Ridge"
+    assert preview["cv_folds"] == 4
+    assert preview["property_unit"] == "eV/atom"
+    assert preview["distance_metric"] == "cosine"
+    assert preview["reliability_k"] == 3
+    assert preview["sparse_threshold"] < preview["ood_threshold"]
+    assert -1.0 <= preview["distance_error_spearman"] <= 1.0
+    assert preview["baseline_rmse"] > preview["rmse"]
 
 
 def test_effective_dimension_reports_zero_thresholds_for_constant_input() -> None:
@@ -210,6 +265,26 @@ def test_effective_dimension_reports_zero_thresholds_for_constant_input() -> Non
     result = AnalysisEngine.effective_dimension(SampleMatrix(values, np.arange(4)), {})
     assert result["preview"]["participation_ratio"] == 0.0
     assert result["preview"]["components_for_threshold"] == {"0.9": 0, "0.95": 0, "0.99": 0}
+
+
+def test_effective_dimension_reports_pca_basis_and_feature_counts() -> None:
+    values = np.array([
+        [0.0, 100.0, 0.0],
+        [1.0, 110.0, 1.0],
+        [2.0, 80.0, 4.0],
+        [3.0, 130.0, 9.0],
+    ])
+    result = AnalysisEngine.effective_dimension(SampleMatrix(values, np.arange(4)), {"preprocess": "standardized"})
+    preview = result["preview"]
+    assert preview["preprocess"] == "standardized"
+    assert preview["pca_basis"] == "correlation"
+    assert preview["feature_count"] == 3
+    assert preview["pca_feature_count"] == 3
+    assert preview["component_count"] == 3
+
+    centered = AnalysisEngine.effective_dimension(SampleMatrix(values, np.arange(4)), {"preprocess": "center"})
+    assert centered["preview"]["pca_basis"] == "covariance"
+    assert not np.allclose(result["arrays"]["explained_variance"], centered["arrays"]["explained_variance"])
 
 
 def test_tsne_adapts_default_perplexity_for_small_inputs() -> None:
@@ -265,10 +340,13 @@ def test_overlap_identity_is_detected_as_duplicate(samples: SampleMatrix) -> Non
 
 
 def test_feature_redundancy_summary_counts_correlated_columns() -> None:
-    values = np.column_stack([np.arange(20), np.arange(20), np.arange(20) ** 2]).astype(np.float64)
-    result = AnalysisEngine.feature_correlation(SampleMatrix(values, np.arange(20)), {"redundancy_threshold": 0.99})
+    values = np.column_stack([np.arange(20), -np.arange(20), np.arange(20) * 2 + 1, np.sin(np.arange(20))]).astype(np.float64)
+    result = AnalysisEngine.feature_correlation(SampleMatrix(values, np.arange(20)), {"correlation_threshold": 0.99})
     assert result["preview"]["highly_correlated_pairs"] >= 1
-    assert result["preview"]["redundant_feature_count"] >= 1
+    assert result["preview"]["high_correlation_cluster_count"] == 1
+    assert result["preview"]["involved_feature_count"] == 3
+    assert result["preview"]["involved_feature_ratio"] == 0.75
+    assert any(row["correlation"] < 0 for row in result["preview"]["pairs"])
 
 
 def test_trajectory_includes_reference_distance_and_projection(samples: SampleMatrix) -> None:
@@ -276,6 +354,48 @@ def test_trajectory_includes_reference_distance_and_projection(samples: SampleMa
     assert result["arrays"]["reference_distance"][0] == 0
     assert result["arrays"]["coords"].shape == (48, 2)
     assert result["arrays"]["cumulative_distance"][-1] >= result["arrays"]["step_distance"][-1]
+    assert result["arrays"]["pc_explained_variance"].shape == (2,)
+    assert 0.0 <= float(result["arrays"]["pc_explained_variance"].sum()) <= 1.0
+
+
+def test_trajectory_event_detection_is_explicit_about_threshold_and_space() -> None:
+    values = np.column_stack([np.linspace(0.0, 1.0, 40), np.zeros(40)]).astype(np.float64)
+    values[20:] += 40.0
+    frames = np.arange(40, dtype=np.int64)
+    samples = SampleMatrix(values, frames)
+
+    result = AnalysisEngine.trajectory(samples, {"event_method": "mad", "event_sensitivity": 3.0})
+    preview = result["preview"]
+    steps = result["arrays"]["step_distance"][1:]
+    median = float(np.median(steps))
+    mad = float(np.median(np.abs(steps - median)))
+    assert preview["event_method"] == "mad"
+    assert preview["event_sensitivity"] == 3.0
+    assert np.isclose(preview["event_threshold"], median + 3.0 * 1.4826 * mad)
+    assert preview["event_space"] == "descriptor"
+    assert preview["event_count"] == len(preview["events"]) == 1
+    assert preview["event_rate"] == pytest.approx(1 / steps.size)
+    assert preview["max_step_distance"] == pytest.approx(float(steps.max()))
+    assert preview["total_distance"] == pytest.approx(float(steps.sum()))
+
+    assert result["arrays"]["event_indices"].tolist() == [20]
+    event = preview["events"][0]
+    assert event["frame"] == 20
+    assert event["percentile"] == 1.0
+    assert event["threshold_ratio"] > 1.0
+    assert event["pc_displacement"] > 0.0
+
+    # A sigma-based threshold is inflated by the single jump: the robust MAD
+    # default must therefore stay available and documented.
+    sigma = AnalysisEngine.trajectory(samples, {"event_method": "zscore", "event_sensitivity": 3.0})["preview"]
+    assert sigma["event_threshold"] > preview["event_threshold"]
+
+    top = AnalysisEngine.trajectory(samples, {"event_method": "percentile", "event_sensitivity": 5.0})["preview"]
+    assert np.isclose(top["event_threshold"], float(np.quantile(steps, 0.95)))
+
+    with pytest.raises(AppError) as exc:
+        AnalysisEngine.trajectory(samples, {"event_method": "unknown"})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
 
 
 def test_uncertainty_acquisition_exposes_knn_uncertainty_and_diversity(samples: SampleMatrix) -> None:

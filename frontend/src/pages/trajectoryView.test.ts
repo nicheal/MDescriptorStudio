@@ -1,0 +1,65 @@
+// The trajectory view re-derives the event threshold live so the sensitivity
+// control stays interactive. These tests pin that derivation to the formula the
+// backend uses (`_trajectory_threshold` in analysis/engine.py).
+import { describe, expect, it } from "vitest";
+import { decimate, MAD_SIGMA, stepPercentiles, stepStats, trajectoryThreshold } from "./trajectoryMath";
+
+const STEPS = [1, 1, 1, 1, 1, 1, 1, 1, 1, 21];
+
+describe("trajectoryThreshold", () => {
+  const stats = stepStats(STEPS);
+
+  it("uses median + k * 1.4826 * MAD for the robust default", () => {
+    expect(trajectoryThreshold(STEPS, stats, "mad", 3)).toBeCloseTo(stats.median + 3 * MAD_SIGMA * stats.mad, 12);
+  });
+
+  it("uses mean + k * sigma for the z-score variant", () => {
+    expect(trajectoryThreshold(STEPS, stats, "zscore", 2.5)).toBeCloseTo(stats.mean + 2.5 * stats.std, 12);
+  });
+
+  it("uses the top percentage for the percentile variant", () => {
+    // 10 steps: the top 10% lands between the smallest step (1) and the jump
+    // (21), and the top 49% still equals the median step.
+    expect(trajectoryThreshold(STEPS, stats, "percentile", 10)).toBeCloseTo(3, 12);
+    expect(trajectoryThreshold(STEPS, stats, "percentile", 49)).toBeCloseTo(1, 12);
+    // Above 50% the "top percent" would stop being a rare-event threshold.
+    expect(trajectoryThreshold(STEPS, stats, "percentile", 50)).toBe(Number.POSITIVE_INFINITY);
+    expect(trajectoryThreshold(STEPS, stats, "percentile", 90)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("leaves one dominant jump as the only transition under the MAD threshold", () => {
+    const threshold = trajectoryThreshold(STEPS, stats, "mad", 3);
+    expect(STEPS.filter((value) => value > threshold)).toEqual([21]);
+  });
+});
+
+describe("stepStats", () => {
+  it("reports median, MAD, mean and standard deviation of the steps", () => {
+    expect(stepStats([1, 2, 3, 4])).toEqual({ median: 2.5, mad: 1, mean: 2.5, std: Math.sqrt(1.25) });
+  });
+
+  it("degrades to zeros without steps", () => {
+    expect(stepStats([])).toEqual({ median: 0, mad: 0, mean: 0, std: 0 });
+  });
+});
+
+describe("stepPercentiles", () => {
+  it("ranks the largest step at 100% and keeps ties in trajectory order", () => {
+    expect(stepPercentiles([5, 1, 5, 3])).toEqual([0.75, 0.25, 1, 0.5]);
+  });
+});
+
+describe("decimate", () => {
+  it("keeps the first and last index while respecting the stride", () => {
+    expect(decimate(10, 4)).toEqual([0, 4, 8, 9]);
+    expect(decimate(3, 1)).toEqual([0, 1, 2]);
+    expect(decimate(0, 5)).toEqual([]);
+  });
+
+  it("never returns more points than the rendering limit", () => {
+    const indices = decimate(10_000, 1, 4_000);
+    expect(indices.length).toBeLessThanOrEqual(4_001);
+    expect(indices[0]).toBe(0);
+    expect(indices[indices.length - 1]).toBe(9_999);
+  });
+});

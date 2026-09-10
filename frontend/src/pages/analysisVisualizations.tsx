@@ -1,9 +1,11 @@
-import Plot from "react-plotly.js";
-import type { Data, Layout } from "plotly.js";
-import { Empty, Table, Typography } from "antd";
+import { useState } from "react";
+import type { Data } from "plotly.js";
+import { Select, Space, Switch, Table, Tag, Typography } from "antd";
 import { useT, type Pair } from "../i18n";
 import type { AnalysisPreview } from "../types/protocol";
 import type { AnalysisPoint } from "./analysisPreview";
+import TrajectoryView from "./trajectoryView";
+import { Metrics, NoData, PlotFrame, fmt, formatCount, formatFixed, formatPercent, layout, matrix, num, nums, quantile, records, strings } from "./analysisChartKit";
 
 export type AnalysisArrays = Record<string, unknown[]>;
 
@@ -28,8 +30,8 @@ const TITLES: Record<string, Pair> = {
   overlap: { en: "TRAIN / TEST OVERLAP", zh: "训练 / 测试重叠" },
   compare: { en: "DESCRIPTOR COMPARISON", zh: "描述符对比" },
   mantel: { en: "MANTEL PERMUTATION TEST", zh: "Mantel 置换检验" },
-  feature_correlation: { en: "FEATURE REDUNDANCY", zh: "特征冗余" },
-  property_correlation: { en: "PROPERTY CORRELATION", zh: "属性相关性" },
+  feature_correlation: { en: "FEATURE CORRELATION", zh: "特征相关性" },
+  property_correlation: { en: "PROPERTY INFORMATION", zh: "属性信息分析" },
   local_diversity: { en: "LOCAL ENVIRONMENT DIVERSITY", zh: "局部环境多样性" },
   trajectory: { en: "DESCRIPTOR TRAJECTORY", zh: "描述符轨迹" },
   drift: { en: "DATASET DRIFT", zh: "数据集漂移" },
@@ -75,9 +77,9 @@ function Visualization({ kind, preview, arrays, points, selectedIndices, onSelec
   if (kind === "compare") return <CompareView preview={preview} arrays={arrays} />;
   if (kind === "mantel") return <MantelView preview={preview} arrays={arrays} />;
   if (kind === "feature_correlation") return <FeatureCorrelationView preview={preview} arrays={arrays} />;
-  if (kind === "property_correlation") return <PropertyView preview={preview} arrays={arrays} />;
+  if (kind === "property_correlation") return <PropertyView preview={preview} arrays={arrays} onSelect={onSelect} />;
   if (kind === "local_diversity") return <LocalView preview={preview} arrays={arrays} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
-  if (kind === "trajectory") return <TrajectoryView preview={preview} arrays={arrays} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
+  if (kind === "trajectory") return <TrajectoryView key={String(preview.analysis_id ?? "trajectory")} preview={preview} arrays={arrays} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
   if (kind === "sensitivity") return <SensitivityView preview={preview} />;
   if (kind === "perturbation_sensitivity") return <PerturbationView preview={preview} arrays={arrays} />;
   if (kind === "kernel") return <KernelView preview={preview} arrays={arrays} />;
@@ -205,32 +207,258 @@ function FeatureCorrelationView({ preview, arrays }: { preview: AnalysisPreview;
   const { t } = useT();
   const values = matrix(arrays.correlation_matrix);
   const featureIndices = nums(arrays.correlation_feature_indices);
+  const threshold = num(preview.correlation_threshold ?? preview.redundancy_threshold) ?? 0.95;
+  const clusteredFeatureOrder = nums(preview.clustered_feature_order);
+  const hasClusteredOrder = clusteredFeatureOrder.length === featureIndices.length
+    && clusteredFeatureOrder.every((feature) => featureIndices.includes(feature));
+  const correlationMethod = preview.correlation_metric === "spearman" ? "spearman" : "pearson";
+  const [displayMode, setDisplayMode] = useState<"signed" | "absolute">("absolute");
+  const [featureOrder, setFeatureOrder] = useState<"original" | "clustered">("original");
+  const [highOnly, setHighOnly] = useState(false);
+  const order = featureOrder === "clustered" && hasClusteredOrder ? clusteredFeatureOrder : featureIndices;
+  const positions = order.map((feature) => featureIndices.indexOf(feature)).filter((position) => position >= 0);
+  const orderedValues = positions.map((rowPosition, rowIndex) => positions.map((columnPosition, columnIndex) => {
+    const raw = values[rowPosition]?.[columnPosition];
+    if (raw == null || rowIndex >= columnIndex || (highOnly && Math.abs(raw) < threshold)) return null;
+    return displayMode === "absolute" ? Math.abs(raw) : raw;
+  }));
+  const orderedSignedValues = positions.map((rowPosition) => positions.map((columnPosition) => values[rowPosition]?.[columnPosition] ?? null));
+  const pairRows = records(preview.pairs)
+    .map((row, index) => {
+      const correlation = num(row.correlation);
+      if (correlation === null) return null;
+      const absoluteCorrelation = num(row.absolute_correlation) ?? Math.abs(correlation);
+      return {
+        key: `${row.feature_a ?? "?"}-${row.feature_b ?? "?"}-${index}`,
+        feature_a: num(row.feature_a),
+        feature_b: num(row.feature_b),
+        correlation,
+        absolute_correlation: absoluteCorrelation,
+        status: absoluteCorrelation >= threshold ? "High" : "Moderate",
+      };
+    })
+    .filter((row): row is CorrelationPairRow => row !== null)
+    .sort((left, right) => right.absolute_correlation - left.absolute_correlation);
+  const colorScale: Array<[number, string]> = displayMode === "absolute"
+    ? [[0, "#F5F7FA"], [0.5, "#8DB8E5"], [1, "#0F6CBD"]]
+    : [[0, "#D13438"], [0.5, "#FFFFFF"], [1, "#0F6CBD"]];
+  const signedMetricLabel = correlationMethod === "spearman" ? "Spearman ρ" : "Pearson r";
+  const absoluteMetricLabel = correlationMethod === "spearman" ? "|ρ|" : "|r|";
+  const metricLabel = displayMode === "absolute" ? absoluteMetricLabel : signedMetricLabel;
+  const heatmapLimited = preview.heatmap_limited === true;
   return <>
-    <Metrics values={[{ k: t("Features"), v: preview.feature_count }, { k: t("Zero variance"), v: preview.zero_variance_count }, { k: t("Highly correlated pairs"), v: preview.highly_correlated_pairs }, { k: t("Redundant features"), v: preview.redundant_feature_count }, { k: t("Redundancy ratio"), v: preview.redundancy_ratio }]} />
-    {values.length ? <PlotFrame ariaLabel={t("Descriptor feature correlation heatmap")} data={[{ type: "heatmap", z: values, x: featureIndices, y: featureIndices, zmin: -1, zmax: 1, colorscale: [[0, "#D13438"], [0.5, "#FFFFFF"], [1, "#0F6CBD"]], colorbar: { title: { text: "Pearson r" } }, hovertemplate: `F%{y} ↔ F%{x}<br>r=%{z:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: t("Feature") }, yaxis: { title: t("Feature"), autorange: "reversed" } })} /> : <NoData message={t("Correlation matrix is unavailable.")} />}
-    <DataTable rows={records(preview.pairs)} />
+    <div className="analysis-correlation-toolbar">
+      <Space wrap size={[8, 8]}>
+        <Typography.Text>{t("Correlation view")}</Typography.Text>
+        <Select
+          className="analysis-correlation-view-select"
+          aria-label={t("Correlation view")}
+          value={displayMode}
+          onChange={setDisplayMode}
+          options={[{ value: "absolute", label: t("Absolute correlation") }, { value: "signed", label: t("Signed correlation") }]}
+        />
+        <Typography.Text>{t("Feature order")}</Typography.Text>
+        <Select
+          aria-label={t("Feature order")}
+          value={featureOrder === "clustered" && !hasClusteredOrder ? "original" : featureOrder}
+          onChange={setFeatureOrder}
+          options={[{ value: "original", label: t("Original order") }, { value: "clustered", label: t("Clustered order"), disabled: !hasClusteredOrder }]}
+        />
+        <Switch aria-label={t("Show only high correlations")} checked={highOnly} onChange={setHighOnly} />
+        <Typography.Text>{t("Show only high correlations")}</Typography.Text>
+      </Space>
+    </div>
+    <Metrics values={[
+      { k: t("Features"), v: formatCount(preview.feature_count) },
+      { k: t("Zero variance"), v: formatCount(preview.zero_variance_count) },
+      { k: t(heatmapLimited ? "High-correlation pairs (heatmap subset)" : "Highly correlated pairs"), v: formatCount(preview.highly_correlated_pairs) },
+      { k: t("High-correlation clusters"), v: formatCount(preview.high_correlation_cluster_count) },
+      { k: t("Involved high-correlation features"), v: formatCount(preview.involved_feature_count ?? preview.redundant_feature_count) },
+      { k: t("High-correlation feature ratio"), v: formatPercent(preview.involved_feature_ratio ?? preview.redundancy_ratio) },
+    ]} />
+    {heatmapLimited && <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>{t("The heatmap and pair summary use the {n} highest-variance valid features.", { n: formatCount(preview.heatmap_feature_count) })}</Typography.Paragraph>}
+    {values.length ? <PlotFrame ariaLabel={t("Descriptor feature correlation heatmap")} data={[{ type: "heatmap", z: orderedValues, customdata: orderedSignedValues, x: order, y: order, zmin: displayMode === "absolute" ? 0 : -1, zmax: 1, colorscale: colorScale, colorbar: { title: { text: metricLabel } }, hovertemplate: displayMode === "absolute" ? `F%{y} ↔ F%{x}<br>${absoluteMetricLabel}=%{z:.4f}<br>${signedMetricLabel}=%{customdata:.4f}<extra></extra>` : `F%{y} ↔ F%{x}<br>${signedMetricLabel}=%{z:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: `${t("Feature")} · ${featureOrder === "clustered" && hasClusteredOrder ? t("Clustered order") : t("Original order")}` }, yaxis: { title: t("Feature"), autorange: "reversed" } })} /> : <NoData message={t("Correlation matrix is unavailable.")} />}
+    {pairRows.length ? <Table<CorrelationPairRow>
+      className="analysis-data-table feature-correlation-table"
+      size="small"
+      tableLayout="fixed"
+      pagination={{ pageSize: 6, hideOnSinglePage: true, showSizeChanger: false }}
+      rowKey="key"
+      dataSource={pairRows}
+      columns={[
+        { title: t("Feature A"), dataIndex: "feature_a", key: "feature_a", width: 96, render: (value: number | null) => formatIndex(value) },
+        { title: t("Feature B"), dataIndex: "feature_b", key: "feature_b", width: 96, render: (value: number | null) => formatIndex(value) },
+        { title: signedMetricLabel, dataIndex: "correlation", key: "correlation", width: 128, align: "right", render: formatCorrelation },
+        { title: absoluteMetricLabel, dataIndex: "absolute_correlation", key: "absolute_correlation", width: 96, align: "right", render: (value: number) => value.toFixed(4) },
+        { title: t("Status"), dataIndex: "status", key: "status", width: 104, render: (value: string) => <Tag color={value === "High" ? "red" : "default"}>{t(value)}</Tag> },
+      ]}
+    /> : <NoData message={t("No feature correlation pairs were returned.")} />}
   </>;
 }
 
-function PropertyView({ preview, arrays }: { preview: AnalysisPreview; arrays: AnalysisArrays }) {
+type CorrelationPairRow = {
+  key: string;
+  feature_a: number | null;
+  feature_b: number | null;
+  correlation: number;
+  absolute_correlation: number;
+  status: "High" | "Moderate";
+};
+
+function PropertyView({ preview, arrays, onSelect }: { preview: AnalysisPreview; arrays: AnalysisArrays; onSelect: (point: AnalysisPoint) => void }) {
   const { t } = useT();
+  const [predictionView, setPredictionView] = useState<"scatter" | "density">("scatter");
+  const [residualView, setResidualView] = useState<"all" | "center99">("all");
+  const [associationMethod, setAssociationMethod] = useState<"pearson" | "spearman" | "mutual_information">("pearson");
+  const [topN, setTopN] = useState<10 | 20 | 50>(20);
   const targets = nums(arrays.targets);
   const predictions = nums(arrays.predictions);
   const residuals = nums(arrays.residuals);
-  const pairDistance = nums(arrays.pair_distance);
-  const pairDelta = nums(arrays.pair_property_delta);
+  const absoluteErrors = nums(arrays.absolute_errors);
+  const distances = nums(arrays.oof_distances);
+  const sampleIndices = nums(arrays.sample_indices);
+  const sampleFrames = nums(arrays.sample_frames);
+  const sampleRows = nums(arrays.sample_rows);
+  const binCenters = nums(arrays.reliability_bin_center);
+  const binMedian = nums(arrays.reliability_bin_median);
+  const binP90 = nums(arrays.reliability_bin_p90);
+  const binP95 = nums(arrays.reliability_bin_p95);
   const identityBounds = [...targets, ...predictions];
   const identityMin = identityBounds.length ? Math.min(...identityBounds) : 0;
   const identityMax = identityBounds.length ? Math.max(...identityBounds) : 1;
-  return <>
-    <Metrics values={[{ k: t("Property"), v: preview.property }, { k: t("Samples"), v: preview.sample_count }, { k: t("CV R²"), v: preview.r2 }, { k: t("CV RMSE"), v: preview.rmse }, { k: t("CV MAE"), v: preview.mae }, { k: t("Distance–property r"), v: preview.distance_property_correlation }]} />
-    <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Cross-validated property prediction")} data={[{ type: "scattergl", mode: "markers", x: targets, y: predictions, marker: { size: 6, color: "#0F6CBD", opacity: 0.65 }, hovertemplate: `${t("target")}=%{x:.5g}<br>${t("prediction")}=%{y:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: t("Target") }, yaxis: { title: t("Cross-validated prediction") }, shapes: [{ type: "line", x0: identityMin, y0: identityMin, x1: identityMax, y1: identityMax, line: { color: "#616161", dash: "dash" } }] })} />
-      <PlotFrame compact ariaLabel={t("Property residual distribution")} data={[{ type: "histogram", x: residuals, marker: { color: "#F7630C" } }]} layout={layout({ xaxis: { title: t("Residual") }, yaxis: { title: t("Samples") } })} />
-      <PlotFrame compact ariaLabel={t("Descriptor distance versus property difference")} data={[{ type: "scattergl", mode: "markers", x: pairDistance, y: pairDelta, marker: { size: 4, color: "#8764B8", opacity: 0.35 } }]} layout={layout({ xaxis: { title: t("Descriptor pair distance") }, yaxis: { title: t("Absolute property difference") } })} />
-      <TopFeatureBars rows={records(preview.top_features)} />
-    </div>
-  </>;
+  const unit = String(preview.property_unit ?? "");
+  const unitSuffix = unit ? ` (${unit})` : "";
+  const residualLimit = quantile(residuals.map(Math.abs), 0.99);
+  const visibleResiduals = residualView === "center99" && residualLimit !== null
+    ? residuals.filter((value) => Math.abs(value) <= residualLimit)
+    : residuals;
+  const associationValues = associationMethod === "spearman"
+    ? nums(arrays.spearman_correlations)
+    : associationMethod === "mutual_information"
+      ? nums(arrays.mutual_information)
+      : nums(arrays.pearson_correlations).length
+        ? nums(arrays.pearson_correlations)
+        : nums(arrays.feature_correlations);
+  const featureIndices = nums(arrays.feature_indices);
+  const associationRows = associationValues.length && featureIndices.length === associationValues.length
+    ? associationValues.map((value, index) => ({ feature: featureIndices[index], value }))
+    : associationMethod === "pearson"
+      ? records(preview.top_features).map((row) => ({ feature: num(row.feature) ?? 0, value: num(row.correlation) ?? 0 }))
+      : [];
+  const rankedAssociations = associationRows
+    .sort((left, right) => associationMethod === "mutual_information" ? right.value - left.value : Math.abs(right.value) - Math.abs(left.value))
+    .slice(0, topN);
+  const predictionData: Data[] = predictionView === "density"
+    ? [{ type: "histogram2dcontour", x: targets, y: predictions, colorscale: "Blues", contours: { coloring: "fill" }, colorbar: { title: { text: t("Density") } }, hovertemplate: `${t("Ground truth")}=%{x:.5g}<br>${t("OOF prediction")}=%{y:.5g}<extra></extra>` } as Data]
+    : [{ type: "scattergl", mode: "markers", x: targets, y: predictions, marker: { size: 6, color: "#0F6CBD", opacity: 0.62 }, hovertemplate: `${t("Ground truth")}=%{x:.5g}<br>${t("OOF prediction")}=%{y:.5g}<extra></extra>` }];
+  const encodingStrength = capitalize(t(String(preview.encoding_strength ?? "unknown")));
+  const informationPattern = String(preview.information_pattern ?? "mixed");
+  return <div className="property-analysis">
+    <section className="property-analysis-section">
+      <PropertySectionHeading number="01" title={t("Property Encoding")} question={t("Does the descriptor encode the property?")} />
+      <div className="property-method-strip">
+        <Tag color="blue">{String(preview.model ?? "Ridge")}</Tag>
+        <Typography.Text>{t("{folds}-fold CV · shuffled · seed {seed}", { folds: formatCount(preview.cv_folds), seed: formatCount(preview.cv_seed) })}</Typography.Text>
+        <Typography.Text type="secondary">{t("Baseline: training-fold mean")}</Typography.Text>
+      </div>
+      <Metrics values={[
+        { k: t("Samples"), v: formatCount(preview.sample_count) },
+        { k: t("Descriptor dimensions"), v: formatCount(preview.feature_count) },
+        { k: t("CV R²"), v: formatFixed(preview.r2, 4) },
+        { k: t("CV RMSE"), v: formatWithUnit(preview.rmse, unit) },
+        { k: t("CV MAE"), v: formatWithUnit(preview.mae, unit) },
+      ]} />
+      <div className="property-insight" role="status">
+        <Typography.Text strong>{t("{strength} property encoding", { strength: encodingStrength })}</Typography.Text>
+        <Typography.Text>{propertyInsight(informationPattern, t)}</Typography.Text>
+      </div>
+      <div className="property-view-toolbar">
+        <Typography.Text>{t("Prediction view")}</Typography.Text>
+        <Select aria-label={t("Prediction view")} value={predictionView} onChange={setPredictionView} options={[{ value: "scatter", label: t("Scatter") }, { value: "density", label: t("Density") }]} />
+        <Typography.Text>{t("Residual range")}</Typography.Text>
+        <Select aria-label={t("Residual range")} value={residualView} onChange={setResidualView} options={[{ value: "all", label: t("All") }, { value: "center99", label: t("Central 99%") }]} />
+      </div>
+      <div className="analysis-chart-grid">
+        <div className="property-chart-panel">
+          <Typography.Text strong>{t("OOF Prediction vs. Ground Truth")}</Typography.Text>
+          <PlotFrame compact ariaLabel={t("OOF Prediction vs. Ground Truth")} data={predictionData} layout={layout({ xaxis: { title: `${t("Ground truth")}${unitSuffix}` }, yaxis: { title: `${t("OOF prediction")}${unitSuffix}` }, shapes: [{ type: "line", x0: identityMin, y0: identityMin, x1: identityMax, y1: identityMax, line: { color: "#616161", dash: "dash" } }], annotations: [{ x: identityMax, y: identityMax, text: "y = x", showarrow: false, xanchor: "right", yanchor: "bottom", font: { color: "#616161" } }] })} />
+        </div>
+        <div className="property-chart-panel">
+          <Typography.Text strong>{t("OOF Residual Distribution")}</Typography.Text>
+          <div className="property-inline-stats">
+            <span>{t("Mean")} {formatWithUnit(preview.residual_mean, unit)}</span>
+            <span>{t("Median")} {formatWithUnit(preview.residual_median, unit)}</span>
+            <span>P95(|error|) {formatWithUnit(preview.p95_absolute_error, unit)}</span>
+            <span>{t("Std")} {formatWithUnit(preview.residual_std, unit)}</span>
+          </div>
+          <PlotFrame compact ariaLabel={t("OOF Residual Distribution")} data={[{ type: "histogram", x: visibleResiduals, marker: { color: "#F7630C" }, hovertemplate: `${t("Residual")}=%{x:.5g}<br>${t("Samples")}=%{y}<extra></extra>` }]} layout={layout({ xaxis: { title: `${t("Residual (prediction − truth)")}${unitSuffix}` }, yaxis: { title: t("Samples") }, shapes: [{ type: "line", x0: 0, x1: 0, y0: 0, y1: 1, yref: "paper", line: { color: "#616161", dash: "dash" } }] })} />
+        </div>
+      </div>
+      <Typography.Text type="secondary" className="property-baseline-note">{t("Mean baseline: R² {r2}, RMSE {rmse}, MAE {mae}", { r2: formatFixed(preview.baseline_r2, 4), rmse: formatWithUnit(preview.baseline_rmse, unit), mae: formatWithUnit(preview.baseline_mae, unit) })}</Typography.Text>
+    </section>
+
+    <section className="property-analysis-section">
+      <PropertySectionHeading number="02" title={t("Information Localization")} question={t("Which descriptor dimensions carry the information?")} />
+      <div className="property-view-toolbar">
+        <Typography.Text>{t("Association method")}</Typography.Text>
+        <Select aria-label={t("Association method")} value={associationMethod} onChange={setAssociationMethod} options={[{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }, { value: "mutual_information", label: t("Mutual Information") }]} />
+        <Typography.Text>{t("Top N")}</Typography.Text>
+        <Select aria-label={t("Top N")} value={topN} onChange={setTopN} options={[10, 20, 50].map((value) => ({ value, label: String(value) }))} />
+      </div>
+      <Metrics values={[
+        { k: "Max |Pearson r|", v: formatFixed(preview.max_abs_pearson, 3) },
+        { k: "Max |Spearman ρ|", v: formatFixed(preview.max_abs_spearman, 3) },
+        { k: t("Max mutual information"), v: formatFixed(preview.max_mutual_information, 3) },
+      ]} />
+      {rankedAssociations.length ? <AssociationBars rows={rankedAssociations} method={associationMethod} /> : <NoData message={t("Association data is unavailable for this saved result. Rerun the analysis to compute it.")} />}
+      <Typography.Text type="secondary">{t("Bars are ranked by association magnitude. Signed methods encode direction by both bar position and a visible value label.")}</Typography.Text>
+    </section>
+
+    <section className="property-analysis-section">
+      <PropertySectionHeading number="03" title={t("Representation Reliability")} question={t("Where does the descriptor representation become unreliable?")} />
+      <div className="property-method-strip">
+        <Tag>{String(preview.distance_metric ?? "euclidean")}</Tag>
+        <Typography.Text>{t("Mean kNN distance to the OOF training fold · k={k}", { k: formatCount(preview.reliability_k) })}</Typography.Text>
+        <Typography.Text type="secondary">{preview.distance_standardized ? t("Descriptor standardized within each fold") : t("Descriptor not standardized")}</Typography.Text>
+      </div>
+      <Metrics values={[
+        { k: "Spearman ρ(distance, |error|)", v: formatFixed(preview.distance_error_spearman, 3) },
+        { k: "Pearson r(distance, |error|)", v: formatFixed(preview.distance_error_pearson, 3) },
+        { k: t("High error + high distance"), v: formatCount(preview.high_error_high_distance_count) },
+        { k: t("High error + low distance"), v: formatCount(preview.high_error_low_distance_count) },
+      ]} />
+      <div className="property-wide-chart">
+        <PlotFrame ariaLabel={t("Descriptor-space coverage versus OOF prediction error")} onClick={(index, curve) => {
+          if (curve !== 0 || !Number.isFinite(sampleFrames[index])) return;
+          const frame = Math.round(sampleFrames[index]);
+          const row = sampleRows[index] >= 0 ? Math.round(sampleRows[index]) : undefined;
+          onSelect({ i: Math.round(sampleIndices[index] ?? index), frame, row, sample_id: row == null ? `frame:${frame}` : `frame:${frame}:atom:${row}`, x: distances[index] ?? 0, y: absoluteErrors[index] ?? 0 });
+        }} data={[
+          { type: "scattergl", mode: "markers", name: t("Samples"), x: distances, y: absoluteErrors, marker: { size: 5, color: "#8764B8", opacity: 0.28 }, hovertemplate: `${t("OOF kNN distance")}=%{x:.5g}<br>|error|=%{y:.5g}${unit ? ` ${unit}` : ""}<extra></extra>` },
+          { type: "scatter", mode: "lines+markers", name: t("Binned median"), x: binCenters, y: binMedian, line: { color: "#0F6CBD", width: 3 }, marker: { size: 7 } },
+          { type: "scatter", mode: "lines", name: "P90 |error|", x: binCenters, y: binP90, line: { color: "#F7630C", width: 2, dash: "dash" } },
+          { type: "scatter", mode: "lines", name: "P95 |error|", x: binCenters, y: binP95, line: { color: "#D13438", width: 2, dash: "dot" } },
+        ]} layout={layout({ xaxis: { title: t("Mean OOF training-fold kNN distance") }, yaxis: { title: `|${t("OOF prediction error")}|${unitSuffix}` }, legend: { orientation: "h", y: 1.12 }, shapes: [
+          { type: "line", x0: num(preview.sparse_threshold) ?? 0, x1: num(preview.sparse_threshold) ?? 0, y0: 0, y1: 1, yref: "paper", line: { color: "#F7630C", dash: "dash" } },
+          { type: "line", x0: num(preview.ood_threshold) ?? 0, x1: num(preview.ood_threshold) ?? 0, y0: 0, y1: 1, yref: "paper", line: { color: "#D13438", dash: "dot" } },
+          { type: "line", x0: 0, x1: 1, xref: "paper", y0: num(preview.high_error_threshold) ?? 0, y1: num(preview.high_error_threshold) ?? 0, line: { color: "#616161", dash: "dash" } },
+        ], annotations: [
+          { x: num(preview.sparse_threshold) ?? 0, y: 1, yref: "paper", text: t("Sparse P{p}", { p: Math.round((num(preview.sparse_quantile) ?? 0.9) * 100) }), showarrow: false, xanchor: "right", yanchor: "bottom", font: { color: "#C75B00" } },
+          { x: num(preview.ood_threshold) ?? 0, y: 1, yref: "paper", text: t("OOD-like P{p}", { p: Math.round((num(preview.ood_quantile) ?? 0.99) * 100) }), showarrow: false, xanchor: "left", yanchor: "bottom", font: { color: "#D13438" } },
+        ] })} />
+      </div>
+      <div className="property-reliability-legend" aria-label={t("Reliability region interpretation")}>
+        <span><b>{t("Low distance · low error")}</b>{t("Covered")}</span>
+        <span><b>{t("High distance · low error")}</b>{t("Sparse but stable")}</span>
+        <span><b>{t("High distance · high error")}</b>{t("Coverage gap")}</span>
+        <span><b>{t("Low distance · high error")}</b>{t("Possible representation degeneracy")}</span>
+      </div>
+    </section>
+  </div>;
+}
+
+function PropertySectionHeading({ number, title, question }: { number: string; title: string; question: string }) {
+  return <div className="property-section-heading"><span>{number}</span><div><Typography.Text strong>{title}</Typography.Text><Typography.Text type="secondary">{question}</Typography.Text></div></div>;
 }
 
 function LocalView({ preview, arrays, points, selectedIndices, onSelect }: Pick<Props, "preview" | "arrays" | "points" | "selectedIndices" | "onSelect">) {
@@ -247,20 +475,6 @@ function LocalView({ preview, arrays, points, selectedIndices, onSelect }: Pick<
     </div>
     {neighborDistances.length > 0 && <PlotFrame compact ariaLabel={t("Local neighbor distance distribution")} data={[{ type: "histogram", x: neighborDistances, marker: { color: "#F7630C" } }]} layout={layout({ xaxis: { title: t("Neighbor distance (Å)") }, yaxis: { title: t("Neighbor pairs") } })} />}
     <DataTable rows={rows} />
-  </>;
-}
-
-function TrajectoryView({ preview, arrays, points, selectedIndices, onSelect }: Pick<Props, "preview" | "arrays" | "points" | "selectedIndices" | "onSelect">) {
-  const { t } = useT();
-  const time = nums(arrays.time);
-  const stepDistance = nums(arrays.step_distance);
-  const eventIndices = nums(arrays.event_indices).map(Math.round).filter((index) => index >= 0 && index < time.length);
-  return <>
-    <Metrics values={[{ k: t("Frames"), v: time.length }, { k: t("Path length"), v: preview?.total_distance }, { k: t("Max displacement"), v: preview?.max_reference_distance }, { k: t("Detected events"), v: preview?.event_count }]} />
-    <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Descriptor trajectory distances")} data={[{ type: "scatter", mode: "lines", name: t("Step"), x: time, y: stepDistance, line: { color: "#0F6CBD" } }, { type: "scatter", mode: "lines", name: t("From start"), x: time, y: nums(arrays.reference_distance), line: { color: "#D13438" } }, { type: "scatter", mode: "lines", name: t("Cumulative"), x: time, y: nums(arrays.cumulative_distance), line: { color: "#F7630C" } }, { type: "scatter", mode: "markers", name: t("Events"), x: eventIndices.map((index) => time[index]), y: eventIndices.map((index) => stepDistance[index]), marker: { color: "#D13438", size: 9, symbol: "diamond" } }]} layout={layout({ xaxis: { title: String(preview?.time_unit ?? t("Frame")) }, yaxis: { title: t("Descriptor distance") }, legend: { orientation: "h" } })} />
-      <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color="path" ariaLabel={t("Descriptor trajectory path in PCA space")} lines />
-    </div>
   </>;
 }
 
@@ -318,44 +532,39 @@ const POINT_COLOR_LABELS: Record<string, Pair> = {
   distance: { en: "distance", zh: "距离" },
   uncertainty: { en: "uncertainty", zh: "不确定性" },
   element: { en: "element", zh: "元素" },
-  path: { en: "path", zh: "路径" },
 };
 
-function PointPlot({ points, selectedIndices, onSelect, color, ariaLabel, lines = false }: { points: AnalysisPoint[]; selectedIndices: number[]; onSelect: (point: AnalysisPoint) => void; color: "label" | "score" | "selected" | "distance" | "uncertainty" | "element" | "path"; ariaLabel: string; lines?: boolean }) {
+function PointPlot({ points, selectedIndices, onSelect, color, ariaLabel }: { points: AnalysisPoint[]; selectedIndices: number[]; onSelect: (point: AnalysisPoint) => void; color: "label" | "score" | "selected" | "distance" | "uncertainty" | "element"; ariaLabel: string }) {
   const { t, tr } = useT();
   if (!points.length) return <NoData message={t("No projected samples are available.")} />;
   const selected = new Set(selectedIndices);
-  const colorValues = points.map((point) => color === "label" ? point.label ?? -1 : color === "score" ? point.score ?? 0 : color === "distance" ? point.distance ?? 0 : color === "uncertainty" ? point.uncertainty ?? 0 : color === "element" ? point.element ?? 0 : color === "selected" ? selected.has(point.i) ? 1 : 0 : point.i);
-  return <PlotFrame compact ariaLabel={ariaLabel} onClick={(index) => points[index] && onSelect(points[index])} data={[{ type: "scattergl", mode: lines ? "lines+markers" : "markers", x: points.map((point) => point.x), y: points.map((point) => point.y), text: points.map((point) => `${point.sample_id ?? t("sample {index}", { index: point.i })}${point.row == null ? "" : t(" · atom {row}", { row: point.row })}`), marker: { size: color === "selected" ? points.map((point) => selected.has(point.i) ? 10 : 5) : 7, color: colorValues, colorscale: color === "selected" ? [[0, "#C8CDD4"], [1, "#D13438"]] : "Viridis", showscale: color !== "selected" && color !== "path", colorbar: { title: { text: tr(POINT_COLOR_LABELS[color] ?? { en: color, zh: color }) } }, opacity: 0.8 }, line: lines ? { color: "#0F6CBD", width: 1.5 } : undefined, hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: "PC1" }, yaxis: { title: "PC2" }, showlegend: false })} />;
+  const colorValues = points.map((point) => color === "label" ? point.label ?? -1 : color === "score" ? point.score ?? 0 : color === "distance" ? point.distance ?? 0 : color === "uncertainty" ? point.uncertainty ?? 0 : color === "element" ? point.element ?? 0 : selected.has(point.i) ? 1 : 0);
+  return <PlotFrame compact ariaLabel={ariaLabel} onClick={(index) => points[index] && onSelect(points[index])} data={[{ type: "scattergl", mode: "markers", x: points.map((point) => point.x), y: points.map((point) => point.y), text: points.map((point) => `${point.sample_id ?? t("sample {index}", { index: point.i })}${point.row == null ? "" : t(" · atom {row}", { row: point.row })}`), marker: { size: color === "selected" ? points.map((point) => selected.has(point.i) ? 10 : 5) : 7, color: colorValues, colorscale: color === "selected" ? [[0, "#C8CDD4"], [1, "#D13438"]] : "Viridis", showscale: color !== "selected", colorbar: { title: { text: tr(POINT_COLOR_LABELS[color]) } }, opacity: 0.8 }, hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: "PC1" }, yaxis: { title: "PC2" }, showlegend: false })} />;
 }
 
-function TopFeatureBars({ rows }: { rows: Record<string, unknown>[] }) {
+function AssociationBars({ rows, method }: { rows: { feature: number; value: number }[]; method: "pearson" | "spearman" | "mutual_information" }) {
   const { t } = useT();
-  const shown = rows.slice(0, 20).reverse();
-  return <PlotFrame compact ariaLabel={t("Most property-correlated descriptor features")} data={[{ type: "bar", orientation: "h", x: shown.map((row) => num(row.correlation) ?? 0), y: shown.map((row) => `F${row.feature}`), marker: { color: shown.map((row) => (num(row.correlation) ?? 0) >= 0 ? "#0F6CBD" : "#D13438") } }]} layout={layout({ xaxis: { title: t("Pearson correlation"), range: [-1, 1] }, yaxis: { automargin: true } })} />;
-}
-
-function PlotFrame({ data, layout: plotLayout, ariaLabel, compact = false, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; onClick?: (index: number) => void }) {
-  return <div className={compact ? "analysis-purpose-chart compact" : "analysis-purpose-chart"} aria-label={ariaLabel}><Plot data={data} layout={plotLayout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={(event) => { const index = event.points?.[0]?.pointIndex; if (typeof index === "number") onClick?.(index); }} /></div>;
-}
-
-function Metrics({ values }: { values: { k: string; v: unknown }[] }) {
-  const visible = values.filter(({ v }) => v !== undefined && v !== null);
-  return <div className="analysis-metric-strip">{visible.map(({ k, v }) => <div className="analysis-metric" key={k}><Typography.Text type="secondary">{k}</Typography.Text><Typography.Text strong>{fmt(v)}</Typography.Text></div>)}</div>;
+  const shown = rows.slice().reverse();
+  const signed = method !== "mutual_information";
+  const axisTitle = method === "spearman" ? "Spearman ρ" : method === "mutual_information" ? t("Mutual Information") : "Pearson r";
+  const maxValue = Math.max(...shown.map((row) => Math.abs(row.value)), 0.01);
+  return <PlotFrame ariaLabel={t("Feature–Property Association")} data={[{
+    type: "bar",
+    orientation: "h",
+    x: shown.map((row) => row.value),
+    y: shown.map((row) => `F${Math.round(row.feature)}`),
+    text: shown.map((row) => `${row.value >= 0 && signed ? "+" : ""}${row.value.toFixed(3)}`),
+    textposition: "outside",
+    cliponaxis: false,
+    marker: { color: shown.map((row) => !signed ? "#8764B8" : row.value >= 0 ? "#0F6CBD" : "#D13438") },
+    hovertemplate: `%{y}<br>${axisTitle}=%{x:.5g}<extra></extra>`,
+  }]} layout={layout({ margin: { l: 62, r: 64, t: 20, b: 52 }, xaxis: { title: axisTitle, range: signed ? [-1, 1] : [0, maxValue * 1.18], zeroline: true, zerolinecolor: "#616161" }, yaxis: { automargin: true } })} />;
 }
 
 function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
   if (!rows.length) return null;
   const keys = Object.keys(rows[0]).filter((key) => key !== "parameters" && key !== "warnings").slice(0, 8);
   return <Table className="analysis-data-table" size="small" pagination={{ pageSize: 8, hideOnSinglePage: true }} rowKey={(row, index) => `${row.sample_id ?? row.run_id ?? index}`} dataSource={rows} columns={keys.map((key) => ({ title: key.replaceAll("_", " "), dataIndex: key, key, render: (value: unknown) => fmt(value) }))} />;
-}
-
-function NoData({ message }: { message: string }) {
-  return <div className="analysis-overview-empty"><Empty description={message} /></div>;
-}
-
-function layout(overrides: Partial<Layout> = {}): Partial<Layout> {
-  return { autosize: true, margin: { l: 62, r: 24, t: 20, b: 52 }, paper_bgcolor: "#FFFFFF", plot_bgcolor: "#FFFFFF", font: { family: "Segoe UI, sans-serif", size: 11, color: "#424242" }, ...overrides };
 }
 
 function coverageMetrics(preview: AnalysisPreview, t: (key: string) => string): { k: string; v: unknown }[] {
@@ -365,33 +574,30 @@ function coverageMetrics(preview: AnalysisPreview, t: (key: string) => string): 
   return values;
 }
 
-function nums(value: unknown): number[] {
-  return Array.isArray(value) ? value.map(num).filter((item): item is number => item !== null) : [];
-}
-
-function matrix(value: unknown): number[][] {
-  return Array.isArray(value) ? value.map(nums).filter((row) => row.length) : [];
-}
-
-function records(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item)) : [];
-}
-
-function strings(value: unknown): string[] {
-  return Array.isArray(value) ? value.map(String) : [];
-}
-
-function num(value: unknown): number | null {
-  const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function fmt(value: unknown): string {
+function formatIndex(value: unknown): string {
   const numeric = num(value);
-  if (numeric !== null) return Math.abs(numeric) >= 1_000 ? numeric.toLocaleString(undefined, { maximumFractionDigits: 2 }) : numeric.toPrecision(5);
-  if (typeof value === "string") return value;
-  if (value == null) return "—";
-  try { return JSON.stringify(value); } catch { return String(value); }
+  return numeric === null ? "?" : String(Math.round(numeric));
+}
+
+function formatCorrelation(value: unknown): string {
+  const numeric = num(value);
+  return numeric === null ? "—" : `${numeric >= 0 ? "+" : ""}${numeric.toFixed(4)}`;
+}
+
+function formatWithUnit(value: unknown, unit: string): string {
+  const numeric = num(value);
+  return numeric === null ? "—" : `${numeric.toPrecision(4)}${unit ? ` ${unit}` : ""}`;
+}
+
+function capitalize(value: string): string {
+  return value.length ? value[0].toUpperCase() + value.slice(1) : value;
+}
+
+function propertyInsight(pattern: string, t: (key: string) => string): string {
+  if (pattern === "distributed") return t("Strong multivariate predictability with moderate single-feature association indicates distributed encoding across descriptor dimensions.");
+  if (pattern === "dominant_features") return t("Strong multivariate predictability and strong single-feature association indicate a small set of dominant dimensions.");
+  if (pattern === "insufficient") return t("Both multivariate predictability and single-feature association are weak; the descriptor carries limited information about this property.");
+  return t("The descriptor contains mixed property information; inspect feature associations and reliability regions together.");
 }
 
 function countBy(values: number[]): [string, number][] {

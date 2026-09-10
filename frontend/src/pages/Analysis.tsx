@@ -5,12 +5,13 @@
  * Plotly is deliberately scoped to this page; Overview remains ECharts and
  * Explore remains 3Dmol.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import Plot from "react-plotly.js";
 import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 import {
   App as AntApp,
   Button,
+  Collapse,
   Empty,
   Input,
   InputNumber,
@@ -21,6 +22,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from "antd";
 import {
@@ -42,6 +44,7 @@ import {
   slotKey,
   useAnalysisUi,
   type AnalysisParams,
+  type EffectiveDimensionPreprocess,
   type OverviewAnalysis,
   type ProjectionName,
   type TabKey,
@@ -85,7 +88,7 @@ type ProjectionOverrides = {
 };
 
 type Metric = {
-  label: string;
+  label: ReactNode;
   value: string;
 };
 
@@ -222,11 +225,11 @@ const ARTIFACT_ARRAYS: Record<string, string[]> = {
   mantel: ["left_pair_distances", "right_pair_distances", "null_distribution", "sample_indices"],
   feature_correlation: ["correlation_matrix", "correlation_feature_indices"],
   effective_dimension: ["explained_variance"],
-  property_correlation: ["targets", "predictions", "residuals", "pair_distance", "pair_property_delta"],
+  property_correlation: ["sample_indices", "sample_frames", "sample_rows", "targets", "predictions", "residuals", "absolute_errors", "feature_indices", "pearson_correlations", "spearman_correlations", "mutual_information", "oof_distances", "reliability_bin_center", "reliability_bin_median", "reliability_bin_p90", "reliability_bin_p95"],
   coverage: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
   overlap: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
   drift: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
-  trajectory: ["time", "frames", "step_distance", "reference_distance", "cumulative_distance", "event_indices"],
+  trajectory: ["time", "frames", "sample_indices", "step_distance", "reference_distance", "cumulative_distance", "coords", "pc_explained_variance", "event_indices"],
   perturbation_sensitivity: ["amplitudes", "mean_response", "median_response", "p95_response", "max_response", "response_matrix", "sample_indices"],
   local_diversity: ["coords", "sample_indices", "labels", "scores", "cluster_labels", "elements", "coordination", "neighbor_offsets", "neighbor_indices", "neighbor_distances"],
   kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
@@ -277,15 +280,18 @@ export default function Analysis() {
   // the last displayed analysis.
   const view = useAnalysisUi((s) => s.view);
   const slots = useAnalysisUi((s) => s.slots);
-  const { tab, projection, overviewAnalysis, mode, preprocess, colorBy, nearZeroThreshold, lowVariationThreshold } = view;
+  const { tab, projection, overviewAnalysis, mode, preprocess, effectiveDimensionPreprocess, colorBy, nearZeroThreshold, lowVariationThreshold, featureCorrelationMethod, featureCorrelationThreshold } = view;
   const setTab = useAnalysisUi((s) => s.setTab);
   const setProjection = useAnalysisUi((s) => s.setProjection);
   const setOverviewAnalysis = useAnalysisUi((s) => s.setOverviewAnalysis);
   const setMode = useAnalysisUi((s) => s.setMode);
   const setPreprocess = useAnalysisUi((s) => s.setPreprocess);
+  const setEffectiveDimensionPreprocess = useAnalysisUi((s) => s.setEffectiveDimensionPreprocess);
   const setColorBy = useAnalysisUi((s) => s.setColorBy);
   const setNearZeroThreshold = useAnalysisUi((s) => s.setNearZeroThreshold);
   const setLowVariationThreshold = useAnalysisUi((s) => s.setLowVariationThreshold);
+  const setFeatureCorrelationMethod = useAnalysisUi((s) => s.setFeatureCorrelationMethod);
+  const setFeatureCorrelationThreshold = useAnalysisUi((s) => s.setFeatureCorrelationThreshold);
   const [points, setPoints] = useState<Point[]>([]);
   const [preview, setPreview] = useState<AnalysisPreview | null>(null);
   const [analysisId, setAnalysisId] = useState<string | null>(null);
@@ -309,6 +315,11 @@ export default function Analysis() {
   const [mantelPermutations, setMantelPermutations] = useState(999);
   const [coverageMode, setCoverageMode] = useState<"coverage" | "overlap">("coverage");
   const [propertyName, setPropertyName] = useState("energy_per_atom");
+  const [propertyFolds, setPropertyFolds] = useState(5);
+  const [propertyReliabilityK, setPropertyReliabilityK] = useState(5);
+  const [propertyDistanceMetric, setPropertyDistanceMetric] = useState<"euclidean" | "cosine">("euclidean");
+  const [propertySparsePercentile, setPropertySparsePercentile] = useState(90);
+  const [propertyOodPercentile, setPropertyOodPercentile] = useState(99);
   const [kernelName, setKernelName] = useState("rbf");
   const [localCutoff, setLocalCutoff] = useState(3.0);
   const [secondRun, setSecondRun] = useState<string | null>(null);
@@ -321,7 +332,6 @@ export default function Analysis() {
   const [contamination, setContamination] = useState(0.01);
   const [queryIndex, setQueryIndex] = useState(0);
   const [methodGuideOpen, setMethodGuideOpen] = useState(false);
-  const [trajectoryStep, setTrajectoryStep] = useState(1);
   const [perturbationType, setPerturbationType] = useState<"jitter" | "strain">("jitter");
   const [perturbationCount, setPerturbationCount] = useState(8);
   const [perturbationMaximum, setPerturbationMaximum] = useState(0.2);
@@ -340,12 +350,13 @@ export default function Analysis() {
 
   // Stable key of every parameter that changes what the current tab computes.
   const analysisParams: AnalysisParams = {
-    projection, mode, preprocess, tsnePerplexity, similarityMode, k, queryIndex,
+    projection, mode, preprocess, effectiveDimensionPreprocess, tsnePerplexity, similarityMode, k, queryIndex,
     clusterAlgorithm, nClusters, outlierAlgorithm, contamination, samplingAlgorithm,
     nSamples, uncertaintyK, coverageMode, compareMode, mantelMethod, mantelPermutations,
-    localCutoff, kernelName, overviewAnalysis, trajectoryStep, propertyName,
+    localCutoff, kernelName, overviewAnalysis, propertyName,
+    propertyFolds, propertyReliabilityK, propertyDistanceMetric, propertySparsePercentile, propertyOodPercentile,
     perturbationType, perturbationCount, perturbationMaximum, perturbationMetric,
-    nearZeroThreshold, lowVariationThreshold,
+    nearZeroThreshold, lowVariationThreshold, featureCorrelationMethod, featureCorrelationThreshold,
   };
   const paramsKey = buildParamsKey(tab, analysisParams);
   // {tab, paramsKey, params} as of the latest render. Runs capture this when
@@ -479,14 +490,27 @@ export default function Analysis() {
     setOverviewArraysBusy(true);
     void Promise.all(missingArrays.map(async (name) => {
       try {
-        const chunk = await ipc.request<AnalysisChunk>("analysis.chunk", {
-          analysis_id: analysisId,
-          array: name,
-          offset: 0,
-          limit: 20_000,
-          column_end: 2_000,
-        });
-        return [name, chunk.data] as const;
+        // One frame per row: these arrays can legitimately exceed a single
+        // chunk, so every trajectory series is stitched back together.
+        const loadAll = (kind === "effective_dimension" && name === "explained_variance") || kind === "trajectory";
+        const values: unknown[] = [];
+        let offset = 0;
+        while (true) {
+          const chunk = await ipc.request<AnalysisChunk>("analysis.chunk", {
+            analysis_id: analysisId,
+            array: name,
+            offset,
+            limit: 20_000,
+            column_end: 2_000,
+          });
+          values.push(...chunk.data);
+          if (!loadAll) break;
+          const nextOffset = Number(chunk.next_offset);
+          const total = Number(chunk.shape?.[0]);
+          if (!chunk.data.length || !Number.isFinite(nextOffset) || nextOffset <= offset || (Number.isFinite(total) && nextOffset >= total)) break;
+          offset = nextOffset;
+        }
+        return [name, values] as const;
       } catch {
         return [name, []] as const;
       }
@@ -740,6 +764,38 @@ export default function Analysis() {
         setLowVariationThreshold(nextLow);
         loadedParams.nearZeroThreshold = nextNear;
         loadedParams.lowVariationThreshold = nextLow;
+      } else if (analysisType === "feature_correlation") {
+        const nextMethod = row.parameters?.method === "spearman" ? "spearman" : "pearson";
+        const savedThreshold = finiteNumber(row.parameters?.correlation_threshold ?? row.parameters?.redundancy_threshold);
+        const nextThreshold = savedThreshold == null ? featureCorrelationThreshold : Math.min(1, Math.max(0, savedThreshold));
+        setFeatureCorrelationMethod(nextMethod);
+        setFeatureCorrelationThreshold(nextThreshold);
+        loadedParams.featureCorrelationMethod = nextMethod;
+        loadedParams.featureCorrelationThreshold = nextThreshold;
+      } else if (analysisType === "effective_dimension") {
+        // Analyses created before the preprocessing setting was exposed used
+        // centered data; keep their cache key and control faithful on restore.
+        const nextPreprocess: EffectiveDimensionPreprocess = row.parameters?.preprocess === "standardized" ? "standardized" : "center";
+        setEffectiveDimensionPreprocess(nextPreprocess);
+        loadedParams.effectiveDimensionPreprocess = nextPreprocess;
+      } else if (analysisType === "property_correlation") {
+        const nextFolds = Math.max(2, Math.round(finiteNumber(row.parameters?.folds) ?? 5));
+        const nextK = Math.max(1, Math.round(finiteNumber(row.parameters?.reliability_k) ?? 5));
+        const nextMetric = row.parameters?.distance_metric === "cosine" ? "cosine" : "euclidean";
+        const nextSparse = Math.round((finiteNumber(row.parameters?.sparse_quantile) ?? 0.90) * 100);
+        const nextOod = Math.round((finiteNumber(row.parameters?.ood_quantile) ?? 0.99) * 100);
+        setPropertyName(String(row.parameters?.property ?? "energy_per_atom"));
+        setPropertyFolds(nextFolds);
+        setPropertyReliabilityK(nextK);
+        setPropertyDistanceMetric(nextMetric);
+        setPropertySparsePercentile(nextSparse);
+        setPropertyOodPercentile(nextOod);
+        loadedParams.propertyName = String(row.parameters?.property ?? "energy_per_atom");
+        loadedParams.propertyFolds = nextFolds;
+        loadedParams.propertyReliabilityK = nextK;
+        loadedParams.propertyDistanceMetric = nextMetric;
+        loadedParams.propertySparsePercentile = nextSparse;
+        loadedParams.propertyOodPercentile = nextOod;
       }
     }
     if (analysisTab === "projection") {
@@ -826,7 +882,7 @@ export default function Analysis() {
         setLoadingAnalysisId(null);
       }
     }
-  }, [dataset, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setLowVariationThreshold, setNearZeroThreshold, t]);
+  }, [dataset, featureCorrelationThreshold, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setNearZeroThreshold, t]);
 
   // Keep the displayed result in step with the current tab + parameters: an
   // exact slot match (same tab, run, parameters) is re-displayed from the
@@ -947,19 +1003,19 @@ export default function Analysis() {
           : overviewAnalysis === "perturbation_sensitivity"
             ? { perturbation: perturbationType, n_amplitudes: perturbationCount, max_amplitude: perturbationMaximum, metric: perturbationMetric, max_structures: 64, preprocess: "standardized" }
           : overviewAnalysis === "trajectory"
-            ? { frame_step: trajectoryStep }
-            : overviewAnalysis === "property_correlation"
-              ? { property: propertyName, folds: 5, top_k: 20, mode }
+            ? {}
+          : overviewAnalysis === "property_correlation"
+              ? { property: propertyName, folds: propertyFolds, top_k: 50, mode, reliability_k: propertyReliabilityK, distance_metric: propertyDistanceMetric, sparse_quantile: propertySparsePercentile / 100, ood_quantile: propertyOodPercentile / 100 }
             : overviewAnalysis === "feature_correlation"
-              ? { top_k: 20 }
+              ? { top_k: 20, method: featureCorrelationMethod, correlation_threshold: featureCorrelationThreshold }
               : overviewAnalysis === "effective_dimension"
-                ? { preprocess: "center" }
+                ? { preprocess: effectiveDimensionPreprocess }
                 : overviewAnalysis === "feature_variance"
                   ? { top_k: 20, near_zero_relative_threshold: nearZeroThreshold, low_variance_relative_threshold: lowVariationThreshold }
                   : { top_k: 20 };
       await runRequest(`analysis.${overviewAnalysis}`, overviewParams, tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]));
     }
-  }, [clusterAlgorithm, contamination, coverageMode, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationType, propertyName, queryIndex, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, setLowVariationThreshold, setNearZeroThreshold, similarityMode, tab, t, tr, trajectoryStep, uncertaintyK, message, compareMode]);
+  }, [clusterAlgorithm, contamination, coverageMode, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, setLowVariationThreshold, setNearZeroThreshold, similarityMode, tab, t, tr, uncertaintyK, message, compareMode]);
 
   const inspectPoint = useCallback((point: Point) => {
     setInspectedPoint(point);
@@ -1137,7 +1193,7 @@ export default function Analysis() {
                     ? `kernel.${kernelName}`
                     : `overview.${overviewAnalysis}`;
   const methodGuide = getAnalysisMethodGuide(methodGuideKey);
-  const overviewModuleControl = <Space wrap><Typography.Text>{t("Module")}</Typography.Text><Select value={overviewAnalysis} style={{ width: 220 }} onChange={setOverviewAnalysis} options={markOptions("overviewAnalysis", [{ value: "feature_variance", label: t("Feature variance") }, { value: "feature_correlation", label: t("Feature correlation") }, { value: "effective_dimension", label: t("Effective dimension") }, { value: "property_correlation", label: t("Property correlation") }, { value: "trajectory", label: t("Trajectory") }, { value: "drift", label: t("Dataset drift") }, { value: "sensitivity", label: t("Parameter sensitivity") }, { value: "perturbation_sensitivity", label: t("Structural perturbation") }])} /></Space>;
+  const overviewModuleControl = <Space className="analysis-overview-module-control" wrap><Typography.Text>{t("Module")}</Typography.Text><Select className="analysis-overview-module-select" value={overviewAnalysis} onChange={setOverviewAnalysis} options={markOptions("overviewAnalysis", [{ value: "feature_variance", label: t("Feature variance") }, { value: "feature_correlation", label: t("Feature correlation") }, { value: "effective_dimension", label: t("Effective dimension") }, { value: "property_correlation", label: t("Property correlation") }, { value: "trajectory", label: t("Trajectory") }, { value: "drift", label: t("Dataset drift") }, { value: "sensitivity", label: t("Parameter sensitivity") }, { value: "perturbation_sensitivity", label: t("Structural perturbation") }])} /></Space>;
   const overviewModuleHint = tab === "overview" && (overviewAnalysis === "sensitivity" || overviewAnalysis === "perturbation_sensitivity") && <Typography.Text type="secondary">{overviewAnalysis === "sensitivity" ? t("Compare parameter variants of the same descriptor; use Compare for different descriptors.") : t("Recompute the selected descriptor after controlled atomic jitter or strain.")}</Typography.Text>;
   const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension");
 
@@ -1177,7 +1233,7 @@ export default function Analysis() {
 
       <div className="analysis-workspace">
         <main className="analysis-main">
-          <section className="analysis-card analysis-controls">
+          <section className={`analysis-card analysis-controls${tab === "overview" && overviewAnalysis === "property_correlation" ? " analysis-controls-property" : ""}`}>
             {tab === "projection" && <ProjectionControls projection={projection} setProjection={setProjection} mode={mode} setMode={setMode} preprocess={preprocess} onPreprocessChange={handlePreprocessChange} tsnePerplexity={tsnePerplexity} setTsnePerplexity={setTsnePerplexity} markOptions={markOptions} cachedParam={cachedParam} />}
             {tab === "similarity" && <Space wrap><Typography.Text>{t("View")}</Typography.Text><Select value={similarityMode} onChange={setSimilarityMode} options={markOptions("similarityMode", [{ value: "query", label: t("Query neighbors") }, { value: "all_neighbors", label: t("All-neighbor graph") }, { value: "pairwise", label: t("Pairwise matrix") }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
             {tab === "clusters" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={markOptions("clusterAlgorithm", ["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() })))} /><ParamLabel label={t("Clusters")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
@@ -1193,16 +1249,47 @@ export default function Analysis() {
               <ParamLabel label={t("Low variation threshold")} cached={cachedParam("lowVariationThreshold")} />
               <InputNumber min={0} max={1} step={0.0001} precision={6} value={lowVariationThreshold} onChange={(value) => setLowVariationThreshold(Math.min(1, Math.max(nearZeroThreshold, value ?? 1e-2)))} />
             </Space>}
+            {tab === "overview" && overviewAnalysis === "feature_correlation" && <Space wrap>
+              <ParamLabel label={t("Correlation method")} cached={cachedParam("featureCorrelationMethod")} />
+              <Select aria-label={t("Correlation method")} value={featureCorrelationMethod} onChange={setFeatureCorrelationMethod} options={markOptions("featureCorrelationMethod", [{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }])} />
+              <ParamLabel label={t("High-correlation threshold")} cached={cachedParam("featureCorrelationThreshold")} />
+              <InputNumber min={0.8} max={0.999} step={0.01} precision={2} value={featureCorrelationThreshold} onChange={(value) => setFeatureCorrelationThreshold(Math.min(0.999, Math.max(0.8, value ?? 0.95)))} />
+              <Typography.Text type="secondary">{t("High when |correlation| ≥ threshold")}</Typography.Text>
+            </Space>}
+            {tab === "overview" && overviewAnalysis === "effective_dimension" && <Space wrap>
+              <ParamLabel label={t("PCA preprocessing")} cached={cachedParam("effectiveDimensionPreprocess")} />
+              <Select
+                aria-label={t("PCA preprocessing")}
+                value={effectiveDimensionPreprocess}
+                onChange={setEffectiveDimensionPreprocess}
+                options={markOptions("effectiveDimensionPreprocess", [
+                  { value: "standardized", label: t("Standardized") },
+                  { value: "center", label: t("Centered") },
+                ])}
+              />
+              <Typography.Text type="secondary">{effectiveDimensionPreprocess === "standardized" ? t("Correlation basis") : t("Covariance basis")}</Typography.Text>
+            </Space>}
             {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap><Typography.Text>{t("Perturbation")}</Typography.Text><Select value={perturbationType} onChange={setPerturbationType} options={markOptions("perturbationType", [{ value: "jitter", label: t("Atomic jitter (Å)") }, { value: "strain", label: t("Isotropic strain") }])} /><ParamLabel label={t("Steps")} cached={cachedParam("perturbationCount")} /><InputNumber min={2} max={32} value={perturbationCount} onChange={(value) => setPerturbationCount(value ?? 8)} /><ParamLabel label={t("Maximum")} cached={cachedParam("perturbationMaximum")} /><InputNumber min={0.001} step={0.01} precision={3} value={perturbationMaximum} onChange={(value) => setPerturbationMaximum(value ?? 0.2)} /><Typography.Text>{t("Metric")}</Typography.Text><Select value={perturbationMetric} onChange={setPerturbationMetric} options={markOptions("perturbationMetric", ["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value })))} /></Space>}
             {(tab === "coverage" || tab === "compare" || (tab === "sampling" && (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity")) || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? t("Left") : tab === "sampling" ? t("Query") : t("Reference")}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? t("Right") : tab === "sampling" ? t("Reference") : t("Query")}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} notFoundContent={sensitivityPair ? t("No other completed run for this descriptor") : undefined} options={pairRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
             {tab === "compare" && <Space wrap><Typography.Text>{t("Test")}</Typography.Text><Select value={compareMode} onChange={setCompareMode} options={markOptions("compareMode", [{ value: "geometry", label: t("Geometry comparison") }, { value: "mantel", label: t("Mantel permutation test") }])} />{compareMode === "mantel" && <><Typography.Text>{t("Statistic")}</Typography.Text><Select value={mantelMethod} onChange={setMantelMethod} options={markOptions("mantelMethod", [{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }])} /><ParamLabel label={t("Permutations")} cached={cachedParam("mantelPermutations")} /><InputNumber min={1} max={5000} value={mantelPermutations} onChange={(value) => setMantelPermutations(value ?? 999)} /></>}</Space>}
             {tab === "similarity" && similarityMode !== "pairwise" && <Space wrap>{similarityMode === "query" && <><ParamLabel label={t("Query index")} cached={cachedParam("queryIndex")} /><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /></>}<ParamLabel label="k" cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
-            {tab === "overview" && overviewAnalysis === "trajectory" && <Space wrap><ParamLabel label={t("Frame step")} cached={cachedParam("trajectoryStep")} /><InputNumber min={1} value={trajectoryStep} onChange={(value) => setTrajectoryStep(value ?? 1)} /></Space>}
-            {tab === "overview" && overviewAnalysis === "property_correlation" && <Space wrap><Typography.Text>{t("Property")}</Typography.Text><Select value={propertyName} onChange={(value) => { setPropertyName(value); if (value === "force_magnitude") setMode("atom"); }} options={markOptions("propertyName", [{ value: "energy_per_atom", label: t("Energy / atom") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "force_magnitude", label: t("Atom |F|") }, { value: "volume", label: t("Volume") }])} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
+            {tab === "overview" && overviewAnalysis === "trajectory" && <Typography.Text type="secondary">{t("Frame range, trajectory sampling interval, event method, sensitivity, and coloring live in the trajectory result itself.")}</Typography.Text>}
+            {tab === "overview" && overviewAnalysis === "property_correlation" && <Space className="analysis-property-controls" wrap>
+              <Typography.Text>{t("Property")}</Typography.Text><Select value={propertyName} onChange={(value) => { setPropertyName(value); if (value === "force_magnitude") setMode("atom"); }} options={markOptions("propertyName", [{ value: "energy_per_atom", label: t("Energy / atom") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "force_magnitude", label: t("Atom |F|") }, { value: "volume", label: t("Volume") }])} />
+              <Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} />
+              <Typography.Text>{t("Model")}</Typography.Text><Tag>Ridge</Tag>
+              <Typography.Text>{t("CV folds")}</Typography.Text><InputNumber aria-label={t("CV folds")} min={2} max={20} value={propertyFolds} onChange={(value) => setPropertyFolds(value ?? 5)} />
+              <Typography.Text>kNN k</Typography.Text><InputNumber aria-label="kNN k" min={1} max={50} value={propertyReliabilityK} onChange={(value) => setPropertyReliabilityK(value ?? 5)} />
+              <Typography.Text>{t("Distance metric")}</Typography.Text><Select aria-label={t("Distance metric")} value={propertyDistanceMetric} onChange={setPropertyDistanceMetric} options={[{ value: "euclidean", label: "Euclidean" }, { value: "cosine", label: "Cosine" }]} />
+              <Typography.Text>{t("Sparse threshold (%)")}</Typography.Text><InputNumber aria-label={t("Sparse threshold")} min={50} max={98} value={propertySparsePercentile} onChange={(value) => setPropertySparsePercentile(Math.min(propertyOodPercentile - 1, value ?? 90))} />
+              <Typography.Text>{t("OOD-like threshold (%)")}</Typography.Text><InputNumber aria-label={t("OOD-like threshold")} min={propertySparsePercentile + 1} max={99} value={propertyOodPercentile} onChange={(value) => setPropertyOodPercentile(Math.max(propertySparsePercentile + 1, value ?? 99))} />
+            </Space>}
             <div className="analysis-controls-actions">
               <Space wrap>
                 <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.tab === tab && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={!selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
-                {points.length > 0 && <Select size="small" value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
+                {/* Only the Projection canvas recolors by property; every
+                    other module owns its coloring inside the result view. */}
+                {tab === "projection" && points.length > 0 && <Select size="small" aria-label={t("Color by")} value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
                 {overviewModuleHint}
               </Space>
               <Button
@@ -1257,7 +1344,6 @@ function OverviewResultVisualization({ preview, arrays, loading, analysisId }: {
   if (kind === "feature_variance") content = <FeatureVarianceChart preview={preview} analysisId={analysisId} />;
   else if (kind === "feature_correlation") content = <FeatureCorrelationChart preview={preview} />;
   else if (kind === "effective_dimension") content = <EffectiveDimensionChart preview={preview} arrays={arrays} />;
-  else if (kind === "trajectory") content = <TrajectoryChart preview={preview} arrays={arrays} />;
   else if (kind === "drift") content = <DriftChart preview={preview} />;
   else if (kind === "sensitivity") content = <SensitivityChart preview={preview} />;
   else return null;
@@ -1385,6 +1471,9 @@ function FeatureVarianceChart({ preview, analysisId }: { preview: AnalysisPrevie
   const topKEnabled = display === "top" || display === "bottom";
   const hasZeroVariance = features.some((feature) => feature.variance === 0);
   const featureOptions = plotRows.map((row) => ({ value: row.index, label: `${t("Feature {index}", { index: row.index })} · ${formatNumber(featureVarianceMetricValue(row, metric))}` }));
+  const chartLabels = chartRows.map((row) => t("Feature {index}", { index: row.index }));
+  const chartPositions = chartRows.map((_, index) => index);
+  const chartHeight = Math.max(360, chartRows.length * 22 + 96);
 
   return <>
     <div className="analysis-metric-strip feature-variance-summary">
@@ -1428,43 +1517,55 @@ function FeatureVarianceChart({ preview, analysisId }: { preview: AnalysisPrevie
               key: "chart",
               label: t("Variance distribution"),
               children: <>
-                {chartRows.length ? <OverviewPlot
-                  className="feature-variance-overview-chart"
-                  ariaLabel={t("Descriptor feature variance distribution")}
-                  data={[{
-                    type: "bar",
-                    orientation: "h",
-                    x: chartRows.map((row) => {
-                      const value = featureVarianceMetricValue(row, metric);
-                      return scale === "log" && value !== null && value <= 0 ? null : value;
-                    }),
-                    y: chartRows.map((row) => t("Feature {index}", { index: row.index })),
-                    customdata: chartRows.map((row) => [
-                      row.index,
-                      formatNumber(row.variance),
-                      formatNumber(row.std),
-                      formatNumber(row.mean),
-                      formatNumber(row.median),
-                      formatNumber(row.p05),
-                      formatNumber(row.p95),
-                      formatNumber(row.relative_variance),
-                      statusText(row.status),
-                    ]),
-                    marker: { color: chartRows.map((row) => FEATURE_VARIANCE_STATUS_COLORS[row.status]) },
-                    hovertemplate: `${t("Feature")} %{customdata[0]}<br>${t("Absolute variance")}=%{customdata[1]}<br>${t("Standard deviation")}=%{customdata[2]}<br>${t("Mean")}=%{customdata[3]}<br>${t("Median")}=%{customdata[4]}<br>${t("P05–P95")}=%{customdata[5]} – %{customdata[6]}<br>${t("Normalized variance")}=%{customdata[7]}<br>${t("Status")}=%{customdata[8]}<extra></extra>`,
-                  }]}
-                  layout={overviewLayout({ xaxis: { title: t(metricLabel(metric)), type: scale === "log" ? "log" : "linear", zeroline: true }, yaxis: { automargin: true } })}
-                  onClick={(event: Readonly<PlotMouseEvent>) => {
-                    const index = event.points?.[0]?.pointIndex;
-                    if (typeof index === "number") {
-                      const nextFeatureIndex = chartRows[index]?.index ?? null;
-                      if (nextFeatureIndex !== null) {
-                        setSelectedFeatureIndex(nextFeatureIndex);
-                        setActivePane("stats");
+                {chartRows.length ? <div className="feature-variance-chart-scroll">
+                  <OverviewPlot
+                    className="feature-variance-overview-chart"
+                    style={{ height: `${chartHeight}px` }}
+                    ariaLabel={t("Descriptor feature variance distribution")}
+                    data={[{
+                      type: "bar",
+                      orientation: "h",
+                      x: chartRows.map((row) => {
+                        const value = featureVarianceMetricValue(row, metric);
+                        return scale === "log" && value !== null && value <= 0 ? null : value;
+                      }),
+                      y: chartPositions,
+                      customdata: chartRows.map((row) => [
+                        row.index,
+                        formatNumber(row.variance),
+                        formatNumber(row.std),
+                        formatNumber(row.mean),
+                        formatNumber(row.median),
+                        formatNumber(row.p05),
+                        formatNumber(row.p95),
+                        formatNumber(row.relative_variance),
+                        statusText(row.status),
+                      ]),
+                      marker: { color: chartRows.map((row) => FEATURE_VARIANCE_STATUS_COLORS[row.status]) },
+                      hovertemplate: `${t("Feature")} %{customdata[0]}<br>${t("Absolute variance")}=%{customdata[1]}<br>${t("Standard deviation")}=%{customdata[2]}<br>${t("Mean")}=%{customdata[3]}<br>${t("Median")}=%{customdata[4]}<br>${t("P05–P95")}=%{customdata[5]} – %{customdata[6]}<br>${t("Normalized variance")}=%{customdata[7]}<br>${t("Status")}=%{customdata[8]}<extra></extra>`,
+                    }]}
+                    layout={overviewLayout({
+                      xaxis: { title: t(metricLabel(metric)), type: scale === "log" ? "log" : "linear", zeroline: true },
+                      yaxis: {
+                        automargin: true,
+                        range: [-0.5, Math.max(0.5, chartRows.length - 0.5)],
+                        tickmode: "array",
+                        tickvals: chartPositions,
+                        ticktext: chartLabels,
+                      },
+                    })}
+                    onClick={(event: Readonly<PlotMouseEvent>) => {
+                      const index = event.points?.[0]?.pointIndex;
+                      if (typeof index === "number") {
+                        const nextFeatureIndex = chartRows[index]?.index ?? null;
+                        if (nextFeatureIndex !== null) {
+                          setSelectedFeatureIndex(nextFeatureIndex);
+                          setActivePane("stats");
+                        }
                       }
-                    }
-                  }}
-                /> : <OverviewNoData message={t("No feature values are available for this metric.")} />}
+                    }}
+                  />
+                </div> : <OverviewNoData message={t("No feature values are available for this metric.")} />}
               </>,
             },
             {
@@ -1727,6 +1828,9 @@ function FeatureCorrelationChart({ preview }: { preview: AnalysisPreview }) {
 
 function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview; arrays: NumericArrays }) {
   const { t } = useT();
+  const [spectrumRange, setSpectrumRange] = useState<SpectrumRange>("20");
+  useEffect(() => setSpectrumRange("20"), [preview.analysis_id]);
+
   const explained = numericArray(arrays.explained_variance);
   if (!explained.length) return <OverviewNoData message={t("The explained-variance array is not available for visualization.")} />;
   const cumulative: number[] = [];
@@ -1735,15 +1839,120 @@ function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview
     total += value;
     cumulative.push(total);
   }
-  const indices = sampledIndices(explained.length, 320);
+
+  const declaredComponentCount = integerCount(preview.component_count) ?? explained.length;
+  const availableComponentCount = Math.min(declaredComponentCount, explained.length);
+  const shownComponentCount = spectrumRange === "all"
+    ? availableComponentCount
+    : Math.min(Number(spectrumRange), availableComponentCount);
+  const indices = sampledIndices(shownComponentCount, 320);
+  const pcaFeatureCount = integerCount(preview.pca_feature_count);
+  const featureCount = integerCount(preview.feature_count) ?? pcaFeatureCount;
+  const preprocess = preview.preprocess === "standardized" || preview.preprocess === "raw" ? preview.preprocess : "center";
+  const scalingLabel = preprocess === "standardized" ? t("Standardized") : preprocess === "raw" ? t("Raw scale") : t("Centered");
+  const basisLabel = preprocess === "standardized" ? t("Correlation") : preprocess === "raw" ? t("Uncentered second moment") : t("Covariance");
+  const thresholdRows = [
+    { key: "0.9", target: "90%", color: "#107C10" },
+    { key: "0.95", target: "95%", color: "#8764B8" },
+    { key: "0.99", target: "99%", color: "#D13438" },
+  ]
+    .map((row) => ({ ...row, component: componentThreshold(preview, row.key) }))
+    .filter((row): row is typeof row & { component: number } => row.component != null && row.component >= 1 && row.component <= availableComponentCount)
+    .map((row) => ({ ...row, cumulative: cumulative[row.component - 1] }));
+  const thresholdShapes = thresholdRows.map((row) => ({
+    type: "line" as const,
+    x0: row.component,
+    x1: row.component,
+    y0: 0,
+    y1: 1,
+    yref: "paper" as const,
+    line: { color: row.color, dash: "dash" as const, width: 1.5 },
+  }));
+  const thresholdAnnotations = thresholdRows.map((row) => ({
+    x: row.component,
+    y: 1,
+    xref: "x" as const,
+    yref: "paper" as const,
+    text: `${row.target} · PC${row.component}`,
+    showarrow: false,
+    yshift: 16,
+    font: { size: 10, color: row.color },
+    bgcolor: "#FFFFFF",
+    bordercolor: row.color,
+    borderwidth: 1,
+    borderpad: 2,
+  }));
+  const thresholdTrace: Data | null = thresholdRows.length
+    ? {
+        type: "scatter",
+        mode: "markers",
+        x: thresholdRows.map((row) => row.component),
+        y: thresholdRows.map((row) => row.cumulative * 100),
+        text: thresholdRows.map((row) => `${row.target} · PC${row.component}`),
+        marker: { color: thresholdRows.map((row) => row.color), size: 8, line: { color: "#FFFFFF", width: 1 } },
+        hovertemplate: `%{text}<br>${t("Cumulative explained variance ratio")}=%{y:.2f}%<extra></extra>`,
+        showlegend: false,
+      }
+    : null;
+  const thresholdMetric = (key: string) => {
+    const component = componentThreshold(preview, key);
+    if (component == null) return "—";
+    return pcaFeatureCount == null ? formatCount(component) : `${formatCount(component)} / ${formatCount(pcaFeatureCount)}`;
+  };
+  const participationRatio = finiteNumber(preview.participation_ratio);
+  const prLabel = (
+    <Tooltip title={t("Participation ratio definition")} placement="top">
+      <span className="analysis-metric-label" tabIndex={0}>
+        {t("PR effective dimension")} <Info16Regular aria-hidden="true" />
+      </span>
+    </Tooltip>
+  );
+  const hiddenThresholds = ["0.9", "0.95", "0.99"]
+    .map((key) => componentThreshold(preview, key))
+    .filter((component): component is number => component != null && component >= 1 && component > shownComponentCount);
+  const conclusion = participationRatio != null && featureCount != null && pcaFeatureCount != null
+    && componentThreshold(preview, "0.9") != null && componentThreshold(preview, "0.95") != null && componentThreshold(preview, "0.99") != null
+    ? t("Effective dimension conclusion", {
+        featureCount: formatCount(featureCount),
+        pcaFeatureCount: formatCount(pcaFeatureCount),
+        pc90: formatCount(componentThreshold(preview, "0.9")),
+        pc95: formatCount(componentThreshold(preview, "0.95")),
+        pc99: formatCount(componentThreshold(preview, "0.99")),
+        participationRatio: formatNumber(participationRatio),
+        scaling: scalingLabel,
+      })
+    : null;
   const metrics: Metric[] = [
-    { label: t("Participation ratio"), value: formatNumber(preview.participation_ratio) },
-    { label: t("90% components"), value: formatCount(componentThreshold(preview, "0.9")) },
-    { label: t("95% components"), value: formatCount(componentThreshold(preview, "0.95")) },
-    { label: t("99% components"), value: formatCount(componentThreshold(preview, "0.99")) },
+    { label: prLabel, value: formatNumber(participationRatio) },
+    { label: t("90% effective dimension"), value: thresholdMetric("0.9") },
+    { label: t("95% effective dimension"), value: thresholdMetric("0.95") },
+    { label: t("99% effective dimension"), value: thresholdMetric("0.99") },
   ];
   return <>
     <MetricStrip metrics={metrics} />
+    <div className="analysis-method-meta" aria-label={t("PCA method details")}>
+      <span><Typography.Text type="secondary">{t("Scaling")}: </Typography.Text><Typography.Text strong>{scalingLabel}</Typography.Text></span>
+      <span><Typography.Text type="secondary">{t("PCA basis")}: </Typography.Text><Typography.Text strong>{basisLabel}</Typography.Text></span>
+      <span><Typography.Text type="secondary">{t("PCA features")}: </Typography.Text><Typography.Text strong>{pcaFeatureCount == null ? "—" : `${formatCount(pcaFeatureCount)} / ${formatCount(featureCount)}`}</Typography.Text></span>
+      <span><Typography.Text type="secondary">{t("Components")}: </Typography.Text><Typography.Text strong>{formatCount(declaredComponentCount)}</Typography.Text></span>
+    </div>
+    <Typography.Text type="secondary" className="analysis-spectrum-note">{t("Threshold dimension explanation")}</Typography.Text>
+    <div className="analysis-spectrum-toolbar">
+      <Space wrap size={8}>
+        <Typography.Text strong>{t("Spectrum range")}</Typography.Text>
+        <Select
+          aria-label={t("Spectrum range")}
+          value={spectrumRange}
+          onChange={(value) => setSpectrumRange(value as SpectrumRange)}
+          options={[
+            { value: "20", label: t("First 20") },
+            { value: "50", label: t("First 50") },
+            { value: "all", label: t("All components") },
+          ]}
+        />
+        <Typography.Text type="secondary">{t("{shown} of {total} components shown", { shown: formatCount(shownComponentCount), total: formatCount(declaredComponentCount) })}</Typography.Text>
+      </Space>
+    </div>
     <OverviewPlot
       ariaLabel={t("Explained and cumulative descriptor variance by component")}
       data={[
@@ -1751,79 +1960,40 @@ function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview
           type: "bar",
           x: indices.map((index) => index + 1),
           y: indices.map((index) => explained[index] * 100),
-          name: t("Explained variance"),
+          name: t("Single-component explained variance ratio"),
           marker: { color: "#0F6CBD" },
-          hovertemplate: `PC %{x}<br>${t("explained")}=%{y:.2f}%<extra></extra>`,
+          hovertemplate: `PC %{x}<br>${t("Single-component explained variance ratio")}=%{y:.2f}%<extra></extra>`,
         },
         {
           type: "scatter",
           mode: "lines",
           x: indices.map((index) => index + 1),
           y: indices.map((index) => cumulative[index] * 100),
-          name: t("Cumulative"),
+          name: t("Cumulative explained variance ratio"),
           line: { color: "#F7630C", width: 2 },
-          hovertemplate: `PC %{x}<br>${t("cumulative")}=%{y:.2f}%<extra></extra>`,
+          hovertemplate: `PC %{x}<br>${t("Cumulative explained variance ratio")}=%{y:.2f}%<extra></extra>`,
         },
+        ...(thresholdTrace ? [thresholdTrace] : []),
       ]}
       layout={overviewLayout({
-        xaxis: { title: t("Component"), type: "linear" },
-        yaxis: { title: t("Variance (%)"), range: [0, 100] },
-        legend: { orientation: "h", y: 1.12, x: 0 },
+        margin: { l: 68, r: 28, t: 52, b: 52 },
+        xaxis: { title: t("Principal component"), type: "linear" },
+        yaxis: { title: t("Explained variance ratio (%)"), range: [0, 100] },
+        shapes: thresholdShapes,
+        annotations: thresholdAnnotations,
+        legend: { orientation: "h", y: 1.18, x: 0 },
       })}
     />
-    <ChartCaption>{t("Bars show the contribution of each principal component and the orange line shows the cumulative contribution; the x axis is evenly subsampled when too long.")}</ChartCaption>
+    {conclusion && <Typography.Paragraph className="analysis-effective-conclusion">{conclusion}</Typography.Paragraph>}
+    <ChartCaption>
+      {t("Bars show the single-component explained variance ratio and the orange line shows the cumulative explained variance ratio.")}
+      {shownComponentCount > 320 ? ` ${t("When more than 320 components are selected, the chart samples evenly for rendering while preserving the selected range.")}` : ""}
+      {hiddenThresholds.length ? ` ${t("Some threshold markers are outside the selected range.")}` : ""}
+    </ChartCaption>
   </>;
 }
 
-function TrajectoryChart({ preview, arrays }: { preview: AnalysisPreview; arrays: NumericArrays }) {
-  const { t } = useT();
-  const time = numericArray(arrays.time);
-  const xValues = time.length ? time : numericArray(arrays.frames);
-  const distances = numericArray(arrays.step_distance);
-  const count = Math.min(xValues.length, distances.length);
-  if (count < 2) return <OverviewNoData message={t("At least two trajectory points are needed for visualization.")} />;
-  const cumulative: number[] = [];
-  let total = 0;
-  for (let index = 0; index < count; index += 1) {
-    total += distances[index];
-    cumulative.push(total);
-  }
-  const indices = sampledIndices(count, 1000);
-  return <>
-    <MetricStrip metrics={[{ label: t("Samples"), value: formatCount(count) }, { label: t("Total descriptor distance"), value: formatNumber(preview.total_distance) }, { label: t("Largest step"), value: formatNumber(Math.max(...distances.slice(0, count))) }]} />
-    <OverviewPlot
-      ariaLabel={t("Descriptor trajectory step and cumulative distance")}
-      data={[
-        {
-          type: "scatter",
-          mode: "lines",
-          x: indices.map((index) => xValues[index]),
-          y: indices.map((index) => distances[index]),
-          name: t("Step distance"),
-          line: { color: "#0F6CBD", width: 1.5 },
-          hovertemplate: `t=%{x}<br>${t("step")}=%{y:.5g}<extra></extra>`,
-        },
-        {
-          type: "scatter",
-          mode: "lines",
-          x: indices.map((index) => xValues[index]),
-          y: indices.map((index) => cumulative[index]),
-          name: t("Cumulative distance"),
-          yaxis: "y2",
-          line: { color: "#F7630C", width: 2 },
-          hovertemplate: `t=%{x}<br>${t("cumulative")}=%{y:.5g}<extra></extra>`,
-        },
-      ]}
-      layout={overviewLayout({
-        xaxis: { title: String(preview.time_unit ?? t("Frame")) },
-        yaxis: { title: t("Step distance") },
-        yaxis2: { title: t("Cumulative distance"), overlaying: "y", side: "right", showgrid: false },
-        legend: { orientation: "h", y: 1.12, x: 0 },
-      })}
-    />
-    <ChartCaption>{t("The blue line shows the descriptor change between neighboring frames and the orange line shows the accumulated change from the start of the trajectory.")}</ChartCaption>
-  </>;
-}
+type SpectrumRange = "20" | "50" | "all";
 
 function DriftChart({ preview }: { preview: AnalysisPreview }) {
   const { t } = useT();
@@ -1898,13 +2068,13 @@ function SensitivityChart({ preview }: { preview: AnalysisPreview }) {
   </>;
 }
 
-function OverviewPlot({ data, layout, ariaLabel, compact = false, className, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; className?: string; onClick?: (event: Readonly<PlotMouseEvent>) => void }) {
+function OverviewPlot({ data, layout, ariaLabel, compact = false, className, style, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; className?: string; style?: CSSProperties; onClick?: (event: Readonly<PlotMouseEvent>) => void }) {
   const classes = ["analysis-overview-chart-frame", compact ? "compact" : "", className ?? ""].filter(Boolean).join(" ");
-  return <div className={classes} aria-label={ariaLabel}><Plot data={data} layout={layout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={onClick} /></div>;
+  return <div className={classes} style={style} aria-label={ariaLabel}><Plot data={data} layout={layout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={onClick} /></div>;
 }
 
 function MetricStrip({ metrics }: { metrics: Metric[] }) {
-  return <div className="analysis-metric-strip">{metrics.map((metric) => <div className="analysis-metric" key={metric.label}><Typography.Text type="secondary">{metric.label}</Typography.Text><Typography.Text strong>{metric.value}</Typography.Text></div>)}</div>;
+  return <div className="analysis-metric-strip">{metrics.map((metric, index) => <div className="analysis-metric" key={index}><Typography.Text type="secondary">{metric.label}</Typography.Text><Typography.Text strong>{metric.value}</Typography.Text></div>)}</div>;
 }
 
 function ChartCaption({ children }: { children: ReactNode }) {
@@ -1957,6 +2127,11 @@ function formatNumber(value: unknown): string {
 function formatCount(value: unknown): string {
   const number = finiteNumber(value);
   return number === null ? "—" : Math.round(number).toLocaleString();
+}
+
+function integerCount(value: unknown): number | null {
+  const number = finiteNumber(value);
+  return number !== null && Number.isInteger(number) && number >= 0 ? number : null;
 }
 
 function formatIndex(value: unknown): string {
@@ -2024,7 +2199,7 @@ function ProjectionControls({ projection, setProjection, mode, setMode, preproce
 
 function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPreview | null; points: Point[]; onSelect?: (row: Record<string, unknown>) => void }) {
   const { t } = useT();
-  if (preview?.kind === "feature_variance") return null;
+  if (preview?.kind === "feature_variance" || preview?.kind === "feature_correlation" || preview?.kind === "effective_dimension" || preview?.kind === "property_correlation") return null;
   if (!preview && !points.length) return <section className="analysis-card"><Empty description={t("Run an analysis module to see its bounded result preview.")} /></section>;
   const rows = Array.isArray(preview?.rows)
     ? preview.rows
@@ -2038,7 +2213,7 @@ function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPreview |
             ? (preview.top_indices as unknown[]).map((index, position) => ({ rank: position + 1, feature: index, variance: (preview.top_values as unknown[] | undefined)?.[position] }))
             : [];
   if (rows.length) return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} meta={t("{n} rows", { n: rows.length.toLocaleString() })} /><Table size="small" pagination={{ pageSize: 12 }} rowKey={(row, index) => `${String(row.i ?? row.sample_id ?? row.run_id ?? index)}:${String(row.source_i ?? row.rank ?? index)}`} dataSource={rows} onRow={(row) => ({ onClick: () => onSelect?.(row) })} columns={Object.keys(rows[0]).slice(0, 7).map((key) => ({ title: key, dataIndex: key, key, render: (value: unknown) => typeof value === "number" ? value.toPrecision(6) : String(value ?? "—") }))} /></section>;
-  return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} /><pre className="analysis-json-preview">{JSON.stringify(preview, null, 2)}</pre></section>;
+  return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} /><Collapse ghost size="small" items={[{ key: "raw", label: t("Raw result output"), children: <pre className="analysis-json-preview">{JSON.stringify(preview, null, 2)}</pre> }]} /></section>;
 }
 
 function SectionHeading({ title, meta }: { title: string; meta?: string }) {

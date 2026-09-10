@@ -435,9 +435,13 @@ body {
   min-width: 0;
 }
 
-/* Keep every selector in the analysis control cards at one fixed width so
-   switching tabs or options never reshuffles the toolbar layout. */
+/* Keep analysis selectors at a stable default width; especially dense modules
+   can opt into a narrower wide-screen layout below. */
 .analysis-controls .ant-select:not(.ant-select-sm) {
+  width: 220px;
+}
+
+.analysis-overview-module-select {
   width: 220px;
 }
 
@@ -557,6 +561,40 @@ body {
   min-width: 0;
 }
 
+@media (min-width: 2200px) {
+  .analysis-controls-property {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  .analysis-controls-property > .ant-space,
+  .analysis-controls-property .analysis-controls-actions > .ant-space {
+    flex-wrap: nowrap;
+  }
+
+  .analysis-controls-property .analysis-overview-module-control,
+  .analysis-controls-property .analysis-property-controls,
+  .analysis-controls-property .analysis-controls-actions {
+    flex: 0 0 auto;
+  }
+
+  .analysis-controls-property .analysis-overview-module-select {
+    width: 180px;
+  }
+
+  .analysis-controls-property .analysis-property-controls .ant-select {
+    width: 140px;
+  }
+
+  .analysis-controls-property .analysis-property-controls .ant-input-number {
+    width: 72px;
+  }
+
+  .analysis-controls-property .analysis-property-controls .ant-typography {
+    white-space: nowrap;
+  }
+}
+
 .analysis-method-guide-button {
   flex: 0 0 auto;
   margin-top: 0;
@@ -667,6 +705,233 @@ body {
   gap: 10px;
 }
 
+.property-analysis {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.property-analysis .analysis-chart-grid {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+
+.property-analysis-section {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e3e8ef;
+  border-radius: 7px;
+  background: #fbfcfe;
+}
+
+.property-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.property-section-heading > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 50%;
+  background: #e8f3fc;
+  color: #0f6cbd;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.property-section-heading > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.property-section-heading .ant-typography:first-child {
+  color: #242424;
+  font-size: 14px;
+}
+
+.property-section-heading .ant-typography:last-child {
+  font-size: 12px;
+}
+
+.property-method-strip,
+.property-view-toolbar,
+.property-inline-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.property-method-strip {
+  margin-bottom: 8px;
+  padding: 7px 9px;
+  border-left: 3px solid #0f6cbd;
+  background: #f4f8fc;
+  font-size: 12px;
+}
+
+.property-view-toolbar {
+  margin: 8px 0;
+}
+
+.property-view-toolbar .ant-select {
+  min-width: 112px;
+}
+
+.property-insight {
+  display: flex;
+  align-items: baseline;
+  gap: 8px 14px;
+  margin: 8px 0;
+  padding: 9px 11px;
+  border: 1px solid #cfe3f5;
+  border-radius: 6px;
+  background: #f3f9fe;
+  color: #243b53;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.property-chart-panel {
+  min-width: 0;
+  padding-top: 5px;
+}
+
+.property-inline-stats {
+  min-height: 20px;
+  margin-top: 4px;
+  color: #616161;
+  font-size: 11px;
+}
+
+.property-baseline-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+}
+
+.property-wide-chart .analysis-purpose-chart {
+  height: min(54vh, 470px);
+  min-height: 350px;
+}
+
+/* Trajectory module: the frame-range slider is a first-class control, not a
+   decoration squeezed between two labels. */
+.trajectory-range-slider {
+  flex: 1 1 260px;
+  min-width: 200px;
+  margin: 0 4px;
+}
+
+/* The two trajectory panels carry the whole diagnosis, so they get more
+   vertical room than the standard compact result chart. */
+.trajectory-chart-grid .analysis-purpose-chart {
+  height: min(64vh, 560px);
+  min-height: 430px;
+}
+
+.trajectory-event-row-selected > td {
+  background: #fde7e9 !important;
+}
+
+.property-reliability-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.property-reliability-legend > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 1px solid #eaecf0;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #616161;
+  font-size: 11px;
+}
+
+.property-reliability-legend b {
+  color: #424242;
+  font-weight: 600;
+}
+
+.analysis-correlation-toolbar {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid #eaecf0;
+  border-radius: 5px;
+  background: #f7f8fa;
+}
+
+.analysis-method-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 4px 0 8px;
+  padding: 7px 10px;
+  border-left: 3px solid #0f6cbd;
+  background: #f7f8fa;
+  font-size: 12px;
+}
+
+.analysis-spectrum-note {
+  display: block;
+  margin: 2px 0 8px;
+  font-size: 12px;
+}
+
+.analysis-spectrum-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.analysis-spectrum-toolbar .ant-select {
+  min-width: 132px;
+}
+
+.analysis-metric-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  outline: none;
+}
+
+.analysis-metric-label svg {
+  color: #616161;
+  flex: none;
+}
+
+.analysis-metric-label:focus-visible {
+  border-radius: 3px;
+  box-shadow: 0 0 0 2px rgba(15, 108, 189, 0.25);
+}
+
+.analysis-effective-conclusion {
+  margin: 8px 0 4px !important;
+  padding: 8px 10px;
+  border: 1px solid #d8e8f7;
+  border-radius: 5px;
+  background: #f5faff;
+  color: #243b53;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.analysis-correlation-view-select {
+  width: 148px;
+}
+
 .analysis-purpose-chart {
   width: 100%;
   height: min(50vh, 430px);
@@ -687,6 +952,10 @@ body {
 
 .analysis-data-table {
   margin-top: 10px;
+}
+
+.feature-correlation-table {
+  width: 100%;
 }
 
 .explore-atom-row-selected > td {
@@ -841,6 +1110,12 @@ body {
 
 .feature-variance-pane-tabs .ant-tabs-tabpane {
   padding: 0 10px 10px;
+}
+
+.feature-variance-chart-scroll {
+  max-height: min(62vh, 620px);
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .feature-variance-overview-chart {
@@ -1004,10 +1279,23 @@ body {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     align-items: start;
   }
+
+  .property-reliability-legend {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
   .analysis-chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .property-insight {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .property-reliability-legend {
     grid-template-columns: minmax(0, 1fr);
   }
 

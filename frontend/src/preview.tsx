@@ -387,10 +387,15 @@ let mockLatestAnalysisKind = "projection";
 let mockAnalysisArrays: Record<string, unknown[]> = {};
 let mockLatestPcaMode = "structure";
 let mockLatestPcaPreprocess = "raw";
+let mockLatestEffectiveDimensionPreprocess = "standardized";
 let mockLatestAcquisitionMethod = "novelty_fps";
 let mockFeatureVarianceSettings = {
   near_zero_relative_threshold: 1e-4,
   low_variance_relative_threshold: 1e-2,
+};
+let mockFeatureCorrelationSettings = {
+  method: "pearson",
+  correlation_threshold: 0.95,
 };
 
 function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kind = "projection", rowType: string | null = kind) {
@@ -564,13 +569,21 @@ function mockOverviewPreview() {
     return {
       analysis_id: mockLatestAnalysisId,
       kind: "feature_correlation",
+      schema_version: 3,
+      correlation_metric: mockFeatureCorrelationSettings.method,
+      correlation_threshold: mockFeatureCorrelationSettings.correlation_threshold,
       feature_count: 256,
+      valid_feature_count: 253,
       zero_variance_count: 3,
       highly_correlated_pairs: 7,
-      redundant_feature_count: 5,
-      redundancy_ratio: 0.0195,
+      high_correlation_cluster_count: 3,
+      involved_feature_count: 5,
+      involved_feature_ratio: 0.0195,
+      clustered_feature_order: [...featureIndices].reverse(),
+      heatmap_feature_count: featureIndices.length,
+      heatmap_limited: true,
       pairs: [
-        { feature_a: 12, feature_b: 41, correlation: 0.94 },
+        { feature_a: 12, feature_b: 41, correlation: 0.97, absolute_correlation: 0.97 },
         { feature_a: 3, feature_b: 7, correlation: -0.91 },
         { feature_a: 28, feature_b: 55, correlation: 0.87 },
         { feature_a: 16, feature_b: 64, correlation: -0.82 },
@@ -627,20 +640,152 @@ function mockOverviewPreview() {
   if (mockLatestAnalysisKind === "property_correlation") {
     const targets = Array.from({ length: 160 }, (_, i) => -4.2 + Math.sin(i / 17) * 0.8);
     const predictions = targets.map((value, i) => value + Math.sin(i / 8) * 0.12);
-    mockAnalysisArrays = { targets, predictions, residuals: targets.map((value, i) => value - predictions[i]), pair_distance: Array.from({ length: 800 }, (_, i) => Math.abs(Math.sin(i / 19)) * 4), pair_property_delta: Array.from({ length: 800 }, (_, i) => Math.abs(Math.sin(i / 19)) * 0.7 + Math.abs(Math.cos(i / 7)) * 0.1) };
-    return { analysis_id: mockLatestAnalysisId, kind: "property_correlation", property: "energy_per_atom", sample_count: targets.length, r2: 0.91, rmse: 0.084, mae: 0.067, distance_property_correlation: 0.78, top_features: Array.from({ length: 12 }, (_, i) => ({ feature: i * 3 + 2, correlation: 0.9 - i * 0.11 })) };
+    const residuals = targets.map((value, i) => predictions[i] - value);
+    const absoluteErrors = residuals.map(Math.abs);
+    const oofDistances = targets.map((_, i) => 0.18 + (i % 40) * 0.018 + Math.abs(Math.sin(i / 9)) * 0.08);
+    const featureIndices = Array.from({ length: 64 }, (_, i) => i);
+    const pearson = featureIndices.map((i) => Math.cos(i * 1.7) * (0.56 - i * 0.005));
+    const spearman = featureIndices.map((i) => Math.sin(i * 1.3) * (0.62 - i * 0.006));
+    const mutualInformation = featureIndices.map((i) => Math.max(0.005, 0.42 * Math.exp(-i / 18) + Math.sin(i) * 0.025));
+    const binCenter = [0.24, 0.34, 0.44, 0.54, 0.64, 0.76, 0.89];
+    mockAnalysisArrays = {
+      sample_indices: targets.map((_, i) => i),
+      sample_frames: targets.map((_, i) => i),
+      sample_rows: targets.map(() => -1),
+      targets,
+      predictions,
+      residuals,
+      absolute_errors: absoluteErrors,
+      oof_distances: oofDistances,
+      feature_indices: featureIndices,
+      pearson_correlations: pearson,
+      spearman_correlations: spearman,
+      mutual_information: mutualInformation,
+      reliability_bin_center: binCenter,
+      reliability_bin_median: [0.035, 0.042, 0.047, 0.056, 0.071, 0.09, 0.12],
+      reliability_bin_p90: [0.07, 0.08, 0.09, 0.105, 0.13, 0.16, 0.2],
+      reliability_bin_p95: [0.085, 0.095, 0.11, 0.125, 0.15, 0.19, 0.23],
+    };
+    return {
+      analysis_id: mockLatestAnalysisId,
+      kind: "property_correlation",
+      property: "energy_per_atom",
+      property_unit: "eV/atom",
+      sample_count: targets.length,
+      feature_count: 256,
+      valid_feature_count: 253,
+      model: "Ridge",
+      cv_folds: 5,
+      cv_shuffle: true,
+      cv_seed: 42,
+      r2: 0.91,
+      rmse: 0.084,
+      mae: 0.067,
+      baseline_r2: -0.012,
+      baseline_rmse: 0.58,
+      baseline_mae: 0.47,
+      residual_mean: 0.001,
+      residual_median: -0.002,
+      residual_std: 0.084,
+      p95_absolute_error: 0.118,
+      max_abs_pearson: 0.56,
+      max_abs_spearman: 0.61,
+      max_mutual_information: 0.42,
+      encoding_strength: "strong",
+      information_pattern: "distributed",
+      distance_metric: "euclidean",
+      distance_standardized: true,
+      reliability_k: 5,
+      distance_error_pearson: 0.51,
+      distance_error_spearman: 0.58,
+      sparse_quantile: 0.9,
+      ood_quantile: 0.99,
+      sparse_threshold: 0.78,
+      ood_threshold: 0.91,
+      high_error_high_distance_count: 11,
+      high_error_low_distance_count: 5,
+    };
   }
   if (mockLatestAnalysisKind === "effective_dimension") {
-    const explained = [0.24, 0.17, 0.12, 0.1, 0.08, 0.07, 0.06, 0.05, 0.04, 0.03, 0.02, 0.012, 0.008, 0.004];
+    const head = [0.5, 0.2, 0.12, 0.1, 0.025, 0.01, 0.012, 0.009, 0.007, 0.005, 0.004];
+    const tailBase = Array.from({ length: 50 }, (_, index) => Math.pow(0.9, index));
+    const tailBaseTotal = tailBase.reduce((sum, value) => sum + value, 0);
+    const explained = [...head, ...tailBase.map((value) => 0.008 * value / tailBaseTotal)];
+    const cumulative: number[] = [];
+    let cumulativeTotal = 0;
+    for (const value of explained) {
+      cumulativeTotal += value;
+      cumulative.push(cumulativeTotal);
+    }
+    const thresholdAt = (target: number) => cumulative.findIndex((value) => value >= target) + 1;
+    const participationRatio = 1 / explained.reduce((sum, value) => sum + value * value, 0);
     mockAnalysisArrays = { explained_variance: explained };
-    return { analysis_id: mockLatestAnalysisId, kind: "effective_dimension", participation_ratio: 6.8, components_for_threshold: { "0.9": 8, "0.95": 10, "0.99": 13 } };
+    return {
+      analysis_id: mockLatestAnalysisId,
+      kind: "effective_dimension",
+      preprocess: mockLatestEffectiveDimensionPreprocess,
+      pca_basis: mockLatestEffectiveDimensionPreprocess === "standardized" ? "correlation" : "covariance",
+      sample_count: 6320,
+      feature_count: 219,
+      pca_feature_count: 219,
+      component_count: explained.length,
+      participation_ratio: participationRatio,
+      components_for_threshold: { "0.9": thresholdAt(0.9), "0.95": thresholdAt(0.95), "0.99": thresholdAt(0.99) },
+    };
   }
   if (mockLatestAnalysisKind === "trajectory") {
     const time = Array.from({ length: 180 }, (_, index) => index);
-    const stepDistance = time.map((index) => Number((0.08 + Math.abs(Math.sin(index / 13)) * 0.24 + (index > 118 && index < 132 ? 0.52 : 0)).toFixed(5)));
+    const jump = (index: number) => (index > 118 && index < 132 ? 0.52 : 0);
+    const stepDistance = time.map((index) => Number((0.08 + Math.abs(Math.sin(index / 13)) * 0.24 + jump(index)).toFixed(5)));
     const referenceDistance = time.map((_, index) => Math.abs(Math.sin(index / 31)) * 2.5 + index / 280);
-    mockAnalysisArrays = { time, frames: time, step_distance: stepDistance, reference_distance: referenceDistance, cumulative_distance: stepDistance.map((_, index) => stepDistance.slice(0, index + 1).reduce((sum, value) => sum + value, 0)), event_indices: [119, 122, 126, 129, 132] };
-    return { analysis_id: mockLatestAnalysisId, kind: "trajectory", frame_start: 0, frame_end: 179, frame_step: 1, time_unit: "frame", total_distance: Number(stepDistance.reduce((sum, value) => sum + value, 0).toFixed(4)), max_reference_distance: Math.max(...referenceDistance), event_count: 5, points: mockAnalysisPoints("trajectory", time.length) };
+    const coords = time.map((index) => [Math.sin(index / 12) * 3 + index / 90, Math.cos(index / 17) * 2 - jump(index) * 4]);
+    const steps = stepDistance.slice(1);
+    const sorted = steps.slice().sort((left, right) => left - right);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const mad = sorted.map((value) => Math.abs(value - median)).sort((left, right) => left - right)[Math.floor(sorted.length / 2)];
+    const mean = steps.reduce((sum, value) => sum + value, 0) / steps.length;
+    const std = Math.sqrt(steps.reduce((sum, value) => sum + (value - mean) ** 2, 0) / steps.length);
+    const threshold = median + 3 * 1.4826 * mad;
+    const eventIndices = time.filter((index) => index > 0 && stepDistance[index] > threshold);
+    const points = mockAnalysisPoints("trajectory", time.length).map((point, index) => ({ ...point, x: coords[index][0], y: coords[index][1] }));
+    mockAnalysisArrays = {
+      time,
+      frames: time,
+      sample_indices: time,
+      step_distance: stepDistance,
+      reference_distance: referenceDistance,
+      cumulative_distance: stepDistance.map((_, index) => stepDistance.slice(0, index + 1).reduce((sum, value) => sum + value, 0)),
+      coords,
+      pc_explained_variance: [0.62, 0.21],
+      event_indices: eventIndices,
+    };
+    return {
+      analysis_id: mockLatestAnalysisId,
+      kind: "trajectory",
+      frame_start: 0,
+      frame_end: 179,
+      frame_step: 1,
+      time_unit: "frame",
+      sample_count: time.length,
+      total_distance: Number(steps.reduce((sum, value) => sum + value, 0).toFixed(4)),
+      max_step_distance: Math.max(...steps),
+      max_reference_distance: Math.max(...referenceDistance),
+      median_step_distance: median,
+      mean_step_distance: mean,
+      step_mad: mad,
+      step_robust_sigma: 1.4826 * mad,
+      step_std: std,
+      event_method: "mad",
+      event_sensitivity: 3,
+      event_threshold: threshold,
+      event_count: eventIndices.length,
+      event_rate: eventIndices.length / steps.length,
+      event_space: "descriptor",
+      pc1_explained_variance: 0.62,
+      pc2_explained_variance: 0.21,
+      pc_explained_variance_sum: 0.83,
+      points,
+    };
   }
   if (mockLatestAnalysisKind === "drift") {
     const rows = Array.from({ length: 240 }, (_, index) => {
@@ -1076,8 +1221,22 @@ const METHODS: Record<string, Handler> = {
     mockRecordAnalysisRow("ana-mock-feature-variance", "feature_variance", { ...mockFeatureVarianceSettings, feature_variance_schema: 2, top_k: p.top_k ?? 20 });
     return response;
   },
-  "analysis.feature_correlation": (_p) => mockAnalysisSubmit("job-feature-correlation-live", "ana-mock-feature-correlation", "feature_correlation"),
-  "analysis.effective_dimension": (_p) => mockAnalysisSubmit("job-effective-dimension-live", "ana-mock-effective-dimension", "effective_dimension"),
+  "analysis.feature_correlation": (p) => {
+    const threshold = Number(p.correlation_threshold);
+    mockFeatureCorrelationSettings = {
+      method: p.method === "spearman" ? "spearman" : "pearson",
+      correlation_threshold: Number.isFinite(threshold) ? Math.min(1, Math.max(0, threshold)) : 0.95,
+    };
+    const response = mockAnalysisSubmit("job-feature-correlation-live", "ana-mock-feature-correlation", "feature_correlation");
+    mockRecordAnalysisRow("ana-mock-feature-correlation", "feature_correlation", { ...mockFeatureCorrelationSettings, feature_correlation_schema: 3, top_k: p.top_k ?? 20 });
+    return response;
+  },
+  "analysis.effective_dimension": (p) => {
+    mockLatestEffectiveDimensionPreprocess = p.preprocess === "center" ? "center" : "standardized";
+    const response = mockAnalysisSubmit("job-effective-dimension-live", "ana-mock-effective-dimension", "effective_dimension");
+    mockRecordAnalysisRow("ana-mock-effective-dimension", "effective_dimension", { preprocess: mockLatestEffectiveDimensionPreprocess });
+    return response;
+  },
   "analysis.property_correlation": (_p) => mockAnalysisSubmit("job-property-live", "ana-mock-property", "property_correlation"),
   "analysis.local_diversity": (_p) => mockAnalysisSubmit("job-local-live", "ana-mock-local", "local_diversity"),
   "analysis.kernel": (_p) => mockAnalysisSubmit("job-kernel-live", "ana-mock-kernel", "kernel"),

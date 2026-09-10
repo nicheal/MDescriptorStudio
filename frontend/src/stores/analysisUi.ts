@@ -30,6 +30,8 @@ export type OverviewAnalysis =
   | "sensitivity"
   | "perturbation_sensitivity";
 export type ColorBy = "none" | "energy" | "force_max" | "volume";
+export type FeatureCorrelationMethod = "pearson" | "spearman";
+export type EffectiveDimensionPreprocess = "center" | "standardized";
 
 const VIEW_SETTINGS_KEY = "workspace.analysisUi";
 const SLOTS_SETTINGS_KEY = "workspace.analysisSlots";
@@ -67,9 +69,12 @@ export interface AnalysisView {
   overviewAnalysis: OverviewAnalysis;
   mode: PcaMode;
   preprocess: string;
+  effectiveDimensionPreprocess: EffectiveDimensionPreprocess;
   colorBy: ColorBy;
   nearZeroThreshold: number;
   lowVariationThreshold: number;
+  featureCorrelationMethod: FeatureCorrelationMethod;
+  featureCorrelationThreshold: number;
 }
 
 export const DEFAULT_ANALYSIS_VIEW: AnalysisView = {
@@ -78,9 +83,12 @@ export const DEFAULT_ANALYSIS_VIEW: AnalysisView = {
   overviewAnalysis: "feature_variance",
   mode: "structure",
   preprocess: "raw",
+  effectiveDimensionPreprocess: "standardized",
   colorBy: "none",
   nearZeroThreshold: 1e-4,
   lowVariationThreshold: 1e-2,
+  featureCorrelationMethod: "pearson",
+  featureCorrelationThreshold: 0.95,
 };
 
 /** One remembered computed result: which tab + parameters produced it. */
@@ -103,6 +111,7 @@ export interface AnalysisParams {
   projection: ProjectionName;
   mode: PcaMode;
   preprocess: string;
+  effectiveDimensionPreprocess: EffectiveDimensionPreprocess;
   tsnePerplexity: number;
   similarityMode: string;
   k: number;
@@ -121,14 +130,20 @@ export interface AnalysisParams {
   localCutoff: number;
   kernelName: string;
   overviewAnalysis: OverviewAnalysis;
-  trajectoryStep: number;
   propertyName: string;
+  propertyFolds: number;
+  propertyReliabilityK: number;
+  propertyDistanceMetric: string;
+  propertySparsePercentile: number;
+  propertyOodPercentile: number;
   perturbationType: string;
   perturbationCount: number;
   perturbationMaximum: number;
   perturbationMetric: string;
   nearZeroThreshold: number;
   lowVariationThreshold: number;
+  featureCorrelationMethod: FeatureCorrelationMethod;
+  featureCorrelationThreshold: number;
 }
 
 /**
@@ -161,13 +176,18 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
       {
         const keyParts = [
           p.overviewAnalysis,
-          p.overviewAnalysis === "trajectory" ? p.trajectoryStep : "",
-          p.overviewAnalysis === "property_correlation" ? p.propertyName : "",
+          p.overviewAnalysis === "property_correlation"
+            ? `${p.propertyName}|${p.propertyFolds}|${p.propertyReliabilityK}|${p.propertyDistanceMetric}|${p.propertySparsePercentile}|${p.propertyOodPercentile}`
+            : "",
           p.overviewAnalysis === "perturbation_sensitivity"
             ? `${p.perturbationType}|${p.perturbationCount}|${p.perturbationMaximum}|${p.perturbationMetric}`
             : p.overviewAnalysis === "feature_variance"
               ? `${p.nearZeroThreshold}|${p.lowVariationThreshold}`
-              : "",
+              : p.overviewAnalysis === "feature_correlation"
+                ? `${p.featureCorrelationMethod}|${p.featureCorrelationThreshold}`
+                : p.overviewAnalysis === "effective_dimension"
+                  ? p.effectiveDimensionPreprocess
+                  : "",
         ];
         return keyParts.join("|");
       }
@@ -219,6 +239,9 @@ export function parseAnalysisView(raw: unknown): AnalysisView | null {
     nearZeroThreshold,
     persistedThreshold(rec.lowVariationThreshold, DEFAULT_ANALYSIS_VIEW.lowVariationThreshold),
   );
+  const featureCorrelationThreshold = persistedThreshold(rec.featureCorrelationThreshold, DEFAULT_ANALYSIS_VIEW.featureCorrelationThreshold);
+  const featureCorrelationMethod: FeatureCorrelationMethod = rec.featureCorrelationMethod === "spearman" ? "spearman" : "pearson";
+  const effectiveDimensionPreprocess: EffectiveDimensionPreprocess = rec.effectiveDimensionPreprocess === "center" ? "center" : "standardized";
   return {
     tab: TAB_KEYS.includes(rec.tab as TabKey) ? (rec.tab as TabKey) : DEFAULT_ANALYSIS_VIEW.tab,
     projection: PROJECTION_NAMES.includes(rec.projection as ProjectionName)
@@ -229,9 +252,12 @@ export function parseAnalysisView(raw: unknown): AnalysisView | null {
       : DEFAULT_ANALYSIS_VIEW.overviewAnalysis,
     mode: rec.mode === "atom" ? "atom" : "structure",
     preprocess: typeof rec.preprocess === "string" && rec.preprocess ? rec.preprocess : DEFAULT_ANALYSIS_VIEW.preprocess,
+    effectiveDimensionPreprocess,
     colorBy: COLOR_BY.includes(rec.colorBy as ColorBy) ? (rec.colorBy as ColorBy) : DEFAULT_ANALYSIS_VIEW.colorBy,
     nearZeroThreshold,
     lowVariationThreshold,
+    featureCorrelationMethod,
+    featureCorrelationThreshold,
   };
 }
 
@@ -313,9 +339,12 @@ interface AnalysisUiState {
   setOverviewAnalysis: (overviewAnalysis: OverviewAnalysis) => void;
   setMode: (mode: PcaMode) => void;
   setPreprocess: (preprocess: string) => void;
+  setEffectiveDimensionPreprocess: (preprocess: EffectiveDimensionPreprocess) => void;
   setColorBy: (colorBy: ColorBy) => void;
   setNearZeroThreshold: (value: number) => void;
   setLowVariationThreshold: (value: number) => void;
+  setFeatureCorrelationMethod: (method: FeatureCorrelationMethod) => void;
+  setFeatureCorrelationThreshold: (value: number) => void;
   /** Records the analysis currently displayed for its tab + parameter combination. */
   rememberResult: (entry: AnalysisSlotInput) => void;
   /** Forgets one slot, e.g. one recorded under an inconsistent context. */
@@ -332,6 +361,7 @@ export const useAnalysisUi = create<AnalysisUiState>()(() => ({
   setOverviewAnalysis: (overviewAnalysis) => applyView({ overviewAnalysis }),
   setMode: (mode) => applyView({ mode }),
   setPreprocess: (preprocess) => applyView({ preprocess }),
+  setEffectiveDimensionPreprocess: (effectiveDimensionPreprocess) => applyView({ effectiveDimensionPreprocess }),
   setColorBy: (colorBy) => applyView({ colorBy }),
   setNearZeroThreshold: (value) => {
     const nearZeroThreshold = normalizeThreshold(value);
@@ -343,6 +373,8 @@ export const useAnalysisUi = create<AnalysisUiState>()(() => ({
     const current = useAnalysisUi.getState().view;
     applyView({ lowVariationThreshold: Math.max(current.nearZeroThreshold, lowVariationThreshold) });
   },
+  setFeatureCorrelationMethod: (featureCorrelationMethod) => applyView({ featureCorrelationMethod }),
+  setFeatureCorrelationThreshold: (value) => applyView({ featureCorrelationThreshold: normalizeThreshold(value) }),
   rememberResult: (entry) => {
     const slots = pruneSlots({
       ...useAnalysisUi.getState().slots,

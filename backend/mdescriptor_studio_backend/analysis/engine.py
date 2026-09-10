@@ -247,15 +247,20 @@ def _bounded_indices(count: int, limit: int) -> np.ndarray:
     return np.linspace(0, count - 1, limit, dtype=np.int64)
 
 
-def _visual_pca(x: np.ndarray) -> np.ndarray:
-    """Fast deterministic two-dimensional PCA used only as a visual companion."""
+def _visual_pca_components(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Two-dimensional visual PCA plus the explained-variance ratio of both axes.
+
+    The ratio is what lets a panel state how much descriptor information the
+    two drawn axes still carry: a visual jump in a 25%-variance panel is not on
+    its own evidence of a descriptor-space jump.
+    """
     x = _as_float64(x)
     if x.shape[0] == 1:
-        return np.zeros((1, 2), dtype=np.float64)
+        return np.zeros((1, 2), dtype=np.float64), np.zeros(2, dtype=np.float64)
     centered = x - x.mean(axis=0)
     components = min(2, centered.shape[0], centered.shape[1])
     if components == 0:
-        return np.zeros((x.shape[0], 2), dtype=np.float64)
+        return np.zeros((x.shape[0], 2), dtype=np.float64), np.zeros(2, dtype=np.float64)
     if min(centered.shape) > 4:
         pca = _safe_import("sklearn.decomposition", "scikit-learn").PCA(
             n_components=components,
@@ -263,12 +268,59 @@ def _visual_pca(x: np.ndarray) -> np.ndarray:
             random_state=42,
         )
         coords = np.asarray(pca.fit_transform(centered), dtype=np.float64)
+        ratio = np.asarray(pca.explained_variance_ratio_, dtype=np.float64)
     else:
-        _u, _singular, vt = np.linalg.svd(centered, full_matrices=False)
+        _u, singular, vt = np.linalg.svd(centered, full_matrices=False)
         coords = centered @ vt[:components].T
+        total = float(np.sum(singular * singular))
+        ratio = (singular[:components] ** 2) / total if total > 0 else np.zeros(components, dtype=np.float64)
     if components < 2:
         coords = np.pad(coords, ((0, 0), (0, 2 - components)))
-    return coords.astype(np.float64, copy=False)
+        ratio = np.pad(ratio, (0, 2 - components))
+    return coords.astype(np.float64, copy=False), np.asarray(ratio[:2], dtype=np.float64)
+
+
+def _visual_pca(x: np.ndarray) -> np.ndarray:
+    """Fast deterministic two-dimensional PCA used only as a visual companion."""
+    return _visual_pca_components(x)[0]
+
+
+_TRAJECTORY_EVENT_METHODS = ("mad", "zscore", "percentile")
+
+
+def _trajectory_threshold(steps: np.ndarray, params: dict) -> tuple[str, float, float, dict[str, float]]:
+    """Event threshold over descriptor-space step distances.
+
+    ``mad`` is the robust default (median + k * 1.4826 * MAD) because one large
+    structural jump inflates the standard deviation and hides later events.
+    ``zscore`` is offered for comparison and ``percentile`` reproduces a fixed
+    top fraction of frames.
+    """
+    method = str(params.get("event_method") or "mad").lower()
+    if method not in _TRAJECTORY_EVENT_METHODS:
+        raise AppError(ANALYSIS_INPUT_INVALID, "event_method must be mad, zscore, or percentile")
+    default_sensitivity = 1.0 if method == "percentile" else 3.0
+    sensitivity = _float_param(params, "event_sensitivity", default_sensitivity, np.finfo(np.float64).eps)
+    median = float(np.median(steps))
+    mad = float(np.median(np.abs(steps - median)))
+    mean = float(steps.mean())
+    std = float(steps.std())
+    robust_sigma = 1.4826 * mad
+    if method == "percentile":
+        if sensitivity >= 50.0:
+            raise AppError(ANALYSIS_INPUT_INVALID, "event_sensitivity must be below 50 for percentile detection")
+        threshold = float(np.quantile(steps, 1.0 - sensitivity / 100.0))
+    elif method == "mad":
+        threshold = median + sensitivity * robust_sigma
+    else:
+        threshold = mean + sensitivity * std
+    return method, sensitivity, threshold, {
+        "median": median,
+        "mad": mad,
+        "robust_sigma": robust_sigma,
+        "mean": mean,
+        "std": std,
+    }
 
 
 def _effective_dimension_metrics(x: np.ndarray) -> tuple[float, dict[str, int]]:
@@ -307,6 +359,46 @@ def _pairwise_matrix(x: np.ndarray, metric: str) -> np.ndarray:
         raise AppError(ANALYSIS_INPUT_INVALID, "metric must be euclidean, cosine, or manhattan")
     fn = _safe_import("sklearn.metrics", "scikit-learn").pairwise_distances
     return np.asarray(fn(_as_float64(x), metric=metric, n_jobs=1), dtype=np.float64)
+
+
+def _clustered_feature_order(correlation: np.ndarray, feature_indices: np.ndarray) -> np.ndarray:
+    """Return a deterministic order that groups features by ``1 - |r|``."""
+    if correlation.shape[0] < 2:
+        return feature_indices.copy()
+    distance = 1.0 - np.clip(np.abs(correlation), 0.0, 1.0)
+    np.fill_diagonal(distance, 0.0)
+    try:
+        hierarchy = _safe_import("scipy.cluster.hierarchy", "scipy")
+        spatial_distance = _safe_import("scipy.spatial.distance", "scipy")
+        condensed = spatial_distance.squareform(distance, checks=False)
+        linkage = hierarchy.linkage(condensed, method="average", optimal_ordering=True)
+        leaves = np.asarray(hierarchy.leaves_list(linkage), dtype=np.int64)
+    except (AppError, ValueError):
+        # Keep correlation analysis usable in reduced runtimes without SciPy.
+        strength = np.sum(np.abs(correlation), axis=1) - 1.0
+        leaves = np.argsort(-strength, kind="stable").astype(np.int64)
+    return feature_indices[leaves]
+
+
+def _connected_component_count(edges: np.ndarray, size: int) -> int:
+    """Count connected components represented by local feature-index edges."""
+    if edges.size == 0:
+        return 0
+    parent = np.arange(size, dtype=np.int64)
+
+    def find(value: int) -> int:
+        while parent[value] != value:
+            parent[value] = parent[parent[value]]
+            value = int(parent[value])
+        return value
+
+    for left, right in edges.tolist():
+        left_root = find(int(left))
+        right_root = find(int(right))
+        if left_root != right_root:
+            parent[right_root] = left_root
+    involved = np.unique(edges)
+    return len({find(int(index)) for index in involved.tolist()})
 
 
 def _preprocess_reference_query(reference: np.ndarray, query: np.ndarray, params: dict, default: str = "raw") -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray]:
@@ -1640,6 +1732,9 @@ class AnalysisEngine:
     def feature_correlation(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
         x = _as_float64(samples.values)
         _check_samples(x, 2)
+        method = str(params.get("method") or "pearson").lower()
+        if method not in ("pearson", "spearman"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "feature correlation method must be pearson or spearman")
         variance = x.var(axis=0)
         variance_threshold = _float_param(params, "variance_threshold", 1e-12, 0.0)
         valid = variance > variance_threshold
@@ -1648,7 +1743,11 @@ class AnalysisEngine:
         if xv.shape[1] < 2:
             raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "at least two non-constant features are required")
         top_k = _int_param(params, "top_k", 50, 1)
-        standardized = (xv - xv.mean(axis=0)) / xv.std(axis=0)
+        correlation_input = xv
+        if method == "spearman":
+            rankdata = _safe_import("scipy.stats", "scipy").rankdata
+            correlation_input = np.asarray(rankdata(xv, axis=0, method="average"), dtype=np.float64)
+        standardized = (correlation_input - correlation_input.mean(axis=0)) / correlation_input.std(axis=0)
         # Only keep a bounded heatmap artifact.  Ranking pairs is the default
         # contract and avoids shipping an accidental D x D matrix over IPC.
         max_heatmap = min(_int_param(params, "heatmap_features", 256, 2), 512)
@@ -1671,14 +1770,44 @@ class AnalysisEngine:
         arrays: dict[str, np.ndarray] = {"pairs": pairs, "correlations": values}
         arrays["correlation_matrix"] = bounded_matrix.astype(np.float64)
         arrays["correlation_feature_indices"] = feature_indices.astype(np.int64)
-        redundancy_threshold = _float_param(params, "redundancy_threshold", 0.95, 0.0, 1.0)
-        high_pairs = np.argwhere(np.triu(np.abs(bounded_matrix) >= redundancy_threshold, 1))
-        redundant_features: set[int] = set()
-        for left_index, right_index in high_pairs.tolist():
-            redundant_features.add(int(feature_indices[max(left_index, right_index)]))
+        threshold_name = "correlation_threshold" if "correlation_threshold" in params else "redundancy_threshold"
+        correlation_threshold = _float_param(params, threshold_name, 0.95, 0.0, 1.0)
+        high_pairs = np.argwhere(np.triu(np.abs(bounded_matrix) >= correlation_threshold, 1))
+        involved_features = np.unique(feature_indices[high_pairs]) if high_pairs.size else np.empty(0, dtype=np.int64)
+        clustered_feature_order = _clustered_feature_order(bounded_matrix, feature_indices)
+        component_count = _connected_component_count(high_pairs, bounded_matrix.shape[0])
+        feature_count = int(x.shape[1])
         if progress:
             progress(1.0, "feature correlation complete")
-        return {"arrays": arrays, "preview": {"kind": "feature_correlation", "feature_count": int(xv.shape[1]), "zero_variance_count": int((~valid).sum()), "redundancy_threshold": redundancy_threshold, "highly_correlated_pairs": int(high_pairs.shape[0]), "redundant_feature_count": int(len(redundant_features)), "redundancy_ratio": float(len(redundant_features) / max(int(xv.shape[1]), 1)), "pairs": [{"feature_a": int(a), "feature_b": int(b), "correlation": float(v)} for (a, b), v in zip(pairs.tolist(), values.tolist())]}, "warnings": warnings}
+        return {
+            "arrays": arrays,
+            "preview": {
+                "kind": "feature_correlation",
+                "schema_version": 3,
+                "correlation_metric": method,
+                "correlation_threshold": correlation_threshold,
+                "feature_count": feature_count,
+                "valid_feature_count": int(xv.shape[1]),
+                "zero_variance_count": int((~valid).sum()),
+                "highly_correlated_pairs": int(high_pairs.shape[0]),
+                "high_correlation_cluster_count": component_count,
+                "involved_feature_count": int(involved_features.size),
+                "involved_feature_ratio": float(involved_features.size / max(feature_count, 1)),
+                "clustered_feature_order": clustered_feature_order.astype(np.int64).tolist(),
+                "heatmap_feature_count": int(feature_indices.size),
+                "heatmap_limited": bool(xv.shape[1] > max_heatmap),
+                "pairs": [
+                    {
+                        "feature_a": int(a),
+                        "feature_b": int(b),
+                        "correlation": float(v),
+                        "absolute_correlation": float(abs(v)),
+                    }
+                    for (a, b), v in zip(pairs.tolist(), values.tolist())
+                ],
+            },
+            "warnings": warnings,
+        }
 
     @staticmethod
     def property_correlation(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
@@ -1699,9 +1828,28 @@ class AnalysisEngine:
         y = target[valid]
         if float(y.std()) <= np.finfo(np.float64).eps:
             raise AppError(ANALYSIS_INPUT_INVALID, f"property {property_name!r} is constant")
-        x, warnings, keep = _preprocess(samples.values[valid], params, "standardized")
+        raw_x = _as_float64(samples.values[valid])
+        x, warnings, keep = _preprocess(raw_x, {"preprocess": "standardized"}, "standardized")
+        model_x = raw_x[:, keep]
         standardized_target = (y - y.mean()) / y.std()
         correlations = (x.T @ standardized_target) / max(x.shape[0], 1)
+        stats = _safe_import("scipy.stats", "scipy")
+        ranked_x = np.asarray(stats.rankdata(model_x, axis=0, method="average"), dtype=np.float64)
+        ranked_y = np.asarray(stats.rankdata(y, method="average"), dtype=np.float64)
+        ranked_x = (ranked_x - ranked_x.mean(axis=0)) / ranked_x.std(axis=0)
+        ranked_y = (ranked_y - ranked_y.mean()) / ranked_y.std()
+        spearman_correlations = (ranked_x.T @ ranked_y) / max(ranked_x.shape[0], 1)
+
+        sklearn_feature_selection = _safe_import("sklearn.feature_selection", "scikit-learn")
+        mutual_information = np.asarray(
+            sklearn_feature_selection.mutual_info_regression(
+                model_x,
+                y,
+                n_neighbors=min(3, max(y.size - 1, 1)),
+                random_state=_seed(params),
+            ),
+            dtype=np.float64,
+        )
         order = np.argsort(-np.abs(correlations), kind="stable")
         top_k = min(_int_param(params, "top_k", 20, 1), correlations.size)
 
@@ -1718,10 +1866,63 @@ class AnalysisEngine:
         )
         if progress:
             progress(0.25, "cross-validating property regression")
-        predictions = np.asarray(sklearn_model_selection.cross_val_predict(model, x, y, cv=splitter, n_jobs=1), dtype=np.float64)
+        sklearn_base = _safe_import("sklearn.base", "scikit-learn")
+        sklearn_neighbors = _safe_import("sklearn.neighbors", "scikit-learn")
+        distance_metric = str(params.get("distance_metric") or "euclidean").lower()
+        if distance_metric not in ("euclidean", "cosine"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "property reliability distance_metric must be euclidean or cosine")
+        reliability_k = _int_param(params, "reliability_k", 5, 1)
+        predictions = np.empty(y.shape[0], dtype=np.float64)
+        baseline_predictions = np.empty(y.shape[0], dtype=np.float64)
+        oof_distances = np.empty(y.shape[0], dtype=np.float64)
+        for train_indices, test_indices in splitter.split(model_x):
+            fold_model = sklearn_base.clone(model)
+            fold_model.fit(model_x[train_indices], y[train_indices])
+            predictions[test_indices] = fold_model.predict(model_x[test_indices])
+            baseline_predictions[test_indices] = float(y[train_indices].mean())
+
+            scaler = sklearn_preprocessing.StandardScaler()
+            train_scaled = scaler.fit_transform(model_x[train_indices])
+            test_scaled = scaler.transform(model_x[test_indices])
+            fold_k = min(reliability_k, train_indices.size)
+            neighbor_model = sklearn_neighbors.NearestNeighbors(n_neighbors=fold_k, metric=distance_metric, n_jobs=1)
+            neighbor_model.fit(train_scaled)
+            distances, _neighbor_indices = neighbor_model.kneighbors(test_scaled)
+            oof_distances[test_indices] = distances.mean(axis=1)
+
         r2 = float(sklearn_metrics.r2_score(y, predictions))
         rmse = float(np.sqrt(sklearn_metrics.mean_squared_error(y, predictions)))
         mae = float(sklearn_metrics.mean_absolute_error(y, predictions))
+        baseline_r2 = float(sklearn_metrics.r2_score(y, baseline_predictions))
+        baseline_rmse = float(np.sqrt(sklearn_metrics.mean_squared_error(y, baseline_predictions)))
+        baseline_mae = float(sklearn_metrics.mean_absolute_error(y, baseline_predictions))
+        residuals = predictions - y
+        absolute_errors = np.abs(residuals)
+        distance_error_pearson = _safe_correlation(oof_distances, absolute_errors)
+        distance_error_spearman = _rank_correlation(oof_distances, absolute_errors)
+
+        sparse_quantile = _float_param(params, "sparse_quantile", 0.90, 0.5, 0.99)
+        ood_quantile = _float_param(params, "ood_quantile", 0.99, sparse_quantile, 0.999)
+        sparse_threshold = float(np.quantile(oof_distances, sparse_quantile))
+        ood_threshold = float(np.quantile(oof_distances, ood_quantile))
+        high_error_threshold = float(np.quantile(absolute_errors, 0.90))
+        high_error = absolute_errors > high_error_threshold
+        sparse_or_ood = oof_distances > sparse_threshold
+
+        bin_count = min(12, max(4, int(np.sqrt(y.size))))
+        quantile_edges = np.unique(np.quantile(oof_distances, np.linspace(0.0, 1.0, bin_count + 1)))
+        bin_centers: list[float] = []
+        bin_median: list[float] = []
+        bin_p90: list[float] = []
+        bin_p95: list[float] = []
+        for left, right in zip(quantile_edges[:-1], quantile_edges[1:]):
+            members = (oof_distances >= left) & (oof_distances <= right if right == quantile_edges[-1] else oof_distances < right)
+            if not bool(members.any()):
+                continue
+            bin_centers.append(float(np.median(oof_distances[members])))
+            bin_median.append(float(np.median(absolute_errors[members])))
+            bin_p90.append(float(np.quantile(absolute_errors[members], 0.90)))
+            bin_p95.append(float(np.quantile(absolute_errors[members], 0.95)))
 
         pair_limit = min(_int_param(params, "pair_samples", 20_000, 100), 100_000)
         if x.shape[0] <= 250:
@@ -1738,30 +1939,103 @@ class AnalysisEngine:
         pair_distance = np.linalg.norm(x[pair_i] - x[pair_j], axis=1)
         pair_property_delta = np.abs(y[pair_i] - y[pair_j])
         distance_property_correlation = _safe_correlation(pair_distance, pair_property_delta)
+        property_units = {
+            "energy_per_atom": "eV/atom",
+            "energy": "eV",
+            "force_max": "eV/Å",
+            "force_magnitude": "eV/Å",
+            "volume": "Å³",
+        }
+        max_pearson = float(np.max(np.abs(correlations)))
+        max_spearman = float(np.max(np.abs(spearman_correlations)))
+        max_mi = float(np.max(mutual_information))
+        encoding_strength = "strong" if r2 >= 0.8 else "moderate" if r2 >= 0.5 else "weak"
+        information_pattern = (
+            "distributed" if r2 >= 0.8 and max_pearson < 0.6
+            else "dominant_features" if r2 >= 0.8 and max_pearson >= 0.6
+            else "insufficient" if r2 < 0.5 and max_pearson < 0.4
+            else "mixed"
+        )
         if progress:
             progress(1.0, "property correlation complete")
         return {
             "arrays": {
                 "sample_indices": np.flatnonzero(valid).astype(np.int64),
+                "sample_frames": np.asarray(samples.frame)[valid].astype(np.int64),
+                "sample_rows": (
+                    np.asarray(samples.row)[valid].astype(np.int64)
+                    if samples.row is not None
+                    else np.full(y.size, -1, dtype=np.int64)
+                ),
                 "targets": y,
                 "predictions": predictions,
-                "residuals": (y - predictions).astype(np.float64),
+                "residuals": residuals.astype(np.float64),
+                "absolute_errors": absolute_errors.astype(np.float64),
                 "feature_correlations": correlations.astype(np.float64),
+                "pearson_correlations": correlations.astype(np.float64),
+                "spearman_correlations": spearman_correlations.astype(np.float64),
+                "mutual_information": mutual_information.astype(np.float64),
+                "feature_indices": np.flatnonzero(keep).astype(np.int64),
                 "top_indices": np.flatnonzero(keep)[order[:top_k]].astype(np.int64),
+                "oof_distances": oof_distances.astype(np.float64),
+                "reliability_bin_center": np.asarray(bin_centers, dtype=np.float64),
+                "reliability_bin_median": np.asarray(bin_median, dtype=np.float64),
+                "reliability_bin_p90": np.asarray(bin_p90, dtype=np.float64),
+                "reliability_bin_p95": np.asarray(bin_p95, dtype=np.float64),
                 "pair_distance": pair_distance.astype(np.float64),
                 "pair_property_delta": pair_property_delta.astype(np.float64),
             },
             "preview": {
                 "kind": "property_correlation",
                 "property": property_name,
+                "property_unit": property_units.get(property_name, ""),
                 "sample_count": int(y.size),
+                "feature_count": int(samples.n_features),
+                "valid_feature_count": int(model_x.shape[1]),
                 "missing_count": int((~valid).sum()),
+                "model": "Ridge",
+                "model_alpha": _float_param(params, "alpha", 1.0, 0.0),
+                "cv_folds": folds,
+                "cv_shuffle": True,
+                "cv_seed": _seed(params),
                 "r2": r2,
                 "rmse": rmse,
                 "mae": mae,
+                "baseline": "training-fold mean",
+                "baseline_r2": baseline_r2,
+                "baseline_rmse": baseline_rmse,
+                "baseline_mae": baseline_mae,
+                "residual_mean": float(residuals.mean()),
+                "residual_median": float(np.median(residuals)),
+                "residual_std": float(residuals.std()),
+                "p95_absolute_error": float(np.quantile(absolute_errors, 0.95)),
+                "max_abs_pearson": max_pearson,
+                "max_abs_spearman": max_spearman,
+                "max_mutual_information": max_mi,
+                "encoding_strength": encoding_strength,
+                "information_pattern": information_pattern,
+                "distance_definition": "mean OOF training-fold kNN distance",
+                "distance_metric": distance_metric,
+                "distance_standardized": True,
+                "reliability_k": reliability_k,
+                "distance_error_pearson": distance_error_pearson,
+                "distance_error_spearman": distance_error_spearman,
+                "sparse_quantile": sparse_quantile,
+                "ood_quantile": ood_quantile,
+                "sparse_threshold": sparse_threshold,
+                "ood_threshold": ood_threshold,
+                "high_error_threshold": high_error_threshold,
+                "high_error_high_distance_count": int(np.sum(high_error & sparse_or_ood)),
+                "high_error_low_distance_count": int(np.sum(high_error & ~sparse_or_ood)),
                 "distance_property_correlation": distance_property_correlation,
                 "top_features": [
-                    {"feature": int(np.flatnonzero(keep)[index]), "correlation": float(correlations[index])}
+                    {
+                        "feature": int(np.flatnonzero(keep)[index]),
+                        "correlation": float(correlations[index]),
+                        "pearson": float(correlations[index]),
+                        "spearman": float(spearman_correlations[index]),
+                        "mutual_information": float(mutual_information[index]),
+                    }
                     for index in order[:top_k]
                 ],
             },
@@ -1930,7 +2204,12 @@ class AnalysisEngine:
 
     @staticmethod
     def effective_dimension(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
-        x, warnings, keep = _preprocess(samples.values, params, "center")
+        effective_params = dict(params or {})
+        preprocess = effective_params.get("preprocess")
+        if preprocess is None or preprocess == "":
+            preprocess = "standardized"
+            effective_params["preprocess"] = preprocess
+        x, warnings, keep = _preprocess(samples.values, effective_params, "standardized")
         _check_samples(x, 2)
         singular = np.linalg.svd(x, compute_uv=False, full_matrices=False)
         eigen = (singular * singular) / max(x.shape[0] - 1, 1)
@@ -1943,9 +2222,32 @@ class AnalysisEngine:
             if total > 0
             else {str(t): 0 for t in (0.9, 0.95, 0.99)}
         )
+        pca_basis = {
+            "standardized": "correlation",
+            "center": "covariance",
+            "raw": "uncentered_second_moment",
+        }[preprocess]
         if progress:
             progress(1.0, "effective dimension complete")
-        return {"arrays": {"eigenvalues": eigen.astype(np.float64), "explained_variance": normalized.astype(np.float64)}, "preview": {"kind": "effective_dimension", "participation_ratio": participation, "components_for_threshold": thresholds}, "warnings": warnings, "feature_indices": np.flatnonzero(keep).astype(np.int64)}
+        return {
+            "arrays": {
+                "eigenvalues": eigen.astype(np.float64),
+                "explained_variance": normalized.astype(np.float64),
+            },
+            "preview": {
+                "kind": "effective_dimension",
+                "preprocess": preprocess,
+                "pca_basis": pca_basis,
+                "sample_count": int(samples.n_samples),
+                "feature_count": int(samples.n_features),
+                "pca_feature_count": int(x.shape[1]),
+                "component_count": int(eigen.size),
+                "participation_ratio": participation,
+                "components_for_threshold": thresholds,
+            },
+            "warnings": warnings,
+            "feature_indices": np.flatnonzero(keep).astype(np.int64),
+        }
 
     @staticmethod
     def trajectory(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
@@ -1957,11 +2259,14 @@ class AnalysisEngine:
         if selected.size < 2:
             raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "trajectory range contains fewer than two samples")
         x, warnings, _keep = _preprocess(samples.values[selected], params, "standardized")
+        # Three distinct quantities: how much the descriptor moves between
+        # neighbouring frames, how far it has drifted from the reference frame,
+        # and how long the explored path is.  Only the first one detects events.
         deltas = np.linalg.norm(np.diff(x, axis=0), axis=1)
         step_distance = np.concatenate([[0.0], deltas])
         reference_distance = np.linalg.norm(x - x[0], axis=1)
         cumulative_distance = np.cumsum(step_distance)
-        coords = _visual_pca(x)
+        coords, pc_explained_variance = _visual_pca_components(x)
         if params.get("timestep") is not None:
             timestep = _float_param(params, "timestep", 1.0, 0.0)
             time_axis = frames[selected].astype(np.float64) * timestep
@@ -1971,12 +2276,70 @@ class AnalysisEngine:
             time_unit = "frame"
         time_delta = np.diff(time_axis, prepend=time_axis[0])
         speed = np.divide(step_distance, time_delta, out=np.zeros_like(step_distance), where=time_delta > 0)
-        event_quantile = _float_param(params, "event_quantile", 0.99, 0.5, 1.0)
-        event_threshold = float(np.quantile(step_distance[1:], event_quantile)) if step_distance.size > 1 else 0.0
+        event_method, event_sensitivity, event_threshold, step_stats = _trajectory_threshold(deltas, params)
         event_indices = np.flatnonzero(step_distance > event_threshold)
         if progress:
             progress(1.0, "trajectory analysis complete")
-        return {"arrays": {"sample_indices": selected.astype(np.int64), "indices": selected.astype(np.int64), "frames": frames[selected], "time": time_axis, "step_distance": step_distance, "reference_distance": reference_distance.astype(np.float64), "cumulative_distance": cumulative_distance.astype(np.float64), "speed": speed.astype(np.float64), "coords": coords, "event_indices": event_indices.astype(np.int64)}, "preview": {"kind": "trajectory", "frame_start": start, "frame_end": end, "frame_step": step, "time_unit": time_unit, "total_distance": float(deltas.sum()), "max_reference_distance": float(reference_distance.max()), "event_threshold": event_threshold, "event_count": int(event_indices.size), "events": [{"frame": int(frames[selected][index]), "step_distance": float(step_distance[index])} for index in event_indices[:20].tolist()]}, "warnings": warnings}
+        # Percentile of each step among all steps, so one event reads as
+        # "larger than 99.6% of the trajectory" without recomputation.
+        step_ranks = np.argsort(np.argsort(deltas, kind="stable"), kind="stable")
+        event_details = [
+            {
+                "index": int(index),
+                "frame": int(frames[selected][index]),
+                "step_distance": float(step_distance[index]),
+                "threshold_ratio": float(step_distance[index] / event_threshold) if event_threshold > 0 else None,
+                "percentile": float((step_ranks[index - 1] + 1) / deltas.size),
+                "reference_distance": float(reference_distance[index]),
+                "pc1": float(coords[index, 0]),
+                "pc2": float(coords[index, 1]),
+                "pc_displacement": float(np.linalg.norm(coords[index] - coords[index - 1])),
+            }
+            for index in event_indices[:200].tolist()
+        ]
+        return {
+            "arrays": {
+                "sample_indices": selected.astype(np.int64),
+                "indices": selected.astype(np.int64),
+                "frames": frames[selected],
+                "time": time_axis,
+                "step_distance": step_distance,
+                "reference_distance": reference_distance.astype(np.float64),
+                "cumulative_distance": cumulative_distance.astype(np.float64),
+                "speed": speed.astype(np.float64),
+                "coords": coords,
+                "pc_explained_variance": pc_explained_variance,
+                "event_indices": event_indices.astype(np.int64),
+            },
+            "preview": {
+                "kind": "trajectory",
+                "frame_start": start,
+                "frame_end": end,
+                "frame_step": step,
+                "time_unit": time_unit,
+                "sample_count": int(selected.size),
+                "total_distance": float(deltas.sum()),
+                "max_step_distance": float(deltas.max()),
+                "max_reference_distance": float(reference_distance.max()),
+                "median_step_distance": step_stats["median"],
+                "mean_step_distance": step_stats["mean"],
+                "step_mad": step_stats["mad"],
+                "step_robust_sigma": step_stats["robust_sigma"],
+                "step_std": step_stats["std"],
+                "event_method": event_method,
+                "event_sensitivity": event_sensitivity,
+                "event_threshold": event_threshold,
+                "event_count": int(event_indices.size),
+                "event_rate": float(event_indices.size / deltas.size),
+                "event_space": "descriptor",
+                "detection_note": "Event detection uses descriptor-space step distances; the PCA panel is a visualization only.",
+                "pc1_explained_variance": float(pc_explained_variance[0]),
+                "pc2_explained_variance": float(pc_explained_variance[1]),
+                "pc_explained_variance_sum": float(pc_explained_variance.sum()),
+                "events": event_details,
+            },
+            "warnings": warnings,
+        }
 
     @staticmethod
     def drift(reference: SampleMatrix, query: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:

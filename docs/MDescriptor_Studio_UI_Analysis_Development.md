@@ -1036,34 +1036,52 @@ SelectedAtom = local_atom
 
 ## 20. Trajectory Analysis
 
-对于有明确时间顺序的 AIMD / MD Dataset：
+对于有明确时间顺序的 AIMD / MD Dataset，轨迹模块围绕三个科学问题组织：
 
-### 20.1 Descriptor Distance vs Time
+1. 描述符随构型演化是连续的，还是发生了突变？
+2. 突变发生在哪里、强度多大？
+3. 整条轨迹是在已有描述符空间内反复采样，还是发生了漂移并进入新的区域？
 
-\[
-D(t) = \|\mathbf d(t) - \mathbf d(0)\|
-\]
+### 20.1 三个距离量
 
-可用于观察：
+| 指标 | 定义 | 科学意义 |
+| --- | --- | --- |
+| Step distance d(t) | ‖x(t) − x(t−1)‖ | 相邻构型变化强度，**唯一用于事件检测** |
+| Distance to reference r(t) | ‖x(t) − x(0)‖ | 是否逐渐漂离初态 |
+| Cumulative path length L(t) | Σd | 整体探索长度（单调，不能用于检测事件） |
 
-- phase transition
-- relaxation
-- structural drift
-- defect migration
+三者都在原始描述符空间计算（默认 standardized），PCA 只承担可视化。
 
-### 20.2 PCA / UMAP Trajectory Path
+### 20.2 事件检测
+
+`d(t)` 上取阈值，方法可选：
+
+- `mad`（默认，稳健）：`median(d) + k · 1.4826 · MAD(d)`
+- `zscore`：`mean(d) + k · σ(d)`，会被单个主导跃迁抬高
+- `percentile`：`quantile(d, 1 − k/100)`，固定标记排名最靠前的若干帧
+
+左侧时间曲线把事件点直接叠加在对应 `d(t)` 峰值上，点击事件后自动放大
+`[t − w, t + w]` 窗口并标注 before → after。帧范围、采样间隔、着色方式只影响
+显示；阈值与统计量始终基于整条轨迹。后端只保存确定性的距离量与稳健统计量，
+视图用同一公式实时重算阈值，因此灵敏度调节是即时的。
+
+### 20.3 PCA 轨迹路径
 
 ```text
 Frame 0 → 1 → 2 → 3 → ...
 ```
 
-在 projection 上连接连续帧。
+连续帧在 PCA 平面上连线，默认每 N 帧连接一次（Trajectory sampling interval），
+按 frame 做连续色映射（colorbar：Frame 0 → Frame N），并提供 `Points` /
+`Trajectory` / `Events` 三种显示模式与 `Focus main population (95%)` 缩放。
+坐标轴标注 `PC1 (xx.x%)` / `PC2 (xx.x%)` 与二者合计解释方差，因此“PCA 上看起来
+跳跃”不会被误读为高维描述符空间的异常。
 
 后续可支持：
 
 - descriptor velocity
-- abrupt structural event detection
-- trajectory segmentation
+- state transition timeline 与状态转移矩阵（与聚类模块联动）
+- 点击事件查看前后构型
 
 ---
 
@@ -1691,7 +1709,7 @@ Back to physical structure
 | Feature Quality | variance、zero-variance、correlation、redundancy、effective dimension | variance bars、correlation heatmap、eigenspectrum / cumulative variance |
 | Property Correlation | descriptor-feature correlation、cross-validated Ridge、distance-property relation | target-prediction scatter、residual histogram、distance-property scatter、feature bars |
 | Local Environment | per-element clustering、neighbor-distance diversity、distorted / outlier environment；coordinate-aware cutoff neighbor graph、coordination number、periodic neighbor shell | atom-level map、per-element category bars、coordination histogram、neighbor-distance histogram、summary table、Structure Preview / Explore cutoff sphere and neighbor links |
-| Trajectory | step / reference / cumulative distance、speed、event detection、PCA path | synchronized distance curves、PCA trajectory path |
+| Trajectory | descriptor-space step distance d(t)、reference distance r(t)、cumulative path length L(t)；事件阈值 MAD / z-score / percentile 三选一；PCA 仅用于可视化并标注解释方差 | step-distance 时间曲线（阈值线 + 峰值事件点 + 可选 reference / cumulative 叠加）、按 Frame 着色的 PCA 轨迹路径、Transition Events 表（frame / step distance / threshold ratio / percentile / PC1 / PC2 / reference distance）、事件前后局部放大与 before→after 联动高亮 |
 | Dataset Drift | coverage shift、RBF MMD、centroid shift、covariance shift | reference/query overlay、distance distribution、drift KPI strip |
 | Parameter Sensitivity | geometry agreement、neighbor consistency、cluster stability、effective dimension、runtime、peak process RSS 与 baseline delta | grouped agreement bars、peak RSS chart、run comparison table |
 | Structural Perturbation Sensitivity | 对同一批结构执行 seeded atomic jitter 或 isotropic strain，重算所选 descriptor，统计 mean / median / P95 / max response 曲线 | response-versus-amplitude curve、per-structure response heatmap、response KPI strip |

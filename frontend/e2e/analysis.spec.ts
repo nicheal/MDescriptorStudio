@@ -101,6 +101,50 @@ test("browser preview renders an Overview chart after a module run", async ({ pa
   await expect(page.getByText("FEATURE VARIANCE", { exact: true })).toBeVisible();
 });
 
+test("browser preview explains effective dimension metrics and spectrum ranges", async ({ page }) => {
+  await page.goto("/preview.html");
+  await page.getByRole("button", { name: "Analysis" }).click();
+  const controls = page.locator(".analysis-controls");
+  await controls.locator(":scope > .ant-space").first().locator(".ant-select").click();
+  await page.getByText("Effective dimension", { exact: true }).last().click();
+  await expect(page.getByRole("button", { name: "Run effective dimension" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "PCA preprocessing" })).toBeVisible();
+  await page.getByRole("button", { name: "Run effective dimension" }).click();
+
+  await expect(page.getByText("EFFECTIVE DIMENSION", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("PR effective dimension", { exact: true })).toBeVisible();
+  await expect(page.getByText("90% effective dimension", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("PCA method details")).toContainText("Scaling");
+  await expect(page.locator(".analysis-json-preview")).toHaveCount(0);
+
+  const plot = page.locator(".analysis-overview-chart-frame .js-plotly-plot");
+  await expect(plot).toBeVisible();
+  const chartState = await plot.evaluate((node) => {
+    const graph = node as HTMLDivElement & {
+      data?: Array<{ name?: string }>;
+      layout?: { shapes?: unknown[]; annotations?: Array<{ text?: string }> };
+    };
+    return {
+      names: graph.data?.map((trace) => trace.name),
+      shapes: graph.layout?.shapes?.length ?? 0,
+      annotations: graph.layout?.annotations?.map((annotation) => annotation.text) ?? [],
+    };
+  });
+  expect(chartState.names).toEqual(expect.arrayContaining(["Single-component explained variance ratio", "Cumulative explained variance ratio"]));
+  expect(chartState.shapes).toBe(3);
+  expect(chartState.annotations).toEqual(expect.arrayContaining(["90% · PC4", "95% · PC6", "99% · PC11"]));
+
+  await expect(page.getByText("20 of 61 components shown", { exact: true })).toBeVisible();
+  const range = page.getByRole("combobox", { name: "Spectrum range" });
+  const rangeSelect = page.locator(".analysis-spectrum-toolbar .ant-select");
+  await rangeSelect.click();
+  await page.getByText("First 50", { exact: true }).last().click();
+  await expect(page.getByText("50 of 61 components shown", { exact: true })).toBeVisible();
+  await rangeSelect.click();
+  await page.getByText("All components", { exact: true }).last().click();
+  await expect(page.getByText("61 of 61 components shown", { exact: true })).toBeVisible();
+});
+
 test("browser preview exposes feature variance filters and distribution detail", async ({ page }) => {
   await page.goto("/preview.html");
   await page.getByRole("button", { name: "Analysis" }).click();
@@ -111,6 +155,24 @@ test("browser preview exposes feature variance filters and distribution detail",
   await expect(page.locator(".feature-variance-k-control input")).toBeDisabled();
   await expect(page.getByText("35", { exact: true })).toBeVisible();
   await expect(page.locator("section.analysis-card:not(.analysis-visual-card) .ant-table")).toHaveCount(0);
+  const featureVariancePlot = page.locator(".feature-variance-overview-chart .js-plotly-plot");
+  const featureVarianceAxis = await featureVariancePlot.evaluate((node) => {
+    const graph = node as HTMLDivElement & {
+      data?: Array<{ y?: unknown[]; customdata?: unknown[][] }>;
+      layout?: { yaxis?: { tickvals?: unknown[]; ticktext?: unknown[] } };
+    };
+    const customdata = graph.data?.[0]?.customdata ?? [];
+    return {
+      y: graph.data?.[0]?.y ?? [],
+      tickvals: graph.layout?.yaxis?.tickvals ?? [],
+      ticktext: graph.layout?.yaxis?.ticktext ?? [],
+      labels: customdata.map((row) => `Feature ${row[0]}`),
+    };
+  });
+  expect(featureVarianceAxis.y).toHaveLength(35);
+  expect(featureVarianceAxis.tickvals).toEqual(featureVarianceAxis.y);
+  expect(featureVarianceAxis.ticktext).toHaveLength(featureVarianceAxis.y.length);
+  expect(featureVarianceAxis.ticktext).toEqual(featureVarianceAxis.labels);
 
   await page.getByRole("button", { name: "Constant 1" }).click();
   await expect(page.getByRole("button", { name: "Constant 1" })).toHaveAttribute("aria-pressed", "true");

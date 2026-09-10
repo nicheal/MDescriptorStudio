@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 _ANALYSIS_SCHEMA_VERSION = 1
-_ALGORITHM_VERSION = "studio-analysis-2"
+_ALGORITHM_VERSION = "studio-analysis-3"
 _MAX_PREVIEW_POINTS = 20_000
 _ANALYSIS_ID_RE = re.compile(r"^ana_[A-Za-z0-9_-]{1,64}$")
 _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
@@ -575,9 +575,22 @@ class AnalysisService:
         return self.submit_generic("feature_variance", params)
 
     def feature_correlation(self, params: dict) -> dict:
+        params = dict(params or {})
+        params["method"] = str(params.get("method") or "pearson").lower()
+        params["feature_correlation_schema"] = 3
         return self.submit_generic("feature_correlation", params)
 
     def property_correlation(self, params: dict) -> dict:
+        params = dict(params or {})
+        try:
+            params["folds"] = int(params.get("folds") or 5)
+            params["reliability_k"] = int(params.get("reliability_k") or 5)
+            params["sparse_quantile"] = float(params.get("sparse_quantile") or 0.90)
+            params["ood_quantile"] = float(params.get("ood_quantile") or 0.99)
+        except (TypeError, ValueError) as exc:
+            raise AppError(ANALYSIS_INPUT_INVALID, "property correlation CV and reliability settings must be numeric") from exc
+        params["distance_metric"] = str(params.get("distance_metric") or "euclidean").lower()
+        params["property_correlation_schema"] = 2
         return self.submit_generic("property_correlation", params)
 
     def local_diversity(self, params: dict) -> dict:
@@ -621,6 +634,10 @@ class AnalysisService:
         version, so changing implementation cannot reuse an old artifact.
         """
         params = dict(params or {})
+        if analysis_type == "effective_dimension" and ("preprocess" not in params or params["preprocess"] is None or params["preprocess"] == ""):
+            # Keep the backend default identical to the UI default so omitted
+            # and explicit standardized requests share one cache identity.
+            params["preprocess"] = "standardized"
         input_ids = self._input_ids(analysis_type, params)
         run_rows = [self._usable_run(run_id) for run_id in input_ids]
         if analysis_type == "sensitivity":

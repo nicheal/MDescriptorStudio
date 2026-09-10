@@ -31,9 +31,12 @@ const persistedView = {
   overviewAnalysis: "feature_correlation",
   mode: "atom",
   preprocess: "standardized",
+  effectiveDimensionPreprocess: "center",
   colorBy: "energy",
   nearZeroThreshold: 0.0002,
   lowVariationThreshold: 0.02,
+  featureCorrelationMethod: "spearman",
+  featureCorrelationThreshold: 0.9,
 };
 
 const slotA: AnalysisSlot = { runId: "run-1", analysisId: "ana-a", tab: "similarity", paramsKey: "query|structure|10|0", updatedAt: 100, seq: 1 };
@@ -41,7 +44,7 @@ const slotB: AnalysisSlot = { runId: "run-1", analysisId: "ana-b", tab: "project
 const slotC: AnalysisSlot = { runId: "run-1", analysisId: "ana-c", tab: "projection", paramsKey: "umap|atom|raw|", updatedAt: 300, seq: 3 };
 
 const baseParams: AnalysisParams = {
-  projection: "pca", mode: "structure", preprocess: "raw", tsnePerplexity: 30,
+  projection: "pca", mode: "structure", preprocess: "raw", effectiveDimensionPreprocess: "standardized", tsnePerplexity: 30,
   similarityMode: "query", k: 10, queryIndex: 0,
   clusterAlgorithm: "kmeans", nClusters: 6,
   outlierAlgorithm: "lof", contamination: 0.01,
@@ -49,9 +52,10 @@ const baseParams: AnalysisParams = {
   coverageMode: "coverage", compareMode: "geometry",
   mantelMethod: "pearson", mantelPermutations: 999,
   localCutoff: 3, kernelName: "rbf",
-  overviewAnalysis: "feature_variance", trajectoryStep: 1, propertyName: "energy_per_atom",
+  overviewAnalysis: "feature_variance", propertyName: "energy_per_atom",
+  propertyFolds: 5, propertyReliabilityK: 5, propertyDistanceMetric: "euclidean", propertySparsePercentile: 90, propertyOodPercentile: 99,
   perturbationType: "jitter", perturbationCount: 8, perturbationMaximum: 0.2, perturbationMetric: "euclidean",
-  nearZeroThreshold: 1e-4, lowVariationThreshold: 1e-2,
+  nearZeroThreshold: 1e-4, lowVariationThreshold: 1e-2, featureCorrelationMethod: "pearson", featureCorrelationThreshold: 0.95,
 };
 
 describe("buildParamsKey", () => {
@@ -66,12 +70,18 @@ describe("buildParamsKey", () => {
   it("keys module-specific parameters only for their module", () => {
     expect(buildParamsKey("similarity", baseParams)).toBe("query|structure|10|0");
     expect(buildParamsKey("similarity", { ...baseParams, similarityMode: "all_neighbors" })).toBe("all_neighbors|structure|10|");
-    expect(buildParamsKey("overview", baseParams)).toBe("feature_variance|||0.0001|0.01");
+    expect(buildParamsKey("overview", baseParams)).toBe("feature_variance||0.0001|0.01");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "feature_correlation", featureCorrelationMethod: "spearman", featureCorrelationThreshold: 0.9 })).toBe("feature_correlation||spearman|0.9");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "effective_dimension", effectiveDimensionPreprocess: "standardized" })).toBe("effective_dimension||standardized");
+    // The trajectory module is configured entirely inside its result view, so
+    // one completed trajectory per descriptor run stays reusable.
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "trajectory" })).toBe("trajectory||");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "property_correlation" })).toBe("property_correlation|energy_per_atom|5|5|euclidean|90|99|");
     expect(buildParamsKey("overview", {
       ...baseParams,
       overviewAnalysis: "perturbation_sensitivity",
       perturbationType: "strain", perturbationCount: 4, perturbationMaximum: 0.1, perturbationMetric: "cosine",
-    })).toBe("perturbation_sensitivity|||strain|4|0.1|cosine");
+    })).toBe("perturbation_sensitivity||strain|4|0.1|cosine");
   });
 
   it("lets a single parameter be probed against the rest of the current combination", () => {
@@ -91,11 +101,14 @@ describe("parseAnalysisView", () => {
   });
 
   it("falls back to defaults for unknown fields", () => {
-    expect(parseAnalysisView(JSON.stringify({ ...persistedView, tab: "nope", projection: 3, mode: "quantum", preprocess: 0, colorBy: "rainbow" }))).toEqual({
+    expect(parseAnalysisView(JSON.stringify({ ...persistedView, tab: "nope", projection: 3, mode: "quantum", preprocess: 0, colorBy: "rainbow", featureCorrelationMethod: "kendall" }))).toEqual({
       ...DEFAULT_ANALYSIS_VIEW,
       overviewAnalysis: "feature_correlation",
+      effectiveDimensionPreprocess: persistedView.effectiveDimensionPreprocess,
       nearZeroThreshold: persistedView.nearZeroThreshold,
       lowVariationThreshold: persistedView.lowVariationThreshold,
+      featureCorrelationMethod: DEFAULT_ANALYSIS_VIEW.featureCorrelationMethod,
+      featureCorrelationThreshold: persistedView.featureCorrelationThreshold,
     });
   });
 

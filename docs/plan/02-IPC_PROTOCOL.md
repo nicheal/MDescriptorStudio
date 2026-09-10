@@ -104,7 +104,8 @@ Analysis API 统一使用同一结果模型：计算型方法立即返回
 | analysis.property_correlation | energy / force / volume 等已存在物理量；feature correlation、cross-validated Ridge 和 descriptor-distance/property-delta correlation |
 | analysis.local_diversity | 强制 atom mode；按 element 做 neighbor-distance category、clustering 和 effective dimension summary |
 | analysis.kernel | linear/cosine/polynomial/RBF；有界 kernel matrix、centered eigenvalues 和 effective rank |
-| analysis.trajectory / analysis.sensitivity | 显式 frame range/timestep；sensitivity 只比较同一种 Descriptor 的 Completed Run；不同 descriptor 使用 analysis.compare |
+| analysis.trajectory | frame range/timestep/frame step 由请求显式给出；返回 step / reference / cumulative distance、speed、PCA 坐标与解释方差、事件阈值（mad / zscore / percentile）及事件明细 |
+| analysis.sensitivity | 只比较同一种 Descriptor 的 Completed Run；不同 descriptor 使用 analysis.compare |
 | analysis.export | JSON/CSV identity/meta，DeepMD/extxyz 子集；禁止修改 source_path |
 
 新分析输入必须是当前 fingerprint 对应的 Completed Descriptor Run。NaN/Inf、
