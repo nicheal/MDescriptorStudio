@@ -460,6 +460,11 @@ function mockOverviewPreview() {
       const median = (minimum + maximum) / 2;
       const q25 = minimum + (maximum - minimum) * 0.25;
       const q75 = minimum + (maximum - minimum) * 0.75;
+      const iqr = q75 - q25;
+      const lowerFence = q25 - 1.5 * iqr;
+      const upperFence = q75 + 1.5 * iqr;
+      const outliers = sample.filter((value) => value < lowerFence || value > upperFence);
+      const inliers = sample.filter((value) => value >= lowerFence && value <= upperFence);
       const relativeVariance = maxVariance > 0 ? variance / maxVariance : 0;
       const status = index === 0
         ? "constant"
@@ -481,10 +486,13 @@ function mockOverviewPreview() {
         median,
         p75: q75,
         p95: maximum,
-        iqr: q75 - q25,
-        mad: (q75 - q25) / 2,
-        robust_sigma: ((q75 - q25) / 2) * 1.4826,
-        std_robust_ratio: standardDeviation > 0 ? standardDeviation / Math.max(((q75 - q25) / 2) * 1.4826, 1e-12) : null,
+        iqr,
+        mad: iqr / 2,
+        robust_sigma: (iqr / 2) * 1.4826,
+        std_robust_ratio: standardDeviation > 0 ? standardDeviation / Math.max((iqr / 2) * 1.4826, 1e-12) : null,
+        whisker_min: inliers.length ? Math.min(...inliers) : q25,
+        whisker_max: inliers.length ? Math.max(...inliers) : q75,
+        outlier_count: outliers.length,
         finite_count: sample.length,
         invalid_count: index === 34 ? 2 : 0,
         missing_count: index === 34 ? 2 : 0,

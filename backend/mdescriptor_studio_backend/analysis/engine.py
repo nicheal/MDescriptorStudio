@@ -1453,6 +1453,9 @@ class AnalysisEngine:
                 "mad": None,
                 "robust_sigma": None,
                 "std_robust_ratio": None,
+                "whisker_min": None,
+                "whisker_max": None,
+                "outlier_count": 0,
                 "finite_count": count,
                 "invalid_count": int(invalid_counts[index]),
                 # Keep the name used by the original development plan as a
@@ -1476,6 +1479,14 @@ class AnalysisEngine:
                     if feature_robust_sigma > np.finfo(np.float64).eps
                     else None
                 )
+                lower_fence = float(quantile_values[1] - 1.5 * feature_iqr)
+                upper_fence = float(quantile_values[3] + 1.5 * feature_iqr)
+                outlier_mask = (finite_values < lower_fence) | (finite_values > upper_fence)
+                outlier_indices = np.flatnonzero(outlier_mask)
+                inlier_values = finite_values[~outlier_mask]
+                whisker_min = float(np.min(inlier_values)) if inlier_values.size else float(quantile_values[1])
+                whisker_max = float(np.max(inlier_values)) if inlier_values.size else float(quantile_values[3])
+                outlier_count = int(outlier_indices.size)
                 means[index] = mean
                 variance[index] = feature_variance
                 std[index] = feature_std
@@ -1495,11 +1506,22 @@ class AnalysisEngine:
                 histogram_edges[index] = edges.astype(np.float64, copy=False)
                 sample_count_for_feature = min(count, distribution_capacity)
                 if sample_count_for_feature:
-                    sample_indices = np.linspace(0, count - 1, sample_count_for_feature, dtype=np.int64)
+                    if outlier_count >= sample_count_for_feature:
+                        outlier_positions = np.linspace(0, outlier_count - 1, sample_count_for_feature, dtype=np.int64)
+                        sample_indices = outlier_indices[outlier_positions]
+                    elif outlier_count:
+                        regular_count = sample_count_for_feature - outlier_count
+                        regular_indices = np.linspace(0, count - 1, regular_count, dtype=np.int64)
+                        # Preserve every detected outlier when the bounded
+                        # sample has room; this keeps a long tail visible in
+                        # the detail panel even for large descriptor runs.
+                        sample_indices = np.unique(np.concatenate((outlier_indices, regular_indices)))
+                    else:
+                        sample_indices = np.linspace(0, count - 1, sample_count_for_feature, dtype=np.int64)
+                    sample_count_for_feature = int(sample_indices.size)
                     distribution_samples[index, :sample_count_for_feature] = finite_values[sample_indices]
                     distribution_sample_counts[index] = sample_count_for_feature
-                scale = max(1.0, float(np.max(np.abs(finite_values))))
-                is_constant = float(np.ptp(finite_values)) <= max(constant_tolerance, np.finfo(np.float64).eps * scale)
+                is_constant = float(np.ptp(finite_values)) <= constant_tolerance
                 record.update(
                     {
                         "mean": mean,
@@ -1516,6 +1538,9 @@ class AnalysisEngine:
                         "mad": feature_mad,
                         "robust_sigma": feature_robust_sigma,
                         "std_robust_ratio": ratio,
+                        "whisker_min": whisker_min,
+                        "whisker_max": whisker_max,
+                        "outlier_count": outlier_count,
                         "distribution_sample_count": int(sample_count_for_feature),
                         "status": "constant" if is_constant else "pending",
                     }

@@ -169,6 +169,11 @@ def test_feature_variance_reports_full_stats_robustness_and_invalid_counts() -> 
     assert features[0]["status"] == "constant"
     assert features[1]["status"] == "near_zero"
     assert features[4]["std_robust_ratio"] > 1.0
+    assert features[4]["outlier_count"] > 0
+    assert features[4]["whisker_max"] < features[4]["max"]
+    assert int(result["arrays"]["histogram_counts"][4].sum()) == features[4]["finite_count"]
+    sampled_values = result["arrays"]["distribution_samples"][4][: features[4]["distribution_sample_count"]]
+    assert 1000.0 in sampled_values
     assert features[5]["finite_count"] == 6
     assert features[5]["invalid_count"] == 2
     assert result["arrays"]["histogram_edges"].shape == (6, 33)

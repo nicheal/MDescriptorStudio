@@ -108,7 +108,9 @@ test("browser preview exposes feature variance filters and distribution detail",
   await expect(page.locator(".feature-variance-layout")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("combobox", { name: "Variance metric" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Feature display filter" })).toBeVisible();
+  await expect(page.locator(".feature-variance-k-control input")).toBeDisabled();
   await expect(page.getByText("35", { exact: true })).toBeVisible();
+  await expect(page.locator("section.analysis-card:not(.analysis-visual-card) .ant-table")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Constant 1" }).click();
   await expect(page.getByRole("button", { name: "Constant 1" })).toHaveAttribute("aria-pressed", "true");
@@ -119,6 +121,24 @@ test("browser preview exposes feature variance filters and distribution detail",
   await expect(page.getByText("Constant feature; KDE omitted.", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Feature value histogram and KDE")).toBeVisible();
   await expect(page.getByLabel("Feature value box plot")).toBeVisible();
+  await page.getByRole("tab", { name: "Feature statistics" }).click();
+  await expect(page.locator(".feature-variance-stat-grid")).toBeVisible();
+  await page.getByRole("tab", { name: "Variance distribution" }).click();
+  await page.locator(".feature-variance-toolbar .ant-select").nth(2).click();
+  await page.getByText("All features", { exact: true }).last().click();
+  await page.locator(".feature-variance-toolbar .ant-select").nth(3).click();
+  await page.getByText("Linear", { exact: true }).last().click();
+  const varianceBars = page.locator(".feature-variance-overview-chart .trace.bars path");
+  const varianceBarIndex = await varianceBars.evaluateAll((nodes) => nodes.findIndex((node) => {
+    const rect = node.getBoundingClientRect();
+    return rect.width > 2 && rect.height > 2 && rect.top > 80;
+  }));
+  expect(varianceBarIndex).toBeGreaterThanOrEqual(0);
+  const varianceBarBox = await varianceBars.nth(varianceBarIndex).boundingBox();
+  expect(varianceBarBox).not.toBeNull();
+  if (varianceBarBox) await page.mouse.click(varianceBarBox.x + varianceBarBox.width / 2, varianceBarBox.y + varianceBarBox.height / 2);
+  await expect(page.getByRole("tab", { name: "Feature statistics" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator(".feature-variance-stat-grid")).toBeVisible();
 });
 
 test("browser preview places the sensitivity run pair after Module", async ({ page }) => {

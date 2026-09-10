@@ -760,6 +760,12 @@ body {
   outline: none;
 }
 
+.feature-variance-summary-note {
+  display: block;
+  margin: -2px 0 6px;
+  font-size: 11px;
+}
+
 .feature-variance-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -775,6 +781,16 @@ body {
   gap: 4px;
   color: #616161;
   font-size: 11px;
+}
+
+.feature-variance-control.is-disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.feature-variance-control.is-disabled .ant-input-number,
+.feature-variance-control .ant-input-number-disabled {
+  cursor: not-allowed;
 }
 
 .feature-variance-control .ant-select {
@@ -801,8 +817,30 @@ body {
 }
 
 .feature-variance-overview,
+.feature-variance-detail-column,
 .feature-variance-detail {
   min-width: 0;
+}
+
+.feature-variance-pane-tabs {
+  overflow: hidden;
+  border: 1px solid #eaecf0;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.feature-variance-pane-tabs .ant-tabs-nav {
+  margin: 0;
+  padding: 0 10px;
+  background: #f7f8fa;
+}
+
+.feature-variance-pane-tabs .ant-tabs-content-holder {
+  min-width: 0;
+}
+
+.feature-variance-pane-tabs .ant-tabs-tabpane {
+  padding: 0 10px 10px;
 }
 
 .feature-variance-overview-chart {
@@ -817,12 +855,21 @@ body {
   margin-top: 8px;
 }
 
+.feature-variance-detail-picker {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
 .feature-variance-feature-picker .ant-select {
   flex: 1 1 220px;
   min-width: 0;
 }
 
 .feature-variance-detail {
+  min-width: 0;
+}
+
+.feature-variance-detail-column {
   border-left: 1px solid #eaecf0;
   padding-left: 14px;
 }
@@ -993,7 +1040,7 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .feature-variance-detail {
+  .feature-variance-detail-column {
     border-top: 1px solid #eaecf0;
     border-left: 0;
     padding-top: 14px;
