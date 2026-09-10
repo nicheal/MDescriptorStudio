@@ -682,6 +682,7 @@ function mockFramePayload(index: number, bondCutoff = 2.4) {
     pbc: "XYZ",
     cell: [2 * a, 0, 0, 0, a, 0, 0, 0, a],
     ghost_count: ghosts.length,
+    ghost_parents: ghostParents,
     bond_cutoff: Math.min(10, Math.max(0.1, bondCutoff || 2.4)),
   };
 }
@@ -1024,8 +1025,11 @@ const RUNS = [
     descriptor_name: "DPA-2",
     engine_version: "0.3.2",
     scope: "dataset",
+    device: "cuda",
     status: "COMPLETED",
     created_at: new Date(NOW - 3600_000).toISOString(),
+    started_at: new Date(NOW - 3540_000).toISOString(),
+    finished_at: new Date(NOW - 3480_000).toISOString(),
     result_path: "mock",
     shape: "[12480, 256]",
   },
@@ -1036,8 +1040,11 @@ const RUNS = [
     descriptor_name: "SOAP",
     engine_version: "0.3.2",
     scope: "dataset",
+    device: "cpu",
     status: "QUEUED",
     created_at: new Date(NOW - 2 * 60000).toISOString(),
+    started_at: null,
+    finished_at: null,
     result_path: null,
     shape: null as string | null,
   },
@@ -1048,8 +1055,11 @@ const RUNS = [
     descriptor_name: "ACE",
     engine_version: "0.3.2",
     scope: "dataset",
+    device: "cpu",
     status: "COMPLETED",
     created_at: new Date(NOW - 90 * 60000).toISOString(),
+    started_at: new Date(NOW - 5340_000).toISOString(),
+    finished_at: new Date(NOW - 5280_000).toISOString(),
     result_path: "mock",
     shape: "[12480, 96]",
   },
@@ -1063,6 +1073,7 @@ function startJobPlaybook() {
   jobPlaybookStarted = true;
   window.setTimeout(() => {
     RUNS[1].status = "RUNNING";
+    RUNS[1].started_at = new Date().toISOString();
     mockEmit("job.progress", { job_id: "job-soap", progress: 0.5, completed: 3160, total: 6320, message: "Computing SOAP descriptors" });
   }, 1500);
   window.setTimeout(() => {
@@ -1070,6 +1081,7 @@ function startJobPlaybook() {
   }, 3000);
   window.setTimeout(() => {
     RUNS[1].status = "COMPLETED";
+    RUNS[1].finished_at = new Date().toISOString();
     RUNS[1].result_path = "mock";
     RUNS[1].shape = "[6320, 432]";
     mockEmit("job.finished", { job_id: "job-soap", status: "COMPLETED", result: null, error: null });

@@ -33,8 +33,8 @@ describe("cellParameters", () => {
 });
 
 describe("minimumInteratomicDistance", () => {
-  it("finds the closest pair including periodic ghost atoms", () => {
-    // Images of the same chain along z: pair distances 2.6, 2.4, 5.0 → 2.4.
+  it("finds the closest pair in the supplied atom block", () => {
+    // Three real atoms along z: pair distances 2.6, 2.4, 5.0 → 2.4.
     const xyz = makeXyz([
       ["Si", 0, 0, 0],
       ["Si", 0, 0, 2.6],
@@ -59,7 +59,7 @@ describe("minimumInteratomicDistance", () => {
 });
 
 describe("minimumDistancePair", () => {
-  it("returns the indices of the closest pair including ghost images", () => {
+  it("returns the indices of the closest pair in the supplied atom block", () => {
     // Same chain as above: pair distances 2.6, 2.4, 5.0 → atoms 1 and 2.
     const xyz = makeXyz([
       ["Si", 0, 0, 0],
@@ -79,6 +79,15 @@ describe("minimumDistancePair", () => {
       i: 0,
       j: 1,
     });
+  });
+
+  it("can ignore periodic padding appended after the real atoms", () => {
+    const xyz = makeXyz([
+      ["Si", 0, 0, 0],
+      ["Si", 0, 0, 4],
+      ["Si", 0, 0, 0.2], // hidden image; would otherwise win
+    ]);
+    expect(minimumDistancePair(xyz, 2)).toEqual({ distance: 4, i: 0, j: 1 });
   });
 
   it("returns null for degenerate input", () => {

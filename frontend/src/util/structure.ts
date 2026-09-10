@@ -1,7 +1,6 @@
 // Frame-level structure metrics for the Explore Structure Inspector: cell
-// parameters, mass density, shortest interatomic distance, net force. All
-// operate on the payload as delivered by `dataset.frame` (xyz may contain
-// periodic ghost images beyond natoms).
+// parameters, mass density, shortest interatomic distance, net force. The
+// dataset frame payload may contain hidden periodic padding after natoms.
 import { ATOMIC_MASS } from "./elements";
 
 export interface CellParameters {
@@ -56,22 +55,25 @@ const MIN_DIST_CELL = 3.0;
 export interface MinDistancePair {
   /** Center-to-center distance in Å. */
   distance: number;
-  /** Indices into the frame's xyz block (ghost images sit beyond natoms). */
+  /** Indices into the displayed real-atom block. */
   i: number;
   j: number;
 }
 
 /**
- * Closest pair of atoms across the frame's xyz block, including ghost images,
- * so the result reflects the periodic structure across cell boundaries and the
- * indices resolve inside the viewer's parsed atoms. Coincident points
- * (≤ 1e-6 Å, the same duplicates the bond parser skips) are ignored; null when
- * fewer than two usable atoms remain.
+ * Closest pair of atoms across the frame's xyz block. When atomLimit is given,
+ * only the first real atoms are considered so hidden periodic padding cannot
+ * leak into the displayed inspector/highlight. Coincident points (≤ 1e-6 Å,
+ * the same duplicates the bond parser skips) are ignored; null when fewer than
+ * two usable atoms remain.
  */
-export function minimumDistancePair(xyz: string): MinDistancePair | null {
+export function minimumDistancePair(xyz: string, atomLimit?: number): MinDistancePair | null {
   const lines = xyz.trim().split(/\r?\n/);
-  const atomCount = Number(lines[0]);
-  if (!Number.isInteger(atomCount) || atomCount <= 0) return null;
+  const declaredAtomCount = Number(lines[0]);
+  const atomCount = atomLimit == null
+    ? declaredAtomCount
+    : Math.min(declaredAtomCount, Math.max(0, Math.floor(atomLimit)));
+  if (!Number.isInteger(declaredAtomCount) || declaredAtomCount <= 0 || !Number.isInteger(atomCount) || atomCount <= 0) return null;
 
   const atoms: [number, number, number][] = [];
   for (let i = 0; i < atomCount; i += 1) {
@@ -140,14 +142,11 @@ export function minimumDistancePair(xyz: string): MinDistancePair | null {
 }
 
 /**
- * Shortest center-to-center distance (Å) across the frame's xyz block,
- * including ghost images, so the value reflects the periodic structure
- * across cell boundaries. Coincident points (≤ 1e-6 Å, the same duplicates
- * the bond parser skips) are ignored; null when fewer than two usable atoms
- * remain.
+ * Shortest center-to-center distance (Å) across the frame's xyz block. Pass
+ * atomLimit to restrict the calculation to the displayed real atoms.
  */
-export function minimumInteratomicDistance(xyz: string): number | null {
-  const pair = minimumDistancePair(xyz);
+export function minimumInteratomicDistance(xyz: string, atomLimit?: number): number | null {
+  const pair = minimumDistancePair(xyz, atomLimit);
   return pair ? pair.distance : null;
 }
 

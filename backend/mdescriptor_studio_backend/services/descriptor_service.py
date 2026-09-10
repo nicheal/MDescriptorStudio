@@ -196,6 +196,13 @@ class DescriptorService:
                 f"device {device!r} is not declared for {name}; supported: {', '.join(declared_devices)}",
             )
 
+        num_threads = params.get("num_threads")
+        if num_threads is not None:
+            if type(num_threads) is not int or not 1 <= num_threads <= 64:
+                raise AppError(INVALID_PARAMS, "num_threads must be an integer between 1 and 64")
+            if device != "cpu" or not (schema.get("execution") or {}).get("num_threads"):
+                raise AppError(INVALID_PARAMS, "thread count is not supported for this execution mode")
+
         try:
             source = validate_local_path(row["source_path"], field="dataset source path")
             fingerprint = compute_fingerprint(source, row["number_of_frames"], use_cache=False)
@@ -216,6 +223,8 @@ class DescriptorService:
                 ]
             ).encode("utf-8")
         ).hexdigest()
+        if num_threads is not None:
+            cache_key = hashlib.sha256(f"{cache_key}\x1fthreads={num_threads}".encode()).hexdigest()
         force = bool(params.get("force"))
         with self._submit_lock:
             hit = self.db.query_one(
@@ -275,7 +284,7 @@ class DescriptorService:
             )
 
             def runner(ctx):
-                return self._run_compute(ctx, run_id, row, name, parameters, scope, frame_index, params.get("output_dtype"), device)
+                return self._run_compute(ctx, run_id, row, name, parameters, scope, frame_index, params.get("output_dtype"), device, num_threads)
 
             try:
                 job_id = self.jobs.submit(
@@ -469,7 +478,7 @@ class DescriptorService:
         if estimated_bytes > _MAX_COMPUTE_INPUT_BYTES:
             raise AppError(OUT_OF_MEMORY, "descriptor input exceeds the supported memory budget")
 
-    def _run_compute(self, ctx, run_id, row, name, parameters, scope, frame_index, output_dtype, device="cpu"):
+    def _run_compute(self, ctx, run_id, row, name, parameters, scope, frame_index, output_dtype, device="cpu", num_threads=None):
         import numpy as np
 
         self.db.execute(
@@ -478,7 +487,10 @@ class DescriptorService:
         )
         ctx.check_cancelled()
         log.info("compute %s: building descriptor %s (device=%s)", run_id, name, device)
-        descriptor = self.adapter.build(name, parameters, device=device)
+        execution = {"device": device}
+        if num_threads is not None:
+            execution["num_threads"] = num_threads
+        descriptor = self.adapter.build(name, parameters, **execution)
         log.info("compute %s: built, loading frames", run_id)
         if scope == "frame":
             frames = [self.datasets._adapter_for(row).get_frame(frame_index)]
@@ -558,6 +570,7 @@ class DescriptorService:
             "descriptor_info_schema": self.adapter.runtime_info().get("descriptor_info_schema_version"),
             "configuration": parameters,
             "device": device,
+            "num_threads": num_threads,
             "dataset_id": row["id"],
             "dataset_fingerprint": compute_fingerprint(
                 validate_local_path(row["source_path"], field="dataset source path"),

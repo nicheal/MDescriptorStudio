@@ -11,6 +11,7 @@ import { jobStatusLabel } from "../stores/jobs";
 import { displayableDescriptorRuns } from "./analysisPreview";
 import { useT } from "../i18n";
 import type { RunRow } from "../types/protocol";
+import { formatComputeDuration } from "../util/duration";
 
 const RUN_STATUS_COLOR: Record<string, string> = {
   QUEUED: "#616161",
@@ -20,6 +21,12 @@ const RUN_STATUS_COLOR: Record<string, string> = {
   FAILED: "#C42B1C",
   CANCELLED: "#8A8A8A",
 };
+const RESULTS_PAGE_SIZE = 15;
+
+function deviceLabel(value: string | null | undefined): "CPU" | "GPU" {
+  const normalized = String(value ?? "cpu").trim().toLowerCase();
+  return normalized === "cuda" || normalized === "gpu" ? "GPU" : "CPU";
+}
 
 function SectionHeading({ title, meta }: { title: string; meta?: string }) {
   return (
@@ -128,7 +135,7 @@ export default function DescriptorResults() {
             className="descriptor-results-table"
             size="small"
             tableLayout="fixed"
-            pagination={resultRuns.length > 8 ? { pageSize: 8 } : false}
+            pagination={resultRuns.length > RESULTS_PAGE_SIZE ? { pageSize: RESULTS_PAGE_SIZE, showSizeChanger: false } : false}
             rowKey="id"
             dataSource={resultRuns}
             rowClassName={(run) => run.id === selectedRun ? "descriptor-results-row-selected" : ""}
@@ -141,6 +148,14 @@ export default function DescriptorResults() {
             columns={[
               { title: t("Descriptor"), dataIndex: "descriptor_name", key: "descriptor", width: descriptorColumnWidth },
               { title: t("Scope"), dataIndex: "scope", key: "scope", width: 84 },
+              {
+                title: t("Device"),
+                dataIndex: "device",
+                key: "device",
+                width: 76,
+                align: "center" as const,
+                render: (value: string | null | undefined) => deviceLabel(value),
+              },
               {
                 title: t("Shape"),
                 dataIndex: "shape",
@@ -161,6 +176,17 @@ export default function DescriptorResults() {
                     {jobStatusLabel(tr, value)}
                   </Typography.Text>
                 ),
+              },
+              {
+                title: t("Compute time"),
+                key: "compute_time",
+                width: 112,
+                render: (_value: unknown, run: RunRow) => {
+                  const value = formatComputeDuration(run.started_at, run.finished_at);
+                  return value === "—"
+                    ? <Typography.Text type="secondary">{value}</Typography.Text>
+                    : <Typography.Text>{value}</Typography.Text>;
+                },
               },
               { title: t("Created"), dataIndex: "created_at", key: "created", width: 168, render: (value: string) => new Date(value).toLocaleString() },
               {

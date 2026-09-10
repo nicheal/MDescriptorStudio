@@ -315,16 +315,21 @@ function DataHealthRail() {
 }
 
 function RecentJobsRail() {
-  const setJobsDrawerOpen = useWorkspace().setJobsDrawerOpen;
+  const { setJobsDrawerOpen, datasets, activeDatasetId } = useWorkspace();
   const { t } = useT();
   const { jobs, order } = useJobs();
   const [rows, setRows] = useState<JobRow[]>([]);
+  const datasetNames = useMemo(() => new Map(datasets.map((dataset) => [dataset.id, dataset.name])), [datasets]);
 
   const load = useCallback(() => {
-    ipc.request<JobRow[]>("job.list", {})
+    if (!activeDatasetId) {
+      setRows([]);
+      return;
+    }
+    ipc.request<JobRow[]>("job.list", { dataset_id: activeDatasetId })
       .then((r) => setRows(r))
       .catch((e) => console.error("job.list failed", e));
-  }, []);
+  }, [activeDatasetId]);
 
   useEffect(() => {
     load();
@@ -335,9 +340,9 @@ function RecentJobsRail() {
   const recent = useMemo(
     () =>
       mergeJobRows(rows, order.map((id) => jobs[id]).filter(Boolean))
-        .filter((j) => j.job_type === "descriptor.compute")
+        .filter((j) => j.job_type === "descriptor.compute" && j.dataset_id === activeDatasetId)
         .slice(0, RECENT_JOB_LIMIT),
-    [rows, jobs, order],
+    [rows, jobs, order, activeDatasetId],
   );
 
   return (
@@ -385,7 +390,7 @@ function RecentJobsRail() {
         ) : (
           <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
             {recent.map((j, i) => (
-              <JobRailRow key={j.id} job={j} first={i === 0} />
+              <JobRailRow key={j.id} job={j} first={i === 0} datasetName={j.dataset_id ? datasetNames.get(j.dataset_id) ?? null : null} />
             ))}
           </div>
         )}
@@ -411,12 +416,18 @@ function RecentJobsRail() {
   );
 }
 
-function JobRailRow({ job, first }: { job: JobState; first: boolean }) {
+function JobRailRow({ job, first, datasetName }: { job: JobState; first: boolean; datasetName: string | null }) {
   const i18n = useT();
   const { tr } = i18n;
   const active = job.status === "RUNNING" || job.status === "QUEUED";
+  const jobLabel = jobTypeLabel(tr, job.job_type);
+  const title = datasetName ? `${jobLabel} · ${datasetName}` : jobLabel;
   const detail =
-    job.completed != null && job.total != null
+    job.status === "QUEUED"
+      ? job.queue_position != null
+        ? i18n.t("#{n} in queue", { n: job.queue_position })
+        : "—"
+      : job.completed != null && job.total != null
       ? `${job.completed.toLocaleString()} / ${job.total.toLocaleString()}`
       : job.error
         ? job.error.message
@@ -426,6 +437,7 @@ function JobRailRow({ job, first }: { job: JobState; first: boolean }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         <span style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLOR[job.status], flex: "0 0 auto" }} />
         <span
+          title={title}
           style={{
             fontSize: 13,
             fontWeight: 600,
@@ -436,7 +448,7 @@ function JobRailRow({ job, first }: { job: JobState; first: boolean }) {
             minWidth: 0,
           }}
         >
-          {jobTypeLabel(tr, job.job_type)}        </span>
+          {title}        </span>
         <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: STATUS_COLOR[job.status], flex: "0 0 auto" }}>
           {jobStatusLabel(tr, job.status)}
         </span>
@@ -458,7 +470,7 @@ function JobRailRow({ job, first }: { job: JobState; first: boolean }) {
           {job.created_at ? formatRailTime(job.created_at, i18n) : "—"}
         </span>
       </div>
-      {active && (
+      {active && job.status !== "QUEUED" && (
         <Progress percent={Math.round(job.progress * 100)} size="small" strokeColor={STATUS_COLOR[job.status]} style={{ margin: "6px 0 0" }} />
       )}
     </div>

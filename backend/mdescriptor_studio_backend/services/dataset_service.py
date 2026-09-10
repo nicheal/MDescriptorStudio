@@ -847,7 +847,7 @@ def periodic_boundary_ghosts(
         dtype=np.float64,
     ) @ cell
     pos_sq = (pos * pos).sum(axis=1)
-    out: list[tuple[str, np.ndarray]] = []
+    out: list[tuple[str, np.ndarray, int]] = []
     chunk = max(1, int(4_000_000 // max(len(symbols), 1)))
     for start in range(0, cand.size, chunk):
         idx = cand[start:start + chunk]

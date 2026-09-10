@@ -169,7 +169,7 @@ export interface FramePayload {
   pbc: string;
   cell: number[] | null;
   ghost_count: number;
-  /** parent real-atom index for each periodic image appended to xyz (click-to-select); empty when there are none */
+  /** parent real-atom index for each optional periodic image appended to xyz; local-shell viewers may consume these images */
   ghost_parents?: number[];
   bond_cutoff: number;
 }
@@ -284,8 +284,11 @@ export interface RunRow {
   descriptor_name: string;
   engine_version: string;
   scope: string;
+  device?: string | null;
   status: string;
   created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
   result_path: string | null;
   shape?: string | null;
   metadata?: Record<string, unknown>;

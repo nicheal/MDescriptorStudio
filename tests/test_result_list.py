@@ -23,8 +23,8 @@ def test_list_includes_shape_from_result_metadata(tmp_path: Path) -> None:
     (run_dir / "metadata.json").write_text('{"shape": [12, 64]}', encoding="utf-8")
     db.execute(
         "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version,"
-        " parameters_json, scope, status, created_at, result_path)"
-        " VALUES ('run_1', 'ds_1', 'ACE', 'test', '{}', 'dataset', 'COMPLETED',"
+        " parameters_json, scope, device, status, created_at, result_path)"
+        " VALUES ('run_1', 'ds_1', 'ACE', 'test', '{}', 'dataset', 'cuda', 'COMPLETED',"
         " '2026-01-01T00:00:00+00:00', ?)",
         (str(run_dir),),
     )
@@ -32,3 +32,4 @@ def test_list_includes_shape_from_result_metadata(tmp_path: Path) -> None:
     rows = ResultService(db).list({"dataset_id": "ds_1"})
 
     assert rows[0]["shape"] == "[12, 64]"
+    assert rows[0]["device"] == "cuda"

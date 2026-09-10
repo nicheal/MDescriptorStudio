@@ -331,6 +331,7 @@ export const zhDict: Record<string, string> = {
   "Refresh": "刷新",
   "Descriptor": "描述符",
   "Shape": "形状",
+  "Compute time": "计算时间",
   "Actions": "操作",
   "Analyze {name} result": "分析 {name} 结果",
   "Open in Analysis": "在分析页打开",

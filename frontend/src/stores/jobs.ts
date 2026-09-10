@@ -7,6 +7,8 @@ import type { JobRow } from "../types/protocol";
 export interface JobState {
   id: string;
   job_type: string;
+  /** Dataset that owns the job; absent for jobs without a dataset. */
+  dataset_id?: string | null;
   status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
   progress: number;
   completed: number | null;
@@ -92,13 +94,14 @@ interface JobsStore {
 
 export const useJobs = create<JobsStore>(() => ({ jobs: {}, order: [], setRunning: () => {} }));
 
-export function trackJob(jobId: string, jobType: string) {
+export function trackJob(jobId: string, jobType: string, datasetId?: string | null) {
   useJobs.setState((st) => ({
     jobs: {
       ...st.jobs,
       [jobId]: {
         id: jobId,
         job_type: jobType,
+        ...(datasetId != null ? { dataset_id: datasetId } : {}),
         status: "QUEUED",
         progress: 0,
         completed: null,
@@ -229,6 +232,7 @@ export function fromJobRow(row: JobRow): JobState {
   return {
     id: row.id,
     job_type: row.job_type,
+    ...(row.dataset_id != null ? { dataset_id: row.dataset_id } : {}),
     status: row.status,
     progress: row.progress,
     completed: row.completed,

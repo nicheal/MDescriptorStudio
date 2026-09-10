@@ -39,6 +39,15 @@ describe("queue_position", () => {
     const merged = mergeJobRows([baseRow({ queue_position: 3 })], [live]);
     expect(merged[0].queue_position).toBe(3);
   });
+
+  it("keeps the dataset association for persisted and live jobs", () => {
+    expect(fromJobRow(baseRow({ dataset_id: "ds-persisted" })).dataset_id).toBe("ds-persisted");
+    trackJob("job-live", "descriptor.compute", "ds-live");
+    expect(useJobs.getState().jobs["job-live"].dataset_id).toBe("ds-live");
+    trackJob("job-1", "descriptor.compute");
+    const merged = mergeJobRows([baseRow({ dataset_id: "ds-persisted" })], [useJobs.getState().jobs["job-1"]]);
+    expect(merged[0].dataset_id).toBe("ds-persisted");
+  });
 });
 
 describe("watchJob", () => {

@@ -56,7 +56,7 @@ convert errors            → 引擎异常 → GUI 错误码
 |---|---|---|
 | `execution.devices` | `devices: list[str]`（0.2.8 起 28/28 为 `["cpu", "cuda"]`；0.2.7 及之前全为 `["cpu"]`） | Descriptor 页 Execution 区设备下拉：选项 = schema 声明列表（唯一声明 cpu 时保持禁用单选）；选择随 `descriptor.submit` 的 `device` 提交，服务端按 schema 校验并计入缓存键；默认 `"cpu"` |
 | `execution.cooperative_cancel` | `cancelable: bool` | JobService 决定 Cancel 按钮态（否则显示 Cancel unavailable，§23）；0.2.5 起 28/28 均 true，0.2.8 保持可中断 |
-| `execution.num_threads` | `threadable: bool` | 线程数输入是否出现 |
+| `execution.num_threads` | `threadable: bool` | 支持时显示线程数输入；CPU 可填 1–64 的整数，留空使用引擎默认；CUDA 禁用。`descriptor.submit.num_threads` 经校验传入引擎 `execution.num_threads`，显式值参与缓存键并记录到结果 metadata |
 | `input.periodicity / mixed_periodicity / spin / charge_spin` | `input_caps` | M3 兼容性预检：与 M1 scan 存的 dataset periodicity 汇总比对，不兼容项禁用 + tooltip；提交时兜底 `UNSUPPORTED_PERIODICITY`。0.2.5 起 mixed_periodicity 为逐描述符能力位（22/28 接受混合批次） |
 | `asset.policy` | `model_spec` | `none` → 无模型区；`required` → Model picker 两态：内置（空参数，bundled 自动解析）/ 自定义（`model` 参数传本地路径字符串） |
 

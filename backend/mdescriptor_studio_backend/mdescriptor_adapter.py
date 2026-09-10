@@ -62,7 +62,7 @@ class EngineAdapter:
         return cached
 
     # -- construction / compute ------------------------------------------
-    def build(self, name: str, parameters: dict, device: str = "cpu"):
+    def build(self, name: str, parameters: dict, device: str = "cpu", num_threads: int | None = None):
         # create_descriptor lazily imports the engine's native extensions;
         # during deferred background warmup this must not race it. The warmup
         # thread itself bypasses the gate (it is the producer).
@@ -70,11 +70,13 @@ class EngineAdapter:
             self._warm_gate.wait()
         try:
             params = dict(parameters)
-            if device != "cpu":
+            if device != "cpu" or num_threads is not None:
                 # Reserved option key: the engine restores it into
                 # ExecutionOptions (create_descriptor -> _restore_parameters);
                 # schema-declared devices were validated by the caller.
                 params["execution"] = {"device": device}
+                if num_threads is not None:
+                    params["execution"]["num_threads"] = num_threads
             cfg = md.DescriptorConfiguration(
                 schema_version=md.CONFIGURATION_SCHEMA_VERSION,
                 descriptor=name,

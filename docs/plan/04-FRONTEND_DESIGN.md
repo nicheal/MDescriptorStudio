@@ -106,6 +106,8 @@ class IpcClient {
 | Descriptors | registry 列表 + describe 信息 Inspector + schema 动态表单（8 类型 + 一层嵌套 object + model 两态）+ Execution（Device=CPU/Threads/Output/Scope）+ [Calculate] + input 兼容预检禁用 | M3（提交在 M4 走通计算） |
 | Analysis | Run selector + Plotly Projection/Similarity/Clusters/Outliers/Sampling/Coverage/Compare tabs + shared Inspector + Open Explore | M5+ |
 
+Explore 与 Analysis 预览中的 3Dmol viewer 默认只渲染晶胞内的真实原子；开启局部壳层时，按壳层半径纳入必要的 XYZ 周期镜像，并将镜像点击映射回真实原子，不显示壳层之外的重复原子。Explore 点击原子会把对应 Atom Table 行滚动到容器中央并与列表点击共用选择状态。
+
 ## 7. 视觉验收（§132 摘要）
 
 当前 Dataset 一眼可见；主要科学内容占最大面积；Primary Action 唯一；数字对齐、单位规范；Failed 状态 = 图标 + 文字；空态简洁（"No datasets. Add a DeepMD or extxyz dataset to begin."）。

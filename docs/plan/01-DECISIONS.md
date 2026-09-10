@@ -185,6 +185,8 @@
 
 ## ADR-26 计算设备选择（0.2.8 起）
 
+2026-09-07 更新：已开放 CPU 描述符线程设置（schema 声明支持时）；`num_threads` 可留空或设为 1–64 的整数。显式值传到引擎 execution，参与缓存键并写入结果 metadata。留空保持原缓存键。下述原决策中的线程默认限制已解除。
+
 **背景**：mdescriptor 0.2.8 为 28/28 描述符声明 `execution.devices: ["cpu","cuda"]`（0.2.7 及之前全 `["cpu"]`）；设备入口为配置保留键 `execution`（引擎还原为 `ExecutionOptions(device=...)`）。
 **决策**：Descriptor 页 Execution 区的设备下拉按 schema 声明列表渲染（唯一 cpu 时保持禁用单选，不硬编码设备名）；选择经 `descriptor.submit` 的 `device` 提交，服务端按 schema 校验（未声明 → `INVALID_PARAMS`）并计入缓存键与结果 metadata（`descriptor_runs.device` 列，migration 5）；默认 `"cpu"`，`num_threads` 仍用引擎默认。声明了但本机无运行时的设备在计算期报 `DEVICE_UNAVAILABLE`（引擎 `code=device_unavailable` 的映射）。
 **后果**：CPU/CUDA 结果互不命中缓存，可审计；CUDA 计算路径的正确性验收需 CUDA 硬件（开发机无 GPU，仅验证了不可用路径的错误呈现），首次 GPU 验收前 UI 不做任何 CUDA 可用性预判。

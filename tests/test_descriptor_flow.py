@@ -88,6 +88,26 @@ def test_descriptor_registry_and_compute(tmp_path: Path) -> None:
         assert meta["shape"] == [12 * 64, done["result"]["feature_count"]]
         assert Path(got["result"]["result_path"], "values.npy").exists()
 
+        threaded = {
+            "dataset_id": ds_id,
+            "descriptor_name": "ACE",
+            "parameters": {"species": [31, 33], "N": 1},
+            "scope": "dataset",
+            "num_threads": 2,
+        }
+        sub_threads = bp.request(201, "descriptor.submit", threaded)
+        assert sub_threads["result"]["cache"] is None
+        threaded_done = wait_job(bp, sub_threads["result"]["job_id"], timeout=300)
+        assert threaded_done["status"] == "COMPLETED", threaded_done
+        threaded_id = threaded_done["result"]["run_id"]
+        threaded_result = bp.request(202, "result.get", {"run_id": threaded_id})
+        assert threaded_result["result"]["metadata"]["num_threads"] == 2
+        cached_threads = bp.request(203, "descriptor.submit", threaded)
+        assert cached_threads["result"]["cache"]["existing_run_id"] == threaded_id
+        for invalid in (0, -1, 65, True, 1.5, "2"):
+            rejected = bp.request(204, "descriptor.submit", {**threaded, "num_threads": invalid})
+            assert rejected["error"]["code"] == "INVALID_PARAMS", rejected
+
         # validation errors
         bad = bp.request(
             106,

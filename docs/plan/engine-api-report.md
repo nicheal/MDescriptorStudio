@@ -108,6 +108,8 @@ GUI 必须用 `display_name` 作为字段标题、用 `description` 作为说明
 
 ### 3.5 Execution Capability
 
+2026-09-07 更新：CPU 线程输入已开放；提交字段 `num_threads` 支持 1–64 整数，留空沿用引擎默认。后端校验能力及设备并传到 `execution.num_threads`，显式值参与缓存键、记录到结果 metadata。以下历史描述中的线程限制已解除。
+
 **0.2.8 起 28 个描述符均声明 `devices: ["cpu", "cuda"]`**（0.2.7 及之前为 `["cpu"]`，无 CUDA 条目）。Descriptor 页 Execution 区设备下拉按 schema 声明列表渲染；选择经 `descriptor.submit` 的 `device` 提交，adapter 在 `device != "cpu"` 时以保留键 `execution: {"device": ...}` 注入配置参数（引擎还原为 `ExecutionOptions`），并计入缓存键；无效设备名在建构期被引擎拒绝（`DescriptorConfigError`，`code=invalid_device`），schema 未声明的设备在 submit 时以 `INVALID_PARAMS` 拒绝；声明了但本机无运行时（无 NVIDIA GPU/driver）在计算期报 `DEVICE_UNAVAILABLE`（引擎 `code=device_unavailable`）。默认 `"cpu"`；`num_threads` 仍用引擎默认。`num_threads` / `cooperative_cancel` 逐 descriptor 以 schema 为准；DPA4/DPA4C 的 `cooperative_cancel` 自 0.2.5 起 true。
 
 ### 3.6 Asset / Model（§95 相关）

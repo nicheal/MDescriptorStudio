@@ -5,6 +5,10 @@ test("browser preview keeps descriptor results in a separate Results page", asyn
   await page.getByRole("button", { name: "Results", exact: true }).click();
   await expect(page.getByText("DESCRIPTOR RESULTS", { exact: true })).toBeVisible();
   await expect(page.getByRole("table")).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Device", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "GPU", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "CPU", exact: true })).toHaveCount(2);
+  await expect(page.getByRole("columnheader", { name: "Compute time", exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "Analysis", exact: true }).click();
   await expect(page.getByText("DESCRIPTOR RESULTS", { exact: true })).not.toBeVisible();

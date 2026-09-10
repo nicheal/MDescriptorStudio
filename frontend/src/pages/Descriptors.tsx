@@ -112,6 +112,7 @@ function SectionHeading({ number, title, description }: { number: number; title:
 // Display labels for engine-declared execution devices; unknown values fall
 // back to the raw identifier uppercased in the option list.
 const DEVICE_LABELS: Record<string, string> = { cpu: "CPU", cuda: "CUDA" };
+const DEFAULT_OUTPUT_DTYPE = "float32";
 
 export default function Descriptors() {
   const { message } = AntApp.useApp();
@@ -126,7 +127,7 @@ export default function Descriptors() {
   const [scope, setScope] = useState<"dataset" | "frame">("dataset");
   const [frameIndex, setFrameIndex] = useState(0);
   const [threads, setThreads] = useState<number | undefined>(undefined);
-  const [dtype, setDtype] = useState<string>("float64");
+  const [dtype, setDtype] = useState<string>(DEFAULT_OUTPUT_DTYPE);
   const [device, setDevice] = useState<string>("cpu");
   const [submitting, setSubmitting] = useState(false);
 
@@ -187,7 +188,7 @@ export default function Descriptors() {
         .some((text) => text.toLowerCase().includes(needle)),
     );
   }, [list, query]);
-  const availableDtypes = schema?.output.dtypes?.length ? schema.output.dtypes : ["float64"];
+  const availableDtypes = schema?.output.dtypes?.length ? schema.output.dtypes : [DEFAULT_OUTPUT_DTYPE];
   const effectiveDtype = availableDtypes.includes(dtype) ? dtype : availableDtypes[0];
   // Device choices are always the schema-declared list (Rule 3: nothing hardcoded);
   // the pick persists across descriptors and is clamped per descriptor.
@@ -213,6 +214,7 @@ export default function Descriptors() {
           frame_index: scope === "frame" ? frameIndex : undefined,
           output_dtype: effectiveDtype,
           device: effectiveDevice,
+          num_threads: effectiveDevice === "cpu" && schema.execution.num_threads ? threads : undefined,
         },
       );
       const watchCompute = (jobId: string) => {
@@ -224,7 +226,7 @@ export default function Descriptors() {
       if (r.cache?.in_flight && r.job_id) {
         // An identical compute is already queued/running: attach to the live
         // job instead of offering a recalculation of the same input.
-        trackJob(r.job_id, "descriptor.compute");
+        trackJob(r.job_id, "descriptor.compute", d.id);
         message.info(t("Identical compute already in progress — attached to it"));
         watchCompute(r.job_id);
         return;
@@ -244,10 +246,11 @@ export default function Descriptors() {
               frame_index: scope === "frame" ? frameIndex : undefined,
               output_dtype: effectiveDtype,
               device: effectiveDevice,
+              num_threads: effectiveDevice === "cpu" && schema.execution.num_threads ? threads : undefined,
               force: true,
             });
             if (r2.job_id) {
-              trackJob(r2.job_id, "descriptor.compute");
+              trackJob(r2.job_id, "descriptor.compute", d.id);
               watchCompute(r2.job_id);
             }
           },
@@ -256,7 +259,7 @@ export default function Descriptors() {
         return;
       }
       if (r.job_id) {
-        trackJob(r.job_id, "descriptor.compute");
+        trackJob(r.job_id, "descriptor.compute", d.id);
         message.info(t("Compute submitted — see Jobs"));
         void watchJob(r.job_id).then((done) => {
           if (done.status === "COMPLETED") message.success(t("Run {id} completed", { id: String(done.result?.run_id ?? "") }));
@@ -470,9 +473,7 @@ export default function Descriptors() {
                     <div style={{ minWidth: 0 }}>
                       <Typography.Text style={{ fontSize: 13, fontWeight: 500 }}>{t("Threads")}</Typography.Text>
                       <div style={{ marginTop: 7 }}>
-                        <Tooltip title={t("v0.1 uses the engine default thread count")}>
-                          <InputNumber min={1} max={64} value={threads} disabled onChange={(v) => setThreads(v ?? undefined)} style={{ width: "100%" }} placeholder={t("engine default")} />
-                        </Tooltip>
+                        <InputNumber min={1} max={64} precision={0} value={threads} disabled={effectiveDevice !== "cpu"} onChange={(v) => setThreads(v ?? undefined)} style={{ width: "100%" }} placeholder={t("engine default")} />
                       </div>
                     </div>
                   )}

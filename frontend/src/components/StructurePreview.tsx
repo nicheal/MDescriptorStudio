@@ -10,15 +10,14 @@ type ViewerAtom = {
   z: number;
   bonds: number[];
   bondOrder: number[];
-  // Index in the parsed payload (real atoms 0..natoms-1, periodic images
-  // after), kept on the atom so a viewer click can identify it.
+  // Index in the viewer model. Real atoms use their Atom Table index; a
+  // periodic image may additionally carry its real-atom parent index.
   i: number;
-  // For periodic images: the real atom this image mirrors.
   parent?: number;
 };
 
-// Atom record 3Dmol hands back from a click callback; only the custom
-// identity fields attached in parseViewerAtoms matter here.
+// Atom record 3Dmol hands back from a click callback; only the custom indices
+// attached in parseViewerAtoms matter here.
 type ClickedAtom = Pick<ViewerAtom, "i" | "parent">;
 
 type ViewerModel = {
@@ -37,39 +36,51 @@ type Viewer = {
   render: () => void;
 };
 
-function parseViewerAtoms(frame: FramePayload): ViewerAtom[] {
+function parseViewerAtoms(frame: FramePayload, includePeriodicImages = false): ViewerAtom[] {
   const cutoff = Math.max(0.1, frame.bond_cutoff || 2.4);
-  const atoms: ViewerAtom[] = frame.atom_rows.map((row) => ({
+  // atom_rows is always the real-atom block. Periodic images are consumed only
+  // by the local-shell preview, so ordinary previews remain inside the cell.
+  const realAtomCount = Math.max(0, frame.natoms);
+  const atoms: ViewerAtom[] = frame.atom_rows.slice(0, realAtomCount).map((row, index) => ({
     elem: row.el,
     x: row.x,
     y: row.y,
     z: row.z,
     bonds: [],
     bondOrder: [],
-    i: row.i,
+    i: index,
   }));
-  // ``atom_rows`` intentionally contains only real atoms because its indices
-  // are used for navigation. The XYZ payload additionally contains periodic
-  // image atoms; include those images in the viewer/local-shell graph without
-  // changing the original atom index space.
-  const xyzLines = frame.xyz.trim().split(/\r?\n/);
-  const xyzCount = Number(xyzLines[0]);
-  if (Number.isInteger(xyzCount) && xyzCount > atoms.length) {
-    for (let index = atoms.length; index < xyzCount; index += 1) {
-      const [elem, xText, yText, zText] = xyzLines[index + 2]?.trim().split(/\s+/) ?? [];
-      const x = Number(xText);
-      const y = Number(yText);
-      const z = Number(zText);
-      if (!elem || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-      atoms.push({ elem, x, y, z, bonds: [], bondOrder: [], i: atoms.length });
+  if (includePeriodicImages && frame.xyz && atoms.length > 0) {
+    const lines = frame.xyz.trim().split(/\r?\n/);
+    const xyzAtomCount = Number.parseInt(lines[0]?.trim() ?? "", 10);
+    const parsedAtomCount = Number.isFinite(xyzAtomCount)
+      ? Math.max(0, Math.min(xyzAtomCount, lines.length - 2))
+      : 0;
+    const declaredGhostCount = Number.isFinite(frame.ghost_count)
+      ? Math.max(0, Math.floor(frame.ghost_count))
+      : Math.max(0, parsedAtomCount - realAtomCount);
+    const displayedAtomCount = Math.min(parsedAtomCount, realAtomCount + declaredGhostCount);
+    for (let xyzIndex = realAtomCount; xyzIndex < displayedAtomCount; xyzIndex += 1) {
+      const parts = lines[xyzIndex + 2]?.trim().split(/\s+/) ?? [];
+      if (parts.length < 4) continue;
+      const x = Number(parts[1]);
+      const y = Number(parts[2]);
+      const z = Number(parts[3]);
+      if (![x, y, z].every(Number.isFinite)) continue;
+      const parent = frame.ghost_parents?.[xyzIndex - realAtomCount];
+      const parentIndex = typeof parent === "number" && Number.isInteger(parent) && parent >= 0 && parent < atoms.length ? parent : undefined;
+      atoms.push({
+        elem: parts[0],
+        x,
+        y,
+        z,
+        bonds: [],
+        bondOrder: [],
+        i: atoms.length,
+        ...(parentIndex != null ? { parent: parentIndex } : {}),
+      });
     }
   }
-  // Periodic images sit at indices >= natoms in payload order; record which
-  // real atom each mirrors so a click on an image selects the real atom.
-  frame.ghost_parents?.forEach((parent, k) => {
-    const atom = atoms[frame.natoms + k];
-    if (atom) atom.parent = parent;
-  });
   const cells = new Map<string, number[]>();
   const cellKey = (x: number, y: number, z: number) =>
     `${Math.floor(x / cutoff)},${Math.floor(y / cutoff)},${Math.floor(z / cutoff)}`;
@@ -196,7 +207,8 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
     const viewer = viewerRef.current;
     if (!viewerReady || !viewer) return;
     viewer.clear();
-    const atoms = parseViewerAtoms(frame);
+    const localShellActive = selectedAtom != null && localCutoff != null && Number.isFinite(localCutoff);
+    const atoms = parseViewerAtoms(frame, localShellActive);
     const model = viewer.addModel();
     model.addAtoms(atoms);
     for (const element of new Set(atoms.map((atom) => atom.elem))) {
@@ -219,9 +231,9 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
       }
     }
     addUnitCell(viewer, frame.cell);
-    // Click-to-select: atoms report their payload index; periodic images map
-    // back to their parent real atom. Registered before render() so 3Dmol
-    // builds the picking intersection shapes.
+    // Click-to-select: real atoms report their Atom Table index; a displayed
+    // periodic image reports its real-atom parent. Registered before render()
+    // so 3Dmol builds the picking intersection shapes.
     viewer.setClickable({}, true, (atom) => {
       const target = atom.parent ?? atom.i;
       if (target != null && target >= 0 && target < frame.natoms) selectHandlerRef.current?.(target);

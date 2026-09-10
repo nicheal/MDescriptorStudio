@@ -66,6 +66,10 @@ descriptor.submit
 Analysis 请求先按 `analysis_type + input_run_ids + 规范化 parameters + algorithm_version` 查 cache key；命中时返回
 `{job_id: null, analysis_id, cache: {existing_analysis_id, cache_key}}`，不重新执行计算。PCA 旧入口的缓存响应保持同一异步外形。
 
+`dataset.frame` 返回 `xyz`（真实原子后可追加用于跨周期成键的镜像原子）和只包含真实原子的 `atom_rows`。
+当存在周期镜像时，`ghost_count` 表示追加数量，`ghost_parents` 按 XYZ 追加顺序给出每个镜像对应的真实原子下标
+（范围为 `0..natoms-1`）；无镜像时为空数组。普通 3Dmol viewer 只使用 `natoms` 个真实原子；开启局部壳层时，前端可按所需半径消费这段周期 padding，并将镜像点击映射回母原子。
+
 ## 5. 指纹与失效
 
 - 注册时 fingerprint 入 `datasets.fingerprint`；`dataset.list/get` 实时重算比对得 `cache_valid`。

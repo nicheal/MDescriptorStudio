@@ -49,42 +49,60 @@ type ViewerAtom = {
   z: number;
   bonds: number[];
   bondOrder: number[];
-  // Index in the parsed payload (real atoms 0..natoms-1, periodic images
-  // after), kept on the atom so a viewer click can identify it.
+  // Index in the viewer model. Real atoms use their Atom Table index; a
+  // periodic image may additionally carry its real-atom parent index.
   i: number;
-  // For periodic images: the real atom this image mirrors.
   parent?: number;
 };
 
-// Atom record 3Dmol hands back from a click callback; only the custom
-// identity fields attached in parseViewerAtoms matter here.
+// Atom record 3Dmol hands back from a click callback; only the custom indices
+// attached in parseViewerAtoms matter here.
 type ClickedAtom = Pick<ViewerAtom, "i" | "parent">;
 
 type ViewerModel = {
   addAtoms: (atoms: ViewerAtom[]) => void;
 };
 
-function parseViewerAtoms(frame: FramePayload, cutoff: number): ViewerAtom[] {
-  const lines = frame.xyz.trim().split(/\r?\n/);
-  const atomCount = Number(lines[0]);
-  if (!Number.isInteger(atomCount) || atomCount <= 0) return [];
+function parseViewerAtoms(frame: FramePayload, cutoff: number, includePeriodicImages = false): ViewerAtom[] {
+  // atom_rows is always the real-atom block. Periodic images are consumed only
+  // by local-shell rendering, so the ordinary viewer remains inside the cell.
+  const realAtomCount = Math.max(0, frame.natoms);
+  const atoms: ViewerAtom[] = frame.atom_rows
+    .slice(0, realAtomCount)
+    .map((row, index) => ({ elem: row.el, x: row.x, y: row.y, z: row.z, bonds: [], bondOrder: [], i: index }));
+  if (!atoms.length) return [];
 
-  const atoms: ViewerAtom[] = [];
-  for (let i = 0; i < atomCount; i += 1) {
-    const tokens = lines[i + 2]?.trim().split(/\s+/) ?? [];
-    const [elem, xText, yText, zText] = tokens;
-    const x = Number(xText);
-    const y = Number(yText);
-    const z = Number(zText);
-    if (!elem || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-    atoms.push({ elem, x, y, z, bonds: [], bondOrder: [], i: atoms.length });
+  if (includePeriodicImages && frame.xyz) {
+    const lines = frame.xyz.trim().split(/\r?\n/);
+    const xyzAtomCount = Number.parseInt(lines[0]?.trim() ?? "", 10);
+    const parsedAtomCount = Number.isFinite(xyzAtomCount)
+      ? Math.max(0, Math.min(xyzAtomCount, lines.length - 2))
+      : 0;
+    const declaredGhostCount = Number.isFinite(frame.ghost_count)
+      ? Math.max(0, Math.floor(frame.ghost_count))
+      : Math.max(0, parsedAtomCount - realAtomCount);
+    const displayedAtomCount = Math.min(parsedAtomCount, realAtomCount + declaredGhostCount);
+    for (let xyzIndex = realAtomCount; xyzIndex < displayedAtomCount; xyzIndex += 1) {
+      const parts = lines[xyzIndex + 2]?.trim().split(/\s+/) ?? [];
+      if (parts.length < 4) continue;
+      const x = Number(parts[1]);
+      const y = Number(parts[2]);
+      const z = Number(parts[3]);
+      if (![x, y, z].every(Number.isFinite)) continue;
+      const parent = frame.ghost_parents?.[xyzIndex - realAtomCount];
+      const parentIndex = typeof parent === "number" && Number.isInteger(parent) && parent >= 0 && parent < atoms.length ? parent : undefined;
+      atoms.push({
+        elem: parts[0],
+        x,
+        y,
+        z,
+        bonds: [],
+        bondOrder: [],
+        i: atoms.length,
+        ...(parentIndex != null ? { parent: parentIndex } : {}),
+      });
+    }
   }
-  // Periodic images sit at indices >= natoms in payload order; record which
-  // real atom each mirrors so a click on an image selects the real atom.
-  frame.ghost_parents?.forEach((parent, k) => {
-    const atom = atoms[frame.natoms + k];
-    if (atom) atom.parent = parent;
-  });
 
   // Use a spatial hash so large frames do not require an O(N²) pair scan.
   const cells = new Map<string, number[]>();
@@ -130,11 +148,19 @@ function clampBondCutoff(value: number): number {
   return Math.max(MIN_BOND_CUTOFF, Math.min(MAX_BOND_CUTOFF, value));
 }
 
-function neighborsWithinCutoff(atoms: ViewerAtom[], selectedAtom: number, cutoff: number): { index: number; distance: number }[] {
+function neighborsWithinCutoff(
+  atoms: ViewerAtom[],
+  selectedAtom: number,
+  cutoff: number,
+): { index: number; distance: number; parent?: number }[] {
   const center = atoms[selectedAtom];
   if (!center) return [];
   return atoms
-    .map((atom, index) => ({ index, distance: Math.sqrt((atom.x - center.x) ** 2 + (atom.y - center.y) ** 2 + (atom.z - center.z) ** 2) }))
+    .map((atom, index) => ({
+      index,
+      parent: atom.parent,
+      distance: Math.sqrt((atom.x - center.x) ** 2 + (atom.y - center.y) ** 2 + (atom.z - center.z) ** 2),
+    }))
     .filter(({ index, distance }) => index !== selectedAtom && distance > 1e-6 && distance <= cutoff)
     .sort((left, right) => left.distance - right.distance);
 }
@@ -157,6 +183,7 @@ export default function Explore() {
   // instead of the single-atom selection (the two are mutually exclusive).
   const [showDistancePair, setShowDistancePair] = useState(false);
   const viewerDiv = useRef<HTMLDivElement>(null);
+  const atomTableRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<
     {
       clear: () => void;
@@ -177,6 +204,9 @@ export default function Explore() {
   const [viewerError, setViewerError] = useState<string | null>(null);
   const loadStart = useRef<number>(0);
   const renderedFrameRef = useRef<number | null>(null);
+  // The backend's xyz padding extent follows bond_cutoff. Keep track of the
+  // last requested extent so enabling or enlarging a local shell can fetch
+  // enough periodic images without refetching on every render.
   const fetchedGhostCutoffRef = useRef(0);
 
   const total = d?.number_of_frames ?? 0;
@@ -187,9 +217,19 @@ export default function Explore() {
     ? selectedSample.atom
     : undefined;
   const selectedLocalNeighbors = frame && selectedAtom != null
-    ? neighborsWithinCutoff(parseViewerAtoms(frame, Math.max(bondCutoff, localCutoff)), selectedAtom, localCutoff)
+    ? neighborsWithinCutoff(
+        parseViewerAtoms(frame, Math.max(bondCutoff, localCutoff), showLocalEnvironment),
+        selectedAtom,
+        localCutoff,
+      )
     : [];
-  const selectedLocalNeighborSet = new Set(showLocalEnvironment ? selectedLocalNeighbors.filter(({ index }) => index < (frame?.natoms ?? 0)).map(({ index }) => index) : []);
+  const selectedLocalNeighborSet = new Set(
+    showLocalEnvironment
+      ? selectedLocalNeighbors
+          .flatMap(({ index, parent }) => [index, parent ?? index])
+          .filter((index) => index >= 0 && index < (frame?.natoms ?? 0))
+      : [],
+  );
   // Force components live on atom_rows (real atoms only); selection indices
   // always reference real atoms, so a direct index lookup is safe.
   const selectedForceRow = frame && selectedAtom != null && selectedAtom < frame.atom_rows.length
@@ -216,12 +256,12 @@ export default function Explore() {
     ? forceArrowGeometry(selectedForceRow.fx, selectedForceRow.fy, selectedForceRow.fz, maxForce, forceArrowScale, FORCE_ARROW_TARGET_LENGTH)
     : null;
   // Frame-level metrics for the inspector; recomputed only when a new frame
-  // (or ghost extent) arrives, not on selection clicks.
+  // arrives, not on selection clicks.
   const cellParams = useMemo(
     () => (frame?.cell && frame.cell.length === 9 ? cellParameters(frame.cell) : null),
     [frame],
   );
-  const minDistancePair = useMemo(() => (frame ? minimumDistancePair(frame.xyz) : null), [frame]);
+  const minDistancePair = useMemo(() => (frame ? minimumDistancePair(frame.xyz, frame.natoms) : null), [frame]);
   const minAtomDistance = minDistancePair?.distance ?? null;
   const netForce = useMemo(() => (frame ? netForceMagnitude(frame.atom_rows) : null), [frame]);
   const density = useMemo(
@@ -313,6 +353,18 @@ export default function Explore() {
   const atomClickRef = useRef(selectAtom);
   atomClickRef.current = selectAtom;
 
+  // Keep the table's selected row visible when selection originates in the
+  // viewer (and use the same behavior for table/inspector selections).
+  useEffect(() => {
+    if (selectedAtom == null) return;
+    const row = atomTableRef.current?.querySelector<HTMLTableRowElement>("tbody tr.explore-atom-row-selected");
+    if (!row || typeof row.scrollIntoView !== "function") return;
+    const prefersReducedMotion = typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    row.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "center", inline: "nearest" });
+  }, [frame?.index, selectedAtom]);
+
   // Red "Max |F|" row click: select the offending atom exactly like a table
   // click (highlight + force arrow, arrow forced on so it is always visible);
   // clicking it again clears the selection.
@@ -323,7 +375,7 @@ export default function Explore() {
   };
 
   // Red "Shortest interatomic distance" row click: highlight the two closest
-  // atoms (the pair may include a periodic ghost image); clicking again hides.
+  // displayed atoms; clicking again hides.
   const toggleDistancePair = () => {
     if (!minDistancePair) return;
     if (showDistancePair) {
@@ -339,18 +391,20 @@ export default function Explore() {
       if (!d) return;
       const idx = Math.max(0, Math.min(index, total - 1));
       const cutoff = clampBondCutoff(requestedBondCutoff);
-      const fetchCutoff = clampBondCutoff(Math.max(cutoff, localCutoff));
+      const requestCutoff = showLocalEnvironment && selectedAtom != null
+        ? clampBondCutoff(Math.max(cutoff, localCutoff))
+        : cutoff;
       setLoading(true);
       loadStart.current = performance.now();
       try {
         const f = await ipc.request<FramePayload>("dataset.frame", {
           id: d.id,
           index: idx,
-          // Request enough periodic images for the local shell, while keeping
-          // the user-facing bond threshold separate below.
-          bond_cutoff: fetchCutoff,
+          // Keep the public display threshold separate from the larger
+          // periodic-padding extent needed by an active local shell.
+          bond_cutoff: requestCutoff,
         });
-        fetchedGhostCutoffRef.current = fetchCutoff;
+        fetchedGhostCutoffRef.current = requestCutoff;
         setFrame({ ...f, bond_cutoff: cutoff });
         st.setActiveFrame(idx);
         setJumpTo(null);
@@ -361,7 +415,7 @@ export default function Explore() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [d, total, bondCutoff, localCutoff],
+    [d, total, bondCutoff, localCutoff, selectedAtom, showLocalEnvironment],
   );
 
   // reset when dataset changes
@@ -384,14 +438,14 @@ export default function Explore() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [st.activeFrameIndex, loading]);
 
-  // A local-shell cutoff may be larger than the cutoff used for the current
-  // frame. Re-fetch only when the cached ghost extent is insufficient; the
-  // ref prevents a frame update from creating a request loop.
+  // A local shell may need periodic images farther out than the bond display
+  // cutoff. Fetch that larger xyz padding only while the shell is active.
   useEffect(() => {
     if (!d || !frame || !showLocalEnvironment || selectedAtom == null) return;
-    if (localCutoff <= fetchedGhostCutoffRef.current + 1e-9) return;
+    const neededCutoff = clampBondCutoff(Math.max(bondCutoff, localCutoff));
+    if (fetchedGhostCutoffRef.current + 1e-9 >= neededCutoff) return;
     void fetchFrame(frame.index, bondCutoff);
-  }, [bondCutoff, d, fetchFrame, frame?.index, localCutoff, selectedAtom, showLocalEnvironment]);
+  }, [bondCutoff, d, fetchFrame, frame, localCutoff, selectedAtom, showLocalEnvironment]);
 
   // 3Dmol lifecycle
   useEffect(() => {
@@ -432,19 +486,18 @@ export default function Explore() {
     const displayCutoff = showLocalEnvironment && selectedAtom != null
       ? Math.max(clampBondCutoff(frame.bond_cutoff), localCutoff)
       : clampBondCutoff(frame.bond_cutoff);
-    const atoms = parseViewerAtoms(frame, displayCutoff);
+    const shellActive = showLocalEnvironment && selectedAtom != null;
+    const atoms = parseViewerAtoms(frame, displayCutoff, shellActive);
     const selected =
       selectedAtom != null && selectedAtom >= 0 && selectedAtom < atoms.length ? selectedAtom : null;
-    const shellNeighbors = showLocalEnvironment && selected != null
+    const shellNeighbors = shellActive && selected != null
       ? neighborsWithinCutoff(atoms, selected, localCutoff)
       : [];
-    // Shell-only rendering: with the local shell shown, atoms beyond the
-    // cutoff are left out of the model entirely. Kept atoms preserve their
-    // original order; bonds and highlight indices are remapped onto the
-    // filtered list. Ghost atoms (periodic images fetched up to this cutoff)
-    // participate like real atoms, so edge atoms keep complete shells across
-    // cell boundaries.
-    const shellNewIndex = showLocalEnvironment && selected != null
+    // Shell-only rendering: with the local shell shown, real atoms beyond the
+    // cutoff are left out of the model entirely. Required periodic images are
+    // treated as ordinary shell neighbors, while their parent index keeps
+    // clicks mapped back to the real Atom Table row.
+    const shellNewIndex = shellActive && selected != null
       ? new Map<number, number>(
           [...shellNeighbors.map((n) => n.index), selected]
             .sort((left, right) => left - right)
@@ -475,7 +528,7 @@ export default function Explore() {
     if (selected != null) {
       const selectedIndex = shellNewIndex ? shellNewIndex.get(selected)! : selected;
       v.addStyle({ index: selectedIndex }, { sphere: { scale: 0.5, color: "#D13438" }, stick: { radius: 0.17, color: "#D13438" } });
-      if (showLocalEnvironment) {
+      if (shellActive) {
         // Neighbors keep their element colors; only the selected atom is
         // highlighted. The lines and cutoff sphere still mark the shell.
         const center = atoms[selected];
@@ -508,9 +561,8 @@ export default function Explore() {
         }
       }
     }
-    // Shortest-pair highlight: red spheres on both partners plus a dashed line
-    // between them. Indices may point at ghost images (beyond natoms), which
-    // the parsed atoms include, so the pair is visible across cell boundaries.
+    // Shortest-pair highlight: red spheres on both real-atom partners plus a
+    // dashed line between them.
     if (showDistancePair && minDistancePair) {
       for (const index of [minDistancePair.i, minDistancePair.j]) {
         if (index >= 0 && index < atoms.length) {
@@ -548,9 +600,9 @@ export default function Explore() {
         });
       }
     }
-    // Click-to-select: every atom (periodic images included) reports its
-    // payload index; images map back to their parent real atom. Registered
-    // before render() so 3Dmol builds the picking intersection shapes.
+    // Click-to-select: real atoms report their Atom Table index; a displayed
+    // periodic image reports its real-atom parent. Registered before render()
+    // so 3Dmol builds the picking intersection shapes.
     v.setClickable({}, true, (atom) => {
       const target = atom.parent ?? atom.i;
       if (target != null && target >= 0 && target < frame.natoms) atomClickRef.current(target);
@@ -559,7 +611,6 @@ export default function Explore() {
     else v.zoomTo(); // shell-only view fits the isolated shell instead of the whole cell
     v.render();
     renderedFrameRef.current = frame.index;
-    if (frame.ghost_count) console.info(`frame ${frame.index}: +${frame.ghost_count} periodic image atoms`);
     const ms = performance.now() - loadStart.current;
     console.info(`frame ${frame.index} fetched+rendered in ${ms.toFixed(0)}ms`);
   }, [viewerReady, frame, localCutoff, selectedAtom, showLocalEnvironment, showForceArrow, forceArrowScale, showDistancePair, minDistancePair]);
@@ -833,7 +884,7 @@ export default function Explore() {
               {t("Shortest pair: {pair}", {
                 pair:
                   [minDistancePair.i, minDistancePair.j]
-                    .map((k) => `#${k}${k >= (frame?.natoms ?? 0) ? "·PBC" : ""}`)
+                    .map((k) => `#${k}`)
                     .join(" – ") + ` (${minAtomDistance.toFixed(3)} Å)`,
               })}
             </Typography.Paragraph>
@@ -841,7 +892,9 @@ export default function Explore() {
           {selectedAtom != null && showLocalEnvironment && <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginTop: 10, marginBottom: 0 }}>
             {t("Neighbors: {list}", {
               list: selectedLocalNeighbors.length
-                ? selectedLocalNeighbors.map(({ index, distance }) => `#${index}${index >= (frame?.natoms ?? 0) ? "·PBC" : ""} (${distance.toFixed(2)} Å)`).join(", ")
+                ? selectedLocalNeighbors
+                    .map(({ index, parent, distance }) => `#${parent ?? index}${parent != null ? "·PBC" : ""} (${distance.toFixed(2)} Å)`)
+                    .join(", ")
                 : t("none within cutoff"),
             })}
           </Typography.Paragraph>}
@@ -857,7 +910,7 @@ export default function Explore() {
       </div>
 
       {/* Atom table */}
-      <div style={{ background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, maxHeight: 260, overflow: "auto" }}>
+      <div ref={atomTableRef} style={{ background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, maxHeight: 260, overflow: "auto" }}>
         <Table
           size="small"
           tableLayout="fixed"
