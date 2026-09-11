@@ -6,6 +6,7 @@ via engine ComputeControl wired in M4 (ADR-13 arrives at the same code path).
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
@@ -209,8 +210,9 @@ class JobService:
         runner's eventual COMPLETED/CANCELLED must neither overwrite nor
         re-emit the settled state."""
         changed = self.db.execute(
-            "UPDATE jobs SET status = ?, finished_at = ?, error = ? WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
-            (status, _NOW(), error["code"] if error else None, job_id),
+            "UPDATE jobs SET status = ?, finished_at = ?, error = ?, result_json = ?"
+            " WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
+            (status, _NOW(), error["code"] if error else None, json.dumps(result) if result is not None else None, job_id),
         )
         if not changed:
             return False
@@ -314,6 +316,8 @@ class JobService:
 
     def get_job(self, job_id: str) -> dict | None:
         row = self.db.query_one("SELECT * FROM jobs WHERE id = ?", (job_id,))
+        if row is not None:
+            row["result"] = json.loads(row.pop("result_json")) if row.get("result_json") else None
         if row is not None and row["status"] == "QUEUED":
             row["queue_position"] = self._queue_positions().get(job_id)
         return row
@@ -333,6 +337,7 @@ class JobService:
         rows = self.db.query(sql, tuple(args))
         positions = self._queue_positions()
         for row in rows:
+            row["result"] = json.loads(row.pop("result_json")) if row.get("result_json") else None
             if row["status"] == "QUEUED" and row["id"] in positions:
                 row["queue_position"] = positions[row["id"]]
         return rows

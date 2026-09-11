@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import threading
 import uuid
@@ -48,6 +49,7 @@ def _frame_indices(value: object, number_of_frames: int) -> list[int]:
     if not isinstance(value, list) or not value:
         raise AppError(INVALID_PARAMS, "'indices' must be a non-empty list of frame indices")
     out: list[int] = []
+    seen: set[int] = set()
     for v in value:
         if not isinstance(v, int) or isinstance(v, bool):
             raise AppError(INVALID_PARAMS, "'indices' must contain integers")
@@ -56,7 +58,8 @@ def _frame_indices(value: object, number_of_frames: int) -> list[int]:
                 INVALID_PARAMS,
                 f"frame index {v} out of range (dataset has {number_of_frames} frames)",
             )
-        if v not in out:
+        if v not in seen:
+            seen.add(v)
             out.append(v)
     return out
 
@@ -138,6 +141,11 @@ class DatasetService:
             # rescan/recompute later updates the dataset fingerprint but never
             # silently resurrects results calculated from the old bytes.
             self._mark_runs_stale(row["id"], f"source fingerprint changed ({row['fingerprint']} -> {current})")
+        lineage = self.db.query_one(
+            "SELECT parent_dataset_id, source_view_id, operation, selection_hash, created_at"
+            " FROM dataset_lineage WHERE child_dataset_id = ?",
+            (row["id"],),
+        )
         return {
             "id": row["id"],
             "name": row["name"],
@@ -157,6 +165,7 @@ class DatasetService:
                 if legacy
                 else ("UNAVAILABLE" if current is None else ("CURRENT" if current == row["fingerprint"] else "STALE"))
             ),
+            "lineage": lineage,
         }
 
     def _adapter_for(self, row: dict):
@@ -208,6 +217,33 @@ class DatasetService:
         if not isinstance(name, str) or not name.strip() or len(name) > 200 or any(ord(ch) < 0x20 for ch in name):
             raise AppError(INVALID_PARAMS, "dataset name is invalid")
         name = name.strip()
+        lineage = params.get("lineage")
+        if lineage is not None:
+            if not isinstance(lineage, dict):
+                raise AppError(INVALID_PARAMS, "'lineage' must be an object")
+            parent_dataset_id = lineage.get("parent_dataset_id")
+            source_view_id = lineage.get("source_view_id")
+            operation = lineage.get("operation") or "materialize"
+            selection_hash = lineage.get("selection_hash")
+            if not isinstance(parent_dataset_id, str) or self.db.query_one(
+                "SELECT id FROM datasets WHERE id = ?", (parent_dataset_id,)
+            ) is None:
+                raise AppError(INVALID_PARAMS, "lineage parent dataset does not exist")
+            if not isinstance(operation, str) or not operation.strip() or len(operation) > 80:
+                raise AppError(INVALID_PARAMS, "lineage operation is invalid")
+            if source_view_id is not None and not isinstance(source_view_id, str):
+                raise AppError(INVALID_PARAMS, "lineage source_view_id is invalid")
+            if selection_hash is not None and not isinstance(selection_hash, str):
+                raise AppError(INVALID_PARAMS, "lineage selection_hash is invalid")
+            if source_view_id is not None:
+                source_view = self.db.query_one(
+                    "SELECT dataset_id, selection_hash FROM dataset_views WHERE id = ?",
+                    (source_view_id,),
+                )
+                if source_view is None or source_view["dataset_id"] != parent_dataset_id:
+                    raise AppError(INVALID_PARAMS, "lineage source view does not belong to its parent dataset")
+                if selection_hash != source_view["selection_hash"]:
+                    raise AppError(INVALID_PARAMS, "lineage selection hash does not match its source view")
         dup = self.db.query_one("SELECT id FROM datasets WHERE source_path = ?", (str(path),))
         if dup:
             raise AppError(INVALID_DATASET, "dataset is already registered", {"dataset_id": dup["id"]})
@@ -290,11 +326,251 @@ class DatasetService:
                 " VALUES (?, ?, ?, ?)",
                 (ds_id, fingerprint, json.dumps(stats), _NOW()),
             )
+            if lineage is not None:
+                self.db.execute(
+                    "INSERT INTO dataset_lineage (child_dataset_id, parent_dataset_id, source_view_id, operation, selection_hash, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        ds_id,
+                        lineage["parent_dataset_id"],
+                        lineage.get("source_view_id"),
+                        str(lineage.get("operation") or "materialize").strip(),
+                        lineage.get("selection_hash"),
+                        _NOW(),
+                    ),
+                )
             ctx.progress(total, total, "done")
             return {"dataset_id": ds_id, "number_of_frames": scan.number_of_frames}
 
         job_id = self.jobs.submit("dataset.register", runner)
         return {"job_id": job_id}
+
+    # -- immutable dataset views ---------------------------------------------
+    def _view_row(self, view_id: object) -> dict:
+        row = self.db.query_one("SELECT * FROM dataset_views WHERE id = ?", (view_id,))
+        if row is None:
+            raise AppError(DATASET_NOT_FOUND, f"dataset view {view_id} does not exist")
+        return row
+
+    def _view_meta(self, row: dict) -> dict:
+        dataset = self._row(row["dataset_id"])
+        dataset_meta = self._meta(dataset)
+        indices = json.loads(row["frame_indices_json"])
+        return {
+            "id": row["id"],
+            "dataset_id": row["dataset_id"],
+            "dataset_name": dataset["name"],
+            "name": row["name"],
+            "role": row.get("role"),
+            "filter": json.loads(row["filter_json"]),
+            "frame_indices": indices,
+            "number_of_frames": len(indices),
+            "selection_hash": row["selection_hash"],
+            "dataset_fingerprint": row["dataset_fingerprint"],
+            "stale": not dataset_meta["cache_valid"] or row["dataset_fingerprint"] != dataset["fingerprint"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def view_list(self, params: dict) -> list[dict]:
+        dataset_id = params.get("dataset_id")
+        if dataset_id:
+            self._row(dataset_id)
+            rows = self.db.query(
+                "SELECT * FROM dataset_views WHERE dataset_id = ? ORDER BY created_at",
+                (dataset_id,),
+            )
+        else:
+            rows = self.db.query("SELECT * FROM dataset_views ORDER BY created_at")
+        return [self._view_meta(row) for row in rows]
+
+    def view_create(self, params: dict) -> dict:
+        dataset = self._row(params.get("dataset_id"))
+        if not self._meta(dataset)["cache_valid"]:
+            raise AppError(DATASET_CHANGED, "dataset must be current before creating a view")
+        name = params.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 200:
+            raise AppError(INVALID_PARAMS, "dataset view name is invalid")
+        role = params.get("role")
+        if role is not None and role not in ("train", "validation", "test", "selection", "filtered"):
+            raise AppError(INVALID_PARAMS, "dataset view role is invalid")
+        indices = _frame_indices(params.get("indices"), dataset["number_of_frames"])
+        indices = sorted(indices)
+        filter_spec = params.get("filter") or {"type": "explicit_indices"}
+        if not isinstance(filter_spec, dict):
+            raise AppError(INVALID_PARAMS, "dataset view filter must be an object")
+        try:
+            filter_json = json.dumps(filter_spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise AppError(INVALID_PARAMS, "dataset view filter must be JSON serializable") from exc
+        selection_hash = hashlib.sha256(
+            json.dumps(
+                {"dataset_fingerprint": dataset["fingerprint"], "indices": indices},
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        now = _NOW()
+        view_id = f"view_{uuid.uuid4().hex[:12]}"
+        try:
+            self.db.execute(
+                "INSERT INTO dataset_views (id, dataset_id, name, role, filter_json, frame_indices_json, selection_hash, dataset_fingerprint, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    view_id,
+                    dataset["id"],
+                    name.strip(),
+                    role,
+                    filter_json,
+                    json.dumps(indices, separators=(",", ":")),
+                    selection_hash,
+                    dataset["fingerprint"],
+                    now,
+                    now,
+                ),
+            )
+        except Exception as exc:
+            if "UNIQUE constraint failed: dataset_views.dataset_id, dataset_views.name" in str(exc):
+                raise AppError(INVALID_PARAMS, "a dataset view with this name already exists") from exc
+            raise
+        return self._view_meta(self._view_row(view_id))
+
+    def view_rename(self, params: dict) -> dict:
+        row = self._view_row(params.get("id"))
+        name = params.get("name")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 200:
+            raise AppError(INVALID_PARAMS, "dataset view name is invalid")
+        try:
+            self.db.execute(
+                "UPDATE dataset_views SET name = ?, updated_at = ? WHERE id = ?",
+                (name.strip(), _NOW(), row["id"]),
+            )
+        except Exception as exc:
+            if "UNIQUE constraint failed: dataset_views.dataset_id, dataset_views.name" in str(exc):
+                raise AppError(INVALID_PARAMS, "a dataset view with this name already exists") from exc
+            raise
+        return self._view_meta(self._view_row(row["id"]))
+
+    def view_remove(self, params: dict) -> dict:
+        row = self._view_row(params.get("id"))
+        self.db.execute("DELETE FROM dataset_views WHERE id = ?", (row["id"],))
+        return {"ok": True}
+
+    def view_split(self, params: dict) -> dict:
+        dataset = self._row(params.get("dataset_id"))
+        if not self._meta(dataset)["cache_valid"]:
+            raise AppError(DATASET_CHANGED, "dataset must be current before creating a split")
+        source_view_id = params.get("view_id")
+        if source_view_id:
+            source = self._view_row(source_view_id)
+            if source["dataset_id"] != dataset["id"]:
+                raise AppError(INVALID_PARAMS, "source view does not belong to the dataset")
+            if source["dataset_fingerprint"] != dataset["fingerprint"]:
+                raise AppError(DATASET_CHANGED, "source view is stale")
+            indices = np.asarray(json.loads(source["frame_indices_json"]), dtype=np.int64)
+        else:
+            indices = np.arange(dataset["number_of_frames"], dtype=np.int64)
+        if indices.size < 3:
+            raise AppError(INVALID_PARAMS, "a train/validation/test split needs at least three frames")
+        try:
+            train_ratio = float(params.get("train_ratio", 0.8))
+            validation_ratio = float(params.get("validation_ratio", 0.1))
+            seed = int(params.get("seed", 42))
+        except (TypeError, ValueError) as exc:
+            raise AppError(INVALID_PARAMS, "split ratios and seed must be numeric") from exc
+        test_ratio = 1.0 - train_ratio - validation_ratio
+        if not np.isfinite([train_ratio, validation_ratio, test_ratio]).all() or min(train_ratio, validation_ratio, test_ratio) <= 0:
+            raise AppError(INVALID_PARAMS, "train, validation, and test ratios must all be positive and sum to 1")
+        prefix = params.get("name_prefix") or (source["name"] if source_view_id else dataset["name"])
+        if not isinstance(prefix, str) or not prefix.strip() or len(prefix.strip()) > 160:
+            raise AppError(INVALID_PARAMS, "split name prefix is invalid")
+        names = [f"{prefix.strip()} / Train", f"{prefix.strip()} / Validation", f"{prefix.strip()} / Test"]
+        placeholders = ",".join("?" for _ in names)
+        if self.db.query_one(
+            f"SELECT id FROM dataset_views WHERE dataset_id = ? AND name IN ({placeholders}) LIMIT 1",
+            (dataset["id"], *names),
+        ):
+            raise AppError(INVALID_PARAMS, "one or more split view names already exist")
+        shuffled = indices.copy()
+        np.random.default_rng(seed).shuffle(shuffled)
+        n = shuffled.size
+        train_end = max(1, min(n - 2, int(round(n * train_ratio))))
+        validation_end = max(train_end + 1, min(n - 1, train_end + int(round(n * validation_ratio))))
+        groups = [np.sort(shuffled[:train_end]), np.sort(shuffled[train_end:validation_end]), np.sort(shuffled[validation_end:])]
+        roles = ("train", "validation", "test")
+        now = _NOW()
+        records = []
+        for name, role, group in zip(names, roles, groups):
+            group_list = [int(value) for value in group.tolist()]
+            selection_hash = hashlib.sha256(
+                json.dumps({"dataset_fingerprint": dataset["fingerprint"], "indices": group_list}, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            records.append(
+                (
+                    f"view_{uuid.uuid4().hex[:12]}", dataset["id"], name, role,
+                    json.dumps({"type": "split", "seed": seed, "train_ratio": train_ratio, "validation_ratio": validation_ratio, "source_view_id": source_view_id}, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    json.dumps(group_list, separators=(",", ":")), selection_hash,
+                    dataset["fingerprint"], now, now,
+                )
+            )
+        self.db.executemany(
+            "INSERT INTO dataset_views (id, dataset_id, name, role, filter_json, frame_indices_json, selection_hash, dataset_fingerprint, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            records,
+        )
+        return {"views": [self._view_meta(self._view_row(record[0])) for record in records]}
+
+    def view_materialize(self, params: dict) -> dict:
+        view = self._view_row(params.get("view_id"))
+        dataset = self._row(view["dataset_id"])
+        if view["dataset_fingerprint"] != dataset["fingerprint"] or not self._meta(dataset)["cache_valid"]:
+            raise AppError(DATASET_CHANGED, "dataset view is stale")
+        raw_dest = params.get("dest_path")
+        if not raw_dest or not isinstance(raw_dest, str):
+            raise AppError(INVALID_PARAMS, "'dest_path' (string) is required")
+        try:
+            dest = validate_local_path(raw_dest, field="materialize destination path")
+        except UnsafePathError as exc:
+            raise AppError(INVALID_PARAMS, "materialize destination must be an absolute local path") from exc
+        if dest.exists():
+            raise AppError(INVALID_DATASET, f"materialize destination already exists: {dest}")
+        source = validate_local_path(dataset["source_path"], field="dataset source path")
+        if dest == source or source in dest.parents or dest in source.parents:
+            raise AppError(INVALID_DATASET, "materialize destination must be outside the source dataset path")
+        fmt = detect_format(source) if source.exists() else dataset["format"]
+        if fmt == "extxyz":
+            if dest.suffix.lower() not in (".xyz", ".extxyz"):
+                raise AppError(INVALID_DATASET, "materializing an extxyz view needs a .xyz / .extxyz destination")
+            from ..datasets.exporters import write_extxyz as writer
+        else:
+            from ..datasets.exporters import write_deepmd as writer
+        indices = [int(value) for value in json.loads(view["frame_indices_json"])]
+
+        def runner(ctx):
+            adapter = self._adapter_for(dataset)
+
+            def frames():
+                for position, frame_index in enumerate(indices, 1):
+                    if position % 250 == 0 or position == len(indices):
+                        ctx.progress(position, max(len(indices), 1), "writing view frames")
+                    yield adapter.get_frame(frame_index)
+
+            written = writer(dest, frames())
+            ctx.progress(max(len(indices), 1), max(len(indices), 1), "done")
+            return {
+                "path": str(dest),
+                "frames_written": written,
+                "format": fmt,
+                "name": view["name"],
+                "lineage": {
+                    "parent_dataset_id": dataset["id"],
+                    "source_view_id": view["id"],
+                    "operation": "materialize_view",
+                    "selection_hash": view["selection_hash"],
+                },
+            }
+
+        job_id = self.jobs.submit("dataset.view.materialize", runner, dataset_id=dataset["id"])
+        return {"job_id": job_id, "dest_path": str(dest)}
 
     def rename(self, params: dict) -> dict:
         name = params.get("name")

@@ -54,8 +54,8 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | method | params → result | 异步 |
 |---|---|---|
 | `system.info` | {} → {backend_version, mdescriptor_version, mdescriptor_api_version, protocol_version, platform, data_dir, cpu_threads} | 否 |
-| `dataset.list` | {} → [{id,name,format,source_path,number_of_frames,elements,properties,periodicity,fingerprint,file_size,created_at,last_scan_at,cache_valid}] | 否 |
-| `dataset.register` | {path, format?: "deepmd"\|"extxyz", name?} → {job_id}（扫描+统计入 cache，统计含 health 数据健康指标） | 是 |
+| `dataset.list` | {} → [{id,name,format,source_path,number_of_frames,elements,properties,periodicity,fingerprint,file_size,created_at,last_scan_at,cache_valid,lineage?}]；物化数据集的 lineage 含 parent_dataset_id/source_view_id/operation/selection_hash | 否 |
+| `dataset.register` | {path, name?, lineage?} → {job_id}（扫描+统计入 cache；lineage 若引用 view，后端校验 parent、view 和 selection_hash 一致） | 是 |
 | `dataset.remove` | {id} → {ok}；级联删除统计缓存与 descriptor runs/results，不碰源文件 | 否 |
 | `dataset.rename` | {id, name} → DatasetMeta（仅改显示名，name 首尾空白被裁剪） | 否 |
 | `dataset.get` | {id} → Dataset + {fingerprint_valid, stats} | 否 |
@@ -67,10 +67,13 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `dataset.restore` | {id, indices:[int]} → {restored,job_id}；从排除清单移除并自动重算统计 | 否/是 |
 | `dataset.excluded` | {id} → {indices:[int],number_of_frames}；当前排除清单（升序） | 否 |
 | `dataset.export_cleaned` | {id, dest_path} → {job_id,dest_path}；job 结果 {path,frames_written,format}。把未排除帧写出为新数据集副本（extxyz→.xyz/.extxyz 文件；deepmd→目录 type.raw/type_map.raw/set.000/*.npy，要求各帧原子数一致）；目标必须不存在且在源路径之外；完成后前端以 dataset.register 注册副本。stats 内 `health_findings`（每检查项帧号，封顶 5000/项）与 `excluded_frames`（{count,indices}）随 statistics 返回 | 否/是 |
+| `dataset.view.list/create/rename/remove` | view 为同一源数据集上的不可变帧索引集合；create: {dataset_id,name,indices,role?,filter?}；list: {dataset_id?}；返回 selection_hash、dataset_fingerprint、stale，不复制源数据 | 否 |
+| `dataset.view.split` | {dataset_id,view_id?,name_prefix?,seed?,train_ratio?,validation_ratio?} → {views:[train,validation,test]}；确定性打乱，三个集合互斥且穷尽所选范围；view_id 只作输入范围，不生成递归视图层级 | 否 |
+| `dataset.view.materialize` | {view_id,dest_path} → {job_id,dest_path}；job 结果含 path/frames_written/format/name/lineage，前端再以 dataset.register 显式注册为独立数据集 | 是 |
 | `descriptor.list` | {} → [{name,display_name,description,schema_version,descriptor_version,level,backend,execution_engine,category,capabilities,input}] | 否 |
 | `descriptor.describe` | {name} → schema 全文（含 input/execution/asset/parameters） | 否 |
 | `descriptor.submit` | {dataset_id, descriptor_name, parameters, scope: "frame"\|"dataset", frame_index?, output_dtype?, device?} → {job_id, cache?: {existing_run_id, cache_key}}；`device` 须在该描述符 schema `execution.devices` 声明内（默认 `"cpu"`），并参与缓存键 | 是 |
-| `result.list` | {dataset_id?, descriptor_name?} → [runs]（含已生成结果的 `shape`） | 否 |
+| `result.list` | {dataset_id?, descriptor_name?} → [runs]（含 shape、feature_count、row_semantics、feature_space_signature；签名用于跨数据集输入兼容性筛选） | 否 |
 | `result.get` | {run_id} → metadata + 摘要（不含大数组） | 否 |
 | `result.remove` | {run_id} → {ok}；级联删除该 run 的 analysis_runs 与关联 jobs 行，并尽力删除磁盘结果/分析目录；run 处于 QUEUED/RUNNING 时拒绝（`RESULT_INCOMPATIBLE`，先取消 job） | 否 |
 | `analysis.pca` | {run_id, mode?: "structure"\|"atom"} → {job_id, analysis_id, cache?}；同一 descriptor run + mode 的已完成 `pca.json` 直接命中缓存（`job_id: null`，`cache.existing_analysis_id`）；进行中的同键任务复用其 job；mode 缺省 structure（每帧一点，原子/配对行均值池化）；atom 模式每个原子/配对行一点并带 frame/atom 索引，超大结果均匀降采样至 ≤20k 点 | 否（缓存命中）/是（需计算） |
@@ -81,6 +84,12 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `engine.check_update` | {} → {installed, latest, has_update, status: idle\|checking\|up_to_date\|available\|error\|unsupported, error?, restart_required?}；后台线程查 PyPI，完成后再次广播 `engine.update.state` 事件（同结构） | 否（后台线程） |
 | `engine.update` | {version?}（缺省用 latest）→ {job_id, target_version}；pip 升级 job，终态后需重启后端生效；frozen 构建报 `ENGINE_UPDATE_UNSUPPORTED` | 是 |
 | `job.list` / `job.get` / `job.cancel` | 见 §4 | 否 |
+
+数据集视图不是新的 `DatasetMeta`，不能递归包含子视图，也不会替换全局
+`activeDatasetId`。它只是一层、不可变、带源 fingerprint 的帧选择；分析输入在
+Reference / Query 各自选择“完整数据集或某个 view”。只有执行
+`dataset.view.materialize` 并重新注册后，它才成为可独立计算 descriptor 的数据集，
+同时通过 lineage 保留来源。
 
 ### 5.1 Analysis extension
 
@@ -96,8 +105,8 @@ Analysis API 统一使用同一结果模型：计算型方法立即返回
 | analysis.neighbors / analysis.similarity / analysis.pairwise | k 默认 10；Euclidean/Cosine；neighbors 返回 n×k，pairwise 仅返回确定性有界抽样矩阵（UI 默认 ≤400 samples） |
 | analysis.cluster | algorithm=kmeans/dbscan/hdbscan/agglomerative；cluster 数默认 6；返回 labels 及可选 centers/probabilities |
 | analysis.outlier | algorithm=knn/lof/isolation_forest/mahalanobis；contamination 默认 0.01；返回 labels/scores |
-| analysis.fps / analysis.sampling / analysis.acquisition | FPS、random、stratified、cluster_representative、per_element；acquisition 在 reference novelty pool 内做 diversity sampling，不调用模型推理 |
-| analysis.coverage / analysis.overlap / analysis.drift | reference_run_id/query_run_id；nearest coverage、near-duplicate overlap、MMD/centroid/covariance drift，并返回有界 joint projection |
+| analysis.fps / analysis.sampling / analysis.acquisition | FPS、random、stratified、cluster_representative、per_element；acquisition 接受 reference_run_id/query_run_id + 可选 reference_view_id/query_view_id，在 reference novelty pool 内做 diversity sampling，不调用模型推理 |
+| analysis.coverage / analysis.overlap / analysis.drift | reference_run_id/query_run_id + 可选 reference_view_id/query_view_id；仅接受 descriptor/version/parameters/row semantics/feature count 一致的特征空间；nearest coverage、near-duplicate overlap、MMD/centroid/covariance drift，并返回有界 joint projection |
 | analysis.compare | sample IDs 对齐；比较 pair-distance Pearson/Spearman、kNN overlap、PCA topology、ARI 和 effective dimension；同 feature count 时追加 feature delta |
 | analysis.feature_variance / analysis.feature_correlation | variance、zero-variance、redundancy summary、Top-K pairs 和 ≤512 feature 的有界 correlation heatmap |
 | analysis.effective_dimension | eigenvalues、explained variance、participation ratio 和 90/95/99% 阈值 |

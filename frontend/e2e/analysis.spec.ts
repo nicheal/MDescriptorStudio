@@ -22,6 +22,40 @@ test("browser preview exposes the Analysis workflow and run selector", async ({ 
   await expect(page.getByText(/analysis history/i)).toBeVisible();
 });
 
+test("cross-dataset analysis selects compatible runs and a saved dataset view", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/preview.html");
+  await page.getByRole("button", { name: "Analysis", exact: true }).click();
+  await page.getByRole("tab", { name: "Coverage", exact: true }).click();
+
+  await expect(page.getByText("Cross-dataset analysis", { exact: true })).toBeVisible();
+  const rows = page.locator(".analysis-cross-input-row");
+  await expect(rows.nth(0)).toContainText("GaAs Training Set");
+  await expect(rows.nth(0)).toContainText("[12480, 256]");
+  await expect(rows.nth(1)).toContainText("Si Training Set");
+  await expect(rows.nth(1)).toContainText("[6320, 256]");
+  await expect(page.getByText("Compatible feature space", { exact: true })).toBeVisible();
+
+  await rows.nth(0).locator(".ant-select").nth(1).click();
+  await page.getByText("Training split · 9,984", { exact: true }).last().click();
+  await expect(rows.nth(0)).toContainText("Training split · 9,984");
+  await page.getByRole("button", { name: "Run Coverage", exact: true }).click();
+  await expect(page.getByText("DATASET COVERAGE", { exact: true })).toBeVisible({ timeout: 30_000 });
+});
+
+test("dataset split entry exposes deterministic ratios and seed", async ({ page }) => {
+  await page.goto("/preview.html");
+  await page.locator(".dataset-item .dataset-item-actions").first().click();
+  await page.getByText("Create train/validation/test split", { exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Train %");
+  await expect(dialog).toContainText("Validation %");
+  await expect(dialog).toContainText("Test %: 10");
+  await expect(dialog).toContainText("Random seed");
+  await expect(dialog.getByRole("button", { name: "Create split", exact: true })).toBeEnabled();
+});
+
 test("browser preview opens the selected analysis method guide", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 720 });
   await page.goto("/preview.html");

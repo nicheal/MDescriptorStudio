@@ -130,6 +130,39 @@ body {
   opacity: 1;
 }
 
+.dataset-view-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 6px;
+  margin: -1px 0 5px 18px;
+  padding: 5px 4px 5px 8px;
+  border-left: 1px solid #c7dff5;
+  color: #424242;
+}
+
+.dataset-view-copy {
+  min-width: 0;
+}
+
+.dataset-view-name {
+  overflow: hidden;
+  color: #242424;
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dataset-view-meta {
+  overflow: hidden;
+  color: #616161;
+  font-size: 10px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Right-rail scan indicator / rescan icon while a scan job is in flight. */
 .rail-spin {
   animation: rail-spin 1.2s linear infinite;
@@ -559,6 +592,65 @@ body {
   flex: 1 1 240px;
   gap: 12px;
   min-width: 0;
+}
+
+.analysis-cross-inputs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #d9e7f5;
+  border-radius: 6px;
+  background: #f7fbff;
+}
+
+.analysis-cross-input-row {
+  display: grid;
+  grid-template-columns: minmax(70px, auto) minmax(150px, 1fr) minmax(150px, 1fr) minmax(180px, 1.2fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.analysis-cross-input-row .ant-select {
+  width: 100% !important;
+  min-width: 0;
+}
+
+.analysis-cross-input-label {
+  color: #0f6cbd;
+}
+
+.analysis-cross-swap {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.analysis-cross-status {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1180px) {
+  .analysis-cross-inputs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-cross-swap {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+
+  .analysis-cross-input-row {
+    grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
+  }
+
+  .analysis-cross-input-row .ant-select {
+    grid-column: 2;
+  }
 }
 
 @media (min-width: 2200px) {

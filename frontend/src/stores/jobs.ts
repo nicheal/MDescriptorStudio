@@ -150,7 +150,7 @@ export function watchJob(jobId: string): Promise<{
         }
         finish({
           status: row.status,
-          result: null,
+          result: row.result ?? null,
           error: row.error ? { code: row.error, message: row.message ?? row.error } : null,
         });
       } catch (error) {

@@ -94,6 +94,116 @@ def test_sensitivity_requires_same_descriptor_before_enqueue(tmp_path: Path) -> 
     db.close()
 
 
+def test_cross_dataset_analysis_rejects_incompatible_feature_space_before_enqueue(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, file_size, created_at)"
+        " VALUES ('ds_2', 'Query', 'extxyz', ?, 12, '[]', '{}', '{}', 'fp_2', 0, '2026-01-01T00:00:00+00:00')",
+        (str(tmp_path / "query.extxyz"),),
+    )
+    result_dir = tmp_path / "results" / "run_2"
+    result_dir.mkdir(parents=True)
+    values = np.arange(96, dtype=np.float32).reshape(12, 8)
+    np.save(result_dir / "values.npy", values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_2", "level": "structure", "row_semantics": "structure", "shape": list(values.shape)}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES ('run_2', 'ds_2', 'ACSF', 'test', '{}',"
+        " 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(result_dir),),
+    )
+
+    with pytest.raises(AppError, match="same descriptor feature space") as exc:
+        service.coverage({"reference_run_id": "run_1", "query_run_id": "run_2"})
+
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+    assert jobs.calls == 0
+    db.close()
+
+
+def test_cross_dataset_analysis_applies_views_and_persists_selection_identity(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, file_size, created_at)"
+        " VALUES ('ds_1', 'Reference', 'extxyz', ?, 12, '[]', '{}', '{}', 'fp_1', 0, '2026-01-01T00:00:00+00:00')",
+        (str(tmp_path / "reference.extxyz"),),
+    )
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, file_size, created_at)"
+        " VALUES ('ds_2', 'Query', 'extxyz', ?, 12, '[]', '{}', '{}', 'fp_2', 0, '2026-01-01T00:00:00+00:00')",
+        (str(tmp_path / "query.extxyz"),),
+    )
+    result_dir = tmp_path / "results" / "run_2"
+    result_dir.mkdir(parents=True)
+    values = (np.arange(96, dtype=np.float32).reshape(12, 8) + 0.5)
+    np.save(result_dir / "values.npy", values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_2", "level": "structure", "row_semantics": "structure", "shape": list(values.shape)}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES ('run_2', 'ds_2', 'SOAP', 'test', '{}',"
+        " 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(result_dir),),
+    )
+    for view_id, dataset_id, fingerprint, indices, selection_hash in (
+        ("view_ref", "ds_1", "fp_1", [0, 1, 2, 3, 4, 5], "selection_ref"),
+        ("view_query", "ds_2", "fp_2", [6, 7, 8, 9, 10, 11], "selection_query"),
+    ):
+        db.execute(
+            "INSERT INTO dataset_views (id, dataset_id, name, role, filter_json, frame_indices_json, selection_hash, dataset_fingerprint, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'filtered', '{}', ?, ?, ?, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+            (view_id, dataset_id, view_id, json.dumps(indices), selection_hash, fingerprint),
+        )
+
+    submitted = service.coverage(
+        {
+            "reference_run_id": "run_1",
+            "query_run_id": "run_2",
+            "reference_view_id": "view_ref",
+            "query_view_id": "view_query",
+            "mode": "structure",
+        }
+    )
+
+    assert submitted["job_id"] == "job_1"
+    row = db.query_one("SELECT params_json FROM analysis_runs WHERE id = ?", (submitted["analysis_id"],))
+    saved = json.loads(row["params_json"])
+    assert saved["reference_selection_hash"] == "selection_ref"
+    assert saved["query_selection_hash"] == "selection_query"
+    preview = service.preview({"analysis_id": submitted["analysis_id"], "limit": 20})
+    assert {item["frame"] for item in preview["rows"]} == set(range(6, 12))
+    db.close()
+
+
+def test_dataset_view_slice_preserves_original_frame_identity() -> None:
+    samples = SampleMatrix(
+        values=np.arange(20, dtype=np.float64).reshape(5, 4),
+        frame=np.asarray([0, 1, 1, 2, 4]),
+        row=np.asarray([0, 0, 1, 0, 0]),
+        sample_ids=["f0:r0", "f1:r0", "f1:r1", "f2:r0", "f4:r0"],
+        elements=np.asarray([1, 6, 8, 14, 32]),
+        mode="atom",
+        properties={"energy": np.asarray([0.0, 1.0, 1.1, 2.0, 4.0])},
+        positions=np.arange(15, dtype=np.float64).reshape(5, 3),
+        cells=np.repeat(np.eye(3)[None, :, :], 5, axis=0),
+        pbc=np.ones((5, 3), dtype=bool),
+    )
+
+    sliced = AnalysisService._slice_samples_to_frames(samples, [1, 4])
+
+    assert sliced.frame.tolist() == [1, 1, 4]
+    assert sliced.row.tolist() == [0, 1, 0]
+    assert sliced.sample_ids == ["f1:r0", "f1:r1", "f4:r0"]
+    assert sliced.values.shape == (3, 4)
+    assert sliced.properties["energy"].tolist() == [1.0, 1.1, 4.0]
+    assert sliced.positions.shape == (3, 3)
+
+
 def test_generic_analysis_is_cached_and_chunked(tmp_path: Path) -> None:
     db, jobs, service = _service(tmp_path)
     first = service.cluster({"run_id": "run_1", "algorithm": "kmeans", "n_clusters": 3, "seed": 42})

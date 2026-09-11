@@ -208,8 +208,8 @@ export const ANALYSIS_METHOD_GUIDES: Readonly<Record<string, AnalysisMethodGuide
   },
   "overview.perturbation_sensitivity": {
     title: { en: "Structural perturbation sensitivity", zh: "结构扰动敏感性" },
-    theory: { en: "The descriptor is recomputed after a seeded sweep of controlled atomic jitter or isotropic strain. The response curve measures local continuity and amplification of structural changes, not model energy or force uncertainty.", zh: "该方法在带固定种子的原子抖动或各向同性应变扫描后重新计算描述符。响应曲线衡量结构变化的局部连续性和放大程度，不代表模型能量或力的不确定性。" },
-    application: { en: "Use it to check descriptor smoothness, expose cutoff or representation discontinuities, and compare robustness of descriptor settings under physically motivated small perturbations.", zh: "可用它检查描述符平滑性，暴露截断或表示不连续问题，并在具有物理意义的小扰动下比较不同描述符设置的稳健性。" },
+    theory: { en: "The descriptor is recomputed after a seeded sweep of controlled atomic jitter or isotropic strain. Every sweep step rebuilds the selected structures and recomputes the descriptor, so the cost grows with structures x amplitudes. The run therefore samples an evenly spaced subset of the dataset instead of every frame and reports how many structures it used out of how many were available. The response curve measures local continuity and amplification of structural changes, not model energy or force uncertainty.", zh: "该方法在带固定种子的原子抖动或各向同性应变扫描后重新计算描述符。每个扫描步都会重建选中结构并重算描述符，代价随（结构数 × 振幅数）增长，因此计算在整个数据集上等距抽取子集而不是使用每一帧，并会报告使用了多少结构、数据集共有多少结构。响应曲线衡量结构变化的局部连续性和放大程度，不代表模型能量或力的不确定性。" },
+    application: { en: "Use it to check descriptor smoothness, expose cutoff or representation discontinuities, and compare robustness of descriptor settings under physically motivated small perturbations. Raise Max structures when rare environments (defects, interfaces, phase-change frames) must be covered; keep it small when the descriptor is expensive and only the overall response shape matters.", zh: "可用它检查描述符平滑性，暴露截断或表示不连续问题，并在具有物理意义的小扰动下比较不同描述符设置的稳健性。当需要覆盖稀有环境（缺陷、界面、相变帧）时提高“最大结构数”；当描述符本身昂贵、只关心整体响应形状时保持较小取值。" },
   },
 };
 

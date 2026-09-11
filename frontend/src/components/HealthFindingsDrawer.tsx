@@ -4,7 +4,7 @@
 // soft-deletes (exclude/restore) or writes a cleaned copy without ever
 // touching the source files.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { App as AntApp, Button, Drawer, Empty, Table, Tabs, Tag, Tooltip, Typography } from "antd";
+import { App as AntApp, Button, Drawer, Empty, Input, Modal, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   ArrowLeft16Regular,
@@ -69,6 +69,8 @@ export default function HealthFindingsDrawer() {
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
   const [current, setCurrent] = useState<number | null>(null);
+  const [viewName, setViewName] = useState("");
+  const [saveViewOpen, setSaveViewOpen] = useState(false);
   const tabRef = useRef(activeTab);
   tabRef.current = activeTab;
 
@@ -252,6 +254,29 @@ export default function HealthFindingsDrawer() {
       setBusy(false);
     }
   }, [d, refreshAll, message, t]);
+
+  const saveSelectionView = useCallback(async () => {
+    if (!d || selected.length === 0 || !viewName.trim()) return;
+    setBusy(true);
+    try {
+      await ipc.request("dataset.view.create", {
+        dataset_id: d.id,
+        name: viewName.trim(),
+        role: "filtered",
+        indices: selected,
+        filter: { source: "health_findings", check: activeTab },
+      });
+      setSaveViewOpen(false);
+      setViewName("");
+      window.dispatchEvent(new Event("dataset-views-changed"));
+      message.success(t("Dataset view saved"));
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      message.error(`${err.code ?? "DATASET_VIEW"}: ${err.message ?? t("Could not save dataset view")}`);
+    } finally {
+      setBusy(false);
+    }
+  }, [activeTab, d, message, selected, t, viewName]);
 
   const preview = useCallback(
     (index: number) => {
@@ -490,10 +515,41 @@ export default function HealthFindingsDrawer() {
                 {t("Export cleaned copy")}
               </Button>
             </Tooltip>
+            <Button
+              size="small"
+              disabled={selected.length === 0 || busy}
+              onClick={() => {
+                setViewName(`${title(activeTab)} ${selected.length}`);
+                setSaveViewOpen(true);
+              }}
+            >
+              {t("Save selection as view")}
+            </Button>
           </div>
           <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginTop: 10, marginBottom: 0 }}>
             {t("Excluding only affects statistics and exports — descriptor runs still use the full source dataset; export a cleaned copy to train on the kept frames.")}
           </Typography.Paragraph>
+          <Modal
+            title={t("Save dataset view")}
+            open={saveViewOpen}
+            okText={t("Save")}
+            confirmLoading={busy}
+            okButtonProps={{ disabled: !viewName.trim() }}
+            onOk={() => void saveSelectionView()}
+            onCancel={() => setSaveViewOpen(false)}
+            destroyOnClose
+          >
+            <Input
+              autoFocus
+              value={viewName}
+              placeholder={t("View name")}
+              onChange={(event) => setViewName(event.target.value)}
+              onPressEnter={() => void saveSelectionView()}
+            />
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+              {t("The view stores these {n} frame indices without copying source data.", { n: selected.length })}
+            </Typography.Paragraph>
+          </Modal>
         </>
       )}
     </Drawer>

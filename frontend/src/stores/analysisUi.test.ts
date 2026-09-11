@@ -54,8 +54,9 @@ const baseParams: AnalysisParams = {
   localCutoff: 3, kernelName: "rbf",
   overviewAnalysis: "feature_variance", propertyName: "energy_per_atom",
   propertyFolds: 5, propertyReliabilityK: 5, propertyDistanceMetric: "euclidean", propertySparsePercentile: 90, propertyOodPercentile: 99,
-  perturbationType: "jitter", perturbationCount: 8, perturbationMaximum: 0.2, perturbationMetric: "euclidean",
+  perturbationType: "jitter", perturbationCount: 8, perturbationMaximum: 0.2, perturbationStructures: 64, perturbationMetric: "euclidean",
   nearZeroThreshold: 1e-4, lowVariationThreshold: 1e-2, featureCorrelationMethod: "pearson", featureCorrelationThreshold: 0.95,
+  referenceRunId: "run-ref", queryRunId: "run-query", referenceViewId: null, queryViewId: "view-query",
 };
 
 describe("buildParamsKey", () => {
@@ -73,6 +74,8 @@ describe("buildParamsKey", () => {
     expect(buildParamsKey("overview", baseParams)).toBe("feature_variance||0.0001|0.01");
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "feature_correlation", featureCorrelationMethod: "spearman", featureCorrelationThreshold: 0.9 })).toBe("feature_correlation||spearman|0.9");
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "effective_dimension", effectiveDimensionPreprocess: "standardized" })).toBe("effective_dimension||standardized");
+    expect(buildParamsKey("coverage", baseParams)).toBe("coverage|structure|run-ref|full|run-query|view-query");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "drift" })).toBe("drift||run-ref:full:run-query:view-query");
     // The trajectory module is configured entirely inside its result view, so
     // one completed trajectory per descriptor run stays reusable.
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "trajectory" })).toBe("trajectory||");
@@ -81,7 +84,13 @@ describe("buildParamsKey", () => {
       ...baseParams,
       overviewAnalysis: "perturbation_sensitivity",
       perturbationType: "strain", perturbationCount: 4, perturbationMaximum: 0.1, perturbationMetric: "cosine",
-    })).toBe("perturbation_sensitivity||strain|4|0.1|cosine");
+    })).toBe("perturbation_sensitivity||strain|4|0.1|cosine|64");
+    // The structure cap changes what the descriptor sweep actually computed.
+    expect(buildParamsKey("overview", {
+      ...baseParams,
+      overviewAnalysis: "perturbation_sensitivity",
+      perturbationStructures: 256,
+    })).toBe("perturbation_sensitivity||jitter|8|0.2|euclidean|256");
   });
 
   it("lets a single parameter be probed against the rest of the current combination", () => {

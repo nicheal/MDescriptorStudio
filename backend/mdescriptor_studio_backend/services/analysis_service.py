@@ -640,6 +640,30 @@ class AnalysisService:
             params["preprocess"] = "standardized"
         input_ids = self._input_ids(analysis_type, params)
         run_rows = [self._usable_run(run_id) for run_id in input_ids]
+        cross_dataset = analysis_type in ("coverage", "overlap", "acquisition", "drift")
+        if cross_dataset:
+            signatures_and_meta = [self.results.feature_space_signature(run_id) for run_id in input_ids]
+            signatures = [item[0] for item in signatures_and_meta]
+            if not signatures[0] or signatures[0] != signatures[1]:
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    "reference and query runs must use the same descriptor feature space",
+                    {
+                        "reference_run_id": input_ids[0],
+                        "query_run_id": input_ids[1],
+                        "reference_descriptor": run_rows[0].get("descriptor_name"),
+                        "query_descriptor": run_rows[1].get("descriptor_name"),
+                        "reference_feature_count": signatures_and_meta[0][1].get("feature_count"),
+                        "query_feature_count": signatures_and_meta[1][1].get("feature_count"),
+                    },
+                )
+            view_ids = [params.get("reference_view_id"), params.get("query_view_id")]
+            for index, view_id in enumerate(view_ids):
+                if not view_id:
+                    continue
+                view = self._usable_view(str(view_id), run_rows[index]["dataset_id"])
+                side = "reference" if index == 0 else "query"
+                params[f"{side}_selection_hash"] = view["selection_hash"]
         if analysis_type == "sensitivity":
             descriptor_names = {str(row["descriptor_name"]) for row in run_rows}
             if len(descriptor_names) > 1:
@@ -696,11 +720,24 @@ class AnalysisService:
             def runner(ctx):
                 self._mark_run_running(analysis_id)
                 ctx.progress(0, 1, "loading descriptor results")
-                samples = [self._load_samples(row, params, analysis_type, check=ctx.check_cancelled) for row in run_rows]
+                view_ids = (
+                    [params.get("reference_view_id"), params.get("query_view_id")]
+                    if cross_dataset
+                    else [None] * len(run_rows)
+                )
+                samples = [
+                    self._load_samples(
+                        row,
+                        params,
+                        analysis_type,
+                        check=ctx.check_cancelled,
+                        view_id=view_ids[index],
+                    )
+                    for index, row in enumerate(run_rows)
+                ]
                 ctx.check_cancelled()
                 result = self._run_engine(analysis_type, params, run_rows, samples, ctx)
                 ctx.check_cancelled()
-                cross_dataset = analysis_type in ("coverage", "overlap", "acquisition", "drift")
                 preview_samples = samples[1] if cross_dataset else samples[0]
                 preview = self._build_preview(
                     result,
@@ -932,6 +969,11 @@ class AnalysisService:
             raise AppError(ANALYSIS_INPUT_INVALID, "max_structures must be an integer") from exc
         if max_structures < 1:
             raise AppError(ANALYSIS_INPUT_INVALID, "max_structures must be >= 1")
+        # Every selected structure is recomputed once per amplitude, so the cap
+        # is a compute budget: keep it explicit and bounded instead of letting
+        # one request schedule an unbounded descriptor sweep.
+        if max_structures > 2048:
+            raise AppError(ANALYSIS_INPUT_INVALID, "max_structures must be <= 2048")
         selected_indices = np.linspace(0, frame_count - 1, min(frame_count, max_structures), dtype=np.int64)
         selected_frames = np.asarray(samples.frame, dtype=np.int64)[selected_indices]
         baseline = SampleMatrix(
@@ -1021,7 +1063,18 @@ class AnalysisService:
             ctx.check_cancelled()
             ctx.progress(None, None, message, fraction=0.75 + 0.25 * float(fraction))
 
-        return AnalysisEngine.perturbation_sensitivity(baseline, perturbation_results, params, report)
+        result = AnalysisEngine.perturbation_sensitivity(baseline, perturbation_results, params, report)
+        # The response curve is a summary over the selected structures, so the
+        # artifact must say how many structures the run could have offered.
+        # Otherwise "Structures: 64" reads as a property of the dataset.
+        sampled = int(selected_indices.size)
+        result["preview"]["available_structure_count"] = int(frame_count)
+        if sampled < frame_count:
+            result["warnings"] = [
+                *result.get("warnings", []),
+                f"sampled {sampled} of {frame_count} structures evenly across the run",
+            ]
+        return result
 
     @staticmethod
     def _perturb_frame(frame, amplitude: float, perturbation: str, jitter_vector: np.ndarray):
@@ -1108,7 +1161,37 @@ class AnalysisService:
             self._mark_stale(row["dataset_id"], f"source fingerprint changed ({dataset['fingerprint']} -> {current})")
             raise AppError(ANALYSIS_STALE, f"run {row['id']} is stale because the source dataset changed", {"run_id": row["id"], "dataset_id": row["dataset_id"]})
 
-    def _load_samples(self, run_row: dict, params: dict, analysis_type: str, check=None) -> SampleMatrix:
+    def _usable_view(self, view_id: str, dataset_id: str) -> dict:
+        view = self.db.query_one("SELECT * FROM dataset_views WHERE id = ?", (view_id,))
+        if view is None:
+            raise AppError(INVALID_PARAMS, f"dataset view {view_id} does not exist")
+        if view["dataset_id"] != dataset_id:
+            raise AppError(ANALYSIS_INPUT_INVALID, "dataset view does not belong to the descriptor run dataset")
+        dataset = self.db.query_one("SELECT fingerprint FROM datasets WHERE id = ?", (dataset_id,))
+        if dataset is None or view["dataset_fingerprint"] != dataset["fingerprint"]:
+            raise AppError(ANALYSIS_STALE, f"dataset view {view_id} is stale")
+        return view
+
+    @staticmethod
+    def _slice_samples_to_frames(samples: SampleMatrix, frame_indices: list[int]) -> SampleMatrix:
+        selected = np.flatnonzero(np.isin(samples.frame, np.asarray(frame_indices, dtype=np.int64)))
+        if selected.size == 0:
+            raise AppError(ANALYSIS_INPUT_INVALID, "dataset view contains no descriptor samples")
+        return SampleMatrix(
+            values=samples.values[selected],
+            frame=samples.frame[selected],
+            row=samples.row[selected] if samples.row is not None else None,
+            sample_ids=[samples.sample_ids[int(index)] for index in selected.tolist()],
+            elements=samples.elements[selected] if samples.elements is not None else None,
+            mode=samples.mode,
+            warnings=list(samples.warnings),
+            properties={key: value[selected] for key, value in samples.properties.items()},
+            positions=samples.positions[selected] if samples.positions is not None else None,
+            cells=samples.cells[selected] if samples.cells is not None else None,
+            pbc=samples.pbc[selected] if samples.pbc is not None else None,
+        )
+
+    def _load_samples(self, run_row: dict, params: dict, analysis_type: str, check=None, view_id=None) -> SampleMatrix:
         import numpy as np
 
         # Cooperative-cancellation checkpoints between the load/pool stages:
@@ -1180,7 +1263,7 @@ class AnalysisService:
             elements = None
             mode = "structure"
         properties = self._sample_properties(row, frames, rows, mode) if analysis_type == "property_correlation" else {}
-        return SampleMatrix(
+        samples = SampleMatrix(
             values=used,
             frame=frames,
             row=rows,
@@ -1192,6 +1275,10 @@ class AnalysisService:
             cells=cells,
             pbc=pbc,
         )
+        if view_id:
+            view = self._usable_view(str(view_id), run_row["dataset_id"])
+            samples = self._slice_samples_to_frames(samples, json.loads(view["frame_indices_json"]))
+        return samples
 
     @staticmethod
     def _valid_offsets(offsets, n_rows: int) -> bool:

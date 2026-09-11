@@ -20,7 +20,10 @@ def test_list_includes_shape_from_result_metadata(tmp_path: Path) -> None:
     )
     run_dir = tmp_path / "results" / "run_1"
     run_dir.mkdir(parents=True)
-    (run_dir / "metadata.json").write_text('{"shape": [12, 64]}', encoding="utf-8")
+    (run_dir / "metadata.json").write_text(
+        '{"shape": [12, 64], "feature_count": 64, "row_semantics": "structure"}',
+        encoding="utf-8",
+    )
     db.execute(
         "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version,"
         " parameters_json, scope, device, status, created_at, result_path)"
@@ -33,3 +36,7 @@ def test_list_includes_shape_from_result_metadata(tmp_path: Path) -> None:
 
     assert rows[0]["shape"] == "[12, 64]"
     assert rows[0]["device"] == "cuda"
+    assert rows[0]["feature_count"] == 64
+    assert rows[0]["row_semantics"] == "structure"
+    assert isinstance(rows[0]["feature_space_signature"], str)
+    assert len(rows[0]["feature_space_signature"]) == 64

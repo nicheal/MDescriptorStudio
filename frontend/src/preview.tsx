@@ -4,7 +4,7 @@
 // tiny in-browser mock backend over the same NDJSON protocol. Not part of the
 // production bundle (vite builds only index.html's entry).
 import "./global.css";
-import type { Hist } from "./types/protocol";
+import type { DatasetView, Hist } from "./types/protocol";
 import { setAppIcon } from "./brand";
 
 setAppIcon();
@@ -123,6 +123,24 @@ const DS = [
     created_at: "2026-04-12T10:00:00Z",
     last_scan_at: new Date(NOW - 60000).toISOString(),
     cache_valid: true,
+  },
+];
+
+let MOCK_DATASET_VIEWS: DatasetView[] = [
+  {
+    id: "view-gaas-train",
+    dataset_id: "ds-gaas",
+    dataset_name: "GaAs Training Set",
+    name: "Training split",
+    role: "train",
+    filter: { type: "split", seed: 42 },
+    frame_indices: Array.from({ length: 80 }, (_, index) => index),
+    number_of_frames: 9984,
+    selection_hash: "mock-view-gaas-train",
+    dataset_fingerprint: "mock-gaas",
+    stale: false,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
   },
 ];
 
@@ -820,7 +838,7 @@ function mockOverviewPreview() {
       response_matrix: responseMatrix,
       sample_indices: Array.from({ length: responseMatrix.length }, (_, i) => i),
     };
-    return { analysis_id: mockLatestAnalysisId, kind: "perturbation_sensitivity", perturbation: "jitter", metric: "euclidean", response_unit: "scaled descriptor distance", sample_count: responseMatrix.length, curve_count: amplitudes.length, baseline_included: true };
+    return { analysis_id: mockLatestAnalysisId, kind: "perturbation_sensitivity", perturbation: "jitter", metric: "euclidean", response_unit: "scaled descriptor distance", sample_count: responseMatrix.length, available_structure_count: 6320, curve_count: amplitudes.length, baseline_included: true, warnings: ["sampled 36 of 6320 structures evenly across the run"] };
   }
   if (mockLatestAnalysisKind === "kernel") {
     const size = 48;
@@ -997,6 +1015,58 @@ const METHODS: Record<string, Handler> = {
     cpu_threads: 16,
   }),
   "dataset.list": () => DS,
+  "dataset.view.list": (p) => p.dataset_id ? MOCK_DATASET_VIEWS.filter((view) => view.dataset_id === p.dataset_id) : MOCK_DATASET_VIEWS,
+  "dataset.view.create": (p) => {
+    const dataset = DS.find((item) => item.id === p.dataset_id) ?? DS[0];
+    const indices = Array.isArray(p.indices) ? p.indices.map(Number) : [];
+    const view: DatasetView = {
+      id: `view-${nextMockId++}`,
+      dataset_id: dataset.id,
+      dataset_name: dataset.name,
+      name: String(p.name ?? "Selection"),
+      role: "filtered",
+      filter: (p.filter as Record<string, unknown>) ?? {},
+      frame_indices: indices,
+      number_of_frames: indices.length,
+      selection_hash: `mock-selection-${nextMockId}`,
+      dataset_fingerprint: dataset.fingerprint,
+      stale: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    MOCK_DATASET_VIEWS = [...MOCK_DATASET_VIEWS, view];
+    return view;
+  },
+  "dataset.view.remove": (p) => {
+    MOCK_DATASET_VIEWS = MOCK_DATASET_VIEWS.filter((view) => view.id !== p.id);
+    return { ok: true };
+  },
+  "dataset.view.rename": (p) => {
+    const view = MOCK_DATASET_VIEWS.find((item) => item.id === p.id);
+    if (view) view.name = String(p.name ?? view.name);
+    return view ?? null;
+  },
+  "dataset.view.split": (p) => {
+    const dataset = DS.find((item) => item.id === p.dataset_id) ?? DS[0];
+    const roles = ["train", "validation", "test"] as const;
+    const views = roles.map((role, index) => ({
+      id: `view-${role}-${nextMockId++}`,
+      dataset_id: dataset.id,
+      dataset_name: dataset.name,
+      name: `${dataset.name} / ${role[0].toUpperCase()}${role.slice(1)}`,
+      role,
+      filter: { type: "split", seed: Number(p.seed ?? 42) },
+      frame_indices: [index],
+      number_of_frames: Math.floor(dataset.number_of_frames * ([0.8, 0.1, 0.1][index])),
+      selection_hash: `mock-${role}-${nextMockId}`,
+      dataset_fingerprint: dataset.fingerprint,
+      stale: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+    MOCK_DATASET_VIEWS = [...MOCK_DATASET_VIEWS, ...views];
+    return { views };
+  },
   "dataset.statistics": (p) => ({
     recalculating: false,
     job_id: null,
@@ -1153,9 +1223,9 @@ const METHODS: Record<string, Handler> = {
   ],
   // mutable run rows + a scripted job lifecycle so the Results page can be
   // watched flipping QUEUED -> RUNNING -> COMPLETED without the real backend
-  "result.list": () => {
+  "result.list": (p) => {
     startJobPlaybook();
-    return RUNS;
+    return p.dataset_id ? RUNS.filter((run) => run.dataset_id === p.dataset_id) : RUNS;
   },
   "result.remove": (p) => {
     const runId = String(p.run_id ?? "");
@@ -1312,6 +1382,27 @@ const RUNS = [
     finished_at: new Date(NOW - 3480_000).toISOString(),
     result_path: "mock",
     shape: "[12480, 256]",
+    feature_space_signature: "dpa2-compatible-feature-space",
+    feature_count: 256,
+    row_semantics: "structure",
+  },
+  {
+    id: "run-dpa2-si",
+    dataset_id: "ds-si",
+    dataset_name: "Si Training Set",
+    descriptor_name: "DPA-2",
+    engine_version: "0.3.2",
+    scope: "dataset",
+    device: "cuda",
+    status: "COMPLETED",
+    created_at: new Date(NOW - 7200_000).toISOString(),
+    started_at: new Date(NOW - 7140_000).toISOString(),
+    finished_at: new Date(NOW - 7080_000).toISOString(),
+    result_path: "mock",
+    shape: "[6320, 256]",
+    feature_space_signature: "dpa2-compatible-feature-space",
+    feature_count: 256,
+    row_semantics: "structure",
   },
   {
     id: "run-soap",
@@ -1342,6 +1433,9 @@ const RUNS = [
     finished_at: new Date(NOW - 5280_000).toISOString(),
     result_path: "mock",
     shape: "[12480, 96]",
+    feature_space_signature: "ace-feature-space",
+    feature_count: 96,
+    row_semantics: "structure",
   },
 ];
 
@@ -1352,18 +1446,22 @@ function startJobPlaybook() {
   if (jobPlaybookStarted) return;
   jobPlaybookStarted = true;
   window.setTimeout(() => {
-    RUNS[1].status = "RUNNING";
-    RUNS[1].started_at = new Date().toISOString();
+    const soap = RUNS.find((run) => run.id === "run-soap");
+    if (!soap) return;
+    soap.status = "RUNNING";
+    soap.started_at = new Date().toISOString();
     mockEmit("job.progress", { job_id: "job-soap", progress: 0.5, completed: 3160, total: 6320, message: "Computing SOAP descriptors" });
   }, 1500);
   window.setTimeout(() => {
     mockEmit("job.progress", { job_id: "job-soap", progress: 0.85, completed: 5372, total: 6320, message: "Computing SOAP descriptors" });
   }, 3000);
   window.setTimeout(() => {
-    RUNS[1].status = "COMPLETED";
-    RUNS[1].finished_at = new Date().toISOString();
-    RUNS[1].result_path = "mock";
-    RUNS[1].shape = "[6320, 432]";
+    const soap = RUNS.find((run) => run.id === "run-soap");
+    if (!soap) return;
+    soap.status = "COMPLETED";
+    soap.finished_at = new Date().toISOString();
+    soap.result_path = "mock";
+    soap.shape = "[6320, 432]";
     mockEmit("job.finished", { job_id: "job-soap", status: "COMPLETED", result: null, error: null });
   }, 4500);
 }

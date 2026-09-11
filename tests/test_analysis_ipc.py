@@ -156,6 +156,14 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
                 assert checked["result"]["preview"]["preprocess"] == "standardized"
                 assert checked["result"]["preview"]["pca_basis"] == "correlation"
                 assert checked["result"]["preview"]["pca_feature_count"] > 0
+            if kind == "perturbation_sensitivity":
+                # The response summarizes a sampled subset, so the artifact must
+                # expose how many structures were available, not just how many
+                # were swept.
+                preview = checked["result"]["preview"]
+                assert preview["sample_count"] == 2
+                assert preview["available_structure_count"] == 8
+                assert any("sampled 2 of 8 structures" in warning for warning in checked["result"]["warnings"])
             if kind == "trajectory":
                 # The trajectory view derives thresholds live, so the artifact
                 # must carry the robust statistics, the detection space and the

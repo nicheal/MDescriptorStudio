@@ -112,6 +112,33 @@ MIGRATIONS: dict[int, str] = {
         PRIMARY KEY (dataset_id, frame_index)
     );
     """,
+    7: """
+    CREATE TABLE IF NOT EXISTS dataset_views (
+        id TEXT PRIMARY KEY,
+        dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        role TEXT,
+        filter_json TEXT NOT NULL,
+        frame_indices_json TEXT NOT NULL,
+        selection_hash TEXT NOT NULL,
+        dataset_fingerprint TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(dataset_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_dataset_views_dataset ON dataset_views(dataset_id, created_at);
+    CREATE TABLE IF NOT EXISTS dataset_lineage (
+        child_dataset_id TEXT PRIMARY KEY REFERENCES datasets(id) ON DELETE CASCADE,
+        parent_dataset_id TEXT REFERENCES datasets(id) ON DELETE SET NULL,
+        source_view_id TEXT,
+        operation TEXT NOT NULL,
+        selection_hash TEXT,
+        created_at TEXT NOT NULL
+    );
+    """,
+    8: """
+    ALTER TABLE jobs ADD COLUMN result_json TEXT;
+    """,
 }
 
 

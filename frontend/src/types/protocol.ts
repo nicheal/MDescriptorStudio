@@ -31,6 +31,31 @@ export interface DatasetMeta {
   created_at: string;
   last_scan_at: string | null;
   cache_valid: boolean;
+  lineage?: DatasetLineage | null;
+}
+
+export interface DatasetLineage {
+  parent_dataset_id: string | null;
+  source_view_id: string | null;
+  operation: string;
+  selection_hash: string | null;
+  created_at: string;
+}
+
+export interface DatasetView {
+  id: string;
+  dataset_id: string;
+  dataset_name: string;
+  name: string;
+  role: "train" | "validation" | "test" | "selection" | "filtered" | null;
+  filter: Record<string, unknown>;
+  frame_indices: number[];
+  number_of_frames: number;
+  selection_hash: string;
+  dataset_fingerprint: string;
+  stale: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Hist {
@@ -257,6 +282,8 @@ export interface JobRow {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** Persisted terminal payload; lets late watchers recover a missed job.finished event. */
+  result?: Record<string, unknown> | null;
   /** 1-based position within its category pool; only present while QUEUED. */
   queue_position?: number;
 }
@@ -282,7 +309,9 @@ export interface RunRow {
   dataset_id: string;
   dataset_name: string | null;
   descriptor_name: string;
+  descriptor_version?: string | null;
   engine_version: string;
+  parameters_json?: string | Record<string, unknown>;
   scope: string;
   device?: string | null;
   status: string;
@@ -291,6 +320,9 @@ export interface RunRow {
   finished_at: string | null;
   result_path: string | null;
   shape?: string | null;
+  feature_space_signature?: string | null;
+  feature_count?: number | null;
+  row_semantics?: string | null;
   metadata?: Record<string, unknown>;
   memory_peak_bytes?: number | null;
 }

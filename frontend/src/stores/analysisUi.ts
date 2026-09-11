@@ -139,11 +139,16 @@ export interface AnalysisParams {
   perturbationType: string;
   perturbationCount: number;
   perturbationMaximum: number;
+  perturbationStructures: number;
   perturbationMetric: string;
   nearZeroThreshold: number;
   lowVariationThreshold: number;
   featureCorrelationMethod: FeatureCorrelationMethod;
   featureCorrelationThreshold: number;
+  referenceRunId: string | null;
+  queryRunId: string | null;
+  referenceViewId: string | null;
+  queryViewId: string | null;
 }
 
 /**
@@ -163,9 +168,17 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
     case "outliers":
       return [p.outlierAlgorithm, p.k, p.contamination, p.mode].join("|");
     case "sampling":
-      return [p.samplingAlgorithm, p.nSamples, p.mode, p.samplingAlgorithm === "uncertainty_diversity" ? p.uncertaintyK : ""].join("|");
+      return [
+        p.samplingAlgorithm,
+        p.nSamples,
+        p.mode,
+        p.samplingAlgorithm === "uncertainty_diversity" ? p.uncertaintyK : "",
+        p.samplingAlgorithm === "novelty_fps" || p.samplingAlgorithm === "uncertainty_diversity"
+          ? [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")
+          : "",
+      ].join("|");
     case "coverage":
-      return [p.coverageMode, p.mode].join("|");
+      return [p.coverageMode, p.mode, p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join("|");
     case "compare":
       return [p.compareMode, p.mode, p.compareMode === "mantel" ? `${p.mantelMethod}|${p.mantelPermutations}` : ""].join("|");
     case "local":
@@ -180,14 +193,16 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
             ? `${p.propertyName}|${p.propertyFolds}|${p.propertyReliabilityK}|${p.propertyDistanceMetric}|${p.propertySparsePercentile}|${p.propertyOodPercentile}`
             : "",
           p.overviewAnalysis === "perturbation_sensitivity"
-            ? `${p.perturbationType}|${p.perturbationCount}|${p.perturbationMaximum}|${p.perturbationMetric}`
+            ? `${p.perturbationType}|${p.perturbationCount}|${p.perturbationMaximum}|${p.perturbationMetric}|${p.perturbationStructures}`
             : p.overviewAnalysis === "feature_variance"
               ? `${p.nearZeroThreshold}|${p.lowVariationThreshold}`
               : p.overviewAnalysis === "feature_correlation"
                 ? `${p.featureCorrelationMethod}|${p.featureCorrelationThreshold}`
                 : p.overviewAnalysis === "effective_dimension"
                   ? p.effectiveDimensionPreprocess
-                  : "",
+                  : p.overviewAnalysis === "drift"
+                    ? [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")
+                    : "",
         ];
         return keyParts.join("|");
       }

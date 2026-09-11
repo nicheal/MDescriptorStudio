@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -63,12 +64,16 @@ class ResultService:
         for row in rows:
             # Keep the list response small: expose only the computed array
             # shape from metadata, never the descriptor values themselves.
-            row["shape"] = self._read_result_shape(row["id"], row.get("result_path"))
+            metadata = self._read_result_metadata(row["id"], row.get("result_path"))
+            row["shape"] = self._shape_text(metadata)
+            row["feature_space_signature"] = self._feature_space_signature(row, metadata)
+            row["feature_count"] = metadata.get("feature_count") if metadata else None
+            row["row_semantics"] = metadata.get("row_semantics") if metadata else None
         return rows
 
-    def _read_result_shape(self, run_id: str, result_path: str | None) -> str | None:
+    def _read_result_metadata(self, run_id: str, result_path: str | None) -> dict:
         if not result_path:
-            return None
+            return {}
         try:
             metadata = json.loads(
                 self._managed_result_file(run_id, result_path, "metadata.json")
@@ -77,13 +82,46 @@ class ResultService:
         except (OSError, TypeError, ValueError, UnsafePathError):
             # Pending/legacy runs may not have result metadata yet; they still
             # belong in the run history with an empty shape.
-            return None
+            return {}
+        return metadata if isinstance(metadata, dict) else {}
+
+    @staticmethod
+    def _shape_text(metadata: dict) -> str | None:
         shape = metadata.get("shape") if isinstance(metadata, dict) else None
         if isinstance(shape, str):
             return shape
         if isinstance(shape, list):
             return json.dumps(shape, ensure_ascii=False)
         return None
+
+    @staticmethod
+    def _feature_space_signature(row: dict, metadata: dict) -> str | None:
+        if row.get("status") not in ("COMPLETED", "STALE") or not metadata:
+            return None
+        try:
+            parameters = json.loads(row.get("parameters_json") or "{}")
+        except (TypeError, ValueError):
+            parameters = row.get("parameters_json")
+        shape = metadata.get("shape")
+        feature_count = metadata.get("feature_count")
+        if feature_count is None and isinstance(shape, list) and len(shape) >= 2:
+            feature_count = shape[-1]
+        payload = {
+            "descriptor": row.get("descriptor_name"),
+            "descriptor_version": row.get("descriptor_version"),
+            "engine_version": row.get("engine_version"),
+            "parameters": parameters,
+            "row_semantics": metadata.get("row_semantics") or metadata.get("level"),
+            "feature_count": feature_count,
+        }
+        return hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    def feature_space_signature(self, run_id: str) -> tuple[str | None, dict]:
+        row = self.get({"run_id": run_id})
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        return self._feature_space_signature(row, metadata), metadata
 
     def get(self, params: dict) -> dict:
         run_id = params.get("run_id")

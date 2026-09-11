@@ -59,6 +59,8 @@ import type {
   AnalysisChunk,
   AnalysisPreview,
   AnalysisRow,
+  DatasetMeta,
+  DatasetView,
   FramePayload,
   PcaAnalysisResponse,
   PcaPayload,
@@ -154,6 +156,85 @@ function AnalysisRunLabel({ name, shape }: { name: string; shape: string }) {
       <span className="analysis-run-shape">{shape}</span>
     </span>
   );
+}
+
+function CrossDatasetPicker({
+  datasets,
+  referenceDatasetId,
+  queryDatasetId,
+  referenceRunId,
+  queryRunId,
+  referenceViewId,
+  queryViewId,
+  referenceRuns,
+  queryRuns,
+  referenceViews,
+  queryViews,
+  compatible,
+  disabled,
+  onReferenceDataset,
+  onQueryDataset,
+  onReferenceRun,
+  onQueryRun,
+  onReferenceView,
+  onQueryView,
+  onSwap,
+}: {
+  datasets: DatasetMeta[];
+  referenceDatasetId: string | null;
+  queryDatasetId: string | null;
+  referenceRunId: string | null;
+  queryRunId: string | null;
+  referenceViewId: string | null;
+  queryViewId: string | null;
+  referenceRuns: RunRow[];
+  queryRuns: RunRow[];
+  referenceViews: DatasetView[];
+  queryViews: DatasetView[];
+  compatible: boolean;
+  disabled: boolean;
+  onReferenceDataset: (value: string) => void;
+  onQueryDataset: (value: string) => void;
+  onReferenceRun: (value: string) => void;
+  onQueryRun: (value: string) => void;
+  onReferenceView: (value: string | null) => void;
+  onQueryView: (value: string | null) => void;
+  onSwap: () => void;
+}) {
+  const { t } = useT();
+  const datasetOptions = datasets.map((item) => ({ value: item.id, label: item.name }));
+  const scopeOptions = (views: DatasetView[]) => [
+    { value: "__full__", label: t("Full dataset") },
+    ...views.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString()}` })),
+  ];
+  const runOptions = (rows: RunRow[]) => rows.map((run) => ({
+    value: run.id,
+    label: <AnalysisRunLabel name={run.descriptor_name} shape={run.shape ?? t("unknown shape")} />,
+  }));
+  const row = (
+    label: string,
+    datasetId: string | null,
+    runId: string | null,
+    viewId: string | null,
+    runs: RunRow[],
+    views: DatasetView[],
+    onDataset: (value: string) => void,
+    onRun: (value: string) => void,
+    onView: (value: string | null) => void,
+  ) => <div className="analysis-cross-input-row">
+    <Typography.Text strong className="analysis-cross-input-label">{label}</Typography.Text>
+    <Select aria-label={`${label} ${t("Dataset")}`} value={datasetId ?? undefined} disabled={disabled} options={datasetOptions} onChange={onDataset} />
+    <Select aria-label={`${label} ${t("Scope")}`} value={viewId ?? "__full__"} disabled={disabled || !datasetId} options={scopeOptions(views)} onChange={(value) => onView(value === "__full__" ? null : value)} />
+    <Select aria-label={`${label} ${t("Descriptor run")}`} value={runId ?? undefined} disabled={disabled || !datasetId} placeholder={runs.length ? t("Select completed run") : t("No compatible run")} options={runOptions(runs)} onChange={onRun} />
+  </div>;
+  return <div className="analysis-cross-inputs">
+    {row(t("Reference"), referenceDatasetId, referenceRunId, referenceViewId, referenceRuns, referenceViews, onReferenceDataset, onReferenceRun, onReferenceView)}
+    <Button className="analysis-cross-swap" size="small" icon={<ArrowSync16Regular />} disabled={disabled || !referenceDatasetId || !queryDatasetId} onClick={onSwap}>{t("Swap")}</Button>
+    {row(t("Query"), queryDatasetId, queryRunId, queryViewId, queryRuns, queryViews, onQueryDataset, onQueryRun, onQueryView)}
+    <div className="analysis-cross-status">
+      <Tag color={compatible ? "green" : "orange"}>{compatible ? t("Compatible feature space") : t("Select a compatible feature space")}</Tag>
+    </div>
+  </div>;
 }
 
 // Green dot marking a parameter value whose analysis result is already
@@ -274,6 +355,8 @@ export default function Analysis() {
   const dataset = activeDataset(st);
   const { t, tr, locale } = useT();
   const [runs, setRuns] = useState<RunRow[]>([]);
+  const [allRuns, setAllRuns] = useState<RunRow[]>([]);
+  const [datasetViews, setDatasetViews] = useState<DatasetView[]>([]);
   const [analyses, setAnalyses] = useState<AnalysisRow[]>([]);
   // Tab / module selection lives in a module-level store: it survives leaving
   // the page, and remounting (or restarting the app) restores it together with
@@ -323,6 +406,12 @@ export default function Analysis() {
   const [kernelName, setKernelName] = useState("rbf");
   const [localCutoff, setLocalCutoff] = useState(3.0);
   const [secondRun, setSecondRun] = useState<string | null>(null);
+  const [referenceDatasetId, setReferenceDatasetId] = useState<string | null>(null);
+  const [queryDatasetId, setQueryDatasetId] = useState<string | null>(null);
+  const [referenceRunId, setReferenceRunId] = useState<string | null>(null);
+  const [queryRunId, setQueryRunId] = useState<string | null>(null);
+  const [referenceViewId, setReferenceViewId] = useState<string | null>(null);
+  const [queryViewId, setQueryViewId] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState("csv");
   const [exportPath, setExportPath] = useState("");
   const [k, setK] = useState(10);
@@ -335,6 +424,7 @@ export default function Analysis() {
   const [perturbationType, setPerturbationType] = useState<"jitter" | "strain">("jitter");
   const [perturbationCount, setPerturbationCount] = useState(8);
   const [perturbationMaximum, setPerturbationMaximum] = useState(0.2);
+  const [perturbationStructures, setPerturbationStructures] = useState(64);
   const [perturbationMetric, setPerturbationMetric] = useState("euclidean");
   const [tsnePerplexity, setTsnePerplexity] = useState(30);
   const [overviewArrays, setOverviewArrays] = useState<NumericArrays>({});
@@ -355,8 +445,9 @@ export default function Analysis() {
     nSamples, uncertaintyK, coverageMode, compareMode, mantelMethod, mantelPermutations,
     localCutoff, kernelName, overviewAnalysis, propertyName,
     propertyFolds, propertyReliabilityK, propertyDistanceMetric, propertySparsePercentile, propertyOodPercentile,
-    perturbationType, perturbationCount, perturbationMaximum, perturbationMetric,
+    perturbationType, perturbationCount, perturbationMaximum, perturbationStructures, perturbationMetric,
     nearZeroThreshold, lowVariationThreshold, featureCorrelationMethod, featureCorrelationThreshold,
+    referenceRunId, queryRunId, referenceViewId, queryViewId,
   };
   const paramsKey = buildParamsKey(tab, analysisParams);
   // {tab, paramsKey, params} as of the latest render. Runs capture this when
@@ -376,15 +467,35 @@ export default function Analysis() {
 
   const selectedRun = st.activeDescriptorRunId;
   const setSelectedRun = st.setActiveRun;
+  const crossDatasetModule = tab === "coverage"
+    || (tab === "sampling" && (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity"))
+    || (tab === "overview" && overviewAnalysis === "drift");
+  const completedAllRuns = useMemo(() => allRuns.filter((run) => run.status === "COMPLETED"), [allRuns]);
+  const referenceRuns = useMemo(() => completedAllRuns.filter((run) => run.dataset_id === referenceDatasetId), [completedAllRuns, referenceDatasetId]);
+  const referenceRunRow = referenceRuns.find((run) => run.id === referenceRunId) ?? null;
+  const queryRuns = useMemo(() => completedAllRuns.filter(
+    (run) => run.dataset_id === queryDatasetId
+      && !!referenceRunRow?.feature_space_signature
+      && run.feature_space_signature === referenceRunRow.feature_space_signature,
+  ), [completedAllRuns, queryDatasetId, referenceRunRow?.feature_space_signature]);
+  const queryRunRow = queryRuns.find((run) => run.id === queryRunId) ?? null;
+  const referenceViews = useMemo(() => datasetViews.filter((view) => view.dataset_id === referenceDatasetId && !view.stale), [datasetViews, referenceDatasetId]);
+  const queryViews = useMemo(() => datasetViews.filter((view) => view.dataset_id === queryDatasetId && !view.stale), [datasetViews, queryDatasetId]);
+  const crossInputsReady = !!referenceRunRow && !!queryRunRow;
+  const pointDataset = crossDatasetModule
+    ? st.datasets.find((item) => item.id === queryDatasetId) ?? dataset
+    : dataset;
+  const pointRunId = crossDatasetModule ? queryRunId : selectedRun;
+  const analysisContextRunId = crossDatasetModule ? referenceRunId : selectedRun;
   const selectedPoint = inspectedPoint ?? points.find((point) => point.i === selectedIndices[0]) ?? null;
 
   // Whether the (tab, run, parameter combination) result is already computed
   // and can be re-displayed without rerunning. One parameter can be probed
   // with a candidate value; the others stay at their current value.
   const isCached = useCallback(
-    (param: string, value: string | number) =>
-      !!selectedRun && slotForParams(slots, tab, selectedRun, buildParamsKey(tab, { ...analysisParams, [param]: value } as AnalysisParams)) !== null,
-    [analysisParams, selectedRun, slots, tab],
+    (param: string, value: string | number | null) =>
+      !!analysisContextRunId && slotForParams(slots, tab, analysisContextRunId, buildParamsKey(tab, { ...analysisParams, [param]: value } as AnalysisParams)) !== null,
+    [analysisContextRunId, analysisParams, slots, tab],
   );
   // Cache dot helpers: select options marked per value, numeric labels per current value.
   const markOptions = (param: string, options: CacheOption[]) => withCacheMarks((value) => isCached(param, value), options);
@@ -393,15 +504,21 @@ export default function Analysis() {
   const refresh = useCallback(async () => {
     if (!dataset) {
       setRuns([]);
+      setAllRuns([]);
+      setDatasetViews([]);
       setAnalyses([]);
       return;
     }
     try {
-      const [resultRows, analysisRows] = await Promise.all([
-        ipc.request<RunRow[]>("result.list", { dataset_id: dataset.id }),
+      const [allResultRows, analysisRows, viewRows] = await Promise.all([
+        ipc.request<RunRow[]>("result.list", {}),
         ipc.request<AnalysisRow[]>("analysis.list", { }),
+        ipc.request<DatasetView[]>("dataset.view.list", {}),
       ]);
+      const resultRows = allResultRows.filter((row) => row.dataset_id === dataset.id);
       setRuns(resultRows);
+      setAllRuns(allResultRows);
+      setDatasetViews(viewRows);
       setAnalyses(analysisRows.filter((row) => (row.dataset_ids ?? []).includes(dataset.id) || row.descriptor_run_id && resultRows.some((run) => run.id === row.descriptor_run_id)));
       const current = useWorkspace.getState().activeDescriptorRunId;
       const completedRuns = resultRows.filter((row) => row.status === "COMPLETED");
@@ -415,6 +532,40 @@ export default function Analysis() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!dataset) return;
+    setReferenceDatasetId((current) => st.datasets.some((item) => item.id === current) ? current : dataset.id);
+  }, [dataset, st.datasets]);
+
+  useEffect(() => {
+    if (!referenceDatasetId) return;
+    setReferenceRunId((current) => {
+      if (referenceRuns.some((run) => run.id === current)) return current;
+      if (selectedRun && referenceRuns.some((run) => run.id === selectedRun)) return selectedRun;
+      return referenceRuns[0]?.id ?? null;
+    });
+    setReferenceViewId((current) => referenceViews.some((view) => view.id === current) ? current : null);
+  }, [referenceDatasetId, referenceRuns, referenceViews, selectedRun]);
+
+  useEffect(() => {
+    if (!referenceRunRow) return;
+    const compatibleDatasetIds = new Set(
+      completedAllRuns
+        .filter((run) => run.feature_space_signature === referenceRunRow.feature_space_signature)
+        .map((run) => run.dataset_id),
+    );
+    setQueryDatasetId((current) => {
+      if (current && compatibleDatasetIds.has(current)) return current;
+      return st.datasets.find((item) => item.id !== referenceDatasetId && compatibleDatasetIds.has(item.id))?.id
+        ?? (compatibleDatasetIds.has(referenceDatasetId ?? "") ? referenceDatasetId : null);
+    });
+  }, [completedAllRuns, referenceDatasetId, referenceRunRow, st.datasets]);
+
+  useEffect(() => {
+    setQueryRunId((current) => queryRuns.some((run) => run.id === current) ? current : queryRuns[0]?.id ?? null);
+    setQueryViewId((current) => queryViews.some((view) => view.id === current) ? current : null);
+  }, [queryRuns, queryViews]);
 
   useEffect(() => {
     operationRef.current += 1;
@@ -452,7 +603,7 @@ export default function Analysis() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!dataset || !selectedPoint) {
+    if (!pointDataset || !selectedPoint) {
       setSelectedFrame(null);
       return;
     }
@@ -461,12 +612,12 @@ export default function Analysis() {
     const localShellActive = preview?.kind === "local_diversity" && selectedPoint.row != null;
     const displayCutoff = 2.4;
     const requestedCutoff = Math.min(10, Math.max(displayCutoff, localShellActive ? localCutoff : displayCutoff));
-    void ipc.request<FramePayload>("dataset.frame", { id: dataset.id, index: selectedPoint.frame, bond_cutoff: requestedCutoff })
+    void ipc.request<FramePayload>("dataset.frame", { id: pointDataset.id, index: selectedPoint.frame, bond_cutoff: requestedCutoff })
       .then((frame) => { if (!disposed) setSelectedFrame({ ...frame, bond_cutoff: displayCutoff }); })
       .catch(() => { if (!disposed) setSelectedFrame(null); })
       .finally(() => { if (!disposed) setSelectedFrameBusy(false); });
     return () => { disposed = true; };
-  }, [dataset, localCutoff, preview?.kind, selectedPoint]);
+  }, [localCutoff, pointDataset, preview?.kind, selectedPoint]);
 
   useEffect(() => {
     const kind = String(preview?.kind ?? "");
@@ -532,12 +683,18 @@ export default function Analysis() {
     return () => { disposed = true; };
   }, [analysisId, preview]);
 
-  const runRequest = useCallback(async (method: string, params: Record<string, unknown>, label: string) => {
-    if (!selectedRun) {
+  const runRequest = useCallback(async (
+    method: string,
+    params: Record<string, unknown>,
+    label: string,
+    options?: { contextRunId?: string | null; followActiveRun?: boolean },
+  ) => {
+    const contextRunId = options?.contextRunId ?? selectedRun;
+    if (!contextRunId) {
       message.warning(t("Select a completed descriptor run first"));
       return null;
     }
-    const requestRunId = selectedRun;
+    const requestRunId = contextRunId;
     const requestDatasetId = dataset?.id;
     // The (tab, parameters) context the run was started under: the result and
     // its cache slot belong there even if the user navigates while the job is
@@ -545,7 +702,7 @@ export default function Analysis() {
     const requestContext = { ...runContextRef.current };
     const operation = ++operationRef.current;
     const isCurrent = () => operationRef.current === operation
-      && useWorkspace.getState().activeDescriptorRunId === requestRunId
+      && (options?.followActiveRun === false || useWorkspace.getState().activeDescriptorRunId === requestRunId)
       && useWorkspace.getState().activeDatasetId === requestDatasetId
       && useAnalysisUi.getState().view.tab === requestContext.tab;
     setLoadingAnalysisId(null);
@@ -726,29 +883,51 @@ export default function Analysis() {
   }, [preprocess, projection, runProjection, selectedRun]);
 
   const loadAnalysis = useCallback(async (row: AnalysisRow, opts?: { silent?: boolean }) => {
-    if (!dataset || !selectedRun || row.status !== "COMPLETED") return;
+    if (!dataset || row.status !== "COMPLETED") return;
+    const analysisType = row.analysis_type.toLowerCase();
+    const analysisTab = tabForAnalysisType(analysisType);
     const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
-    if (!inputRunIds.includes(selectedRun)) {
+    const crossDatasetAnalysis = ["coverage", "overlap", "acquisition", "drift"].includes(analysisType);
+    if (!crossDatasetAnalysis && (!selectedRun || !inputRunIds.includes(selectedRun))) {
       message.warning(t("Select the source descriptor run before loading this analysis"));
       return;
     }
+    const requestRunId = crossDatasetAnalysis ? inputRunIds[0] : selectedRun;
+    if (!requestRunId) return;
+    if (crossDatasetAnalysis) {
+      const reference = allRuns.find((run) => run.id === inputRunIds[0]);
+      const query = allRuns.find((run) => run.id === inputRunIds[1]);
+      if (!reference || !query) {
+        message.warning(t("The source descriptor runs are no longer available"));
+        return;
+      }
+      setReferenceDatasetId(reference.dataset_id);
+      setReferenceRunId(reference.id);
+      setReferenceViewId(typeof row.parameters?.reference_view_id === "string" ? row.parameters.reference_view_id : null);
+      setQueryDatasetId(query.dataset_id);
+      setQueryRunId(query.id);
+      setQueryViewId(typeof row.parameters?.query_view_id === "string" ? row.parameters.query_view_id : null);
+    }
 
     const operation = ++operationRef.current;
-    const requestRunId = selectedRun;
     const requestDatasetId = dataset.id;
     // `tab` guards against a tab switch while a slow restore fetch is in
     // flight — the stale result must not land on (or yank back) another tab.
     const isCurrent = () => operationRef.current === operation
-      && useWorkspace.getState().activeDescriptorRunId === requestRunId
+      && (crossDatasetAnalysis || useWorkspace.getState().activeDescriptorRunId === requestRunId)
       && useWorkspace.getState().activeDatasetId === requestDatasetId
       && useAnalysisUi.getState().view.tab === analysisTab;
-    const analysisType = row.analysis_type.toLowerCase();
-    const analysisTab = tabForAnalysisType(analysisType);
     // Slot context for the loaded analysis, derived from the row itself. The
     // cached path below records before React re-renders, so the live
     // runContextRef would still describe the tab the user is leaving and
     // would file this analysis under another tab's parameters.
     const loadedParams: AnalysisParams = { ...runContextRef.current.params };
+    if (crossDatasetAnalysis) {
+      loadedParams.referenceRunId = inputRunIds[0] ?? null;
+      loadedParams.queryRunId = inputRunIds[1] ?? null;
+      loadedParams.referenceViewId = typeof row.parameters?.reference_view_id === "string" ? row.parameters.reference_view_id : null;
+      loadedParams.queryViewId = typeof row.parameters?.query_view_id === "string" ? row.parameters.query_view_id : null;
+    }
     setTab(analysisTab);
     if (analysisTab === "overview" && ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"].includes(analysisType)) {
       setOverviewAnalysis(analysisType as OverviewAnalysis);
@@ -882,7 +1061,7 @@ export default function Analysis() {
         setLoadingAnalysisId(null);
       }
     }
-  }, [dataset, featureCorrelationThreshold, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setNearZeroThreshold, t]);
+  }, [allRuns, dataset, featureCorrelationThreshold, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setNearZeroThreshold, t]);
 
   // Keep the displayed result in step with the current tab + parameters: an
   // exact slot match (same tab, run, parameters) is re-displayed from the
@@ -893,10 +1072,10 @@ export default function Analysis() {
   useEffect(() => {
     if (busy || loadingAnalysisId) return;
     const slotMap = useAnalysisUi.getState().slots;
-    const exact = slotForParams(slotMap, tab, selectedRun, paramsKey);
+    const exact = slotForParams(slotMap, tab, analysisContextRunId, paramsKey);
     const tabChanged = lastLookedTabRef.current !== tab;
     lastLookedTabRef.current = tab;
-    const slot = exact ?? (tabChanged ? latestSlotForTab(slotMap, tab, selectedRun) : null);
+    const slot = exact ?? (tabChanged ? latestSlotForTab(slotMap, tab, analysisContextRunId) : null);
     const wantedId = slot?.analysisId ?? null;
     if (analysisId === wantedId) return;
     if (!wantedId) {
@@ -912,7 +1091,7 @@ export default function Analysis() {
       // The history listing lost this analysis (filtered out or not listed
       // yet), but the in-memory cache still holds the computed chart —
       // restore from it instead of dropping the result.
-      const cached = selectedRun ? analysisCache.get(wantedId) : undefined;
+      const cached = analysisContextRunId ? analysisCache.get(wantedId) : undefined;
       if (cached) {
         setAnalysisId(wantedId);
         setPreview(cached.preview);
@@ -923,7 +1102,7 @@ export default function Analysis() {
       }
     }
     const inputRunIds = row?.input_run_ids?.length ? row.input_run_ids : row ? [row.descriptor_run_id] : [];
-    if (!row || row.status !== "COMPLETED" || !inputRunIds.includes(selectedRun ?? "")) {
+    if (!row || row.status !== "COMPLETED" || !inputRunIds.includes(analysisContextRunId ?? "")) {
       restoreAttemptedRef.current = null;
       clearDisplayedAnalysis();
       return;
@@ -938,7 +1117,7 @@ export default function Analysis() {
       return;
     }
     void loadAnalysis(row, { silent: true });
-  }, [analyses, analysisId, busy, clearDisplayedAnalysis, loadAnalysis, loadingAnalysisId, paramsKey, selectedRun, tab]);
+  }, [analyses, analysisContextRunId, analysisId, busy, clearDisplayedAnalysis, loadAnalysis, loadingAnalysisId, paramsKey, tab]);
 
   const runTabAnalysis = useCallback(async () => {
     if (tab === "projection") return runProjection();
@@ -954,21 +1133,21 @@ export default function Analysis() {
       await runRequest("analysis.outlier", { algorithm: outlierAlgorithm, k, contamination, preprocess: "standardized", mode }, outlierAlgorithm.toUpperCase());
     } else if (tab === "sampling") {
       if (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity") {
-        if (!secondRun || !selectedRun) {
-          message.warning(t("Select a reference run for acquisition"));
+        if (!crossInputsReady || !referenceRunId || !queryRunId) {
+          message.warning(t("Select compatible reference and query runs"));
           return;
         }
         const uncertainty = samplingAlgorithm === "uncertainty_diversity";
-        await runRequest("analysis.acquisition", { reference_run_id: secondRun, query_run_id: selectedRun, n_samples: nSamples, mode, acquisition_method: samplingAlgorithm, novelty_weight: 0.65, uncertainty_weight: 0.65, uncertainty_k: uncertaintyK }, uncertainty ? t("Uncertainty acquisition") : t("Novelty acquisition"));
+        await runRequest("analysis.acquisition", { reference_run_id: referenceRunId, query_run_id: queryRunId, ...(referenceViewId ? { reference_view_id: referenceViewId } : {}), ...(queryViewId ? { query_view_id: queryViewId } : {}), n_samples: nSamples, mode, acquisition_method: samplingAlgorithm, novelty_weight: 0.65, uncertainty_weight: 0.65, uncertainty_k: uncertaintyK }, uncertainty ? t("Uncertainty acquisition") : t("Novelty acquisition"), { contextRunId: referenceRunId, followActiveRun: false });
       } else {
         await runRequest("analysis.sampling", { algorithm: samplingAlgorithm, n_samples: nSamples, mode }, t("Sampling"));
       }
     } else if (tab === "coverage") {
-      if (!secondRun || !selectedRun) {
-        message.warning(t("Select a reference/query run pair"));
+      if (!crossInputsReady || !referenceRunId || !queryRunId) {
+        message.warning(t("Select compatible reference and query runs"));
         return;
       }
-      await runRequest(`analysis.${coverageMode}`, { reference_run_id: selectedRun, query_run_id: secondRun, metric: "euclidean", mode }, coverageMode === "coverage" ? t("Coverage") : t("Overlap"));
+      await runRequest(`analysis.${coverageMode}`, { reference_run_id: referenceRunId, query_run_id: queryRunId, ...(referenceViewId ? { reference_view_id: referenceViewId } : {}), ...(queryViewId ? { query_view_id: queryViewId } : {}), metric: "euclidean", mode }, coverageMode === "coverage" ? t("Coverage") : t("Overlap"), { contextRunId: referenceRunId, followActiveRun: false });
     } else if (tab === "compare") {
       if (!secondRun || !selectedRun) {
         message.warning(t("Select a descriptor run pair"));
@@ -984,7 +1163,11 @@ export default function Analysis() {
     } else if (tab === "kernel") {
       await runRequest("analysis.kernel", { kernel: kernelName, mode, max_samples: 400 }, t("Kernel diagnostics"));
     } else if (tab === "overview") {
-      if ((overviewAnalysis === "drift" || overviewAnalysis === "sensitivity") && (!secondRun || !selectedRun)) {
+      if (overviewAnalysis === "drift" && (!crossInputsReady || !referenceRunId || !queryRunId)) {
+        message.warning(t("Select compatible reference and query runs"));
+        return;
+      }
+      if (overviewAnalysis === "sensitivity" && (!secondRun || !selectedRun)) {
         message.warning(t("Select a reference/query run pair"));
         return;
       }
@@ -997,11 +1180,11 @@ export default function Analysis() {
         }
       }
       const overviewParams: Record<string, unknown> = overviewAnalysis === "drift"
-        ? { reference_run_id: selectedRun, query_run_id: secondRun, metric: "euclidean" }
+        ? { reference_run_id: referenceRunId, query_run_id: queryRunId, ...(referenceViewId ? { reference_view_id: referenceViewId } : {}), ...(queryViewId ? { query_view_id: queryViewId } : {}), metric: "euclidean", mode }
         : overviewAnalysis === "sensitivity"
           ? { run_ids: [selectedRun, secondRun] }
           : overviewAnalysis === "perturbation_sensitivity"
-            ? { perturbation: perturbationType, n_amplitudes: perturbationCount, max_amplitude: perturbationMaximum, metric: perturbationMetric, max_structures: 64, preprocess: "standardized" }
+            ? { perturbation: perturbationType, n_amplitudes: perturbationCount, max_amplitude: perturbationMaximum, metric: perturbationMetric, max_structures: perturbationStructures, preprocess: "standardized" }
           : overviewAnalysis === "trajectory"
             ? {}
           : overviewAnalysis === "property_correlation"
@@ -1013,17 +1196,27 @@ export default function Analysis() {
                 : overviewAnalysis === "feature_variance"
                   ? { top_k: 20, near_zero_relative_threshold: nearZeroThreshold, low_variance_relative_threshold: lowVariationThreshold }
                   : { top_k: 20 };
-      await runRequest(`analysis.${overviewAnalysis}`, overviewParams, tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]));
+      await runRequest(`analysis.${overviewAnalysis}`, overviewParams, tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]), overviewAnalysis === "drift" ? { contextRunId: referenceRunId, followActiveRun: false } : undefined);
     }
-  }, [clusterAlgorithm, contamination, coverageMode, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, setLowVariationThreshold, setNearZeroThreshold, similarityMode, tab, t, tr, uncertaintyK, message, compareMode]);
+  }, [clusterAlgorithm, contamination, coverageMode, crossInputsReady, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationStructures, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, queryRunId, queryViewId, referenceRunId, referenceViewId, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, setLowVariationThreshold, setNearZeroThreshold, similarityMode, tab, t, tr, uncertaintyK, message, compareMode]);
 
   const inspectPoint = useCallback((point: Point) => {
     setInspectedPoint(point);
-    if (dataset && selectedRun) {
-      useWorkspace.getState().setSelectedSample({ datasetId: dataset.id, runId: selectedRun, mode: point.row == null ? mode : "atom", frame: point.frame, atom: point.row });
+    if (pointDataset && pointRunId) {
+      useWorkspace.getState().setSelectedSample({ datasetId: pointDataset.id, runId: pointRunId, mode: point.row == null ? mode : "atom", frame: point.frame, atom: point.row });
       useWorkspace.getState().setActiveFrame(point.frame);
     }
-  }, [dataset, mode, selectedRun]);
+  }, [mode, pointDataset, pointRunId]);
+
+  const openPointInExplore = useCallback(() => {
+    if (!pointDataset || !selectedPoint) return;
+    const workspace = useWorkspace.getState();
+    workspace.setActiveDataset(pointDataset.id);
+    const next = useWorkspace.getState();
+    next.setActiveFrame(selectedPoint.frame);
+    next.setSelectedSample({ datasetId: pointDataset.id, ...(pointRunId ? { runId: pointRunId } : {}), mode: selectedPoint.row == null ? mode : "atom", frame: selectedPoint.frame, atom: selectedPoint.row });
+    next.setPage("explore");
+  }, [mode, pointDataset, pointRunId, selectedPoint]);
 
   // Keep the cached entry in sync with the on-chart selection so leaving the
   // page and coming back restores it together with the chart.
@@ -1047,7 +1240,7 @@ export default function Analysis() {
   // synthetic point (like the result-table path) covers atoms with no
   // counterpart among the current projection's points.
   const handlePreviewAtomSelect = useCallback((atom: number) => {
-    if (!dataset || !selectedFrame) return;
+    if (!pointDataset || !selectedFrame) return;
     if (selectedPoint?.row === atom && selectedPoint.frame === selectedFrame.index) {
       setInspectedPoint(null);
       setSelectedIndices([]);
@@ -1061,7 +1254,7 @@ export default function Analysis() {
       return;
     }
     handlePoint({ i: selectedPoint?.i ?? selectedIndices[0] ?? points.length, frame: selectedFrame.index, row: atom, x: 0, y: 0 });
-  }, [dataset, handlePoint, points, selectedFrame, selectedPoint, selectedIndices, updateCachedSelection]);
+  }, [handlePoint, pointDataset, points, selectedFrame, selectedPoint, selectedIndices, updateCachedSelection]);
 
   const plot = useMemo(() => {
     if (!points.length) return null;
@@ -1171,7 +1364,9 @@ export default function Analysis() {
   const pairRuns = sensitivityPair ? sensitivityRuns : completedRuns;
   const visibleAnalyses = analyses.filter((row) => {
     const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
-    return !selectedRun || inputRunIds.includes(selectedRun);
+    return crossDatasetModule
+      ? (row.dataset_ids ?? []).includes(dataset.id)
+      : !selectedRun || inputRunIds.includes(selectedRun);
   });
   const methodGuideKey = tab === "projection"
     ? `projection.${projection}`
@@ -1194,27 +1389,32 @@ export default function Analysis() {
                     : `overview.${overviewAnalysis}`;
   const methodGuide = getAnalysisMethodGuide(methodGuideKey);
   const overviewModuleControl = <Space className="analysis-overview-module-control" wrap><Typography.Text>{t("Module")}</Typography.Text><Select className="analysis-overview-module-select" value={overviewAnalysis} onChange={setOverviewAnalysis} options={markOptions("overviewAnalysis", [{ value: "feature_variance", label: t("Feature variance") }, { value: "feature_correlation", label: t("Feature correlation") }, { value: "effective_dimension", label: t("Effective dimension") }, { value: "property_correlation", label: t("Property correlation") }, { value: "trajectory", label: t("Trajectory") }, { value: "drift", label: t("Dataset drift") }, { value: "sensitivity", label: t("Parameter sensitivity") }, { value: "perturbation_sensitivity", label: t("Structural perturbation") }])} /></Space>;
-  const overviewModuleHint = tab === "overview" && (overviewAnalysis === "sensitivity" || overviewAnalysis === "perturbation_sensitivity") && <Typography.Text type="secondary">{overviewAnalysis === "sensitivity" ? t("Compare parameter variants of the same descriptor; use Compare for different descriptors.") : t("Recompute the selected descriptor after controlled atomic jitter or strain.")}</Typography.Text>;
+  const overviewModuleHint = tab === "overview" && overviewAnalysis === "sensitivity" && <Typography.Text type="secondary">{t("Compare parameter variants of the same descriptor; use Compare for different descriptors.")}</Typography.Text>;
   const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension");
 
   return (
     <div className="analysis-page">
       <section className="analysis-toolbar">
         <Space wrap>
-          <Typography.Text strong>{t("Run")}</Typography.Text>
-          <Select
-            aria-label={t("Analysis descriptor run")}
-            value={selectedRun ?? undefined}
-            placeholder={t("Select completed run")}
-            style={{ width: 250 }}
-            disabled={busy}
-            onChange={setSelectedRun}
-            options={completedRuns.map((run) => ({
-              value: run.id,
-              label: <AnalysisRunLabel name={run.descriptor_name} shape={run.shape ?? t("unknown shape")} />,
-            }))}
-          />
-          <Tag color={selectedRunRow?.status === "COMPLETED" ? "green" : "orange"}>{selectedRunRow ? jobStatusLabel(tr, selectedRunRow.status) : t("No run")}</Tag>
+          {crossDatasetModule ? <>
+            <Typography.Text strong>{t("Cross-dataset analysis")}</Typography.Text>
+            <Tag>{dataset.name}</Tag>
+          </> : <>
+            <Typography.Text strong>{t("Run")}</Typography.Text>
+            <Select
+              aria-label={t("Analysis descriptor run")}
+              value={selectedRun ?? undefined}
+              placeholder={t("Select completed run")}
+              style={{ width: 250 }}
+              disabled={busy}
+              onChange={setSelectedRun}
+              options={completedRuns.map((run) => ({
+                value: run.id,
+                label: <AnalysisRunLabel name={run.descriptor_name} shape={run.shape ?? t("unknown shape")} />,
+              }))}
+            />
+            <Tag color={selectedRunRow?.status === "COMPLETED" ? "green" : "orange"}>{selectedRunRow ? jobStatusLabel(tr, selectedRunRow.status) : t("No run")}</Tag>
+          </>}
           <Button size="small" icon={<ArrowSync16Regular />} onClick={() => void refresh()}>{t("Refresh")}</Button>
         </Space>
         {busy && runningInfo && (
@@ -1243,6 +1443,38 @@ export default function Analysis() {
             {tab === "local" && <Space wrap><ParamLabel label={t("Clusters / element")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><ParamLabel label={t("Descriptor kNN")} cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><ParamLabel label={t("Neighbor cutoff")} cached={cachedParam("localCutoff")} /><InputNumber min={0.1} max={10} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value == null ? 3 : Math.max(0.1, Math.min(10, value)))} addonAfter="Å" /><Typography.Text type="secondary">{t("Coordinates and periodic images determine coordination.")}</Typography.Text></Space>}
             {tab === "kernel" && <Space wrap><Typography.Text>{t("Kernel")}</Typography.Text><Select value={kernelName} onChange={setKernelName} options={markOptions("kernelName", ["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() })))} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
             {tab === "overview" && overviewModuleControl}
+            {crossDatasetModule && <CrossDatasetPicker
+              datasets={st.datasets}
+              referenceDatasetId={referenceDatasetId}
+              queryDatasetId={queryDatasetId}
+              referenceRunId={referenceRunId}
+              queryRunId={queryRunId}
+              referenceViewId={referenceViewId}
+              queryViewId={queryViewId}
+              referenceRuns={referenceRuns}
+              queryRuns={queryRuns}
+              referenceViews={referenceViews}
+              queryViews={queryViews}
+              compatible={crossInputsReady}
+              disabled={busy}
+              onReferenceDataset={(value) => { setReferenceDatasetId(value); setReferenceRunId(null); setReferenceViewId(null); }}
+              onQueryDataset={(value) => { setQueryDatasetId(value); setQueryRunId(null); setQueryViewId(null); }}
+              onReferenceRun={setReferenceRunId}
+              onQueryRun={setQueryRunId}
+              onReferenceView={setReferenceViewId}
+              onQueryView={setQueryViewId}
+              onSwap={() => {
+                const nextReferenceDataset = queryDatasetId;
+                const nextReferenceRun = queryRunId;
+                const nextReferenceView = queryViewId;
+                setQueryDatasetId(referenceDatasetId);
+                setQueryRunId(referenceRunId);
+                setQueryViewId(referenceViewId);
+                setReferenceDatasetId(nextReferenceDataset);
+                setReferenceRunId(nextReferenceRun);
+                setReferenceViewId(nextReferenceView);
+              }}
+            />}
             {tab === "overview" && overviewAnalysis === "feature_variance" && <Space wrap>
               <ParamLabel label={t("Near-zero threshold")} cached={cachedParam("nearZeroThreshold")} />
               <InputNumber min={0} max={1} step={0.0001} precision={6} value={nearZeroThreshold} onChange={(value) => setNearZeroThreshold(Math.min(lowVariationThreshold, Math.max(0, value ?? 1e-4)))} />
@@ -1269,8 +1501,8 @@ export default function Analysis() {
               />
               <Typography.Text type="secondary">{effectiveDimensionPreprocess === "standardized" ? t("Correlation basis") : t("Covariance basis")}</Typography.Text>
             </Space>}
-            {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap><Typography.Text>{t("Perturbation")}</Typography.Text><Select value={perturbationType} onChange={setPerturbationType} options={markOptions("perturbationType", [{ value: "jitter", label: t("Atomic jitter (Å)") }, { value: "strain", label: t("Isotropic strain") }])} /><ParamLabel label={t("Steps")} cached={cachedParam("perturbationCount")} /><InputNumber min={2} max={32} value={perturbationCount} onChange={(value) => setPerturbationCount(value ?? 8)} /><ParamLabel label={t("Maximum")} cached={cachedParam("perturbationMaximum")} /><InputNumber min={0.001} step={0.01} precision={3} value={perturbationMaximum} onChange={(value) => setPerturbationMaximum(value ?? 0.2)} /><Typography.Text>{t("Metric")}</Typography.Text><Select value={perturbationMetric} onChange={setPerturbationMetric} options={markOptions("perturbationMetric", ["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value })))} /></Space>}
-            {(tab === "coverage" || tab === "compare" || (tab === "sampling" && (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity")) || (tab === "overview" && (overviewAnalysis === "drift" || overviewAnalysis === "sensitivity"))) && <Space wrap><Typography.Text>{tab === "compare" ? t("Left") : tab === "sampling" ? t("Query") : t("Reference")}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? t("Right") : tab === "sampling" ? t("Reference") : t("Query")}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} notFoundContent={sensitivityPair ? t("No other completed run for this descriptor") : undefined} options={pairRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
+            {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap><Typography.Text>{t("Perturbation")}</Typography.Text><Select value={perturbationType} onChange={setPerturbationType} options={markOptions("perturbationType", [{ value: "jitter", label: t("Atomic jitter (Å)") }, { value: "strain", label: t("Isotropic strain") }])} /><ParamLabel label={t("Steps")} cached={cachedParam("perturbationCount")} /><InputNumber min={2} max={32} value={perturbationCount} onChange={(value) => setPerturbationCount(value ?? 8)} /><ParamLabel label={t("Maximum")} cached={cachedParam("perturbationMaximum")} /><InputNumber min={0.001} step={0.01} precision={3} value={perturbationMaximum} onChange={(value) => setPerturbationMaximum(value ?? 0.2)} /><ParamLabel label={t("Max structures")} cached={cachedParam("perturbationStructures")} /><Tooltip title={t("Structures sampled evenly across the run; every one is recomputed per amplitude.")} placement="top"><InputNumber aria-label={t("Max structures")} min={1} max={2048} step={8} value={perturbationStructures} onChange={(value) => setPerturbationStructures(Math.max(1, Math.min(2048, Math.round(value ?? 64))))} /></Tooltip><Typography.Text>{t("Metric")}</Typography.Text><Select value={perturbationMetric} onChange={setPerturbationMetric} options={markOptions("perturbationMetric", ["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value })))} /></Space>}
+            {(tab === "compare" || (tab === "overview" && overviewAnalysis === "sensitivity")) && <Space wrap><Typography.Text>{tab === "compare" ? t("Left") : t("Reference")}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? t("Right") : t("Query")}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} notFoundContent={sensitivityPair ? t("No other completed run for this descriptor") : undefined} options={pairRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
             {tab === "compare" && <Space wrap><Typography.Text>{t("Test")}</Typography.Text><Select value={compareMode} onChange={setCompareMode} options={markOptions("compareMode", [{ value: "geometry", label: t("Geometry comparison") }, { value: "mantel", label: t("Mantel permutation test") }])} />{compareMode === "mantel" && <><Typography.Text>{t("Statistic")}</Typography.Text><Select value={mantelMethod} onChange={setMantelMethod} options={markOptions("mantelMethod", [{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }])} /><ParamLabel label={t("Permutations")} cached={cachedParam("mantelPermutations")} /><InputNumber min={1} max={5000} value={mantelPermutations} onChange={(value) => setMantelPermutations(value ?? 999)} /></>}</Space>}
             {tab === "similarity" && similarityMode !== "pairwise" && <Space wrap>{similarityMode === "query" && <><ParamLabel label={t("Query index")} cached={cachedParam("queryIndex")} /><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /></>}<ParamLabel label="k" cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
             {tab === "overview" && overviewAnalysis === "trajectory" && <Typography.Text type="secondary">{t("Frame range, trajectory sampling interval, event method, sensitivity, and coloring live in the trajectory result itself.")}</Typography.Text>}
@@ -1286,7 +1518,7 @@ export default function Analysis() {
             </Space>}
             <div className="analysis-controls-actions">
               <Space wrap>
-                <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.tab === tab && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={!selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
+                <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.tab === tab && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={crossDatasetModule ? !crossInputsReady : !selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
                 {/* Only the Projection canvas recolors by property; every
                     other module owns its coloring inside the result view. */}
                 {tab === "projection" && points.length > 0 && <Select size="small" aria-label={t("Color by")} value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
@@ -1321,8 +1553,8 @@ export default function Analysis() {
         </main>
 
         <aside className="analysis-inspector">
-          <section className="analysis-card"><SectionHeading title={t("INSPECTOR")} meta={selectedPoint ? t("Frame {index}", { index: selectedPoint.frame }) : undefined} />{selectedPoint ? <><Row k={t("Sample")} v={selectedPoint.sample_id ?? String(selectedPoint.i)} /><Row k={t("Frame")} v={String(selectedPoint.frame)} />{selectedPoint.row != null && <Row k={t("Row")} v={String(selectedPoint.row)} />}<Button size="small" icon={<ArrowRight16Regular />} onClick={() => { st.setActiveFrame(selectedPoint.frame); st.setPage("explore"); }}>{t("Open in Explore")}</Button></> : <Typography.Text type="secondary">{t("Click a point, or use box/lasso selection, to inspect a structure.")}</Typography.Text>}</section>
-          <section className="analysis-card"><SectionHeading title={t("STRUCTURE PREVIEW")} meta={selectedFrame ? t("Frame {index}", { index: selectedFrame.index }) : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} selectedAtom={selectedPoint?.row} localCutoff={preview?.kind === "local_diversity" && selectedPoint?.row != null ? localCutoff : undefined} onOpen={() => { st.setActiveFrame(selectedFrame.index); st.setPage("explore"); }} onSelectAtom={handlePreviewAtomSelect} /> : <div className="analysis-empty-small">{selectedFrameBusy ? t("Loading structure…") : t("Select a sample to preview it.")}</div>}</section>
+          <section className="analysis-card"><SectionHeading title={t("INSPECTOR")} meta={selectedPoint ? t("Frame {index}", { index: selectedPoint.frame }) : undefined} />{selectedPoint ? <><Row k={t("Sample")} v={selectedPoint.sample_id ?? String(selectedPoint.i)} /><Row k={t("Frame")} v={String(selectedPoint.frame)} />{selectedPoint.row != null && <Row k={t("Row")} v={String(selectedPoint.row)} />}<Button size="small" icon={<ArrowRight16Regular />} onClick={openPointInExplore}>{t("Open in Explore")}</Button></> : <Typography.Text type="secondary">{t("Click a point, or use box/lasso selection, to inspect a structure.")}</Typography.Text>}</section>
+          <section className="analysis-card"><SectionHeading title={t("STRUCTURE PREVIEW")} meta={selectedFrame ? t("Frame {index}", { index: selectedFrame.index }) : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} selectedAtom={selectedPoint?.row} localCutoff={preview?.kind === "local_diversity" && selectedPoint?.row != null ? localCutoff : undefined} onOpen={openPointInExplore} onSelectAtom={handlePreviewAtomSelect} /> : <div className="analysis-empty-small">{selectedFrameBusy ? t("Loading structure…") : t("Select a sample to preview it.")}</div>}</section>
           <section className="analysis-card"><SectionHeading title={t("ANALYSIS HISTORY")} meta={`${visibleAnalyses.length}`} />{visibleAnalyses.length ? <div className="analysis-history-list">{visibleAnalyses.slice(0, 10).map((row) => <div className="analysis-history-row" key={row.id}><div><Typography.Text strong>{row.analysis_type}</Typography.Text><Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>{new Date(row.created_at).toLocaleString(locale)}</Typography.Text></div><Space size={4}><Tag color={row.status === "COMPLETED" ? "green" : row.status === "STALE" ? "orange" : undefined}>{jobStatusLabel(tr, row.status)}</Tag><Button size="small" type="text" icon={<ArrowRight16Regular />} aria-label={t("Load {name} analysis", { name: row.analysis_type })} title={t("Load cached analysis")} loading={loadingAnalysisId === row.id} disabled={row.status !== "COMPLETED" || (loadingAnalysisId !== null && loadingAnalysisId !== row.id)} onClick={() => void loadAnalysis(row)} /><Button size="small" type="text" icon={<Delete16Regular />} aria-label={t("Delete {name} analysis", { name: row.analysis_type })} disabled={row.status === "RUNNING" || row.status === "QUEUED"} onClick={() => void deleteAnalysis(row)} /></Space></div>)}</div> : <Typography.Text type="secondary">{t("No analysis artifacts for this descriptor run yet.")}</Typography.Text>}</section>
         </aside>
       </div>

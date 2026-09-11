@@ -59,11 +59,12 @@ describe("watchJob", () => {
     vi.spyOn(ipc, "request").mockResolvedValue({
       id: "job-fast",
       status: "COMPLETED",
+      result: { path: "saved.extxyz" },
       message: null,
       error: null,
     } as never);
 
-    await expect(watchJob("job-fast")).resolves.toMatchObject({ status: "COMPLETED", result: null, error: null });
+    await expect(watchJob("job-fast")).resolves.toMatchObject({ status: "COMPLETED", result: { path: "saved.extxyz" }, error: null });
   });
 
   it("prefers the live finished event result", async () => {
