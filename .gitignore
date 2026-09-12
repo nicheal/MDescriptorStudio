@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
 build/
 dist/
 backend/dist/
@@ -16,6 +17,7 @@ frontend/tsconfig.tsbuildinfo
 
 # Tauri / Rust
 src-tauri/target/
+src-tauri/gen/schemas/
 src-tauri/binaries/*.exe
 !src-tauri/binaries/.gitkeep
 
@@ -31,5 +33,6 @@ backend/mdescriptor_studio_backend/datasets/_native/
 
 # Vendored engine source / local tooling state
 .tmp-src/
+.tmp-thread-tests/
 .zcode/plans/
 .workbuddy/

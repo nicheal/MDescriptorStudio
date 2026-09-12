@@ -29,8 +29,7 @@ backend/mdescriptor_studio_backend/
 │   ├── result_service.py        # run 历史/metadata；load_values 仅供分析
 │   ├── analysis_service.py      # 统一 Analysis API、JobManager、artifact/cache、导出
 │   └── analysis/
-│       ├── engine.py             # CPU-first PCA/UMAP/t-SNE/cluster/outlier/sampling/quality
-│       └── models.py             # AnalysisResult / ArtifactManifest 序列化契约
+│       └── engine.py             # CPU-first PCA/UMAP/t-SNE/cluster/outlier/sampling/quality
 └── storage/database.py          # SQLite WAL + 写锁 + 迁移(当前 v3)
 ```
 

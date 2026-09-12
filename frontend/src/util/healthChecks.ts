@@ -10,7 +10,7 @@ export const CHECK_KEYS = [
   "net_force",
 ] as const;
 
-export type HealthCheckKey = (typeof CHECK_KEYS)[number];
+type HealthCheckKey = (typeof CHECK_KEYS)[number];
 
 const CHECK_TITLES: Record<HealthCheckKey, string> = {
   missing_values: "Missing values",

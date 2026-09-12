@@ -8,17 +8,10 @@ the fallback path anyway.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-BACKEND = Path(__file__).resolve().parent.parent / "backend"
-if str(BACKEND) not in sys.path:
-    sys.path.insert(0, str(BACKEND))
-
-from mdescriptor_studio_backend.datasets import statistics as st  # noqa: E402
+from mdescriptor_studio_backend.datasets import statistics as st
 from mdescriptor_studio_backend.datasets import native as native_mod  # noqa: E402
 from mdescriptor_studio_backend.datasets.covalent_radii import (  # noqa: E402
     _ARRAY as RADII,

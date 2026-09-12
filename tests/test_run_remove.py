@@ -3,16 +3,13 @@ jobs, remove the on-disk result/analysis dirs, and refuse non-terminal runs
 (a live runner would keep writing into them — cancel the job first).
 """
 
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
-
-from mdescriptor_studio_backend.errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE  # noqa: E402
-from mdescriptor_studio_backend.services.result_service import ResultService  # noqa: E402
-from mdescriptor_studio_backend.storage.database import Database  # noqa: E402
+from mdescriptor_studio_backend.errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
+from mdescriptor_studio_backend.services.result_service import ResultService
+from mdescriptor_studio_backend.storage.database import Database
 
 
 def _env(tmp_path: Path):

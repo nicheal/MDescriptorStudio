@@ -118,11 +118,6 @@ class JobService:
         # jobs left non-terminal by a previous session can never finish: close them.
         # Their run rows are zombies too — nothing will ever settle them.
         self._sweep_zombie_runs("backend_restart")
-        self.db.execute(
-            "UPDATE jobs SET status = 'CANCELLED', finished_at = ?, error = 'backend_restart'"
-            " WHERE status IN ('QUEUED', 'RUNNING')",
-            (_NOW(),),
-        )
 
     # -- submit / run -----------------------------------------------------
     def submit(
@@ -157,7 +152,7 @@ class JobService:
             raise
 
     def _sweep_zombie_runs(self, reason: str) -> None:
-        """Settle run rows abandoned non-terminal (crash/restart/shutdown)."""
+        """Settle job and run rows abandoned non-terminal (crash/restart/shutdown)."""
         self.db.execute(
             "UPDATE descriptor_runs SET status = 'CANCELLED', finished_at = ?, error_message = ?"
             " WHERE status IN ('QUEUED', 'RUNNING')",
@@ -167,6 +162,11 @@ class JobService:
             "UPDATE analysis_runs SET status = 'CANCELLED', finished_at = ?"
             " WHERE status IN ('QUEUED', 'RUNNING')",
             (_NOW(),),
+        )
+        self.db.execute(
+            "UPDATE jobs SET status = 'CANCELLED', finished_at = ?, error = ?"
+            " WHERE status IN ('QUEUED', 'RUNNING')",
+            (_NOW(), reason),
         )
 
     def _run(self, job_id: str, job_type: str, runner) -> None:
@@ -365,8 +365,3 @@ class JobService:
         # anything still non-terminal can no longer reach the about-to-close db:
         # close it out here so the table never keeps zombie RUNNING rows
         self._sweep_zombie_runs("backend_shutdown")
-        self.db.execute(
-            "UPDATE jobs SET status = 'CANCELLED', finished_at = ?, error = 'backend_shutdown'"
-            " WHERE status IN ('QUEUED', 'RUNNING')",
-            (_NOW(),),
-        )

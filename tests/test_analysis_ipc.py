@@ -4,13 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import sys
+from make_fixtures import write_deepmd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_deepmd  # noqa: E402
-
-from test_backend_smoke import BackendProcess  # noqa: E402
-from test_dataset_flow import wait_job  # noqa: E402
+from conftest import BackendProcess, wait_job
 
 
 def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:

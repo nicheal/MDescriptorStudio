@@ -156,72 +156,30 @@ function intHist(pairs: [number, number][]): Hist {
   return { edges, counts };
 }
 
-// real per-element atom-count distributions measured from the Zhang CHO set
-function choElementCounts(): Record<string, Hist> {
-  const c = intHist([
-    [132, 1], [134, 2], [135, 4], [136, 13], [137, 13], [138, 31], [139, 80],
-    [140, 2728], [141, 136], [142, 204], [143, 218], [144, 148], [145, 119],
-    [146, 51], [147, 65],
-  ]);
-  const o = intHist([
-    [3, 6], [4, 1], [6, 4], [7, 11], [8, 12], [9, 9], [10, 27], [11, 55],
-    [12, 52], [13, 67], [14, 363], [15, 18], [16, 12], [17, 37], [18, 19],
-    [19, 13], [20, 39], [21, 31], [22, 42], [23, 36], [24, 47], [25, 48],
-    [26, 53], [27, 69], [28, 370], [29, 16], [30, 31], [31, 32], [32, 29],
-    [33, 20], [34, 25], [35, 21], [36, 43], [37, 22], [38, 52], [39, 33],
-    [40, 106], [41, 72], [42, 376], [43, 20], [44, 16], [45, 22], [46, 25],
-    [47, 26], [48, 27], [49, 39], [50, 32], [51, 29], [52, 63], [53, 47],
-    [54, 52], [55, 45], [56, 339], [57, 13], [58, 20], [59, 54], [60, 48],
-    [61, 57], [62, 58], [63, 50], [64, 44], [65, 39], [66, 43], [67, 29],
-    [68, 67], [69, 31], [70, 148], [71, 3], [72, 7], [73, 1],
-  ]);
-  const hPairs: [number, number][] = [];
-  for (let v = 1; v <= 70; v++) {
-    const c = Math.round(3813 * (0.018 * Math.exp(-((v - 14) ** 2) / 260) + 0.008 * Math.exp(-((v - 45) ** 2) / 500)) + 4);
-    hPairs.push([v, c]);
-  }
-  return { C: c, H: intHist(hPairs), O: o };
-}
-
-// long-tail exact stoichiometry like the real Zhang CHO set: 794 species over
-// 3813 structures, the largest single species at ~2.7%
-function choFormulas(): { formula: string; elements: string[]; count: number }[] {
-  const top: [string, string[], number][] = [
-    ["C140O42", ["C", "O"], 102],
-    ["C140O56", ["C", "O"], 101],
-    ["C140H10O42", ["C", "H", "O"], 100],
-    ["C140O28", ["C", "O"], 97],
-    ["C140O14", ["C", "O"], 90],
-    ["C140H7O28", ["C", "H", "O"], 84],
-    ["C140H4O14", ["C", "H", "O"], 72],
-    ["C140H21O42", ["C", "H", "O"], 69],
-    ["C140H10O14", ["C", "H", "O"], 65],
-    ["C140H14O28", ["C", "H", "O"], 65],
-    ["C140H14O56", ["C", "H", "O"], 65],
-    ["C140H14O14", ["C", "H", "O"], 61],
-  ];
-  const rows: { formula: string; elements: string[]; count: number }[] = top.map(([formula, elements, count]) => ({
-    formula,
-    elements,
-    count,
-  }));
-  let remaining = 3813 - rows.reduce((s, r) => s + r.count, 0);
-  const TAIL = 782;
-  for (let i = 0; i < TAIL; i++) {
-    const left = TAIL - i;
-    const avg = remaining / left;
+// Synthetic CHO stoichiometry: a fixed C140 backbone with arithmetically
+// varied H/O counts across 794 species totalling the dataset's 3813
+// structures. Pure arithmetic, so preview reloads stay deterministic.
+function choStats(): { formulas: { formula: string; elements: string[]; count: number }[]; elementAtomCounts: Record<string, Hist> } {
+  const formulas: { formula: string; elements: string[]; count: number }[] = [];
+  const hCounts = new Map<number, number>();
+  const oCounts = new Map<number, number>();
+  let remaining = 3813;
+  for (let i = 0; i < 794; i++) {
+    const left = 794 - i;
     const h = i % 23;
     const o = ((i * 7) % 57) + 1;
-    const count = i === TAIL - 1 ? remaining : Math.max(1, Math.min(60 - Math.floor(i / 16), Math.round(avg * 1.6), remaining - (left - 1)));
-    rows.push({
-      formula: h > 0 ? `C140H${h}O${o}` : `C140O${o}`,
-      elements: h > 0 ? ["C", "H", "O"] : ["C", "O"],
-      count,
-    });
+    // decaying share of the remaining budget keeps abundant species on top
+    const count = i === 793 ? remaining : Math.max(1, Math.min(Math.round((remaining / left) * 1.6), remaining - (left - 1)));
+    formulas.push({ formula: h > 0 ? `C140H${h}O${o}` : `C140O${o}`, elements: h > 0 ? ["C", "H", "O"] : ["C", "O"], count });
+    if (h > 0) hCounts.set(h, (hCounts.get(h) ?? 0) + count);
+    oCounts.set(o, (oCounts.get(o) ?? 0) + count);
     remaining -= count;
   }
-  return rows;
+  const pairs = (m: Map<number, number>): [number, number][] => [...m.entries()].sort((a, b) => a[0] - b[0]);
+  return { formulas, elementAtomCounts: { C: intHist([[140, 3813]]), H: intHist(pairs(hCounts)), O: intHist(pairs(oCounts)) } };
 }
+
+const CHO_STATS = choStats();
 
 const STATS: Record<string, unknown> = {
   "ds-gaas": {
@@ -296,8 +254,8 @@ const STATS: Record<string, unknown> = {
       { elements: ["C", "O"], count: 547 },
       { elements: ["C", "H", "O"], count: 3266 },
     ],
-    formulas: choFormulas(),
-    element_atom_counts: choElementCounts(),
+    formulas: CHO_STATS.formulas,
+    element_atom_counts: CHO_STATS.elementAtomCounts,
     atoms_per_structure: hist(140, 250, 40, 196, 16),
     atoms_per_structure_summary: { min: 154, max: 240, mean: 196, median: 196 },
     energy_per_atom: hist(-9, -6, 50, -7.6, 0.4),
@@ -1207,20 +1165,6 @@ const METHODS: Record<string, Handler> = {
       },
     };
   },
-  "run.list": () => [
-    {
-      id: "run-dpa2",
-      dataset_id: "ds-gaas",
-      dataset_name: "GaAs Training Set",
-      descriptor_name: "DPA-2",
-      engine_version: "0.3.2",
-      scope: "dataset",
-      status: "COMPLETED",
-      created_at: new Date(NOW - 3600_000).toISOString(),
-      result_path: null,
-      shape: "[12480, 256]",
-    },
-  ],
   // mutable run rows + a scripted job lifecycle so the Results page can be
   // watched flipping QUEUED -> RUNNING -> COMPLETED without the real backend
   "result.list": (p) => {
@@ -1270,7 +1214,6 @@ const METHODS: Record<string, Handler> = {
   "analysis.cluster": (_p) => mockAnalysisSubmit("job-cluster-live", "ana-mock-clusters", "clusters"),
   "analysis.outlier": (_p) => mockAnalysisSubmit("job-outlier-live", "ana-mock-outliers", "outliers"),
   "analysis.sampling": (_p) => mockAnalysisSubmit("job-sampling-live", "ana-mock-sampling", "sampling"),
-  "analysis.fps": (_p) => mockAnalysisSubmit("job-fps-live", "ana-mock-sampling", "sampling"),
   "analysis.coverage": (_p) => mockAnalysisSubmit("job-coverage-live", "ana-mock-coverage", "coverage"),
   "analysis.overlap": (_p) => mockAnalysisSubmit("job-overlap-live", "ana-mock-overlap", "overlap"),
   "analysis.acquisition": (p) => {
@@ -1342,17 +1285,6 @@ const METHODS: Record<string, Handler> = {
       x_label: "PC1 (61.2%)",
       y_label: "PC2 (22.1%)",
     };
-  },
-  "result.heatmap": (p) => {
-    const atoms = Array.from({ length: 8 }, (_, i) => i);
-    const features = Array.from({ length: 96 }, (_, i) => i);
-    const frame = Number(p.frame_index ?? 0);
-    const values = atoms.map((atom) =>
-      features.map((feature) =>
-        Number((Math.sin(atom * 0.8 + feature / 14 + frame / 10) * 0.45 + Math.cos(feature / 9) * 0.2).toFixed(6)),
-      ),
-    );
-    return { atoms, features, values, atomOffset: 0 };
   },
 };
 
@@ -1552,32 +1484,10 @@ function showPreviewError(text: string) {
 };
 
 async function bootstrap() {
-  const React = await import("react");
-  const ReactDOM = await import("react-dom/client");
-  const antd = await import("antd");
-  const [{ theme }, { default: enUS }, { default: zhCN }, { useI18n }] = await Promise.all([
-    import("./theme"),
-    import("antd/locale/en_US"),
-    import("antd/locale/zh_CN"),
-    import("./i18n"),
-  ]);
-  const { default: App } = await import("./App");
-  // Applies the antd locale pack for the selected UI language around the app.
-  const LocalizedApp = () => {
-    const lang = useI18n((s) => s.lang);
-    return React.createElement(
-      antd.ConfigProvider,
-      { theme, locale: lang === "zh" ? zhCN : enUS },
-      React.createElement(antd.App, null, React.createElement(App)),
-    );
-  };
-  ReactDOM.createRoot(document.getElementById("root")!).render(
-    React.createElement(
-      React.StrictMode,
-      null,
-      React.createElement(LocalizedApp),
-    ),
-  );
+  // Same mounting path as main.tsx; loaded asynchronously so the mock backend
+  // above is fully installed before the real app boots.
+  const { mountApp } = await import("./AppMount");
+  mountApp(document.getElementById("root")!);
 }
 
 void bootstrap();

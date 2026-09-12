@@ -1,15 +1,15 @@
 """Multi-set DeepMD layout (set.000/, set.001/ ...) — bug3 regression."""
 
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_deepmd  # noqa: E402
+from make_fixtures import write_deepmd
 
-from mdescriptor_studio_backend.datasets import create_adapter, detect_format  # noqa: E402
+from mdescriptor_studio_backend.datasets import create_adapter, detect_format
+
+from conftest import BackendProcess, wait_job
 
 REAL_DATASET = Path(r"D:\mlffkit\mlffkit\tests\dpdata-C50Cl1")
 
@@ -47,10 +47,6 @@ def test_real_deepmd_dataset(tmp_path: Path) -> None:
     """Smoke against the user's real dataset (skipped when not on this machine)."""
     if not REAL_DATASET.exists():
         pytest.skip("real dataset not present")
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from test_backend_smoke import BackendProcess
-    from test_dataset_flow import wait_job
-
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"

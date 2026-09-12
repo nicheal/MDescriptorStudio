@@ -1,12 +1,10 @@
 """Adapter + statistics unit tests on generated fixtures."""
 
-import sys
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_deepmd, write_extxyz  # noqa: E402
+from make_fixtures import write_deepmd, write_extxyz
 
 from mdescriptor_studio_backend.datasets import (
     compute_fingerprint,

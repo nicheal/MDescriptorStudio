@@ -18,7 +18,6 @@ use tauri::{Emitter, EventTarget, Manager};
 const PROTOCOL_VERSION: u64 = 1;
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_REQUESTS: usize = 1024;
-const MAX_REQUEST_ID: u64 = (1 << 53) - 1;
 const TRIPLE: &str = "x86_64-pc-windows-msvc";
 const BACKEND_EVENT: &str = "backend-message";
 const BACKEND_EXIT_EVENT: &str = "backend-exit";
@@ -270,9 +269,6 @@ fn route_backend_line(handle: &tauri::AppHandle, line: String) {
         eprintln!("backend emitted an unaddressed frame");
         return;
     };
-    if id > MAX_REQUEST_ID {
-        return;
-    }
     let is_pending = handle
         .state::<BackendState>()
         .pending_ids

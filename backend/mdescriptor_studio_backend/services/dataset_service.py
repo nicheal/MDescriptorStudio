@@ -319,8 +319,8 @@ class DatasetService:
                     ),
                 )
             except Exception as exc:
-                # a concurrent register of the same path loses here; surface the
-                # domain error instead of a raw UNIQUE constraint (red-team #5)
+                # a concurrent register of the same path loses the source_path
+                # UNIQUE race; surface the domain error, not the raw constraint
                 if "UNIQUE constraint failed: datasets.source_path" in str(exc):
                     raise AppError(
                         INVALID_DATASET, "dataset is already registered"
@@ -524,30 +524,40 @@ class DatasetService:
         )
         return {"views": [self._view_meta(self._view_row(record[0])) for record in records]}
 
+    def _export_destination(self, row: dict, params: dict, verb: str, extxyz_msg: str):
+        """Shared destination pipeline for view.materialize and export_cleaned:
+        validate/reject dest_path, keep it outside the source, and pick the
+        writer from the on-disk format. Returns (dest, fmt, writer)."""
+        raw_dest = params.get("dest_path")
+        if not raw_dest or not isinstance(raw_dest, str):
+            raise AppError(INVALID_PARAMS, "'dest_path' (string) is required")
+        try:
+            dest = validate_local_path(raw_dest, field=f"{verb} destination path")
+        except UnsafePathError as exc:
+            raise AppError(INVALID_PARAMS, f"{verb} destination must be an absolute local path") from exc
+        if dest.exists():
+            raise AppError(INVALID_DATASET, f"{verb} destination already exists: {dest}")
+        source = validate_local_path(row["source_path"], field="dataset source path")
+        if dest == source or source in dest.parents or dest in source.parents:
+            raise AppError(INVALID_DATASET, f"{verb} destination must be outside the source dataset path")
+        fmt = detect_format(source) if source.exists() else row["format"]
+        if fmt == "extxyz":
+            if dest.suffix.lower() not in (".xyz", ".extxyz"):
+                raise AppError(INVALID_DATASET, extxyz_msg)
+            from ..datasets.exporters import write_extxyz as writer
+        else:
+            from ..datasets.exporters import write_deepmd as writer
+        return dest, fmt, writer
+
     def view_materialize(self, params: dict) -> dict:
         view = self._view_row(params.get("view_id"))
         dataset = self._row(view["dataset_id"])
         if view["dataset_fingerprint"] != dataset["fingerprint"] or not self._meta(dataset)["cache_valid"]:
             raise AppError(DATASET_CHANGED, "dataset view is stale")
-        raw_dest = params.get("dest_path")
-        if not raw_dest or not isinstance(raw_dest, str):
-            raise AppError(INVALID_PARAMS, "'dest_path' (string) is required")
-        try:
-            dest = validate_local_path(raw_dest, field="materialize destination path")
-        except UnsafePathError as exc:
-            raise AppError(INVALID_PARAMS, "materialize destination must be an absolute local path") from exc
-        if dest.exists():
-            raise AppError(INVALID_DATASET, f"materialize destination already exists: {dest}")
-        source = validate_local_path(dataset["source_path"], field="dataset source path")
-        if dest == source or source in dest.parents or dest in source.parents:
-            raise AppError(INVALID_DATASET, "materialize destination must be outside the source dataset path")
-        fmt = detect_format(source) if source.exists() else dataset["format"]
-        if fmt == "extxyz":
-            if dest.suffix.lower() not in (".xyz", ".extxyz"):
-                raise AppError(INVALID_DATASET, "materializing an extxyz view needs a .xyz / .extxyz destination")
-            from ..datasets.exporters import write_extxyz as writer
-        else:
-            from ..datasets.exporters import write_deepmd as writer
+        dest, fmt, writer = self._export_destination(
+            dataset, params, "materialize",
+            "materializing an extxyz view needs a .xyz / .extxyz destination",
+        )
         indices = [int(value) for value in json.loads(view["frame_indices_json"])]
 
         def runner(ctx):
@@ -803,25 +813,10 @@ class DatasetService:
         """Write a new dataset file/dir that skips excluded frames (the source
         is never modified); the UI registers the result via dataset.register."""
         row = self._row(params.get("id"))
-        raw_dest = params.get("dest_path")
-        if not raw_dest or not isinstance(raw_dest, str):
-            raise AppError(INVALID_PARAMS, "'dest_path' (string) is required")
-        try:
-            dest = validate_local_path(raw_dest, field="export destination path")
-        except UnsafePathError as exc:
-            raise AppError(INVALID_PARAMS, "export destination must be an absolute local path") from exc
-        if dest.exists():
-            raise AppError(INVALID_DATASET, f"export destination already exists: {dest}")
-        source = validate_local_path(row["source_path"], field="dataset source path")
-        if dest == source or source in dest.parents or dest in source.parents:
-            raise AppError(INVALID_DATASET, "export destination must be outside the source dataset path")
-        fmt = detect_format(source) if source.exists() else row["format"]
-        if fmt == "extxyz":
-            if dest.suffix.lower() not in (".xyz", ".extxyz"):
-                raise AppError(INVALID_DATASET, "exporting an extxyz dataset needs a .xyz / .extxyz destination")
-            from ..datasets.exporters import write_extxyz as writer
-        else:
-            from ..datasets.exporters import write_deepmd as writer
+        dest, fmt, writer = self._export_destination(
+            row, params, "export",
+            "exporting an extxyz dataset needs a .xyz / .extxyz destination",
+        )
 
         def runner(ctx):
             excluded = self._excluded_set(row["id"])
@@ -863,11 +858,6 @@ class DatasetService:
                     source = validate_local_path(row["source_path"], field="dataset source path")
                 except UnsafePathError as exc:
                     raise AppError(INVALID_DATASET, "dataset source path is not a safe local path") from exc
-                legacy_current = (
-                    compute_legacy_fingerprint(source, row["number_of_frames"])
-                    if not is_v2_fingerprint(old_fingerprint)
-                    else None
-                )
                 adapter = self._adapter_for(row)
                 excluded = self._excluded_set(ds_id)
                 total = max(len(adapter) - len(excluded), 1)
@@ -1075,7 +1065,7 @@ def periodic_boundary_ghosts(
     try:
         a_inv = np.linalg.inv(cell)
     except np.linalg.LinAlgError:
-        return []  # singular cell: no well-defined images (red-team #7)
+        return []  # singular cell: no invertible lattice, so no well-defined images
     frac = pos @ a_inv
     frac_w = frac - np.floor(frac)  # face test needs in-cell fraction
     spacing = 1.0 / np.linalg.norm(a_inv, axis=0)  # interplanar distance per axis

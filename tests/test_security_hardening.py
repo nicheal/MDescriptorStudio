@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from mdescriptor_studio_backend.datasets import compute_fingerprint
@@ -68,6 +68,10 @@ def test_fingerprint_v2_changes_when_file_content_changes(tmp_path: Path) -> Non
     source = tmp_path / "sample.xyz"
     source.write_bytes(b"A" * 4096)
     before = compute_fingerprint(source)
+    # cross an NTFS last-write timestamp tick: two same-size writes inside one
+    # tick share an mtime_ns, and the 2s fingerprint cache would then return
+    # the first value for the second call
+    time.sleep(0.02)
     source.write_bytes(b"B" * 4096)
     after = compute_fingerprint(source)
     assert before.startswith("v2:")

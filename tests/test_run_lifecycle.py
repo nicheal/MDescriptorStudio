@@ -11,24 +11,13 @@ descriptor_runs row on the cancel/failure path, so the Results page reads
 status RUNNING forever.
 """
 
-import sys
 import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_deepmd  # noqa: E402
+from make_fixtures import write_deepmd
 
-from test_backend_smoke import BackendProcess  # noqa: E402
-from test_dataset_flow import wait_job  # noqa: E402
-
-
-def _register(bp: BackendProcess, vid: int, path: Path) -> str:
-    resp = bp.request(vid, "dataset.register", {"path": str(path), "name": path.name})
-    # wide timeout: the suite may run alongside other heavy local jobs
-    done = wait_job(bp, resp["result"]["job_id"], timeout=180)
-    assert done["status"] == "COMPLETED", done
-    return done["result"]["dataset_id"]
+from conftest import BackendProcess, register_dataset, wait_job
 
 
 def _run_id_for_job(bp: BackendProcess, vid: int, job_id: str) -> str:
@@ -50,7 +39,7 @@ def test_cancel_marks_descriptor_run_cancelled(tmp_path: Path) -> None:
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"
-        ds_id = _register(bp, 10, ds_dir)
+        ds_id = register_dataset(bp, 10, ds_dir)
 
         sub = bp.request(
             11,
@@ -89,7 +78,7 @@ def test_failed_compute_marks_run_failed(tmp_path: Path) -> None:
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"
-        ds_id = _register(bp, 10, ds_dir)
+        ds_id = register_dataset(bp, 10, ds_dir)
 
         sub = bp.request(
             11,
@@ -121,7 +110,7 @@ def test_progress_does_not_claim_done_while_computing(tmp_path: Path) -> None:
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"
-        ds_id = _register(bp, 10, ds_dir)
+        ds_id = register_dataset(bp, 10, ds_dir)
 
         bp.send(
             {
@@ -159,7 +148,6 @@ def test_progress_does_not_claim_done_while_computing(tmp_path: Path) -> None:
 def test_backend_restart_closes_zombie_runs(tmp_path: Path) -> None:
     """A backend restart (or shutdown) must also settle descriptor_runs rows
     left non-terminal by jobs that can no longer finish."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
     from mdescriptor_studio_backend.services.job_service import JobService
     from mdescriptor_studio_backend.storage.database import Database
 
@@ -184,7 +172,6 @@ def test_backend_restart_closes_zombie_runs(tmp_path: Path) -> None:
 
 
 def test_backend_shutdown_closes_zombie_runs(tmp_path: Path) -> None:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
     from mdescriptor_studio_backend.services.job_service import JobService
     from mdescriptor_studio_backend.storage.database import Database
 

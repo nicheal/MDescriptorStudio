@@ -1,21 +1,10 @@
 """Descriptor submit -> compute -> cache flow through the real engine (M3/M4 backend)."""
 
-import sys
-import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_deepmd  # noqa: E402
+from make_fixtures import write_deepmd
 
-from test_backend_smoke import BackendProcess  # noqa: E402
-from test_dataset_flow import wait_job  # noqa: E402
-
-
-def _register(bp: BackendProcess, path: Path) -> str:
-    resp = bp.request(100, "dataset.register", {"path": str(path), "name": path.name})
-    done = wait_job(bp, resp["result"]["job_id"])
-    assert done["status"] == "COMPLETED", done
-    return done["result"]["dataset_id"]
+from conftest import BackendProcess, register_dataset, wait_job
 
 
 def test_descriptor_registry_and_compute(tmp_path: Path) -> None:
@@ -24,7 +13,7 @@ def test_descriptor_registry_and_compute(tmp_path: Path) -> None:
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"
-        ds_id = _register(bp, ds_dir)
+        ds_id = register_dataset(bp, 100, ds_dir)
 
         # registry is dynamic (28 entries, no hardcoding)
         listing = bp.request(101, "descriptor.list")
@@ -131,7 +120,7 @@ def test_descriptor_device_selection(tmp_path: Path) -> None:
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"
-        ds_id = _register(bp, ds_dir)
+        ds_id = register_dataset(bp, 100, ds_dir)
 
         base = {
             "dataset_id": ds_id,

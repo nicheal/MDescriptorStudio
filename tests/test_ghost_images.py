@@ -1,11 +1,8 @@
 """Unit tests for periodic_boundary_ghosts (Explore page boundary images)."""
 
-import sys
 from pathlib import Path
 
 import numpy as np
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 from mdescriptor_studio_backend.services.dataset_service import periodic_boundary_ghosts
 

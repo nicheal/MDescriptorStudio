@@ -1,14 +1,10 @@
 """PCA + heatmap flow over IPC (M5 backend acceptance)."""
 
-import sys
-import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_deepmd  # noqa: E402
+from make_fixtures import write_deepmd
 
-from test_backend_smoke import BackendProcess  # noqa: E402
-from test_dataset_flow import wait_job  # noqa: E402
+from conftest import BackendProcess, wait_job
 
 
 def test_pca_and_heatmap(tmp_path: Path) -> None:

@@ -58,7 +58,7 @@ class Server:
         if stdin_available is None:
             self._serve_blocking(stream)
             return
-        mode = self._serve_polled(stream, stdin_available)
+        mode = self._serve_polled(stdin_available)
         if mode == "warm" and not self._closed.is_set():
             # Warmup imports are done: no DLL-loading import can race a
             # blocking read anymore, so return to the historical loop for
@@ -93,7 +93,7 @@ class Server:
                 break
         self.close()
 
-    def _serve_polled(self, stream, stdin_available) -> str:
+    def _serve_polled(self, stdin_available) -> str:
         """Polling loop for Windows pipe stdin: no ReadFile left in flight.
 
         While the background warmup imports the numeric stack, a blocking

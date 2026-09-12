@@ -13,6 +13,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
+
 from ..datasets import compute_fingerprint
 from ..errors import (
     AppError,
@@ -449,7 +451,7 @@ class DescriptorService:
         elif periodicity.get("isolated") and not periodicity.get("fully_periodic"):
             need = "isolated"
         else:
-            return  # uniform datasets above; mixed handled below
+            return  # mixed (checked above) or neither kind alone: nothing to require
         if need not in allowed:
             raise AppError(
                 UNSUPPORTED_PERIODICITY,
@@ -459,8 +461,6 @@ class DescriptorService:
     # -- compute job ------------------------------------------------------------
     @staticmethod
     def _frame_memory_bytes(frame) -> int:
-        import numpy as np
-
         total = 0
         for name in ("numbers", "positions", "cell", "pbc", "forces", "virial"):
             value = getattr(frame, name, None)
@@ -479,8 +479,6 @@ class DescriptorService:
             raise AppError(OUT_OF_MEMORY, "descriptor input exceeds the supported memory budget")
 
     def _run_compute(self, ctx, run_id, row, name, parameters, scope, frame_index, output_dtype, device="cpu", num_threads=None):
-        import numpy as np
-
         self.db.execute(
             "UPDATE descriptor_runs SET status = 'RUNNING', started_at = ? WHERE id = ?",
             (_NOW(), run_id),

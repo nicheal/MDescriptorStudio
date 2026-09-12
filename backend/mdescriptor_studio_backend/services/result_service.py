@@ -261,8 +261,6 @@ class ResultService:
             structure_index = 0
         else:
             structure_index = 0 if requested_frame is None else requested_frame
-            if structure_index < 0 or structure_index >= n_struct:
-                raise AppError(INVALID_PARAMS, f"frame index out of range: {structure_index}")
         if structure_index < 0 or structure_index >= n_struct:
             raise AppError(INVALID_PARAMS, f"frame index out of range: {structure_index}")
         lo, hi = int(offsets[structure_index]), int(offsets[structure_index + 1])

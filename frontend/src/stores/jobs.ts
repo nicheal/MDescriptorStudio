@@ -47,11 +47,6 @@ const JOB_TYPE_PAIRS: Record<string, Pair> = {
   "analysis.trajectory": { en: "Trajectory", zh: "轨迹" },
   "analysis.drift": { en: "Dataset drift", zh: "数据集漂移" },
   "analysis.sensitivity": { en: "Parameter sensitivity", zh: "参数敏感性" },
-  "analysis.kmeans": { en: "K-Means", zh: "K-Means" },
-  "analysis.dbscan": { en: "DBSCAN", zh: "DBSCAN" },
-  "analysis.hdbscan": { en: "HDBSCAN", zh: "HDBSCAN" },
-  "analysis.agglomerative": { en: "Agglomerative", zh: "层次聚类" },
-  "analysis.analysis": { en: "Analysis", zh: "分析" },
   "analysis.export": { en: "Analysis export", zh: "分析导出" },
 };
 
@@ -184,6 +179,24 @@ export function watchJob(jobId: string): Promise<{
       finish({ status: d.status, result: d.result ?? null, error: d.error ?? null });
     });
     void inspect();
+  });
+}
+
+/** Resolves when the backend job finishes; reports progress along the way. */
+export function jobDone(jobId: string, onProgress?: (p: number) => void): Promise<void> {
+  return new Promise((resolve) => {
+    const offDone = ipc.on("job.finished", (data) => {
+      const j = data as { job_id: string };
+      if (j.job_id !== jobId) return;
+      offDone();
+      offProgress();
+      resolve();
+    });
+    const offProgress = ipc.on("job.progress", (data) => {
+      const j = data as { job_id: string; progress: number };
+      if (j.job_id !== jobId) return;
+      onProgress?.(j.progress);
+    });
   });
 }
 

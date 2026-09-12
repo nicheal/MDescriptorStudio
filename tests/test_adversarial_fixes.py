@@ -1,21 +1,10 @@
 """Regression tests for adversarial-review fixes (red-team findings #1-#8)."""
 
-import sys
-import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_extxyz  # noqa: E402
+from make_fixtures import write_extxyz
 
-from test_backend_smoke import BackendProcess  # noqa: E402
-from test_dataset_flow import wait_job  # noqa: E402
-
-
-def _register(bp: BackendProcess, vid: int, path: Path, name: str = "d") -> str:
-    resp = bp.request(vid, "dataset.register", {"path": str(path), "name": name})
-    done = wait_job(bp, resp["result"]["job_id"])
-    assert done["status"] == "COMPLETED", done
-    return done["result"]["dataset_id"]
+from conftest import BackendProcess, register_dataset, wait_job
 
 
 def test_job_get_unknown_id_is_error(tmp_path: Path) -> None:
@@ -36,7 +25,7 @@ def test_adapter_cache_invalidated_on_change(tmp_path: Path) -> None:
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"
-        ds_id = _register(bp, 10, xyz)
+        ds_id = register_dataset(bp, 10, xyz)
 
         # warm the adapter cache, then change the data on disk
         assert bp.request(10, "dataset.frame", {"id": ds_id, "index": 0})["result"]
@@ -66,7 +55,7 @@ def test_remove_cleans_related_rows(tmp_path: Path) -> None:
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"
-        ds_id = _register(bp, 10, xyz)
+        ds_id = register_dataset(bp, 10, xyz)
         rm = bp.request(10, "dataset.remove", {"id": ds_id})
         assert rm["result"] == {"ok": True}
         # FK + explicit cleanup: no orphan statistics/jobs rows remain visible
@@ -87,7 +76,7 @@ def test_singular_cell_frame_is_not_an_error(tmp_path: Path) -> None:
     bp = BackendProcess(tmp_path)
     try:
         assert bp.read_line()["event"] == "backend.ready"
-        ds_id = _register(bp, 10, xyz)
+        ds_id = register_dataset(bp, 10, xyz)
         fr = bp.request(10, "dataset.frame", {"id": ds_id, "index": 0})
         payload = fr["result"]
         assert payload["natoms"] == 2

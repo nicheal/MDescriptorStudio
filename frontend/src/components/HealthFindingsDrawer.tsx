@@ -14,6 +14,7 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import SaveViewModal from "./SaveViewModal";
+import { jobDone } from "../stores/jobs";
 import { activeDataset, refetchDatasets, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
@@ -29,24 +30,6 @@ const EXCLUDED_TAB = "__excluded__";
 
 /** Localized labels for per-frame missing-property tags (dataset properties). */
 const PROP_LABELS: Record<string, string> = { energy: "Energy", forces: "Forces", virial: "Virial" };
-
-/** Resolves when the backend job finishes (same contract as the rail's helper). */
-function jobDone(jobId: string, onProgress?: (p: number) => void): Promise<void> {
-  return new Promise((resolve) => {
-    const offDone = ipc.on("job.finished", (data) => {
-      const j = data as { job_id: string };
-      if (j.job_id !== jobId) return;
-      offDone();
-      offProgress();
-      resolve();
-    });
-    const offProgress = ipc.on("job.progress", (data) => {
-      const j = data as { job_id: string; progress: number };
-      if (j.job_id !== jobId) return;
-      onProgress?.(j.progress);
-    });
-  });
-}
 
 export default function HealthFindingsDrawer() {
   const { message } = AntApp.useApp();

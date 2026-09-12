@@ -30,6 +30,7 @@ import { activeDataset, refetchDatasets, useWorkspace } from "../../stores/works
 import { useT, type T } from "../../i18n";
 import {
   JOB_STATUS_COLOR as STATUS_COLOR,
+  jobDone,
   jobStatusLabel,
   jobTypeLabel,
   mergeJobRows,
@@ -55,24 +56,6 @@ type StatisticsResponse = {
   job_id: string | null;
   stats: { structures: number; health?: DatasetHealth } | null;
 };
-
-/** Resolves when the backend job finishes; reports progress along the way. */
-function jobDone(jobId: string, onProgress?: (p: number) => void): Promise<void> {
-  return new Promise((resolve) => {
-    const offDone = ipc.on("job.finished", (data) => {
-      const j = data as { job_id: string };
-      if (j.job_id !== jobId) return;
-      offDone();
-      offProgress();
-      resolve();
-    });
-    const offProgress = ipc.on("job.progress", (data) => {
-      const j = data as { job_id: string; progress: number };
-      if (j.job_id !== jobId) return;
-      onProgress?.(j.progress);
-    });
-  });
-}
 
 /** Missing-values subtitle: per-property counts when the scan provides them
  * (declared properties only), otherwise the generic fallback. */

@@ -6,20 +6,17 @@ User-reported symptom: Jobs page shows FAILED while Results page keeps the run
 at RUNNING forever, because only the COMPLETED path ever updated the run row.
 """
 
-import sys
 import time
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
-
-from mdescriptor_studio_backend.services.analysis_service import AnalysisService  # noqa: E402
-from mdescriptor_studio_backend.services.descriptor_service import DescriptorService  # noqa: E402
-from mdescriptor_studio_backend.services.job_service import JobService  # noqa: E402
-from mdescriptor_studio_backend.services.result_service import ResultService  # noqa: E402
-from mdescriptor_studio_backend.storage.database import Database  # noqa: E402
-from mdescriptor_studio_backend.errors import RESULT_INCOMPATIBLE, AppError  # noqa: E402
+from mdescriptor_studio_backend.services.analysis_service import AnalysisService
+from mdescriptor_studio_backend.services.descriptor_service import DescriptorService
+from mdescriptor_studio_backend.services.job_service import JobService
+from mdescriptor_studio_backend.services.result_service import ResultService
+from mdescriptor_studio_backend.storage.database import Database
+from mdescriptor_studio_backend.errors import RESULT_INCOMPATIBLE, AppError
 
 _TERMINAL = ("COMPLETED", "FAILED", "CANCELLED")
 

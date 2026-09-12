@@ -158,8 +158,6 @@ class EngineAdapter:
             self._warm_gate.set()
 
     def _warmup_locked(self) -> None:
-        import numpy as np
-
         preload_native = getattr(md, "preload_native", None)
         if callable(preload_native):
             preload_native()

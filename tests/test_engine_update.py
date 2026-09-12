@@ -1,10 +1,9 @@
 """Engine update check over IPC (PyPI; tolerant to offline environments)."""
 
-import sys
 import time
 from pathlib import Path
 
-from test_backend_smoke import BackendProcess  # noqa: E402
+from conftest import BackendProcess
 
 
 def test_check_update_snapshot(tmp_path: Path) -> None:

@@ -60,7 +60,7 @@ def _configure_stdio() -> None:
             reconfigure(encoding="utf-8", errors="strict")
 
 
-def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root, updates):
+def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root, updates):
     def system_info(_params):
         return {
             "backend_version": __version__,
@@ -180,7 +180,7 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         "analysis.drift": analysis.drift,
         "analysis.sensitivity": analysis.sensitivity,
         "analysis.perturbation_sensitivity": analysis.perturbation_sensitivity,
-        "analysis.export": analysis.export,
+        "analysis.export": analysis.submit_export,
         "engine.check_update": engine_check_update,
         "engine.update": engine_update,
     }
@@ -208,7 +208,7 @@ def main() -> int:
     analysis = AnalysisService(db, jobs, results, datasets, root)
     updates = UpdateService(server.emit, info.get("version", "unknown"))
     server.methods = build_methods(
-        db, jobs, datasets, descriptors, results, analysis, db, info, root, updates
+        jobs, datasets, descriptors, results, analysis, db, info, root, updates
     )
 
     # Arm both warmup gates before the handshake: the heavy warmups below run
@@ -270,7 +270,8 @@ def main() -> int:
         log.exception("protocol server crashed")
         exit_code = 1
     finally:
-        # job pool first (it finalizes rows), then the database (red-team #3)
+        # job pool first: shutdown() settles job/run rows, so it must run while
+        # the database is still open
         jobs.shutdown()
         db.close()
     log.info("backend stopped")

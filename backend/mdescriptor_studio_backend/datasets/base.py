@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..errors import AppError, INVALID_DATASET, UNSUPPORTED_FORMAT
+from ..errors import AppError, UNSUPPORTED_FORMAT
 
 
 @dataclass

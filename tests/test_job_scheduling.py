@@ -6,17 +6,14 @@ engine.update; analysis and dataset pools are isolated so a blocked compute
 cannot starve scans, and shutdown cancels live jobs before settling rows.
 """
 
-import sys
 import threading
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
-
-from mdescriptor_studio_backend.errors import JOB_CANCELLED, AppError  # noqa: E402
-from mdescriptor_studio_backend.services.descriptor_service import DescriptorService  # noqa: E402
-from mdescriptor_studio_backend.services.job_service import JobService  # noqa: E402
-from mdescriptor_studio_backend.storage.database import Database  # noqa: E402
+from mdescriptor_studio_backend.errors import JOB_CANCELLED, AppError
+from mdescriptor_studio_backend.services.descriptor_service import DescriptorService
+from mdescriptor_studio_backend.services.job_service import JobService
+from mdescriptor_studio_backend.storage.database import Database
 
 _TERMINAL = ("COMPLETED", "FAILED", "CANCELLED")
 

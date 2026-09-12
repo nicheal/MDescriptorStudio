@@ -1,24 +1,11 @@
 """Full IPC flow: register (async job) -> statistics -> frame, over stdio."""
 
-import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_deepmd, write_extxyz  # noqa: E402
+from make_fixtures import write_deepmd, write_extxyz
 
-from test_backend_smoke import BackendProcess  # noqa: E402
-
-
-def wait_job(bp: BackendProcess, job_id: str, timeout: float = 60.0) -> dict:
-    """Wait for the job.finished event (carries the runner result payload)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        frame = bp.read_line()
-        if frame.get("event") == "job.finished" and frame["data"]["job_id"] == job_id:
-            return frame["data"]
-        # ignore job.progress events
-    raise AssertionError(f"job {job_id} did not finish in {timeout}s")
+from conftest import BackendProcess, wait_job
 
 
 def test_register_statistics_frame_flow(tmp_path: Path) -> None:

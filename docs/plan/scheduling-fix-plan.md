@@ -2,7 +2,7 @@
 
 - 日期:2026-09-06
 - 代码基线:commit `a55cef9`(Refine Jobs)
-- 状态:方案已评审,待实施
+- 状态:已实施(资源感知线程池见 job_service.py `_POOL_SIZES`)
 
 ## 一、现状概述
 

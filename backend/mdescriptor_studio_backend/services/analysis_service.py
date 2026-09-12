@@ -25,6 +25,7 @@ import numpy as np
 from ..analysis import AnalysisEngine, SampleMatrix
 from ..errors import (
     ANALYSIS_INPUT_INVALID,
+    ANALYSIS_INSUFFICIENT_SAMPLES,
     ANALYSIS_NOT_FOUND,
     ANALYSIS_STALE,
     ARTIFACT_INVALID,
@@ -56,32 +57,18 @@ _ANALYSIS_ID_RE = re.compile(r"^ana_[A-Za-z0-9_-]{1,64}$")
 _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
 _RESERVED_ARTIFACT_NAME_RE = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE)
 
-# Analysis dispatch table: analysis_type -> (engine_method, sample_arity) for
-# types that call AnalysisEngine.<engine_method>(*samples, params, progress)
-# directly (arity 2 = the cross-dataset reference/query pair).  The grouped
-# cluster/outlier/sampling funnels and the bespoke sensitivity runners keep
-# explicit dispatch in _run_engine.
-_ENGINE_DISPATCH: dict[str, tuple[str, int]] = {
-    "pca": ("pca", 1),
-    "umap": ("umap", 1),
-    "tsne": ("tsne", 1),
-    "neighbors": ("neighbors", 1),
-    "similarity": ("similarity", 1),
-    "pairwise": ("pairwise", 1),
-    "coverage": ("coverage", 2),
-    "overlap": ("overlap", 2),
-    "acquisition": ("acquisition", 2),
-    "compare": ("compare", 2),
-    "mantel": ("mantel", 2),
-    "drift": ("drift", 2),
-    "feature_variance": ("feature_variance", 1),
-    "feature_correlation": ("feature_correlation", 1),
-    "property_correlation": ("property_correlation", 1),
-    "local_diversity": ("local_diversity", 1),
-    "kernel": ("kernel", 1),
-    "effective_dimension": ("effective_dimension", 1),
-    "trajectory": ("trajectory", 1),
-}
+# Analysis types dispatched straight to the same-named AnalysisEngine method
+# as AnalysisEngine.<analysis_type>(*samples, params, progress); the pair types
+# take the cross-dataset reference/query matrix as a second sample.  Legacy PCA
+# keeps its dedicated runner (pca()); the grouped cluster/outlier/sampling
+# funnels and the bespoke sensitivity runners keep explicit dispatch in
+# _run_engine.
+_ENGINE_TYPES = frozenset({
+    "umap", "tsne", "neighbors", "similarity", "pairwise", "feature_variance",
+    "feature_correlation", "property_correlation", "local_diversity", "kernel",
+    "effective_dimension", "trajectory",
+})
+_ENGINE_PAIR_TYPES = frozenset({"coverage", "overlap", "acquisition", "compare", "mantel", "drift"})
 
 # Service methods that are exactly ``submit_generic(<analysis_type>, params)``;
 # they are generated from this set at the end of this module.  Everything else
@@ -94,6 +81,12 @@ _GENERIC_TYPES = frozenset({
     "effective_dimension", "trajectory", "drift", "sensitivity", "mantel",
     "perturbation_sensitivity",
 })
+
+# Per-sample array keys the preview builder maps onto points/rows.
+_PREVIEW_ARRAY_KEYS = (
+    "labels", "scores", "distances", "cluster_labels", "elements",
+    "coordination", "novelty", "uncertainty", "diversity",
+)
 
 
 def _pool_rows(values: np.ndarray, offsets: np.ndarray) -> np.ndarray:
@@ -358,7 +351,7 @@ class AnalysisService:
             frames = frame_values[local_frames]
             atoms = np.arange(values.shape[0], dtype=np.int64) - offsets[local_frames]
             pooled = values
-            max_points = 20000
+            max_points = _MAX_PREVIEW_POINTS
             if pooled.shape[0] > max_points:
                 keep = np.unique(np.linspace(0, pooled.shape[0] - 1, max_points).astype(int))
                 pooled, frames, atoms = pooled[keep], frames[keep], atoms[keep]
@@ -604,9 +597,6 @@ class AnalysisService:
     def sampling(self, params: dict) -> dict:
         algorithm = str(params.get("algorithm") or params.get("method") or "random").lower()
         return self.submit_generic(algorithm, params)
-
-    def export(self, params: dict) -> dict:
-        return self.submit_export(params)
 
     def submit_generic(self, analysis_type: str, params: dict) -> dict:
         """Create or reuse a generic analysis job.
@@ -882,11 +872,9 @@ class AnalysisService:
     def _run_engine(self, analysis_type: str, params: dict, rows: list[dict], samples: list[SampleMatrix], ctx) -> dict:
         progress = lambda fraction, message: (ctx.check_cancelled(), ctx.progress(None, None, message, fraction=0.1 + 0.85 * float(fraction)))
         self._apply_thread_limit()
-        dispatch = _ENGINE_DISPATCH.get(analysis_type)
-        if dispatch is not None:
-            engine_method, arity = dispatch
-            args = (samples[0], params) if arity == 1 else (samples[0], samples[1], params)
-            return getattr(AnalysisEngine, engine_method)(*args, progress)
+        if analysis_type in _ENGINE_TYPES or analysis_type in _ENGINE_PAIR_TYPES:
+            args = (samples[0], params) if analysis_type in _ENGINE_TYPES else (samples[0], samples[1], params)
+            return getattr(AnalysisEngine, analysis_type)(*args, progress)
         if analysis_type in ("kmeans", "dbscan", "hdbscan", "agglomerative", "hierarchical"):
             return AnalysisEngine.cluster(samples[0], params, analysis_type, progress)
         if analysis_type in ("knn", "lof", "isolation_forest", "isolation-forest", "iforest", "mahalanobis", "mahalanobis_distance"):
@@ -1357,14 +1345,14 @@ class AnalysisService:
                 if point is None:
                     continue
                 point.update({"x": float(coords[i, 0]), "y": float(coords[i, 1])})
-                for key in ("labels", "scores", "distances", "cluster_labels", "elements", "coordination", "novelty", "uncertainty", "diversity"):
+                for key in _PREVIEW_ARRAY_KEYS:
                     if key in arrays and np.asarray(arrays[key]).ndim == 1 and i < len(arrays[key]):
                         output_key = "label" if key == "labels" else "cluster" if key == "cluster_labels" else "element" if key == "elements" else key
                         point[output_key] = int(arrays[key][i]) if key in ("labels", "cluster_labels", "elements", "coordination") else float(arrays[key][i])
                 points.append(point)
             preview["points"] = points
             preview["total_points"] = int(coords.shape[0])
-            row_keys = [key for key in ("labels", "scores", "distances", "cluster_labels", "elements", "coordination", "novelty", "uncertainty", "diversity") if key in arrays and np.asarray(arrays[key]).ndim == 1]
+            row_keys = [key for key in _PREVIEW_ARRAY_KEYS if key in arrays and np.asarray(arrays[key]).ndim == 1]
             if row_keys:
                 rows = []
                 for i in range(min(coords.shape[0], _MAX_PREVIEW_POINTS)):
@@ -1424,7 +1412,7 @@ class AnalysisService:
             preview["rows"] = rows
             preview["total_rows"] = int(indices.size if indices.ndim == 1 else indices.shape[0] * indices.shape[1])
         elif "labels" in arrays or "scores" in arrays or "distances" in arrays or "coordination" in arrays or "uncertainty" in arrays:
-            lengths = [len(np.asarray(arrays[key])) for key in ("labels", "scores", "distances", "elements", "coordination", "novelty", "uncertainty", "diversity") if key in arrays and np.asarray(arrays[key]).ndim == 1]
+            lengths = [len(np.asarray(arrays[key])) for key in _PREVIEW_ARRAY_KEYS if key in arrays and np.asarray(arrays[key]).ndim == 1]
             n = min([samples.n_samples, *lengths]) if lengths else samples.n_samples
             count = min(n, _MAX_PREVIEW_POINTS)
             rows = []
@@ -1432,7 +1420,7 @@ class AnalysisService:
                 item = sample_identity(i)
                 if item is None:
                     continue
-                for key in ("labels", "scores", "distances", "elements", "coordination", "novelty", "uncertainty", "diversity"):
+                for key in _PREVIEW_ARRAY_KEYS:
                     if key in arrays and i < len(arrays[key]):
                         value = np.asarray(arrays[key])[i]
                         if np.asarray(value).ndim == 0:

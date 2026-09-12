@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { Data } from "plotly.js";
 import { Select, Space, Switch, Table, Tag, Typography } from "antd";
 import { useT, type Pair } from "../i18n";
+import { formatLabel } from "../util/format";
 import type { AnalysisPreview } from "../types/protocol";
 import type { AnalysisPoint } from "./analysisPreview";
 import TrajectoryView from "./trajectoryView";
@@ -351,7 +352,7 @@ function PropertyView({ preview, arrays, onSelect }: { preview: AnalysisPreview;
   const predictionData: Data[] = predictionView === "density"
     ? [{ type: "histogram2dcontour", x: targets, y: predictions, colorscale: "Blues", contours: { coloring: "fill" }, colorbar: { title: { text: t("Density") } }, hovertemplate: `${t("Ground truth")}=%{x:.5g}<br>${t("OOF prediction")}=%{y:.5g}<extra></extra>` } as Data]
     : [{ type: "scattergl", mode: "markers", x: targets, y: predictions, marker: { size: 6, color: "#0F6CBD", opacity: 0.62 }, hovertemplate: `${t("Ground truth")}=%{x:.5g}<br>${t("OOF prediction")}=%{y:.5g}<extra></extra>` }];
-  const encodingStrength = capitalize(t(String(preview.encoding_strength ?? "unknown")));
+  const encodingStrength = formatLabel(t(String(preview.encoding_strength ?? "unknown")));
   const informationPattern = String(preview.information_pattern ?? "mixed");
   return <div className="property-analysis">
     <section className="property-analysis-section">
@@ -593,10 +594,6 @@ function formatCorrelation(value: unknown): string {
 function formatWithUnit(value: unknown, unit: string): string {
   const numeric = num(value);
   return numeric === null ? "—" : `${numeric.toPrecision(4)}${unit ? ` ${unit}` : ""}`;
-}
-
-function capitalize(value: string): string {
-  return value.length ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 function propertyInsight(pattern: string, t: (key: string) => string): string {

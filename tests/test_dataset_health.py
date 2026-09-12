@@ -5,18 +5,15 @@ dedupe, unit- and IPC-level."""
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-from make_fixtures import write_deepmd  # noqa: E402
+from make_fixtures import write_deepmd
 
-from mdescriptor_studio_backend.datasets import compute_statistics, create_adapter  # noqa: E402
+from mdescriptor_studio_backend.datasets import compute_statistics, create_adapter
 
-from test_backend_smoke import BackendProcess  # noqa: E402
-from test_dataset_flow import wait_job  # noqa: E402
+from conftest import BackendProcess, wait_job
 
 
 def write_pathological_xyz(path: Path) -> None:
