@@ -5,6 +5,8 @@ import { Button, Descriptions, Drawer, InputNumber, Progress, Radio, Space, Typo
 import { Settings16Regular } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { useAppUpdate } from "../stores/appUpdate";
+import { getVersion } from "@tauri-apps/api/app";
+import EngineVersionCheck from "./EngineVersionCheck";
 import { useI18n, useT } from "../i18n";
 
 interface SystemInfo {
@@ -40,8 +42,8 @@ export default function SettingsDrawer() {
   }, [open]);
 
   useEffect(() => {
-    if (open && appUpdate.status === "idle") void appUpdate.refresh();
-  }, [appUpdate.refresh, appUpdate.status, open]);
+    if (open) void getVersion().then((current) => useAppUpdate.setState({ current })).catch(() => undefined);
+  }, [open]);
 
   return (
     <>
@@ -118,10 +120,15 @@ export default function SettingsDrawer() {
           {t("Logs: {path}", { path: info ? `${info.data_dir}\\logs\\backend.log` : "—" })}
         </Typography.Text>
 
+        {open && <EngineVersionCheck installed={info?.mdescriptor_version} />}
+
         <Typography.Text strong style={{ fontSize: 12, color: "#616161", display: "block", marginTop: 24 }}>
-          {t("APPLICATION UPDATE")}
+          {t("Studio application update")}
         </Typography.Text>
         <div style={{ marginTop: 8, fontSize: 13 }}>
+          <Typography.Paragraph type="secondary">
+            {t("Studio updates require a publicly accessible release source; the current repository is private.")}
+          </Typography.Paragraph>
           <Row k={t("Installed")} v={appUpdate.current || "—"} />
           <Row k={t("Latest release")} v={appUpdate.latest ?? "—"} />
           <Row k={t("Status")} v={appStatusLabel(appUpdate.status, t)} />

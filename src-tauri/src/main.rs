@@ -346,8 +346,7 @@ fn clean_command_environment(command: &mut Command, temp_dir: &Path) {
         }
     }
     // PyInstaller one-file executables need a writable extraction directory.
-    // Do not inherit a caller-controlled TEMP; use the app-local directory
-    // resolved by Tauri and pass it consistently to all temp-variable names.
+    // Use the app-local directory consistently for all temp-variable names.
     command
         .env("TEMP", temp_dir)
         .env("TMP", temp_dir)
@@ -427,7 +426,8 @@ fn verify_sidecar(sidecar: &Path, expected: Option<&str>) -> Result<(), String> 
     let mut file =
         File::open(sidecar).map_err(|error| format!("could not open backend sidecar: {error}"))?;
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
+    // Hashing runs on the Windows main thread; keep the 1 MiB buffer off its stack.
+    let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
         let count = file
             .read(&mut buffer)
@@ -474,4 +474,24 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_verification_fits_a_small_stack_and_rejects_wrong_hash() {
+        let executable = std::env::current_exe().unwrap();
+        let expected = format!("{:x}", Sha256::digest(fs::read(&executable).unwrap()));
+        thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                verify_sidecar(&executable, Some(&expected)).unwrap();
+                assert!(verify_sidecar(&executable, Some(&"0".repeat(64))).is_err());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 }

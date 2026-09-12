@@ -44,6 +44,7 @@ class UpdateService:
             "status": "idle",
             "error": None,
             "restart_required": False,
+            "installer_required": self._frozen(),
         }
 
     def snapshot(self) -> dict:
@@ -61,14 +62,11 @@ class UpdateService:
         return getattr(sys, "frozen", False)
 
     def start_check(self) -> dict:
-        if self._frozen():
-            self._set(status="unsupported", error="frozen build: update via new installer")
-            return self.snapshot()
         with self._lock:
             if self._checking:
                 return dict(self.state)
             self._checking = True
-        self._set(status="checking")
+        self._set(status="checking", error=None)
         threading.Thread(target=self._check, daemon=True, name="pypi-check").start()
         return self.snapshot()
 

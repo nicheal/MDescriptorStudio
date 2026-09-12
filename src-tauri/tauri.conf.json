@@ -15,7 +15,6 @@
         "title": "MDescriptor Studio",
         "label": "main",
         "decorations": false,
-        "dataDirectory": "MDescriptorStudio/webview-v1",
         "width": 1440,
         "height": 900,
         "minWidth": 1280,
