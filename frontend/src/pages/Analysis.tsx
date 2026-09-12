@@ -51,6 +51,7 @@ import {
 } from "../stores/analysisUi";
 import { useT, type Pair } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
+import SaveViewModal from "../components/SaveViewModal";
 import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
 import AnalysisResultVisualization, { type AnalysisArrays } from "./analysisVisualizations";
 import { getAnalysisMethodGuide, type AnalysisMethodGuide } from "./analysisMethodGuides";
@@ -386,6 +387,7 @@ export default function Analysis() {
   const [runningInfo, setRunningInfo] = useState<{ label: string; tab: TabKey; method: string | null } | null>(null);
   const [lastJobProgress, setLastJobProgress] = useState<number | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  const [saveViewOpen, setSaveViewOpen] = useState(false);
   const [inspectedPoint, setInspectedPoint] = useState<Point | null>(null);
   const [selectedFrame, setSelectedFrame] = useState<FramePayload | null>(null);
   const [selectedFrameBusy, setSelectedFrameBusy] = useState(false);
@@ -488,6 +490,18 @@ export default function Analysis() {
   const pointRunId = crossDatasetModule ? queryRunId : selectedRun;
   const analysisContextRunId = crossDatasetModule ? referenceRunId : selectedRun;
   const selectedPoint = inspectedPoint ?? points.find((point) => point.i === selectedIndices[0]) ?? null;
+  // Dataset frames behind the current selection, for saving a purification
+  // view: sample i maps to its frame via the preview rows (exact in atom mode;
+  // structure-mode rows fall back to i === frame).
+  const selectedFrames = useMemo(() => {
+    if (tab === "projection") return [];
+    const frameOf = new Map<number, number>();
+    (preview?.selected ?? []).forEach((row) => {
+      const index = Number(row.i ?? row.sample_index);
+      if (Number.isInteger(index) && index >= 0) frameOf.set(index, Number(row.frame ?? index));
+    });
+    return [...new Set(selectedIndices.map((index) => frameOf.get(index) ?? index))].sort((a, b) => a - b);
+  }, [preview, selectedIndices, tab]);
 
   // Whether the (tab, run, parameter combination) result is already computed
   // and can be re-displayed without rerunning. One parameter can be probed
@@ -1539,9 +1553,30 @@ export default function Analysis() {
 
           <AnalysisMethodGuideModal guide={methodGuide} open={methodGuideOpen} onClose={() => setMethodGuideOpen(false)} />
 
+          {pointDataset && (
+            <SaveViewModal
+              open={saveViewOpen}
+              onClose={() => setSaveViewOpen(false)}
+              datasetId={pointDataset.id}
+              frames={selectedFrames}
+              totalFrames={pointDataset.number_of_frames}
+              defaultName={`${tr(TAB_LABELS[tab])} ${selectedFrames.length}`}
+              source={{ source: "analysis", analysis_type: String(preview?.kind ?? "") }}
+              onSaved={(view) => setDatasetViews((prev) => [...prev, view])}
+            />
+          )}
+
           {tab === "projection" && <section className="analysis-card analysis-plot-card"><SectionHeading title={t("DESCRIPTOR SPACE")} meta={`${t("{n} preview points", { n: points.length.toLocaleString() })}${selectedIndices.length ? t(" · {n} selected", { n: selectedIndices.length }) : ""}`} />{points.length ? <div className="analysis-plot-frame">{plot}</div> : <Empty description={t("Run PCA, UMAP, or t-SNE to populate the Plotly canvas.")} />}</section>}
           {legacyOverview && <OverviewResultVisualization preview={preview} arrays={overviewArrays} loading={overviewArraysBusy} analysisId={analysisId} />}
           {tab !== "projection" && !legacyOverview && <AnalysisResultVisualization preview={preview} arrays={overviewArrays} points={points} loading={overviewArraysBusy} selectedIndices={selectedIndices} onSelect={handlePoint} />}
+          {tab !== "projection" && selectedFrames.length > 0 && (
+            <section className="analysis-card">
+              <Space wrap>
+                <Typography.Text type="secondary">{t("{n} frames selected", { n: selectedFrames.length.toLocaleString() })}</Typography.Text>
+                <Button size="small" disabled={busy} onClick={() => setSaveViewOpen(true)}>{t("Save selection as view")}</Button>
+              </Space>
+            </section>
+          )}
           {tab !== "projection" && <ResultPanel preview={preview} points={points} onSelect={(row) => {
             if (row.i == null && row.sample_index == null && row.frame == null) return;
             const index = Number(row.i ?? row.sample_index ?? 0);
