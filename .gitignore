@@ -41,3 +41,5 @@ backend/mdescriptor_studio_backend/datasets/_native/
 .tmp-thread-tests/
 .zcode/plans/
 .workbuddy/
+.agents/
+/AGENTS.md

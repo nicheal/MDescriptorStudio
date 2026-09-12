@@ -3,7 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -334,26 +334,49 @@ fn read_line_bounded<R: BufRead>(
     }
 }
 
-fn clean_command_environment(command: &mut Command) {
+fn clean_command_environment(command: &mut Command, temp_dir: &Path) {
     for (key, _) in std::env::vars() {
         let upper = key.to_ascii_uppercase();
         if matches!(
             upper.as_str(),
-            "PYTHONPATH"
-                | "PYTHONHOME"
-                | "PYTHONSTARTUP"
-                | "MDS_DATA_DIR"
-                | "TEMP"
-                | "TMP"
-                | "TMPDIR"
+            "PYTHONPATH" | "PYTHONHOME" | "PYTHONSTARTUP" | "MDS_DATA_DIR"
         ) || upper.starts_with("PIP_")
         {
             command.env_remove(key);
         }
     }
+    // PyInstaller one-file executables need a writable extraction directory.
+    // Do not inherit a caller-controlled TEMP; use the app-local directory
+    // resolved by Tauri and pass it consistently to all temp-variable names.
+    command
+        .env("TEMP", temp_dir)
+        .env("TMP", temp_dir)
+        .env("TMPDIR", temp_dir);
+}
+
+fn backend_temp_dir() -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    let root = PathBuf::from(
+        std::env::var_os("LOCALAPPDATA")
+            .ok_or_else(|| "LOCALAPPDATA is unavailable".to_string())?,
+    )
+    .join("MDescriptorStudio");
+    #[cfg(not(target_os = "windows"))]
+    let root = std::env::temp_dir().join("MDescriptorStudio");
+
+    let temp_dir = root.join("backend-temp");
+    fs::create_dir_all(&temp_dir).map_err(|error| {
+        format!(
+            "could not create backend temp directory {}: {error}",
+            temp_dir.display()
+        )
+    })?;
+    Ok(temp_dir)
 }
 
 fn backend_command() -> Result<(Command, &'static str), String> {
+    let temp_dir = backend_temp_dir()?;
+
     // A release build must use a verified bundled sidecar. Falling back to a
     // developer Python environment would make the released trust boundary
     // depend on the user's PATH and site packages.
@@ -367,7 +390,7 @@ fn backend_command() -> Result<(Command, &'static str), String> {
             if sidecar.is_file() {
                 verify_sidecar(&sidecar, EMBEDDED_SIDECAR_SHA256)?;
                 let mut command = Command::new(&sidecar);
-                clean_command_environment(&mut command);
+                clean_command_environment(&mut command, &temp_dir);
                 return Ok((command, "verified-sidecar"));
             }
         }
@@ -382,7 +405,7 @@ fn backend_command() -> Result<(Command, &'static str), String> {
     let python = repo.join(".venv").join("Scripts").join("python.exe");
     let backend_dir = repo.join("backend");
     let mut command = Command::new(python);
-    clean_command_environment(&mut command);
+    clean_command_environment(&mut command, &temp_dir);
     command
         .args(["-m", "mdescriptor_studio_backend"])
         .current_dir(backend_dir)
