@@ -209,7 +209,7 @@ class EngineAdapter:
     # -- errors ------------------------------------------------------------
     @staticmethod
     def _convert(exc: md.MDescriptorError) -> AppError:
-        # 0.2.5+ engine errors carry a structured code (gui-adaptation-baseline.md);
+        # 0.2.5+ engine errors carry a structured code (upstream engine contract doc: mdescriptor/docs/gui-adaptation-baseline.md inside the installed wheel);
         # use it to split DescriptorInputError into periodicity vs invalid input
         # and to surface an unavailable CUDA backend as its own code.
         code = getattr(exc, "code", "")

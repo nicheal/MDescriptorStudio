@@ -10,12 +10,10 @@ export default function Histogram({
   title,
   unit,
   hist,
-  color = "#0F6CBD",
 }: {
   title: string;
   unit?: string;
   hist: Hist | null;
-  color?: string;
 }) {
   const { t } = useT();
   const option = useMemo(
@@ -55,13 +53,13 @@ export default function Histogram({
               (hist.edges[i] + hist.edges[i + 1]) / 2,
               c,
             ]) ?? [],
-          itemStyle: { color, borderRadius: [1, 1, 0, 0] },
+          itemStyle: { color: "#0F6CBD", borderRadius: [1, 1, 0, 0] },
           barCategoryGap: "8%",
         },
       ],
       animation: false,
     }),
-    [color, hist, t, title, unit],
+    [hist, t, title, unit],
   );
 
   return (

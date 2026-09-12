@@ -10,6 +10,9 @@ backend/dist/
 # Node / frontend
 node_modules/
 frontend/dist/
+frontend/debug.log
+frontend/test-results/
+frontend/tsconfig.tsbuildinfo
 
 # Tauri / Rust
 src-tauri/target/
@@ -25,3 +28,8 @@ Thumbs.db
 
 # Native statistics kernel (built by scripts/build_native.ps1)
 backend/mdescriptor_studio_backend/datasets/_native/
+
+# Vendored engine source / local tooling state
+.tmp-src/
+.zcode/plans/
+.workbuddy/

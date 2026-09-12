@@ -1,6 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { App as AntApp, Button, Dropdown, Empty, Input, InputNumber, Modal, Space, Tooltip, Typography } from "antd";
-import { MoreOutlined, SearchOutlined } from "@ant-design/icons";
 import {
   Add16Regular,
   ChevronLeft16Regular,
@@ -8,11 +7,14 @@ import {
   Document16Regular,
   FolderOpen16Regular,
   BranchFork16Regular,
+  MoreHorizontal16Regular,
+  Search16Regular,
 } from "@fluentui/react-icons";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { ipc } from "../../ipc/client";
 import { RenameDatasetModal, useDatasetDelete } from "../datasetActions";
 import { refetchDatasets, useWorkspace } from "../../stores/workspace";
+import { formatLabel, formatSize } from "../../util/format";
 import { trackJob, watchJob } from "../../stores/jobs";
 import { useT } from "../../i18n";
 import type { DatasetMeta, DatasetView } from "../../types/protocol";
@@ -273,7 +275,7 @@ export default function Sidebar() {
       </div>
       <Input
         size="small"
-        prefix={<SearchOutlined style={{ color: "#8A8A8A" }} />}
+        prefix={<Search16Regular style={{ color: "#8A8A8A" }} />}
         placeholder={t("Search datasets...")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -463,7 +465,7 @@ function DatasetItem({
             className="dataset-item-actions"
             type="text"
             size="small"
-            icon={<MoreOutlined />}
+            icon={<MoreHorizontal16Regular />}
             onClick={(e) => e.stopPropagation()}
             style={{ height: 20, width: 20, minWidth: 0, marginRight: -4, flex: "0 0 auto" }}
           />
@@ -497,23 +499,7 @@ function DatasetViewItem({ view, onRename, onSplit, onMaterialize, onDelete }: {
       { type: "divider" },
       { key: "delete", label: t("Delete view"), danger: true },
     ], onClick: ({ key }) => { if (key === "rename") onRename(); if (key === "split") onSplit(); if (key === "materialize") onMaterialize(); if (key === "delete") onDelete(); } }} trigger={["click"]}>
-      <Button className="dataset-item-actions" type="text" size="small" aria-label={t("Dataset view actions")} icon={<MoreOutlined />} />
+      <Button className="dataset-item-actions" type="text" size="small" aria-label={t("Dataset view actions")} icon={<MoreHorizontal16Regular />} />
     </Dropdown>
   </div>;
-}
-
-function formatLabel(format: string): string {
-  return format.charAt(0).toUpperCase() + format.slice(1);
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = bytes / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(1)} ${units[i]}`;
 }

@@ -34,6 +34,3 @@ export const categoricalPalette = [
   "#0A3D91",
   "#8FB339",
 ];
-
-// sequential colormap for continuous color-by (blue -> red like mockup scatter)
-export const sequentialStops = ["#2166AC", "#67A9CF", "#F7F7F7", "#EF8A62", "#B2182B"];

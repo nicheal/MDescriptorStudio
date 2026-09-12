@@ -12,8 +12,8 @@ use std::thread;
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{Emitter, EventTarget, Manager};
-use uuid::Uuid;
 
 const PROTOCOL_VERSION: u64 = 1;
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
@@ -24,6 +24,10 @@ const BACKEND_EVENT: &str = "backend-message";
 const BACKEND_EXIT_EVENT: &str = "backend-exit";
 const MAIN_WEBVIEW: &str = "main";
 const EMBEDDED_SIDECAR_SHA256: Option<&str> = option_env!("MDS_SIDECAR_SHA256");
+
+// Request ids only need to be unique among pending requests, which are
+// cleared on restart, so a monotonic counter cannot collide within a run.
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 struct BackendState {
     child: Mutex<Option<Child>>,
@@ -60,16 +64,7 @@ fn backend_request(
         if pending.len() >= MAX_PENDING_REQUESTS {
             return Err("backend request queue is full".into());
         }
-        let mut candidate = (Uuid::new_v4().as_u128() as u64) & MAX_REQUEST_ID;
-        if candidate == 0 {
-            candidate = 1;
-        }
-        while pending.contains(&candidate) {
-            candidate = (candidate + 1) & MAX_REQUEST_ID;
-            if candidate == 0 {
-                candidate = 1;
-            }
-        }
+        let candidate = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
         pending.insert(candidate);
         candidate
     };
@@ -409,13 +404,6 @@ fn verify_sidecar(sidecar: &Path, expected: Option<&str>) -> Result<(), String> 
         })
         .map(str::to_ascii_lowercase)
         .ok_or_else(|| "embedded sidecar hash is missing or malformed".to_string())?;
-    if expected.len() != 64
-        || !expected
-            .chars()
-            .all(|character| character.is_ascii_hexdigit())
-    {
-        return Err("sidecar hash manifest is malformed".into());
-    }
 
     let mut file =
         File::open(sidecar).map_err(|error| format!("could not open backend sidecar: {error}"))?;

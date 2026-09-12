@@ -83,7 +83,6 @@ class ExtXYZAdapter(DatasetAdapter):
             number_of_frames=len(self._offsets),
             file_size=self.source_path.stat().st_size,
             elements=[],  # filled by statistics pass
-            properties={},  # filled by statistics pass
             periodicity=periodicity,
         )
 

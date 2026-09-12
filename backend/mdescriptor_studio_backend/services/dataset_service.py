@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+from collections import Counter
 import logging
 import threading
 import uuid
@@ -70,12 +71,29 @@ def _symbol(z: int) -> str:
     return _Z_TO_SYMBOL.get(int(z), f"Z{z}")
 
 
+class _CountingAdapter:
+    """Forwarding adapter view whose iter_frames runs through a closure that
+    tracks progress (register and the statistics recompute job)."""
+
+    def __init__(self, adapter, iter_frames):
+        self.format_name = adapter.format_name
+        self.source_path = adapter.source_path
+        self._adapter = adapter
+        self._iter_frames = iter_frames
+
+    def __len__(self):
+        return len(self._adapter)
+
+    def get_frame(self, index):
+        return self._adapter.get_frame(index)
+
+    def iter_frames(self):
+        return self._iter_frames()
+
+
 def formula_of(symbols: list[str]) -> str:
-    counts: dict[str, int] = {}
-    for s in symbols:
-        counts[s] = counts.get(s, 0) + 1
     return "".join(
-        f"{sym}{n}" for sym, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        f"{sym}{n}" for sym, n in sorted(Counter(symbols).items(), key=lambda kv: (-kv[1], kv[0]))
     )
 
 
@@ -264,20 +282,7 @@ class DatasetService:
                         ctx.progress(frames_seen, total, "computing statistics")
                     yield frame
 
-            class _CountingAdapter:
-                format_name = adapter.format_name
-                source_path = adapter.source_path
-
-                def __len__(self):
-                    return len(adapter)
-
-                def get_frame(self, index):
-                    return adapter.get_frame(index)
-
-                def iter_frames(self):
-                    return counting_iter()
-
-            stats = compute_statistics(_CountingAdapter())
+            stats = compute_statistics(_CountingAdapter(adapter, counting_iter))
             # fresh registration has no exclusions; the key keeps the stats
             # payload shape stable for the cache-upgrade checks
             stats["excluded_frames"] = {"count": 0, "indices": []}
@@ -641,36 +646,20 @@ class DatasetService:
         if stats_row is None or stats_row["fingerprint"] != current:
             return None
         stats = json.loads(stats_row["stats_json"])
-        if "health" not in stats:
-            # pre-health cache (dataset registered before the health pass):
-            # one recompute fills it in
+        # The stats payload gained keys across generations; a cache missing any
+        # required key is a pre-upgrade shape that one recompute fills in.
+        required = {
+            "health", "min_distance", "compositions", "formulas",
+            "element_atom_counts", "health_findings", "excluded_frames",
+        }
+        if not isinstance(stats, dict) or not required <= stats.keys():
             return None
-        health = stats.get("health")
-        if not isinstance(health, dict) or not {
-            "nonphysical_structures",
-            "net_force",
-        } <= health.keys():
-            # pre-short-contact / pre-net-force cache (before the NepTrainKit-
-            # style checks): same upgrade
-            return None
-        if "min_distance" not in stats:
-            # pre-min-distance cache (before the Overview chart): same upgrade
-            return None
-        if "compositions" not in stats:
-            # pre-compositions cache (before the Overview combination chart): same upgrade
-            return None
-        if "formulas" not in stats:
-            # pre-formulas cache (before the Overview exact-composition mode): same upgrade
-            return None
-        if "element_atom_counts" not in stats:
-            # pre-element-atom-counts cache (before the Overview atom-count view): same upgrade
-            return None
-        if "health_findings" not in stats or "excluded_frames" not in stats:
-            # pre-findings cache (before per-check frame indices / exclusions): same upgrade
+        health = stats["health"]
+        if not isinstance(health, dict) or not {"nonphysical_structures", "net_force"} <= health.keys():
             return None
         if "duplicate_structures_of" not in (stats.get("health_findings") or {}):
-            # pre-duplicate-origin cache (before the per-copy first-occurrence
-            # mapping behind the findings table's "duplicate of" column)
+            # per-copy first-occurrence mapping behind the findings table's
+            # "duplicate of" column
             return None
         return stats
 
@@ -894,20 +883,7 @@ class DatasetService:
                             ctx.progress(count, total, "computing statistics")
                         yield frame
 
-                class _CountingAdapter:
-                    format_name = adapter.format_name
-                    source_path = adapter.source_path
-
-                    def __len__(self):
-                        return len(adapter)
-
-                    def get_frame(self, index):
-                        return adapter.get_frame(index)
-
-                    def iter_frames(self):
-                        return counting_iter()
-
-                stats = compute_statistics(_CountingAdapter())
+                stats = compute_statistics(_CountingAdapter(adapter, counting_iter))
                 # exclusions are service state, not file state: the effective
                 # dataset is the scan minus the excluded frames
                 stats["excluded_frames"] = {

@@ -68,11 +68,6 @@ export function formatFixed(value: unknown, digits: number): string {
   return numeric === null ? "—" : numeric.toFixed(digits);
 }
 
-export function formatNumber(value: unknown, digits = 2): string {
-  const numeric = num(value);
-  return numeric === null ? "—" : numeric.toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
-}
-
 export function quantile(values: number[], q: number): number | null {
   if (!values.length) return null;
   const sorted = values.slice().sort((left, right) => left - right);

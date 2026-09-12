@@ -16,6 +16,7 @@ import { ipc } from "../ipc/client";
 import SaveViewModal from "./SaveViewModal";
 import { activeDataset, refetchDatasets, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
+import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import type { FindingsRow, Stats } from "../types/protocol";
 
 type StatisticsResponse = {
@@ -23,15 +24,6 @@ type StatisticsResponse = {
   job_id: string | null;
   stats: Stats | null;
 };
-
-const CHECK_KEYS = [
-  "missing_values",
-  "invalid_cell",
-  "duplicate_structures",
-  "extreme_force",
-  "nonphysical_structures",
-  "net_force",
-] as const;
 
 const EXCLUDED_TAB = "__excluded__";
 
@@ -74,15 +66,7 @@ export default function HealthFindingsDrawer() {
   const tabRef = useRef(activeTab);
   tabRef.current = activeTab;
 
-  const title = (key: string): string =>
-    ({
-      missing_values: t("Missing values"),
-      invalid_cell: t("Invalid cell"),
-      duplicate_structures: t("Duplicate structures"),
-      extreme_force: t("Extreme force"),
-      nonphysical_structures: t("Non-physical structures"),
-      net_force: t("Net force"),
-    })[key] ?? key;
+  const title = (key: string): string => healthCheckTitle(key, t);
 
   // reset when the drawer opens for another dataset / scan
   useEffect(() => {

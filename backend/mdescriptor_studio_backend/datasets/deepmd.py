@@ -186,16 +186,10 @@ class DeepMDAdapter(DatasetAdapter):
         # frames report uniform pbc: periodic iff the system has any valid box
         # (degenerate boxes in a periodic system keep the claim — see get_frame)
         pbc_set = {(True, True, True)} if self._periodic_system else {(False, False, False)}
-        props = {
-            "energy": self._energies is not None,
-            "forces": self._forces is not None,
-            "virial": self._virials is not None,
-        }
         return ScanMeta(
             number_of_frames=self.number_of_frames,
             file_size=file_size,
             elements=symbols,
-            properties=props,
             periodicity=pbc_summary(pbc_set),
         )
 

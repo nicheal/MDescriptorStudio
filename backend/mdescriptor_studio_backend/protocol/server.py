@@ -28,9 +28,8 @@ class Server:
     # look hung. All three are fast DB reads/row updates.
     CONTROL_METHODS = frozenset({"job.cancel", "job.get", "job.list"})
 
-    def __init__(self, methods: dict, on_stop=None):
+    def __init__(self, methods: dict):
         self.methods = methods
-        self.on_stop = on_stop
         # Set once the background warmup thread has finished its imports; the
         # polled input loop then hands over to the low-latency blocking loop.
         self.warmup_finished: threading.Event | None = None
@@ -189,8 +188,6 @@ class Server:
         self._closed.set()
         self._pool.shutdown(wait=True, cancel_futures=True)
         self._control_pool.shutdown(wait=True, cancel_futures=True)
-        if self.on_stop is not None:
-            self.on_stop()
 
     def _stdin_available_probe(self):
         """Non-blocking stdin availability probe for Windows pipe stdin, or None.

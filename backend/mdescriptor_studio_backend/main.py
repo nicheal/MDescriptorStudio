@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import logging
 import math
 import os
@@ -44,6 +45,13 @@ _ALLOWED_SETTINGS = {
 _MAX_SETTING_VALUE = 4096
 
 
+def _dependency_version(dist_name: str) -> str | None:
+    try:
+        return importlib.metadata.version(dist_name)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
 def _configure_stdio() -> None:
     """Keep the NDJSON transport UTF-8 even when Windows uses a legacy code page."""
     for stream in (sys.stdin, sys.stdout):
@@ -65,9 +73,8 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
             "analysis_api_version": 1,
             "analysis_algorithm_version": "studio-analysis-2",
             "analysis_dependencies": {
-                "scikit-learn": "1.9.0",
-                "umap-learn": "0.5.12",
-                "hdbscan": "0.8.44",
+                name: _dependency_version(name)
+                for name in ("scikit-learn", "umap-learn", "hdbscan")
             },
             "data_dir": str(root),
             "cpu_threads": platform.os.cpu_count(),
@@ -158,10 +165,6 @@ def build_methods(db, jobs, datasets, descriptors, results, analysis, settings_k
         "analysis.outlier": analysis.outlier,
         "analysis.fps": analysis.fps,
         "analysis.sampling": analysis.sampling,
-        "analysis.random": lambda params: analysis.submit_generic("random", params),
-        "analysis.stratified": lambda params: analysis.submit_generic("stratified", params),
-        "analysis.cluster_representative": lambda params: analysis.submit_generic("cluster_representative", params),
-        "analysis.per_element": lambda params: analysis.submit_generic("per_element", params),
         "analysis.coverage": analysis.coverage,
         "analysis.overlap": analysis.overlap,
         "analysis.acquisition": analysis.acquisition,
@@ -194,7 +197,6 @@ def main() -> int:
     info = adapter.runtime_info()
     log.info("engine %s (api v%s)", info.get("version"), info.get("api_version"))
 
-    # note: no on_stop here — the db must outlive the job pool; main() closes it
     server = Server(methods={})
     server.warmup_finished = threading.Event()
     jobs = JobService(db, server.emit)

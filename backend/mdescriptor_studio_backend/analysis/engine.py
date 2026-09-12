@@ -9,6 +9,7 @@ scikit-learn keyword.
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 from dataclasses import dataclass, field
@@ -71,8 +72,6 @@ from ..errors import (
     AppError,
 )
 
-
-MAX_PREVIEW_POINTS = 20_000
 
 # Deferred-warmup gate. backend.ready is emitted before the background warmup
 # thread imports sklearn/umap/hdbscan, so _safe_import waits until that import
@@ -2411,7 +2410,7 @@ class AnalysisEngine:
                 raise AppError(ANALYSIS_INPUT_INVALID, "parameter sensitivity requires aligned sample IDs")
             parameters = run.get("parameters_json") or "{}"
             try:
-                parameter_value = parameters if isinstance(parameters, dict) else __import__("json").loads(parameters)
+                parameter_value = parameters if isinstance(parameters, dict) else json.loads(parameters)
             except (TypeError, ValueError):
                 parameter_value = {"raw": str(parameters)}
             if same_feature_dimensions:

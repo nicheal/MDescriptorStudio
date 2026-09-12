@@ -17,7 +17,7 @@ import HealthFindingsDrawer from "./components/HealthFindingsDrawer";
 import Overview from "./pages/Overview";
 import Explore from "./pages/Explore";
 import Descriptors from "./pages/Descriptors";
-import Results from "./pages/Results";
+import Results from "./pages/DescriptorResults";
 import Analysis from "./pages/Analysis";
 import { ipc } from "./ipc/client";
 import { useWorkspace, hydrateActiveRun } from "./stores/workspace";

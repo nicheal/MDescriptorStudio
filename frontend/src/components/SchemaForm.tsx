@@ -2,8 +2,7 @@
 // of engine-api-report). Values collected into a params object on change.
 import { useEffect, useState } from "react";
 import { Button, Checkbox, Input, InputNumber, Select, Space, Tooltip, Typography } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { FolderOpen16Regular } from "@fluentui/react-icons";
+import { FolderOpen16Regular, Info16Regular } from "@fluentui/react-icons";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useT } from "../i18n";
 import type { ParamSchema } from "../types/protocol";
@@ -99,7 +98,7 @@ export function SchemaField({
         {schema.required && <span style={{ color: "#C42B1C" }}>*</span>}
         {schema.unit && <Typography.Text type="secondary" style={{ fontSize: 11 }}>({schema.unit})</Typography.Text>}
       <Tooltip title={description}>
-        <InfoCircleOutlined
+        <Info16Regular
           aria-label={`${displayName}: ${description}`}
           style={{ color: "#98A2B3", fontSize: 13, cursor: "help" }}
         />
@@ -308,7 +307,7 @@ export function collectDefaults(schema: Record<string, ParamSchema>, elementOpti
   return out;
 }
 
-export function speciesToNumbers(selected: string[], elementOptions: string[]): number[] {
+export function speciesToNumbers(selected: string[]): number[] {
   const z: Record<string, number> = {
     H: 1, He: 2, Li: 3, Be: 4, B: 5, C: 6, N: 7, O: 8, F: 9, Ne: 10, Na: 11, Mg: 12,
     Al: 13, Si: 14, P: 15, S: 16, Cl: 17, Ar: 18, K: 19, Ca: 20, Sc: 21, Ti: 22, V: 23,
@@ -320,6 +319,5 @@ export function speciesToNumbers(selected: string[], elementOptions: string[]): 
     W: 74, Re: 75, Os: 76, Ir: 77, Pt: 78, Au: 79, Hg: 80, Tl: 81, Pb: 82, Bi: 83,
     Po: 84, At: 85, Rn: 86, Fr: 87, Ra: 88, Ac: 89, Th: 90, Pa: 91, U: 92,
   };
-  void elementOptions;
   return selected.map((s) => z[s]).filter((n) => n !== undefined);
 }

@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..analysis import AnalysisEngine, AnalysisResult, ArtifactManifest, SampleMatrix
+from ..analysis import AnalysisEngine, SampleMatrix
 from ..errors import (
     ANALYSIS_INPUT_INVALID,
     ANALYSIS_NOT_FOUND,
@@ -55,6 +55,45 @@ _MAX_PREVIEW_POINTS = 20_000
 _ANALYSIS_ID_RE = re.compile(r"^ana_[A-Za-z0-9_-]{1,64}$")
 _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
 _RESERVED_ARTIFACT_NAME_RE = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE)
+
+# Analysis dispatch table: analysis_type -> (engine_method, sample_arity) for
+# types that call AnalysisEngine.<engine_method>(*samples, params, progress)
+# directly (arity 2 = the cross-dataset reference/query pair).  The grouped
+# cluster/outlier/sampling funnels and the bespoke sensitivity runners keep
+# explicit dispatch in _run_engine.
+_ENGINE_DISPATCH: dict[str, tuple[str, int]] = {
+    "pca": ("pca", 1),
+    "umap": ("umap", 1),
+    "tsne": ("tsne", 1),
+    "neighbors": ("neighbors", 1),
+    "similarity": ("similarity", 1),
+    "pairwise": ("pairwise", 1),
+    "coverage": ("coverage", 2),
+    "overlap": ("overlap", 2),
+    "acquisition": ("acquisition", 2),
+    "compare": ("compare", 2),
+    "mantel": ("mantel", 2),
+    "drift": ("drift", 2),
+    "feature_variance": ("feature_variance", 1),
+    "feature_correlation": ("feature_correlation", 1),
+    "property_correlation": ("property_correlation", 1),
+    "local_diversity": ("local_diversity", 1),
+    "kernel": ("kernel", 1),
+    "effective_dimension": ("effective_dimension", 1),
+    "trajectory": ("trajectory", 1),
+}
+
+# Service methods that are exactly ``submit_generic(<analysis_type>, params)``;
+# they are generated from this set at the end of this module.  Everything else
+# normalizes parameters first (cluster, outlier, sampling, feature_variance,
+# feature_correlation, property_correlation, local_diversity) or funnels to a
+# dedicated runner (export) and keeps an explicit method.
+_GENERIC_TYPES = frozenset({
+    "umap", "tsne", "neighbors", "similarity", "pairwise", "fps",
+    "coverage", "overlap", "acquisition", "compare", "kernel",
+    "effective_dimension", "trajectory", "drift", "sensitivity", "mantel",
+    "perturbation_sensitivity",
+})
 
 
 def _pool_rows(values: np.ndarray, offsets: np.ndarray) -> np.ndarray:
@@ -289,6 +328,13 @@ class AnalysisService:
         except (OSError, TypeError, ValueError, UnsafePathError) as exc:
             raise AppError(RESULT_INCOMPATIBLE, "descriptor result artifact is unavailable") from exc
 
+    def _row_offsets(self, run_row: dict) -> np.ndarray | None:
+        """Row-offsets file of a descriptor result, if present."""
+        path = self._result_root(run_row)
+        offsets_file = path / "row_offsets.npy"
+        ensure_no_reparse_points(offsets_file)
+        return np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64) if offsets_file.is_file() else None
+
     def _pca_points(self, values: np.ndarray, run_row: dict, mode: str, preprocess: str = "center"):
         """Return (coords, explained, frames, atoms|None).
 
@@ -297,15 +343,12 @@ class AnalysisService:
         in-frame row index for tooltips/reverse-jump. Very large runs are evenly
         subsampled so the IPC payload and chart stay responsive (design doc §25).
         """
-        path = self._result_root(run_row)
-        offsets_file = path / "row_offsets.npy"
-        ensure_no_reparse_points(offsets_file)
-        offsets = np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64) if offsets_file.is_file() else None
+        offsets = self._row_offsets(run_row)
         atom_level = values.ndim == 2 and self._valid_offsets(offsets, values.shape[0])
         if mode == "atom" and not atom_level:
             raise AppError(ANALYSIS_INPUT_INVALID, "atom/local-environment PCA requires verified row_offsets")
         if mode == "structure" or not atom_level:
-            pooled = self._pool_per_structure(values, run_row)
+            pooled = _pool_rows(values, offsets) if atom_level else values.reshape(values.shape[0], -1)
             frames = self._run_frame_values(run_row, pooled.shape[0])
             atoms = None
         else:
@@ -327,16 +370,6 @@ class AnalysisService:
         if run_row.get("scope") == "frame":
             return np.full(count, int(run_row.get("frame_index") or 0), dtype=np.int64)
         return np.arange(count, dtype=np.int64)
-
-    def _pool_per_structure(self, values: np.ndarray, run_row: dict) -> np.ndarray:
-        path = self._result_root(run_row)
-        offsets_file = path / "row_offsets.npy"
-        ensure_no_reparse_points(offsets_file)
-        if values.ndim == 2 and offsets_file.is_file():
-            offsets = np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64)
-            if self._valid_offsets(offsets, values.shape[0]):
-                return _pool_rows(values, offsets)
-        return values.reshape(values.shape[0], -1)
 
     @staticmethod
     def _pca(x: np.ndarray, preprocess: str = "center"):
@@ -475,8 +508,6 @@ class AnalysisService:
 
     def chunk(self, params: dict) -> dict:
         """Read a bounded slice of one named artifact array."""
-        import numpy as np
-
         row = self._analysis_row(params.get("analysis_id") or params.get("id"))
         self._require_artifact(row)
         name = str(params.get("array") or params.get("array_name") or "")
@@ -526,23 +557,11 @@ class AnalysisService:
             "data": values,
         }
 
-    # Small wrappers keep the IPC method table explicit and make the supported
-    # analysis vocabulary discoverable to frontend code and integration tests.
-    def umap(self, params: dict) -> dict:
-        return self.submit_generic("umap", params)
-
-    def tsne(self, params: dict) -> dict:
-        return self.submit_generic("tsne", params)
-
-    def neighbors(self, params: dict) -> dict:
-        return self.submit_generic("neighbors", params)
-
-    def similarity(self, params: dict) -> dict:
-        return self.submit_generic("similarity", params)
-
-    def pairwise(self, params: dict) -> dict:
-        return self.submit_generic("pairwise", params)
-
+    # Wrappers that normalize parameters (or funnel to a dedicated runner)
+    # before submit_generic stay explicit; the pure pass-throughs listed in
+    # _GENERIC_TYPES are generated at the end of this module, which keeps the
+    # supported analysis vocabulary discoverable to frontend code and
+    # integration tests in one place.
     def cluster(self, params: dict) -> dict:
         algorithm = str(params.get("algorithm") or params.get("method") or "kmeans").lower()
         return self.submit_generic(algorithm, params)
@@ -550,21 +569,6 @@ class AnalysisService:
     def outlier(self, params: dict) -> dict:
         algorithm = str(params.get("algorithm") or params.get("method") or "lof").lower()
         return self.submit_generic(algorithm, params)
-
-    def fps(self, params: dict) -> dict:
-        return self.submit_generic("fps", params)
-
-    def coverage(self, params: dict) -> dict:
-        return self.submit_generic("coverage", params)
-
-    def overlap(self, params: dict) -> dict:
-        return self.submit_generic("overlap", params)
-
-    def acquisition(self, params: dict) -> dict:
-        return self.submit_generic("acquisition", params)
-
-    def compare(self, params: dict) -> dict:
-        return self.submit_generic("compare", params)
 
     def feature_variance(self, params: dict) -> dict:
         # The richer per-feature contract supersedes the legacy top-K-only
@@ -596,27 +600,6 @@ class AnalysisService:
     def local_diversity(self, params: dict) -> dict:
         params = {**dict(params or {}), "mode": "atom"}
         return self.submit_generic("local_diversity", params)
-
-    def kernel(self, params: dict) -> dict:
-        return self.submit_generic("kernel", params)
-
-    def effective_dimension(self, params: dict) -> dict:
-        return self.submit_generic("effective_dimension", params)
-
-    def trajectory(self, params: dict) -> dict:
-        return self.submit_generic("trajectory", params)
-
-    def drift(self, params: dict) -> dict:
-        return self.submit_generic("drift", params)
-
-    def sensitivity(self, params: dict) -> dict:
-        return self.submit_generic("sensitivity", params)
-
-    def mantel(self, params: dict) -> dict:
-        return self.submit_generic("mantel", params)
-
-    def perturbation_sensitivity(self, params: dict) -> dict:
-        return self.submit_generic("perturbation_sensitivity", params)
 
     def sampling(self, params: dict) -> dict:
         algorithm = str(params.get("algorithm") or params.get("method") or "random").lower()
@@ -899,50 +882,17 @@ class AnalysisService:
     def _run_engine(self, analysis_type: str, params: dict, rows: list[dict], samples: list[SampleMatrix], ctx) -> dict:
         progress = lambda fraction, message: (ctx.check_cancelled(), ctx.progress(None, None, message, fraction=0.1 + 0.85 * float(fraction)))
         self._apply_thread_limit()
-        if analysis_type == "pca":
-            return AnalysisEngine.pca(samples[0], params, progress)
-        if analysis_type == "umap":
-            return AnalysisEngine.umap(samples[0], params, progress)
-        if analysis_type == "tsne":
-            return AnalysisEngine.tsne(samples[0], params, progress)
-        if analysis_type == "neighbors":
-            return AnalysisEngine.neighbors(samples[0], params, progress)
-        if analysis_type == "similarity":
-            return AnalysisEngine.similarity(samples[0], params, progress)
-        if analysis_type == "pairwise":
-            return AnalysisEngine.pairwise(samples[0], params, progress)
+        dispatch = _ENGINE_DISPATCH.get(analysis_type)
+        if dispatch is not None:
+            engine_method, arity = dispatch
+            args = (samples[0], params) if arity == 1 else (samples[0], samples[1], params)
+            return getattr(AnalysisEngine, engine_method)(*args, progress)
         if analysis_type in ("kmeans", "dbscan", "hdbscan", "agglomerative", "hierarchical"):
             return AnalysisEngine.cluster(samples[0], params, analysis_type, progress)
         if analysis_type in ("knn", "lof", "isolation_forest", "isolation-forest", "iforest", "mahalanobis", "mahalanobis_distance"):
             return AnalysisEngine.outlier(samples[0], params, analysis_type, progress)
         if analysis_type in ("fps", "random", "stratified", "cluster_representative", "cluster", "per_element", "element"):
             return AnalysisEngine.sampling(samples[0], params, analysis_type, progress)
-        if analysis_type == "coverage":
-            return AnalysisEngine.coverage(samples[0], samples[1], params, progress)
-        if analysis_type == "overlap":
-            return AnalysisEngine.overlap(samples[0], samples[1], params, progress)
-        if analysis_type == "acquisition":
-            return AnalysisEngine.acquisition(samples[0], samples[1], params, progress)
-        if analysis_type == "compare":
-            return AnalysisEngine.compare(samples[0], samples[1], params, progress)
-        if analysis_type == "mantel":
-            return AnalysisEngine.mantel(samples[0], samples[1], params, progress)
-        if analysis_type == "feature_variance":
-            return AnalysisEngine.feature_variance(samples[0], params, progress)
-        if analysis_type == "feature_correlation":
-            return AnalysisEngine.feature_correlation(samples[0], params, progress)
-        if analysis_type == "property_correlation":
-            return AnalysisEngine.property_correlation(samples[0], params, progress)
-        if analysis_type == "local_diversity":
-            return AnalysisEngine.local_diversity(samples[0], params, progress)
-        if analysis_type == "kernel":
-            return AnalysisEngine.kernel(samples[0], params, progress)
-        if analysis_type == "effective_dimension":
-            return AnalysisEngine.effective_dimension(samples[0], params, progress)
-        if analysis_type == "trajectory":
-            return AnalysisEngine.trajectory(samples[0], params, progress)
-        if analysis_type == "drift":
-            return AnalysisEngine.drift(samples[0], samples[1], params, progress)
         if analysis_type == "sensitivity":
             return AnalysisEngine.sensitivity(list(zip(rows, samples)), params, progress)
         if analysis_type == "perturbation_sensitivity":
@@ -1158,7 +1108,7 @@ class AnalysisService:
         except (OSError, TypeError, ValueError, UnsafePathError) as exc:
             raise AppError(RESULT_INCOMPATIBLE, "dataset source is unavailable") from exc
         if current != dataset["fingerprint"]:
-            self._mark_stale(row["dataset_id"], f"source fingerprint changed ({dataset['fingerprint']} -> {current})")
+            self.datasets._mark_runs_stale(row["dataset_id"], f"source fingerprint changed ({dataset['fingerprint']} -> {current})")
             raise AppError(ANALYSIS_STALE, f"run {row['id']} is stale because the source dataset changed", {"run_id": row["id"], "dataset_id": row["dataset_id"]})
 
     def _usable_view(self, view_id: str, dataset_id: str) -> dict:
@@ -1192,8 +1142,6 @@ class AnalysisService:
         )
 
     def _load_samples(self, run_row: dict, params: dict, analysis_type: str, check=None, view_id=None) -> SampleMatrix:
-        import numpy as np
-
         # Cooperative-cancellation checkpoints between the load/pool stages:
         # without them a cancel during a multi-GB load waits for the whole
         # phase to finish before it takes effect.
@@ -1213,10 +1161,7 @@ class AnalysisService:
         if analysis_type != "feature_variance" and not np.isfinite(values).all():
             raise AppError(ANALYSIS_INPUT_INVALID, "descriptor result contains NaN or Inf")
         check()
-        path = self._result_root(row)
-        offsets_path = path / "row_offsets.npy"
-        ensure_no_reparse_points(offsets_path)
-        offsets = np.asarray(np.load(offsets_path, allow_pickle=False), dtype=np.int64) if offsets_path.is_file() else None
+        offsets = self._row_offsets(row)
         meta = self._result_metadata(row)
         requested_mode = str(params.get("mode") or "structure")
         if requested_mode not in ("structure", "atom"):
@@ -1239,8 +1184,7 @@ class AnalysisService:
             rows = np.arange(values.shape[0], dtype=np.int64) - offsets[local_frames]
             sample_ids = [f"frame:{int(f)}:row:{int(r)}" for f, r in zip(frames, rows)]
             used = values
-            elements = self._atom_elements(row, offsets, local_frames)
-            positions, cells, pbc = self._atom_geometry(row, offsets, local_frames)
+            elements, positions, cells, pbc = self._atom_metadata(row, offsets, local_frames)
             mode = "atom"
         elif valid_offsets and declared_atom:
             used = _pool_rows(values, offsets)
@@ -1287,59 +1231,47 @@ class AnalysisService:
         except (TypeError, ValueError):
             return False
 
-    def _atom_elements(self, run_row: dict, offsets, local_frames: np.ndarray) -> object:
-        """Load element labels only when a dataset adapter can verify them."""
-        import numpy as np
+    def _atom_metadata(self, run_row: dict, offsets, local_frames: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+        """Element labels and per-atom geometry for atom/local-environment rows.
 
+        Both are optional metadata and become None when the dataset adapter
+        cannot verify them against the descriptor rows.
+        """
         if self.datasets is None:
-            return None
+            return None, None, None, None
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
         if dataset is None:
-            return None
+            return None, None, None, None
         try:
             adapter = self.datasets._adapter_for(dataset)
-            labels = []
-            frame_values = self._run_frame_values(run_row, len(offsets) - 1)
-            for frame_index in frame_values.tolist():
-                labels.extend([int(z) for z in adapter.get_frame(int(frame_index)).numbers.tolist()])
-            if len(labels) != len(local_frames):
-                return None
-            return np.asarray(labels, dtype=np.int64)
-        except Exception:  # element labels are optional metadata, not a reason to corrupt a run
-            return None
+            frames = [adapter.get_frame(int(index)) for index in self._run_frame_values(run_row, len(offsets) - 1).tolist()]
+        except Exception:  # optional metadata, not a reason to corrupt a run
+            return None, None, None, None
 
-    def _atom_geometry(self, run_row: dict, offsets, local_frames: np.ndarray) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-        """Load atom coordinates/cells for local-environment neighbor analysis."""
-        if self.datasets is None:
-            return None, None, None
-        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
-        if dataset is None:
-            return None, None, None
+        labels = [int(z) for frame in frames for z in frame.numbers.tolist()]
+        elements = np.asarray(labels, dtype=np.int64) if len(labels) == len(local_frames) else None
+
         try:
-            adapter = self.datasets._adapter_for(dataset)
-            frame_values = self._run_frame_values(run_row, len(offsets) - 1)
             position_rows: list[np.ndarray] = []
             cell_rows: list[np.ndarray] = []
             pbc_rows: list[np.ndarray] = []
-            for offset_index, frame_index in enumerate(frame_values.tolist()):
-                frame = adapter.get_frame(int(frame_index))
+            for offset_index, frame in enumerate(frames):
                 expected = int(offsets[offset_index + 1] - offsets[offset_index])
                 frame_positions = np.asarray(frame.positions, dtype=np.float64)
                 if frame_positions.shape != (expected, 3):
-                    return None, None, None
+                    return elements, None, None, None
                 position_rows.append(frame_positions)
                 cell = np.asarray(frame.cell, dtype=np.float64)
                 if cell.shape != (3, 3):
                     cell = np.zeros((3, 3), dtype=np.float64)
                 cell_rows.append(np.repeat(cell[None, :, :], expected, axis=0))
                 pbc_rows.append(np.repeat(np.asarray(frame.pbc, dtype=bool)[None, :], expected, axis=0))
-            return (
-                np.concatenate(position_rows, axis=0) if position_rows else np.zeros((0, 3), dtype=np.float64),
-                np.concatenate(cell_rows, axis=0) if cell_rows else np.zeros((0, 3, 3), dtype=np.float64),
-                np.concatenate(pbc_rows, axis=0) if pbc_rows else np.zeros((0, 3), dtype=bool),
-            )
+            positions = np.concatenate(position_rows, axis=0) if position_rows else np.zeros((0, 3), dtype=np.float64)
+            cells = np.concatenate(cell_rows, axis=0) if cell_rows else np.zeros((0, 3, 3), dtype=np.float64)
+            pbc = np.concatenate(pbc_rows, axis=0) if pbc_rows else np.zeros((0, 3), dtype=bool)
         except Exception:  # geometry is optional metadata; preserve descriptor analysis if unavailable
-            return None, None, None
+            return elements, None, None, None
+        return elements, positions, cells, pbc
 
     def _sample_properties(self, run_row: dict, frames: np.ndarray, rows: np.ndarray | None, mode: str) -> dict[str, np.ndarray]:
         """Load only the physical targets requested by property analysis."""
@@ -1520,8 +1452,6 @@ class AnalysisService:
         return self._json_safe(preview)
 
     def _commit_artifact(self, analysis_id: str, analysis_type: str, input_ids: list[str], params: dict, result: dict, preview: dict, ctx) -> tuple[Path, dict]:
-        import numpy as np
-
         root = self.data_dir / "analysis"
         root.mkdir(parents=True, exist_ok=True)
         ensure_no_reparse_points(root)
@@ -1529,13 +1459,15 @@ class AnalysisService:
         final = root / analysis_id
         staging.mkdir(parents=True, exist_ok=False)
         ensure_no_reparse_points(staging)
-        manifest = ArtifactManifest(
-            analysis_id=analysis_id,
-            analysis_type=analysis_type,
-            input_run_ids=input_ids,
-            algorithm_version=_ALGORITHM_VERSION,
-            schema_version=_ANALYSIS_SCHEMA_VERSION,
-        ).to_dict()
+        manifest = {
+            "analysis_id": analysis_id,
+            "analysis_type": analysis_type,
+            "input_run_ids": input_ids,
+            "algorithm_version": _ALGORITHM_VERSION,
+            "schema_version": _ANALYSIS_SCHEMA_VERSION,
+            "completed": False,
+            "files": {},
+        }
         try:
             arrays = result.get("arrays", {})
             for name, value in arrays.items():
@@ -1558,15 +1490,15 @@ class AnalysisService:
                 np.save(staging / f"{safe_name}.npy", array, allow_pickle=False)
                 target = staging / f"{safe_name}.npy"
                 manifest["files"][name] = {"path": target.name, "shape": list(array.shape), "dtype": str(array.dtype), "bytes": target.stat().st_size}
-            metadata = AnalysisResult(
-                analysis_id=analysis_id,
-                analysis_type=analysis_type,
-                input_run_ids=input_ids,
-                parameters=params,
-                algorithm_version=_ALGORITHM_VERSION,
-                warnings=list(result.get("warnings", [])),
-                preview=preview,
-            ).to_metadata()
+            metadata = {
+                "analysis_id": analysis_id,
+                "analysis_type": analysis_type,
+                "input_run_ids": input_ids,
+                "parameters": params,
+                "algorithm_version": _ALGORITHM_VERSION,
+                "warnings": list(result.get("warnings", [])),
+                "preview": preview,
+            }
             metadata["created_at"] = _NOW()
             with open_text_for_write(staging / "metadata.json") as fh:
                 json.dump(self._json_safe(metadata), fh, ensure_ascii=False, indent=2)
@@ -1662,7 +1594,6 @@ class AnalysisService:
 
     @staticmethod
     def _write_deepmd(adapter, frames: list[int], target: Path, ctx) -> None:
-        import numpy as np
         from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
 
         first = adapter.get_frame(frames[0])
@@ -1865,19 +1796,6 @@ class AnalysisService:
         n = max((len(v) for v in arrays.values()), default=0)
         return [{"i": i, **{name: self._json_safe(value[i]) for name, value in arrays.items() if i < len(value)}} for i in range(offset, min(offset + limit, n))]
 
-    def _mark_stale(self, dataset_id: str, reason: str) -> None:
-        now = _NOW()
-        self.db.execute(
-            "UPDATE descriptor_runs SET status = 'STALE', error_message = ?, finished_at = ? WHERE dataset_id = ? AND status = 'COMPLETED'",
-            (reason, now, dataset_id),
-        )
-        self.db.execute(
-            "UPDATE analysis_runs SET status = 'STALE', stale_reason = ?, finished_at = ?, updated_at = ?"
-            " WHERE status = 'COMPLETED' AND (descriptor_run_id IN"
-            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?) OR dataset_ids_json LIKE ? ESCAPE '!')",
-            (reason, now, now, dataset_id, f'%"{escape_like(dataset_id)}"%'),
-        )
-
     @staticmethod
     def _json_safe(value):
         if isinstance(value, dict):
@@ -1904,3 +1822,14 @@ class AnalysisService:
             remove_managed_tree(path)
         except (OSError, UnsafePathError):
             log.warning("could not remove managed analysis artifact", exc_info=True)
+
+
+def _generic_pass_through(analysis_type: str):
+    def method(self, params: dict) -> dict:
+        return self.submit_generic(analysis_type, params)
+
+    return method
+
+
+for _analysis_type in sorted(_GENERIC_TYPES):
+    setattr(AnalysisService, _analysis_type, _generic_pass_through(_analysis_type))

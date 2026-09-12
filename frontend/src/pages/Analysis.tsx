@@ -55,6 +55,7 @@ import SaveViewModal from "../components/SaveViewModal";
 import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
 import AnalysisResultVisualization, { type AnalysisArrays } from "./analysisVisualizations";
 import { getAnalysisMethodGuide, type AnalysisMethodGuide } from "./analysisMethodGuides";
+import { NoData as OverviewNoData, formatCount, num as finiteNumber, nums as numericArray, records as recordArray } from "./analysisChartKit";
 import type {
   AnalysisJobResponse,
   AnalysisChunk,
@@ -697,6 +698,43 @@ export default function Analysis() {
     return () => { disposed = true; };
   }, [analysisId, preview]);
 
+  // The two points-fetch variants behind an analysis: bounded preview arrays
+  // (with normalized points) and the PCA payload (points only).
+  const fetchAnalysisPoints = useCallback(async (id: string, source: "preview" | "pca"): Promise<CachedAnalysis> => {
+    if (source === "pca") {
+      const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: id });
+      return { preview: null, points: pcaPayloadPoints(payload), selectedIndices: [], arrays: {} };
+    }
+    const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: id, limit: 20_000 });
+    return { preview: result, points: normalizePoints(result), selectedIndices: selectedIndicesFromPreview(result), arrays: {} };
+  }, []);
+
+  // Cache + display: the single place a resolved analysis lands on screen.
+  const commitAnalysis = useCallback((id: string, next: CachedAnalysis) => {
+    const cached = analysisCache.get(id);
+    analysisCache.set(id, { ...next, arrays: cached?.arrays ?? next.arrays });
+    setAnalysisId(id);
+    setPreview(next.preview);
+    setPoints(next.points);
+    setSelectedIndices(next.selectedIndices);
+    setOverviewArrays(next.arrays);
+  }, []);
+
+  const watchAnalysisJob = useCallback(async (jobId: string, method: string, label: string, isCurrent: () => boolean): Promise<{ failed: true } | { failed: false; analysisId: string | null }> => {
+    trackJob(jobId, method);
+    const offProgress = ipc.on("job.progress", (data) => {
+      const event = data as { job_id: string; progress: number };
+      if (event.job_id === jobId) setLastJobProgress(event.progress);
+    });
+    const done = await watchJob(jobId);
+    offProgress();
+    if (done.status !== "COMPLETED") {
+      if (isCurrent()) message.error(`${label} ${jobStatusLabel(tr, done.status)}: ${done.error?.message ?? ""}`);
+      return { failed: true };
+    }
+    return { failed: false, analysisId: typeof done.result?.analysis_id === "string" ? done.result.analysis_id : null };
+  }, [message, tr]);
+
   const runRequest = useCallback(async (
     method: string,
     params: Record<string, unknown>,
@@ -734,19 +772,9 @@ export default function Analysis() {
       const response = await ipc.request<AnalysisJobResponse>(method, { ...params, run_id: requestRunId, seed: params.seed ?? 42 });
       let id = response.analysis_id;
       if (response.job_id) {
-        trackJob(response.job_id, method);
-        const offProgress = ipc.on("job.progress", (data) => {
-          const event = data as { job_id: string; progress: number };
-          if (event.job_id === response.job_id) setLastJobProgress(event.progress);
-        });
-        const done = await watchJob(response.job_id);
-        offProgress();
-        if (done.status !== "COMPLETED") {
-          if (!isCurrent()) return null;
-          message.error(`${label} ${jobStatusLabel(tr, done.status)}: ${done.error?.message ?? ""}`);
-          return null;
-        }
-        if (typeof done.result?.analysis_id === "string") id = done.result.analysis_id;
+        const watched = await watchAnalysisJob(response.job_id, method, label, isCurrent);
+        if (watched.failed) return null;
+        if (watched.analysisId !== null) id = watched.analysisId;
       }
       if (!id) throw new Error(`${method} returned no analysis_id`);
       // Record the slot under the request context before the display checks:
@@ -756,30 +784,14 @@ export default function Analysis() {
       if (!isCurrent()) return null;
       const frontendCached = response.job_id ? undefined : analysisCache.get(id);
       if (frontendCached) {
-        setAnalysisId(id);
-        setPreview(frontendCached.preview);
-        setPoints(frontendCached.points);
-        setSelectedIndices(frontendCached.selectedIndices);
-        setOverviewArrays(frontendCached.arrays);
+        commitAnalysis(id, frontendCached);
         setLastJobProgress(1);
         message.success(t("{label} loaded from cache", { label }));
         return id;
       }
-      const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: id, limit: 20_000 });
+      const fetched = await fetchAnalysisPoints(id, "preview");
       if (!isCurrent()) return null;
-      const nextPoints = normalizePoints(result);
-      const nextSelectedIndices = selectedIndicesFromPreview(result);
-      const cached = analysisCache.get(id);
-      analysisCache.set(id, {
-        preview: result,
-        points: nextPoints,
-        selectedIndices: nextSelectedIndices,
-        arrays: cached?.arrays ?? {},
-      });
-      setAnalysisId(id);
-      setPreview(result);
-      setPoints(nextPoints);
-      setSelectedIndices(nextSelectedIndices);
+      commitAnalysis(id, fetched);
       setLastJobProgress(1);
       message.success(response.job_id ? t("{label} complete", { label }) : t("{label} loaded from cache", { label }));
       return id;
@@ -793,7 +805,7 @@ export default function Analysis() {
         setRunningInfo(null);
       }
     }
-  }, [dataset?.id, message, selectedRun, t, tr]);
+  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, message, selectedRun, t, tr, watchAnalysisJob]);
 
   const runProjection = useCallback(async ({ mode: requestedMode, preprocess: requestedPreprocess }: ProjectionOverrides = {}) => {
     if (!selectedRun) return;
@@ -829,47 +841,22 @@ export default function Analysis() {
         const response = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: requestRunId, mode: activeMode, seed: 42, preprocess: activePreprocess });
         let id = response.analysis_id;
         if (response.job_id) {
-          trackJob(response.job_id, "analysis.pca");
-          const offProgress = ipc.on("job.progress", (data) => {
-            const event = data as { job_id: string; progress: number };
-            if (event.job_id === response.job_id) setLastJobProgress(event.progress);
-          });
-          const done = await watchJob(response.job_id);
-          offProgress();
-          if (done.status !== "COMPLETED") {
-            if (!isCurrent()) return;
-            message.error(`PCA ${jobStatusLabel(tr, done.status)}: ${done.error?.message ?? ""}`);
-            return;
-          }
-          if (typeof done.result?.analysis_id === "string") id = done.result.analysis_id;
+          const watched = await watchAnalysisJob(response.job_id, "analysis.pca", "PCA", isCurrent);
+          if (watched.failed) return;
+          if (watched.analysisId !== null) id = watched.analysisId;
         }
         if (!isCurrent()) return;
         useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: id, tab: requestContext.tab, paramsKey: requestContext.paramsKey });
         const frontendCached = response.job_id ? undefined : analysisCache.get(id);
         if (frontendCached) {
-          setAnalysisId(id);
-          setPreview(frontendCached.preview);
-          setPoints(frontendCached.points);
-          setSelectedIndices(frontendCached.selectedIndices);
-          setOverviewArrays(frontendCached.arrays);
+          commitAnalysis(id, frontendCached);
           setLastJobProgress(1);
           message.success(t("PCA loaded from cache"));
           return;
         }
-        const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: id });
+        const fetched = await fetchAnalysisPoints(id, "pca");
         if (!isCurrent()) return;
-        const nextPoints = pcaPayloadPoints(payload);
-        const cached = analysisCache.get(id);
-        analysisCache.set(id, {
-          preview: null,
-          points: nextPoints,
-          selectedIndices: [],
-          arrays: cached?.arrays ?? {},
-        });
-        setAnalysisId(id);
-        setPreview(null);
-        setPoints(nextPoints);
-        setSelectedIndices([]);
+        commitAnalysis(id, fetched);
         setLastJobProgress(1);
         message.success(response.job_id ? t("PCA complete") : t("PCA loaded from cache"));
       } catch (error) {
@@ -887,7 +874,7 @@ export default function Analysis() {
       ? { mode: activeMode, preprocess: activePreprocess, n_neighbors: 15, min_dist: 0.1 }
       : { mode: activeMode, preprocess: activePreprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000 };
     await runRequest(`analysis.${projection}`, projectionParams, projection.toUpperCase());
-  }, [dataset?.id, message, mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity, t, tr]);
+  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, message, mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity, t, tr, watchAnalysisJob]);
 
   const handlePreprocessChange = useCallback((value: string) => {
     setPreprocess(value);
@@ -1027,41 +1014,16 @@ export default function Analysis() {
       const cached = analysisCache.get(row.id);
       if (cached) {
         if (!isCurrent()) return;
-        setAnalysisId(row.id);
-        setPreview(cached.preview);
-        setPoints(cached.points);
-        setSelectedIndices(cached.selectedIndices);
-        setOverviewArrays(cached.arrays);
+        commitAnalysis(row.id, cached);
         useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: row.id, ...loadedContext });
         setLastJobProgress(1);
         if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
         return;
       }
 
-      if (analysisType === "pca") {
-        const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: row.id });
-        if (!isCurrent()) return;
-        const nextPoints = pcaPayloadPoints(payload);
-        const nextCached: CachedAnalysis = { preview: null, points: nextPoints, selectedIndices: [], arrays: {} };
-        analysisCache.set(row.id, nextCached);
-        setAnalysisId(row.id);
-        setPreview(null);
-        setPoints(nextPoints);
-        setSelectedIndices([]);
-        setOverviewArrays({});
-      } else {
-        const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: row.id, limit: 20_000 });
-        if (!isCurrent()) return;
-        const nextPoints = normalizePoints(result);
-        const nextSelectedIndices = selectedIndicesFromPreview(result);
-        const nextCached: CachedAnalysis = { preview: result, points: nextPoints, selectedIndices: nextSelectedIndices, arrays: {} };
-        analysisCache.set(row.id, nextCached);
-        setAnalysisId(row.id);
-        setPreview(result);
-        setPoints(nextPoints);
-        setSelectedIndices(nextSelectedIndices);
-        setOverviewArrays({});
-      }
+      const fetched = await fetchAnalysisPoints(row.id, analysisType === "pca" ? "pca" : "preview");
+      if (!isCurrent()) return;
+      commitAnalysis(row.id, fetched);
       useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: row.id, ...loadedContext });
       setLastJobProgress(1);
       if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
@@ -1075,7 +1037,7 @@ export default function Analysis() {
         setLoadingAnalysisId(null);
       }
     }
-  }, [allRuns, dataset, featureCorrelationThreshold, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setNearZeroThreshold, t]);
+  }, [allRuns, commitAnalysis, dataset, featureCorrelationThreshold, fetchAnalysisPoints, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setNearZeroThreshold, t]);
 
   // Keep the displayed result in step with the current tab + parameters: an
   // exact slot match (same tab, run, parameters) is re-displayed from the
@@ -1609,10 +1571,7 @@ function OverviewResultVisualization({ preview, arrays, loading, analysisId }: {
 
   let content: ReactNode;
   if (kind === "feature_variance") content = <FeatureVarianceChart preview={preview} analysisId={analysisId} />;
-  else if (kind === "feature_correlation") content = <FeatureCorrelationChart preview={preview} />;
   else if (kind === "effective_dimension") content = <EffectiveDimensionChart preview={preview} arrays={arrays} />;
-  else if (kind === "drift") content = <DriftChart preview={preview} />;
-  else if (kind === "sensitivity") content = <SensitivityChart preview={preview} />;
   else return null;
 
   return <section className="analysis-card analysis-visual-card"><SectionHeading title={title} meta={t("Visual summary")} />{content}</section>;
@@ -2064,35 +2023,6 @@ function buildKde(samples: number[], edges: number[], totalCount: number): { x: 
   return { x, y };
 }
 
-function FeatureCorrelationChart({ preview }: { preview: AnalysisPreview }) {
-  const { t } = useT();
-  const pairs = recordArray(preview.pairs)
-    .map((pair) => ({
-      feature: `F${formatIndex(pair.feature_a)} ↔ F${formatIndex(pair.feature_b)}`,
-      value: finiteNumber(pair.correlation),
-    }))
-    .filter((pair): pair is { feature: string; value: number } => pair.value !== null);
-  if (!pairs.length) return <OverviewNoData message={t("No feature correlation pairs were returned.")} />;
-  const rows = pairs.slice().reverse();
-  const strongest = pairs.reduce((best, row) => Math.max(best, Math.abs(row.value)), 0);
-  return <>
-    <MetricStrip metrics={[{ label: t("Pairs shown"), value: String(pairs.length) }, { label: t("Strongest |r|"), value: strongest.toFixed(3) }]} />
-    <OverviewPlot
-      ariaLabel={t("Top descriptor feature correlations")}
-      data={[{
-        type: "bar",
-        orientation: "h",
-        x: rows.map((row) => row.value),
-        y: rows.map((row) => row.feature),
-        marker: { color: rows.map((row) => row.value >= 0 ? "#0F6CBD" : "#D13438") },
-        hovertemplate: `%{y}<br>${t("correlation")}=%{x:.4f}<extra></extra>`,
-      }]}
-      layout={overviewLayout({ xaxis: { title: t("Pearson correlation"), range: [-1, 1], zeroline: true }, yaxis: { automargin: true } })}
-    />
-    <ChartCaption>{t("Blue means positive correlation and red means negative correlation; the larger the absolute correlation, the more redundant the features.")}</ChartCaption>
-  </>;
-}
-
 function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview; arrays: NumericArrays }) {
   const { t } = useT();
   const [spectrumRange, setSpectrumRange] = useState<SpectrumRange>("20");
@@ -2262,79 +2192,6 @@ function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview
 
 type SpectrumRange = "20" | "50" | "all";
 
-function DriftChart({ preview }: { preview: AnalysisPreview }) {
-  const { t } = useT();
-  const rows = recordArray(preview.rows)
-    .map((row) => ({ label: finiteNumber(row.labels), distance: finiteNumber(row.distances) }))
-    .filter((row): row is { label: number; distance: number } => row.label !== null && row.distance !== null);
-  const categoryLabels = [t("Covered"), t("Marginal"), t("Out of coverage")];
-  const categoryColors = ["#107C10", "#F7630C", "#D13438"];
-  const grouped = categoryLabels.map((_, category) => rows.filter((row) => row.label === category).map((row) => row.distance));
-  const counts = [
-    numberOr(preview.covered, grouped[0].length),
-    numberOr(preview.marginal, grouped[1].length),
-    numberOr(preview.out_of_coverage, grouped[2].length),
-  ];
-  const q95 = finiteNumber(preview.q95);
-  const q99 = finiteNumber(preview.q99);
-  const thresholdShapes = [q95, q99]
-    .filter((value): value is number => value !== null)
-    .map((value, index) => ({ type: "line" as const, x0: value, x1: value, y0: 0, y1: 1, yref: "paper" as const, line: { color: index === 0 ? "#F7630C" : "#D13438", dash: "dash" as const, width: 1.5 } }));
-  const data: Data[] = rows.length
-    ? grouped.map((values, index) => ({ type: "histogram" as const, x: values, name: categoryLabels[index], opacity: 0.78, marker: { color: categoryColors[index] }, nbinsx: 28, hovertemplate: `${categoryLabels[index]}<br>${t("distance")}=%{x:.5g}<br>${t("count")}=%{y}<extra></extra>` }))
-    : [{ type: "bar", x: categoryLabels, y: counts, marker: { color: categoryColors }, hovertemplate: `%{x}<br>${t("count")}=%{y}<extra></extra>` }];
-  return <>
-    <MetricStrip metrics={[{ label: t("Mean distance"), value: formatNumber(preview.mean_distance) }, { label: t("Median distance"), value: formatNumber(preview.median_distance) }, { label: t("Max distance"), value: formatNumber(preview.max_distance) }, { label: t("Out of coverage"), value: formatCount(preview.out_of_coverage) }]} />
-    <OverviewPlot
-      ariaLabel={t("Distribution of distances from query samples to the reference descriptor set")}
-      data={data}
-      layout={overviewLayout({
-        barmode: rows.length ? "stack" : "group",
-        xaxis: { title: rows.length ? t("Nearest-reference distance") : t("Coverage category") },
-        yaxis: { title: t("Samples") },
-        shapes: thresholdShapes,
-        legend: { orientation: "h", y: 1.12, x: 0 },
-      })}
-    />
-    <ChartCaption>{t("The farther right the distribution, the farther the query samples are from the reference descriptor space; the dashed lines correspond to the q95 and q99 thresholds.")}</ChartCaption>
-  </>;
-}
-
-function SensitivityChart({ preview }: { preview: AnalysisPreview }) {
-  const { t } = useT();
-  const records = recordArray(preview.runs);
-  const geometryMode = records.some((run) => finiteNumber(run.mean_delta_norm) === null);
-  const metricKey = geometryMode ? "pairwise_distance_spearman" : "mean_delta_norm";
-  const metricLabel = geometryMode ? t("Pairwise distance Spearman") : t("Mean descriptor delta norm");
-  const runs = records
-    .map((run, index) => ({
-      label: parameterLabel(run.parameters, index),
-      value: finiteNumber(run[metricKey]),
-      detail: parameterText(run.parameters),
-    }))
-    .filter((run): run is { label: string; value: number; detail: string } => run.value !== null);
-  if (!runs.length) return <OverviewNoData message={t("No completed runs were returned for sensitivity analysis.")} />;
-  const rows = runs.slice().reverse();
-  const extremeValue = geometryMode ? Math.min(...runs.map((run) => run.value)) : Math.max(...runs.map((run) => run.value));
-  return <>
-    <MetricStrip metrics={[{ label: t("Runs compared"), value: String(runs.length) }, { label: geometryMode ? t("Lowest geometry correlation") : t("Largest mean delta"), value: formatNumber(extremeValue) }]} />
-    <OverviewPlot
-      ariaLabel={t("Descriptor parameter sensitivity across completed runs")}
-      data={[{
-        type: "bar",
-        orientation: "h",
-        x: rows.map((run) => run.value),
-        y: rows.map((run) => run.label),
-        customdata: rows.map((run) => run.detail),
-        marker: { color: rows.map((_, index) => index === rows.length - 1 ? "#107C10" : "#0F6CBD") },
-        hovertemplate: `%{y}<br>${metricLabel.toLowerCase()}=%{x:.5g}<br>%{customdata}<extra></extra>`,
-      }]}
-      layout={overviewLayout({ xaxis: { title: metricLabel, zeroline: true }, yaxis: { automargin: true } })}
-    />
-    <ChartCaption>{geometryMode ? t("Descriptors with different feature dimensions are compared by sample geometric consistency; the closer the Spearman is to 1, the more consistent the sample ordering.") : t("The first completed run is the baseline; the longer the bar, the larger the overall result difference caused by the descriptor parameter change.")}</ChartCaption>
-  </>;
-}
-
 function OverviewPlot({ data, layout, ariaLabel, compact = false, className, style, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; className?: string; style?: CSSProperties; onClick?: (event: Readonly<PlotMouseEvent>) => void }) {
   const classes = ["analysis-overview-chart-frame", compact ? "compact" : "", className ?? ""].filter(Boolean).join(" ");
   return <div className={classes} style={style} aria-label={ariaLabel}><Plot data={data} layout={layout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={onClick} /></div>;
@@ -2348,10 +2205,6 @@ function ChartCaption({ children }: { children: ReactNode }) {
   return <Typography.Text type="secondary" className="analysis-chart-caption">{children}</Typography.Text>;
 }
 
-function OverviewNoData({ message }: { message: string }) {
-  return <div className="analysis-overview-empty"><Empty description={message} /></div>;
-}
-
 function overviewLayout(overrides: Partial<Layout> = {}): Partial<Layout> {
   return {
     autosize: true,
@@ -2361,22 +2214,6 @@ function overviewLayout(overrides: Partial<Layout> = {}): Partial<Layout> {
     font: { family: "Segoe UI, sans-serif", size: 12, color: "#424242" },
     ...overrides,
   };
-}
-
-function numericArray(value: unknown): number[] {
-  if (!Array.isArray(value)) return [];
-  return value.map(finiteNumber).filter((item): item is number => item !== null);
-}
-
-function recordArray(value: unknown): Record<string, unknown>[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item));
-}
-
-function finiteNumber(value: unknown): number | null {
-  if (typeof value !== "number" && typeof value !== "string") return null;
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
 }
 
 function sampledIndices(length: number, maxPoints: number): number[] {
@@ -2391,46 +2228,15 @@ function formatNumber(value: unknown): string {
   return Math.abs(number) >= 1000 ? number.toLocaleString(undefined, { maximumFractionDigits: 2 }) : number.toPrecision(5);
 }
 
-function formatCount(value: unknown): string {
-  const number = finiteNumber(value);
-  return number === null ? "—" : Math.round(number).toLocaleString();
-}
-
 function integerCount(value: unknown): number | null {
   const number = finiteNumber(value);
   return number !== null && Number.isInteger(number) && number >= 0 ? number : null;
-}
-
-function formatIndex(value: unknown): string {
-  const number = finiteNumber(value);
-  return number === null ? "?" : String(Math.round(number));
 }
 
 function componentThreshold(preview: AnalysisPreview, key: string): number | null {
   const thresholds = preview.components_for_threshold;
   if (typeof thresholds !== "object" || thresholds === null || Array.isArray(thresholds)) return null;
   return finiteNumber((thresholds as Record<string, unknown>)[key]);
-}
-
-function numberOr(value: unknown, fallback: number): number {
-  return finiteNumber(value) ?? fallback;
-}
-
-function parameterText(value: unknown): string {
-  if (value == null) return "";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-function parameterLabel(value: unknown, index: number): string {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    const entries = Object.entries(value as Record<string, unknown>).slice(0, 2);
-    if (entries.length) return entries.map(([key, item]) => `${key}=${String(item)}`).join(", ");
-  }
-  return `Run ${index + 1}`;
 }
 
 function AnalysisMethodGuideModal({ guide, open, onClose }: { guide: AnalysisMethodGuide; open: boolean; onClose: () => void }) {

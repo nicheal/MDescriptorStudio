@@ -42,9 +42,6 @@ _GEO_SIGNATURE = ctypes.CFUNCTYPE(
 
 def _library_candidates() -> list[Path]:
     candidates: list[Path] = []
-    override = os.environ.get("MDS_NATIVE_DIR")
-    if override:
-        candidates.append(Path(override) / _LIBRARY_NAME)
     # package-relative: the dev tree and the PyInstaller bundle (which keeps
     # the package layout inside _MEIPASS) share this location
     candidates.append(Path(__file__).resolve().parent / "_native" / _LIBRARY_NAME)

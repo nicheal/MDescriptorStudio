@@ -10,6 +10,7 @@ import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
+import { formatLabel, formatSize } from "../util/format";
 import type { Hist, Stats } from "../types/protocol";
 
 export default function Overview() {
@@ -233,7 +234,7 @@ function StatsTable({
           .filter(Boolean)
           .join(", ") || "—",
       )}
-      {row(t("Format"), d.format.charAt(0).toUpperCase() + d.format.slice(1))}
+      {row(t("Format"), formatLabel(d.format))}
       {row("PBC", d.periodicity.flags.join("") || "—")}
       {row(t("Created"), new Date(d.created_at).toLocaleString())}
       {row(t("File Size"), d.file_size ? formatSize(d.file_size) : "—")}
@@ -505,16 +506,4 @@ function EmptyState() {
       <Typography.Text type="secondary">{t("Add a DeepMD or extxyz dataset to begin.")}</Typography.Text>
     </div>
   );
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let v = bytes / 1024;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(1)} ${units[i]}`;
 }

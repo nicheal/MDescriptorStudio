@@ -1,6 +1,7 @@
 # MDescriptor GUI 项目设计文档
 
-> 规范说明：本文件的旧示例以[正式设计基线](gui-adaptation-baseline.md)为准。
+> 规范说明：本文件的旧示例以正式设计基线为准：上游引擎仓库的
+> `gui-adaptation-baseline.md`（0.2.7+ 已随 wheel 发布于 `mdescriptor/docs/`）。
 > 基线定义唯一的 JSON 字段、版本、模型资源和执行契约；本文件只描述 GUI
 > 产品层、数据集层和 IPC 层，不再另行定义 MDescriptor public API。
 

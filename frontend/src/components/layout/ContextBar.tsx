@@ -2,10 +2,11 @@
 // property availability pills, source path + overflow menu on the right.
 import { useState } from "react";
 import { App as AntApp, Button, Dropdown, Space, Tag, Tooltip, Typography } from "antd";
-import { CheckCircleFilled, MoreOutlined } from "@ant-design/icons";
+import { CheckmarkCircle16Filled, MoreHorizontal16Regular } from "@fluentui/react-icons";
 import { ipc } from "../../ipc/client";
 import { RenameDatasetModal, useDatasetDelete } from "../datasetActions";
 import { activeDataset, useWorkspace } from "../../stores/workspace";
+import { formatLabel } from "../../util/format";
 import { useT } from "../../i18n";
 
 function PropertyChip({ label, ok }: { label: string; ok: boolean }) {
@@ -24,7 +25,7 @@ function PropertyChip({ label, ok }: { label: string; ok: boolean }) {
       }}
     >
       {label}
-      <CheckCircleFilled style={{ color: ok ? "#107C10" : "#D9D9D9", fontSize: 12 }} />
+      <CheckmarkCircle16Filled style={{ color: ok ? "#107C10" : "#D9D9D9", fontSize: 12 }} />
     </span>
   );
 }
@@ -44,7 +45,6 @@ export default function ContextBar() {
     );
   }
   const has = (v: boolean | undefined) => v === true;
-  const formatLabel = d.format.charAt(0).toUpperCase() + d.format.slice(1);
   const pbcLabel = d.periodicity.flags.join("") || "—";
   const copyPath = async () => {
     try {
@@ -72,7 +72,7 @@ export default function ContextBar() {
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
         <Space size={8} wrap style={{ flex: 1, minWidth: 0 }}>
-          <Tag style={{ marginRight: 0 }}>{formatLabel}</Tag>
+          <Tag style={{ marginRight: 0 }}>{formatLabel(d.format)}</Tag>
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
             {t("{n} structures", { n: d.number_of_frames.toLocaleString() })}
           </Typography.Text>
@@ -127,7 +127,7 @@ export default function ContextBar() {
             }}
             trigger={["click"]}
           >
-            <Button type="text" size="small" icon={<MoreOutlined />} />
+            <Button type="text" size="small" icon={<MoreHorizontal16Regular />} />
           </Dropdown>
         </Space>
       </div>

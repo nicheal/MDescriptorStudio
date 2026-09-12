@@ -15,7 +15,7 @@ import {
   Tooltip,
   Typography,
 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
+import { Info16Regular } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
@@ -102,7 +102,7 @@ function SectionHeading({ number, title, description }: { number: number; title:
       </Typography.Text>
       {description && (
         <Tooltip title={description}>
-          <InfoCircleOutlined aria-label={description} style={{ color: "#98A2B3", fontSize: 15, cursor: "help" }} />
+          <Info16Regular aria-label={description} style={{ color: "#98A2B3", fontSize: 15, cursor: "help" }} />
         </Tooltip>
       )}
     </div>
@@ -200,22 +200,23 @@ export default function Descriptors() {
     const params: ParamValues = { ...values };
     // species multi-select holds symbols -> engine wants atomic numbers
     if (schema.parameters.species && Array.isArray(params.species)) {
-      params.species = speciesToNumbers(params.species as string[], elementOptions);
+      params.species = speciesToNumbers(params.species as string[]);
     }
     setSubmitting(true);
     try {
+      const submitRequest = {
+        dataset_id: d.id,
+        descriptor_name: selected,
+        parameters: params,
+        scope,
+        frame_index: scope === "frame" ? frameIndex : undefined,
+        output_dtype: effectiveDtype,
+        device: effectiveDevice,
+        num_threads: effectiveDevice === "cpu" && schema.execution.num_threads ? threads : undefined,
+      };
       const r = await ipc.request<{ job_id: string | null; cache: { existing_run_id: string; in_flight?: boolean } | null }>(
         "descriptor.submit",
-        {
-          dataset_id: d.id,
-          descriptor_name: selected,
-          parameters: params,
-          scope,
-          frame_index: scope === "frame" ? frameIndex : undefined,
-          output_dtype: effectiveDtype,
-          device: effectiveDevice,
-          num_threads: effectiveDevice === "cpu" && schema.execution.num_threads ? threads : undefined,
-        },
+        submitRequest,
       );
       const watchCompute = (jobId: string) => {
         void watchJob(jobId).then((done) => {
@@ -238,17 +239,7 @@ export default function Descriptors() {
           okText: t("Recalculate"),
           cancelText: t("Use existing"),
           onOk: async () => {
-            const r2 = await ipc.request<{ job_id: string | null }>("descriptor.submit", {
-              dataset_id: d.id,
-              descriptor_name: selected,
-              parameters: params,
-              scope,
-              frame_index: scope === "frame" ? frameIndex : undefined,
-              output_dtype: effectiveDtype,
-              device: effectiveDevice,
-              num_threads: effectiveDevice === "cpu" && schema.execution.num_threads ? threads : undefined,
-              force: true,
-            });
+            const r2 = await ipc.request<{ job_id: string | null }>("descriptor.submit", { ...submitRequest, force: true });
             if (r2.job_id) {
               trackJob(r2.job_id, "descriptor.compute", d.id);
               watchCompute(r2.job_id);
@@ -261,10 +252,7 @@ export default function Descriptors() {
       if (r.job_id) {
         trackJob(r.job_id, "descriptor.compute", d.id);
         message.info(t("Compute submitted — see Jobs"));
-        void watchJob(r.job_id).then((done) => {
-          if (done.status === "COMPLETED") message.success(t("Run {id} completed", { id: String(done.result?.run_id ?? "") }));
-          else message.error(t("Compute {status}: {message}", { status: done.status, message: done.error?.message ?? "" }));
-        });
+        watchCompute(r.job_id);
       }
     } catch (e) {
       const err = e as { code: string; message: string };

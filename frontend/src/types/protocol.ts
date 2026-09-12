@@ -288,22 +288,6 @@ export interface JobRow {
   queue_position?: number;
 }
 
-export interface JobFinishedData {
-  job_id: string;
-  status: "COMPLETED" | "FAILED" | "CANCELLED";
-  result: {
-    dataset_id?: string;
-    run_id?: string;
-    shape?: number[];
-    dtype?: string;
-    level?: string;
-    feature_count?: number;
-    analysis_id?: string;
-    n_points?: number;
-  } | null;
-  error: ErrorFrame | null;
-}
-
 export interface RunRow {
   id: string;
   dataset_id: string;

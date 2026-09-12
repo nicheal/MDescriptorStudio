@@ -31,7 +31,6 @@ class ScanMeta:
     number_of_frames: int
     file_size: int
     elements: list[str]  # may be empty when only statistics can determine it
-    properties: dict  # {"energy": bool, "forces": bool, "virial": bool}
     periodicity: dict  # {"fully_periodic": bool, "isolated": bool, "mixed": bool, "flags": [..]}
 
 
@@ -82,12 +81,6 @@ def create_adapter(path: Path, fmt: str | None = None) -> DatasetAdapter:
     if fmt == "extxyz":
         return ExtXYZAdapter(path)
     raise AppError(UNSUPPORTED_FORMAT, f"unknown format {fmt!r}")
-
-
-def require_dir(path: Path) -> Path:
-    if not path.exists():
-        raise AppError(INVALID_DATASET, f"path does not exist: {path}")
-    return path
 
 
 def pbc_summary(pbc_tuples: set[tuple[bool, bool, bool]]) -> dict:

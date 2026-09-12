@@ -25,7 +25,6 @@ def test_detect_and_scan_deepmd(tmp_path: Path) -> None:
     meta = a.scan()
     assert meta.number_of_frames == 5
     assert meta.elements == ["As", "Ga"]
-    assert meta.properties == {"energy": True, "forces": True, "virial": True}
     assert meta.periodicity["fully_periodic"] is True
     assert len(a) == 5
 
@@ -51,7 +50,6 @@ def test_deepmd_unlabeled_and_nopbc(tmp_path: Path) -> None:
     a = create_adapter(d)
     meta = a.scan()
     assert meta.number_of_frames == 3
-    assert meta.properties == {"energy": False, "forces": False, "virial": False}
     f = a.get_frame(1)
     assert f.energy is None and f.forces is None and f.virial is None
 

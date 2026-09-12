@@ -15,6 +15,7 @@ import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import { forceArrowGeometry, frameMaxForce } from "../util/forces";
 import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, virialSummary } from "../util/structure";
+import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import type { DatasetHealth, FramePayload, HealthFindings } from "../types/protocol";
 
 const DEFAULT_BOND_CUTOFF = 2.4;
@@ -23,15 +24,6 @@ const MAX_BOND_CUTOFF = 10;
 // data-health severity color for the inspector: rows behind a flagged check
 // (and the banner listing them) render in this red
 const HEALTH_RED = "#D13438";
-// health checks whose per-frame indices can red-flag an inspector row
-const CHECK_KEYS = [
-  "missing_values",
-  "invalid_cell",
-  "duplicate_structures",
-  "extreme_force",
-  "nonphysical_structures",
-  "net_force",
-] as const;
 // localized labels for the per-frame missing-properties inspector row
 const MISSING_PROP_LABELS: Record<string, string> = { energy: "Energy", forces: "Forces", virial: "Virial" };
 // Force arrows are normalized per frame: the strongest force in the frame
@@ -816,16 +808,7 @@ export default function Explore() {
                       onClick={() => useWorkspace.getState().openFindings(check)}
                       style={{ color: HEALTH_RED, cursor: "pointer", textDecoration: "underline" }}
                     >
-                      {t(
-                        {
-                          missing_values: "Missing values",
-                          invalid_cell: "Invalid cell",
-                          duplicate_structures: "Duplicate structures",
-                          extreme_force: "Extreme force",
-                          nonphysical_structures: "Non-physical structures",
-                          net_force: "Net force",
-                        }[check] ?? check,
-                      )}
+                      {healthCheckTitle(check, t)}
                     </a>
                   ))}
                 </div>

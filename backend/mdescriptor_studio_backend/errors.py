@@ -57,10 +57,6 @@ class AppError(Exception):
         self.public_message = public_message or _PUBLIC_MESSAGES.get(code, "Request failed.")
 
 
-def invalid_params(message: str, details: dict | None = None) -> AppError:
-    return AppError(INVALID_PARAMS, message, details)
-
-
 _PUBLIC_MESSAGES = {
     INVALID_PARAMS: "Invalid request.",
     DATASET_NOT_FOUND: "Dataset not found.",

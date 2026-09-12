@@ -89,10 +89,9 @@ export const JOB_STATUS_COLOR: Record<JobState["status"], string> = {
 interface JobsStore {
   jobs: Record<string, JobState>;
   order: string[]; // newest first
-  setRunning: (n: number) => void;
 }
 
-export const useJobs = create<JobsStore>(() => ({ jobs: {}, order: [], setRunning: () => {} }));
+export const useJobs = create<JobsStore>(() => ({ jobs: {}, order: [] }));
 
 export function trackJob(jobId: string, jobType: string, datasetId?: string | null) {
   useJobs.setState((st) => ({

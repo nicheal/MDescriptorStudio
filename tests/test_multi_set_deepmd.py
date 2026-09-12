@@ -36,7 +36,6 @@ def test_multi_set_detection_and_frames(tmp_path: Path) -> None:
     assert len(a) == 7
     meta = a.scan()
     assert meta.number_of_frames == 7
-    assert meta.properties == {"energy": True, "forces": True, "virial": True}
     # frames across the set boundary resolve to the right set
     f2, f3, f6 = a.get_frame(2), a.get_frame(3), a.get_frame(6)
     assert f3.index == 3 and f6.index == 6

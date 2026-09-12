@@ -13,6 +13,7 @@ from mdescriptor_studio_backend.analysis import AnalysisEngine, SampleMatrix
 from mdescriptor_studio_backend.datasets.base import DatasetFrame
 from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, ANALYSIS_STALE, AppError
 from mdescriptor_studio_backend.services.analysis_service import AnalysisService
+from mdescriptor_studio_backend.services.dataset_service import DatasetService
 from mdescriptor_studio_backend.services.result_service import ResultService
 from mdescriptor_studio_backend.storage.database import Database
 
@@ -265,7 +266,7 @@ def test_stale_artifacts_remain_auditable_but_cannot_feed_new_work(tmp_path: Pat
     created = service.cluster({"run_id": "run_1", "algorithm": "kmeans", "n_clusters": 2, "seed": 42})
     assert jobs.calls == 1
 
-    service._mark_stale("ds_1", "fixture source changed")
+    DatasetService(db, adapter=None, jobs=jobs)._mark_runs_stale("ds_1", "fixture source changed")
     run = db.query_one("SELECT status FROM descriptor_runs WHERE id = 'run_1'")
     analysis = db.query_one("SELECT status FROM analysis_runs WHERE id = ?", (created["analysis_id"],))
     assert run["status"] == "STALE"
