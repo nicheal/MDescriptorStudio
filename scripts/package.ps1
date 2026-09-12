@@ -25,18 +25,8 @@ if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
     throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is required for the encrypted updater key"
 }
 
-& powershell -ExecutionPolicy Bypass -File "$root\scripts\build_native.ps1"
-if ($LASTEXITCODE -ne 0) { throw "native kernel build failed" }
-
-Push-Location "$root\backend"
-& "$root\.venv\Scripts\python.exe" -m PyInstaller backend.spec --noconfirm --log-level ERROR
-Pop-Location
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller backend build failed" }
-
-Copy-Item "$root\backend\dist\backend.exe" "$root\src-tauri\binaries\backend-x86_64-pc-windows-msvc.exe" -Force
-$sidecar = "$root\src-tauri\binaries\backend-x86_64-pc-windows-msvc.exe"
-$sidecarHash = (Get-FileHash -LiteralPath $sidecar -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath "$sidecar.sha256" -Value "$sidecarHash  $(Split-Path -Leaf $sidecar)" -Encoding ascii
+& "$root\scripts\prepare_sidecar.ps1"
+if ($LASTEXITCODE -ne 0) { throw "sidecar preparation failed" }
 
 Push-Location $root
 & node "$root\node_modules\@tauri-apps\cli\tauri.js" build

@@ -22,19 +22,20 @@ CI 则设置 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 ## 发布新版本
 
 1. 将同一个版本号更新到 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`frontend/package.json`、`frontend/package-lock.json` 和 `backend/mdescriptor_studio_backend/__init__.py`。
-2. 使用生产密钥运行：
+2. 确认仓库已配置 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 两个 Actions Secret。
+
+3. 创建并推送版本 tag：
 
    ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\package.ps1
+   git tag v0.2.0
+   git push origin v0.2.0
    ```
 
-3. 在 GitHub 创建对应的 tag，例如 `v0.2.0`，并上传 `src-tauri\target\release\bundle\nsis\` 下的：
+4. `.github/workflows/release.yml` 会在 Windows runner 上构建 sidecar 和 Tauri 安装包，自动创建 Release 并上传安装包、`.sig` 和 `latest.json`。
 
-   - `MDescriptor Studio_<version>_x64-setup.exe`
-   - `MDescriptor Studio_<version>_x64-setup.exe.sig`
-   - `latest.json`
+如需只在本地验证产物，可运行 `scripts\package.ps1`；它会在 `src-tauri\target\release\bundle\nsis\` 生成同样的安装包和更新清单。
 
-   `latest.json` 中的下载地址已由脚本指向该 GitHub Release。发布前确认 tag、文件名和版本号完全一致。
+`v0.1.0.rc` 这类预发布 tag 只适合验证 CI 构建流程；它不会作为稳定版本被 `releases/latest` 更新地址选中。要验证应用内升级，需要先发布一个较低的稳定版本，再发布更高的稳定版本。
 
 ## 用户升级
 
