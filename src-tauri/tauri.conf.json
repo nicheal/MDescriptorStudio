@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico"],
     "externalBin": ["binaries/backend"],
     "resources": ["binaries/backend-x86_64-pc-windows-msvc.exe.sha256"],
@@ -35,6 +36,17 @@
       "nsis": {
         "installMode": "perMachine",
         "languages": ["English", "SimpChinese"]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZCOUY5NUQ1NjlDQ0FFRDcKUldUWHJzeHAxWldmKzVUNXR5SXJsbTNsUHVLMlFCQy9RU2pWVnpUT1J3cE1NaFlpcTZIcXZIbFkK",
+      "endpoints": [
+        "https://github.com/nicheal/MDescriptorStudio/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

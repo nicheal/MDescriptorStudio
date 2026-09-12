@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.pytest-tmp/
 build/
 dist/
 backend/dist/
@@ -23,6 +24,10 @@ src-tauri/binaries/*.exe
 
 # Runtime data (dev override)
 .mds-data/
+
+# Tauri update signing key and local package cache
+.tauri/
+.tmp-npm-cache/
 
 # OS / IDE
 Thumbs.db

@@ -15,6 +15,7 @@
     "@fluentui/react-icons": "2.0.339",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.2",
+    "@tauri-apps/plugin-updater": "2.11.0",
     "3dmol": "2.5.5",
     "antd": "5.29.3",
     "echarts": "6.1.0",

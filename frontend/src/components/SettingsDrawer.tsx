@@ -1,13 +1,10 @@
 // Settings + About (M5, ADR-12): default threads, data dir, log folder path,
-// language (EN/ZH), About with component versions (design doc §52) + engine
-// update (PyPI).
+// language (EN/ZH), About with component versions (design doc §52) + app update.
 import { useEffect, useState } from "react";
-import { Button, Descriptions, Drawer, InputNumber, Radio, Space, Typography } from "antd";
-import { invoke } from "@tauri-apps/api/core";
+import { Button, Descriptions, Drawer, InputNumber, Progress, Radio, Space, Typography } from "antd";
 import { Settings16Regular } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
-import { useEngineUpdate } from "../stores/engineUpdate";
-import { useWorkspace } from "../stores/workspace";
+import { useAppUpdate } from "../stores/appUpdate";
 import { useI18n, useT } from "../i18n";
 
 interface SystemInfo {
@@ -25,16 +22,10 @@ export default function SettingsDrawer() {
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [defaultThreads, setDefaultThreads] = useState<number | null>(null);
-  const upd = useEngineUpdate();
-  const setBackendStarting = useWorkspace((s) => s.setBackendStarting ?? (() => {}));
+  const appUpdate = useAppUpdate();
   const { t } = useT();
   const lang = useI18n((s) => s.lang);
   const setLang = useI18n((s) => s.setLang);
-
-  const restartBackend = async () => {
-    setBackendStarting();
-    await invoke("backend_restart");
-  };
 
   useEffect(() => {
     if (!open) return;
@@ -47,6 +38,10 @@ export default function SettingsDrawer() {
       setDefaultThreads(th.value ? Number(th.value) : null);
     })();
   }, [open]);
+
+  useEffect(() => {
+    if (open && appUpdate.status === "idle") void appUpdate.refresh();
+  }, [appUpdate.refresh, appUpdate.status, open]);
 
   return (
     <>
@@ -124,50 +119,43 @@ export default function SettingsDrawer() {
         </Typography.Text>
 
         <Typography.Text strong style={{ fontSize: 12, color: "#616161", display: "block", marginTop: 24 }}>
-          {t("ENGINE UPDATE")}
+          {t("APPLICATION UPDATE")}
         </Typography.Text>
         <div style={{ marginTop: 8, fontSize: 13 }}>
-          <Row k={t("Installed")} v={upd.installed || info?.mdescriptor_version || "—"} />
-          <Row k={t("Latest (PyPI)")} v={upd.latest ?? "—"} />
-          <Row k={t("Status")} v={statusLabel(upd.status, t)} />
-          {upd.error && (
+          <Row k={t("Installed")} v={appUpdate.current || "—"} />
+          <Row k={t("Latest release")} v={appUpdate.latest ?? "—"} />
+          <Row k={t("Status")} v={appStatusLabel(appUpdate.status, t)} />
+          {appUpdate.notes && (
+            <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "6px 0" }}>
+              {appUpdate.notes}
+            </Typography.Paragraph>
+          )}
+          {appUpdate.progress !== null && (
+            <Progress percent={appUpdate.progress} size="small" showInfo={false} style={{ margin: "4px 0" }} />
+          )}
+          {appUpdate.error && (
             <Typography.Text type="danger" style={{ fontSize: 11 }}>
-              {upd.error}
+              {appUpdate.error}
             </Typography.Text>
           )}
           <div style={{ marginTop: 8 }}>
-            {upd.status === "restart_required" ? (
-              <Button type="primary" onClick={() => void restartBackend()}>
-                {t("Restart backend to apply")}
-              </Button>
-            ) : upd.status === "available" ? (
-              <Button type="primary" onClick={() => void upd.runUpdate()}>
-                {t("Update to {version}", { version: upd.latest ?? "" })}
-              </Button>
-            ) : upd.status === "unsupported" ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {t("Engine ships inside the installer — download a new setup.exe to upgrade.")}
-              </Typography.Text>
-            ) : upd.status === "updating" ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {t("Updating…")}
-              </Typography.Text>
-            ) : upd.status === "checking" ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {t("Checking PyPI…")}
-              </Typography.Text>
-            ) : (
+            <Space direction="vertical" size={6}>
               <Space>
-                <Button size="small" onClick={() => void upd.refresh()}>
-                  {t("Re-check")}
+                <Button size="small" onClick={() => void appUpdate.refresh()} loading={appUpdate.status === "checking"} disabled={appUpdate.status === "installing"}>
+                  {t("Check for updates")}
                 </Button>
-                {upd.status === "up_to_date" && (
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    {t("ADR-2: after any update, rerun scripts/probe_engine.py + pytest.")}
-                  </Typography.Text>
+                {appUpdate.status === "available" && (
+                  <Button type="primary" onClick={() => void appUpdate.install()}>
+                    {t("Install and restart")}
+                  </Button>
                 )}
               </Space>
-            )}
+              {appUpdate.status === "installing" && (
+                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                  {t("The app will close and restart to finish the update.")}
+                </Typography.Text>
+              )}
+            </Space>
           </div>
         </div>
 
@@ -182,7 +170,7 @@ export default function SettingsDrawer() {
           labelStyle={{ width: 150, color: "#616161", fontSize: 13 }}
           contentStyle={{ fontSize: 13, fontVariantNumeric: "tabular-nums" }}
         >
-          <Descriptions.Item label="MDescriptor Studio">0.1.0</Descriptions.Item>
+          <Descriptions.Item label="MDescriptor Studio">{appUpdate.current || "—"}</Descriptions.Item>
           <Descriptions.Item label={t("Backend")}>{info?.backend_version ?? "—"}</Descriptions.Item>
           <Descriptions.Item label="MDescriptor">{info?.mdescriptor_version ?? "—"}</Descriptions.Item>
           <Descriptions.Item label={t("Protocol")}>{info?.protocol_version ?? "—"}</Descriptions.Item>
@@ -200,20 +188,18 @@ export default function SettingsDrawer() {
   );
 }
 
-function statusLabel(s: string, t: (key: string) => string): string {
+function appStatusLabel(s: string, t: (key: string) => string): string {
   switch (s) {
     case "up_to_date":
       return t("Up to date");
     case "available":
       return t("Update available");
+    case "installing":
+      return t("Installing update…");
+    case "installed":
+      return t("Updated — restarting");
     case "checking":
-      return t("Checking PyPI…");
-    case "updating":
-      return t("Updating…");
-    case "restart_required":
-      return t("Updated — restart pending");
-    case "unsupported":
-      return t("In-app update unavailable");
+      return t("Checking for updates…");
     case "error":
       return t("Check failed");
     default:

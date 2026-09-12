@@ -1,6 +1,5 @@
 import { useCallback, useEffect, type ReactNode } from "react";
-import { App as AntApp, Button, Space } from "antd";
-import { invoke } from "@tauri-apps/api/core";
+import { App as AntApp } from "antd";
 import {
   Grid16Regular,
   Image16Regular,
@@ -23,7 +22,6 @@ import { ipc } from "./ipc/client";
 import { useWorkspace, hydrateActiveRun } from "./stores/workspace";
 import { hydrateAnalysisUi } from "./stores/analysisUi";
 import { wireJobEvents } from "./stores/jobs";
-import { useEngineUpdate, wireEngineUpdate } from "./stores/engineUpdate";
 import { getT, initLanguage, useT } from "./i18n";
 import type { DatasetMeta } from "./types/protocol";
 import { APP_ICON_URL } from "./brand";
@@ -39,11 +37,10 @@ const TABS: { key: "overview" | "explore" | "descriptors" | "results" | "analysi
 ];
 
 export default function App() {
-  const { message, notification } = AntApp.useApp();
+  const { message } = AntApp.useApp();
   const {
     backendStatus,
     setBackendReady,
-    setBackendStarting,
     setBackendError,
     setDatasets,
     setActiveDataset,
@@ -52,71 +49,6 @@ export default function App() {
     setPage,
   } = useWorkspace();
   const { t } = useT();
-
-  const restartBackend = useCallback(async () => {
-    setBackendStarting();
-    await invoke("backend_restart");
-  }, [setBackendStarting]);
-
-  const offerEngineUpdate = useCallback(() => {
-    // Called from the once-registered ready handler — resolve the current
-    // language at call time so switching languages does not re-run the effect.
-    const { t } = getT();
-    const upd = useEngineUpdate.getState();
-    if (upd.status !== "available") return;
-    notification.info({
-      message: t("MDescriptor engine update available"),
-      description: t("Installed {installed} — PyPI has {latest}. The upgrade runs in the background; a backend restart applies it.", { installed: upd.installed, latest: upd.latest ?? "" }),
-      duration: 0,
-      btn: (
-        <Space>
-          <Button
-            size="small"
-            onClick={() => {
-              notification.destroy();
-            }}
-          >
-            {t("Later")}
-          </Button>
-          <Button
-            type="primary"
-            size="small"
-            onClick={() => {
-              notification.destroy();
-              void upd.runUpdate().then((/* done */) => {
-                const s = useEngineUpdate.getState();
-                const { t: tNow } = getT();
-                if (s.status === "restart_required") {
-                  notification.success({
-                    message: tNow("Engine updated to {version}", { version: s.latest ?? "" }),
-                    description: tNow("Restart the backend to load it. After any engine update, rerun scripts/probe_engine.py + pytest (ADR-2)."),
-                    duration: 0,
-                    btn: (
-                      <Button
-                        type="primary"
-                        size="small"
-                        onClick={() => {
-                          notification.destroy();
-                          void restartBackend();
-                        }}
-                      >
-                        {tNow("Restart backend")}
-                      </Button>
-                    ),
-                  });
-                } else if (s.status === "error") {
-                  message.error(tNow("Engine update failed: {message}", { message: s.error ?? "" }));
-                }
-              });
-            }}
-          >
-            {t("Update to {version}", { version: upd.latest ?? "" })}
-          </Button>
-        </Space>
-      ),
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [notification, message, restartBackend]);
 
   const refreshDatasets = useCallback(async () => {
     try {
@@ -163,10 +95,6 @@ export default function App() {
           await Promise.all([hydrateActiveRun(), hydrateAnalysisUi()]);
           setBackendReady(info.mdescriptor_version, info.cpu_threads ?? null);
           await refreshDatasets();
-          // engine update check (PyPI) — non-blocking, UI notifies when available
-          wireEngineUpdate();
-          await useEngineUpdate.getState().refresh();
-          offerEngineUpdate();
         } catch (e) {
           console.error(e);
           setBackendError();
@@ -199,7 +127,7 @@ export default function App() {
       if (poller) clearInterval(poller);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offerEngineUpdate, refreshDatasets, setBackendError, setBackendReady]);
+  }, [refreshDatasets, setBackendError, setBackendReady]);
 
   if (backendStatus !== "ready") {
     return (

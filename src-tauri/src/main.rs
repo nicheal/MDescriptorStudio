@@ -427,6 +427,7 @@ fn verify_sidecar(sidecar: &Path, expected: Option<&str>) -> Result<(), String> 
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(BackendState {
             child: Mutex::new(None),
             ready_line: Mutex::new(None),
