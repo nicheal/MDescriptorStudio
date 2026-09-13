@@ -144,6 +144,6 @@ EXPORT_FAILED
 ## 7. Sidecar 生命周期
 
 - **dev**：Tauri 直接 spawn `.venv\Scripts\python.exe -m mdescriptor_studio_backend`（cwd=backend/，env `MDS_DATA_DIR` 可覆盖数据目录）。
-- **release**：spawn PyInstaller 产物 `binaries/backend-x86_64-pc-windows-msvc.exe`（externalBin）。
+- **release**：spawn PyInstaller onedir 产物 `<安装目录>/backend/backend.exe`（`bundle.resources` 打包；spawn 前按编译期嵌入的哈希校验 `backend-manifest.json`，再逐文件校验大小与 SHA-256）。
 - Rust 侧：stdout 按行转发给 webview（事件 `backend-message`）；`backend_send(line)` 命令写入 stdin；子进程退出 → 事件 `backend-exit`，前端置后端不可用并提供重启入口。
 - 应用退出：关闭 stdin → 等待 ≤ 3s → kill。

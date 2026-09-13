@@ -1,9 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for the MDescriptor Studio backend sidecar (onefile).
+# PyInstaller spec for the MDescriptor Studio backend bundle (onedir).
 # Build:  .venv\Scripts\python.exe -m PyInstaller backend.spec --noconfirm
-# Output: dist\backend.exe  -> copied to src-tauri\binaries\backend-<triple>.exe
-# (onefile: Tauri externalBin carries a single file; extraction adds a few
-#  seconds to first launch, acceptable vs. shipping a sidecar directory.)
+# Output: dist\backend\  -> copied to src-tauri\resources\backend\
+# (onedir: no per-launch archive extraction and no Windows Defender storm
+#  over freshly extracted files, which dominated first data load after an
+#  install; Tauri bundles the directory via `bundle.resources`.)
 
 from PyInstaller.utils.hooks import collect_all
 
@@ -67,9 +68,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="backend",
     debug=False,
     bootloader_ignore_signals=False,
@@ -77,4 +77,13 @@ exe = EXE(
     upx=False,
     console=True,  # stdio protocol transport
     icon="../src-tauri/icons/icon.ico",
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="backend",
 )

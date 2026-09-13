@@ -30,8 +30,9 @@
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico"],
-    "externalBin": ["binaries/backend"],
-    "resources": ["binaries/backend-x86_64-pc-windows-msvc.exe.sha256"],
+    "resources": {
+      "resources/backend": "backend"
+    },
     "windows": {
       "nsis": {
         "installMode": "perMachine",

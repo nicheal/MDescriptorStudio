@@ -21,6 +21,7 @@ src-tauri/target/
 src-tauri/gen/schemas/
 src-tauri/binaries/*.exe
 !src-tauri/binaries/.gitkeep
+src-tauri/resources/backend/
 
 # Runtime data (dev override)
 .mds-data/

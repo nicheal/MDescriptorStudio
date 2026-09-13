@@ -1,6 +1,6 @@
 # MDescriptor Studio 发布与应用内升级
 
-当前发布目标为 Windows x64 NSIS 安装包。应用内升级由 Tauri Updater 完成，升级包包含 Studio、Rust 壳、Python backend sidecar 和固定版本的 MDescriptor；用户无需执行 `pip` 命令。
+当前发布目标为 Windows x64 NSIS 安装包。应用内升级由 Tauri Updater 完成，升级包包含 Studio、Rust 壳、PyInstaller onedir 形式的 Python 后端目录（`src-tauri/resources/backend/`，随 `bundle.resources` 打包，启动时全量校验完整性）和构建时从 PyPI 安装的最新版 MDescriptor（`backend/requirements.txt` 以 `mdescriptor>=0.3.2` 约束下限）；用户无需执行 `pip` 命令。
 
 ## 一次性配置签名
 
@@ -21,17 +21,17 @@ CI 则设置 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 ## 发布新版本
 
-1. 将同一个版本号更新到 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`frontend/package.json`、`frontend/package-lock.json` 和 `backend/mdescriptor_studio_backend/__init__.py`。
+1. 版本号以 Git tag 为准，不要手动同步 6 个文件。CI 会先将 tag 版本写入 `src-tauri/tauri.conf.json`，再同步 `src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`frontend/package.json`、`frontend/package-lock.json` 和 `backend/mdescriptor_studio_backend/__init__.py`。本地无 tag 时，`tauri.conf.json` 中的版本仅作为开发/本地打包兜底；只校验而不写入可运行 `scripts\sync_version.ps1 -Check`。
 2. 确认仓库已配置 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 两个 Actions Secret。
 
-3. 创建并推送版本 tag：
+3. 创建并推送目标版本 tag，例如：
 
    ```powershell
    git tag v0.2.0
    git push origin v0.2.0
    ```
 
-4. `.github/workflows/release.yml` 会在 Windows runner 上构建 sidecar 和 Tauri 安装包，自动创建 Release 并上传安装包、`.sig` 和 `latest.json`。
+4. `.github/workflows/release.yml` 会在 Windows runner 上构建后端目录和 Tauri 安装包，自动创建 Release 并上传安装包、`.sig` 和 `latest.json`。
 
 如需只在本地验证产物，可运行 `scripts\package.ps1`；它会在 `src-tauri\target\release\bundle\nsis\` 生成同样的安装包和更新清单。
 

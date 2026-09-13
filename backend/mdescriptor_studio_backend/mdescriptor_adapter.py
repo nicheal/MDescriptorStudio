@@ -1,7 +1,7 @@
 """Single boundary to the mdescriptor engine (docs/plan/05-ENGINE_ADAPTER.md).
 
 No other module may `import mdescriptor`. All engine exceptions are converted
-to AppError here. Engine updates via UpdateService (PyPI pin mdescriptor==0.2.8 as of 2026-09-05, ADR-2).
+to AppError here. Engine updates via UpdateService (PyPI mdescriptor>=0.3.2; release installs latest, ADR-2).
 """
 
 from __future__ import annotations

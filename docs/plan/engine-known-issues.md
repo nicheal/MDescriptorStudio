@@ -1,9 +1,15 @@
-# mdescriptor 已知问题清单（基于 0.2.8 复核）
+# mdescriptor 已知问题清单（基于 0.3.3 复核）
 
-> 日期：2026-09-05（0.2.8 复核；初版 2026-08-30 基于 0.2.7）；环境：Windows x64，cp312 wheel，项目 `.venv`
+> 日期：2026-09-13（0.3.2→0.3.3 复核；初版 2026-08-30 基于 0.2.7）；环境：Windows x64，cp312 wheel，项目 `.venv`
 > 性质：MDescriptor Studio 开发过程中的实测发现，可直接作为上游 issue 素材（github.com/nicheal/MDescriptor）
-> 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ 已历经 0.2.5（2026-08-29）、0.2.7（2026-08-30）、0.2.8（2026-09-05）三轮升级复核；每轮按 `scripts/probe_engine.py` 重建 API 基线并跑 `scripts/verify_known_issues.py`。
-> 仍需上游修改的项已整理为可开工清单：**`upstream-issues.md`**（0.2.8 复测后无待开工项；原 GPU 路径条目的声明层已落地，剩 CUDA 硬件运行时验收）
+> 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ 已历经 0.2.5（2026-08-29）、0.2.7（2026-08-30）、0.2.8（2026-09-05）、0.3.2/0.3.3（2026-09-13）升级复核；每轮按 `scripts/probe_engine.py` 重建 API 基线并跑 `scripts/verify_known_issues.py`。
+> 仍需上游修改的项已整理为可开工清单：**`upstream-issues.md`**（无待开工项；CUDA 运行时验收已在 RTX 2080 SUPER 于 0.3.2/0.3.3 完成）
+
+## 0.3.2→0.3.3 复核补充（2026-09-13）
+
+- **升级动因**：0.2.8 仅在 schema 声明 `execution.devices: ["cpu","cuda"]`，但 wheel 未携带 CUDA 插件（实测 0.2.8 wheel 内无 `_cuda*.pyd` / `cudart64_12.dll`），`import mdescriptor._cuda` 失败 → 引擎 `code=device_unavailable` → 发布版选 CUDA 必报 `DEVICE_UNAVAILABLE`。0.3.x 起 `_cuda.pyd` + `cudart64_12.dll` 随 wheel 发布。
+- probe JSON 逐键 diff（0.2.8 → 0.3.3）：仅 `engine_version` / `runtime_info.version` 变化，schema 零漂移；`verify_known_issues.py` 复核结论不变。版本策略同步放开为 `mdescriptor>=0.3.2`（发布构建装 PyPI 最新版，ADR-2）。
+- **CUDA 计算路径验收通过**（RTX 2080 SUPER，driver 610.47；0.3.2 与 0.3.3 双版本实测）：引擎直调 CoulombMatrix device=cuda 计算正确；后端 pytest 163 项全绿（含 `descriptor.submit device=cuda` 实算分支）；PyInstaller onefile sidecar 内已确认打包 `_cuda.pyd` + `cudart64_12.dll`，冻结 sidecar 经 stdio 协议端到端 CUDA 计算完成。
 
 ## 0.2.8 复核补充（2026-09-05）
 

@@ -14,10 +14,10 @@
 **决策**：代码放工作区根目录，与 `docs/` 并列（frontend / backend / src-tauri / scripts / tests / README.md）；不采用独立子目录；如需迁移可整体挪出。
 **后果**：路径最短，`.venv` 与 `docs/` 天然同仓；设计文档 §47 的目录树按此映射。
 
-## ADR-2 引擎依赖：PyPI 安装，pin `mdescriptor`（当前 0.2.8）
+## ADR-2 引擎依赖：PyPI 安装，发布用最新版（`mdescriptor>=0.3.2`）
 
-**背景**：设计文档 §48/§50 的开发模式假设本地 editable 引擎仓库；实际无本地引擎仓库，PyPI 可达且 cp312 wheel 存在。
-**决策**：开发与 Release 一律从 PyPI 安装并 pin（pin 随引擎更新移动，当前 `==0.2.8`，2026-09-05 由 0.2.7 升级）；按已发布 API 对接（实测完整，见 engine-api-report.md）；升级走 05 文档 §2 四步流程（改 pin → 重跑 probe → diff JSON → 回归）。
+**背景**：设计文档 §48/§50 的开发模式假设本地 editable 引擎仓库；实际无本地引擎仓库，PyPI 可达且 cp312 wheel 存在。0.2.8 发布版曾因 wheel 未携带 CUDA 插件而使 CUDA 选择必报 `DEVICE_UNAVAILABLE`，暴露了固定 pin 滞后于上游修复的问题。
+**决策**：开发与 Release 一律从 PyPI 安装，`backend/requirements.txt` 以 `mdescriptor>=0.3.2`（2026-09-13 由 `==0.2.8` 升级并放开；0.3.2 起 `_cuda.pyd` + `cudart64_12.dll` 随 wheel 发布，下限保证 CUDA 插件在位）约束下限；**发布构建时安装 PyPI 最新版**，开发 `.venv` 已满足下限时 pip 不自动升级；不做 editable 安装；引擎无本地仓库，PyPI 为唯一来源；应用内 UpdateService 走同一 pip 安装路径；引擎升级后走 05 文档 §2 流程（重跑 probe → diff JSON → 回归）后再发版。
 **后果**：不再需要「GUI 侧 schema 兜底」与引擎 Phase 0 需求清单；引擎缺陷走上游 issue。
 
 ## ADR-3 桌面壳：Tauri 2，无浏览器过渡态

@@ -2,11 +2,11 @@
 
 > 日期：2026-09-05（0.2.8 复测；初版 2026-08-30 基于 0.2.7）；环境：Windows x64，cp312 wheel **0.2.8**，项目 `.venv`（Python 3.12.9）+ numpy 2.5.2
 > 来源：`engine-known-issues.md` 的历史复核与 `scripts/probe_engine.py` 探测；schema 事实基线见 `engine-api-report.md`/`.json`
-> 范围：仅列最新复测后仍需修改的项。0.2.7 已补齐 GUI baseline API、`StructureBatch.from_frames()`、详细描述符列表和 `UnsupportedPeriodicityError`；参数展示元数据也已完整提供。**0.2.8 起 28/28 描述符声明 `devices: ["cpu","cuda"]`，原 P1「无任何 GPU 执行路径」在声明层已落地**——`ExecutionOptions(device=...)` 即设备选择入口；剩余部分为 CUDA 环境下的运行时验收（Studio 开发机无 GPU，未实测），故本清单当前无待开工项。
+> 范围：仅列最新复测后仍需修改的项。0.2.7 已补齐 GUI baseline API、`StructureBatch.from_frames()`、详细描述符列表和 `UnsupportedPeriodicityError`；参数展示元数据也已完整提供。**0.2.8 起 28/28 描述符声明 `devices: ["cpu","cuda"]`，原 P1「无任何 GPU 执行路径」在声明层已落地**——`ExecutionOptions(device=...)` 即设备选择入口；0.3.2 起 CUDA 插件随 wheel 发布并已在 RTX 2080 SUPER 完成运行时验收（见 `engine-known-issues.md` 0.3.2 节），故本清单当前无待开工项。
 
 | # | 问题 | 优先级 | 类型 |
 |---|---|---|---|
-| ~~1~~ | ~~无任何 GPU 执行路径（28/28 `devices: ["cpu"]`）~~ **0.2.8 已声明 CUDA**（剩余：CUDA 硬件运行时验收） | ~~P1~~ | 能力 |
+| ~~1~~ | ~~无任何 GPU 执行路径（28/28 `devices: ["cpu"]`）~~ **0.2.8 已声明 CUDA；0.3.2 插件随 wheel 发布，CUDA 路径实测通过** | ~~P1~~ | 能力 |
 
 0.2.5 的原始条目证据保留在下文，作为变更历史；其中 #1/#3/#4/#5 已由 0.2.7 的公开 API 解决，#2 的声明部分已由 0.2.8 解决。
 

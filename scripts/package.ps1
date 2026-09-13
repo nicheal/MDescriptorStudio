@@ -2,13 +2,17 @@
 # Usage:  powershell -ExecutionPolicy Bypass -File scripts\package.ps1
 # Steps:
 #   1. Native statistics kernel (optional; best-effort)
-#   2. PyInstaller backend sidecar (onefile)
-#   3. Copy to src-tauri\binaries\backend-x86_64-pc-windows-msvc.exe
+#   2. PyInstaller backend bundle (onedir) + per-file integrity manifest
+#   3. Copy to src-tauri\resources\backend\
 #   4. tauri build  ->  NSIS installer + signed updater bundle
 #   5. Generate latest.json for the configured GitHub Releases endpoint
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+
+& "$root\scripts\sync_version.ps1"
+if (-not $?) { throw "version synchronization failed" }
+
 $localSigningKey = Join-Path $root ".tauri\mdescriptor-studio.key"
 $localSigningPassword = Join-Path $root ".tauri\mdescriptor-studio.key.password"
 if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {

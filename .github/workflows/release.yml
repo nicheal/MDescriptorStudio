@@ -18,6 +18,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Synchronize release version
+        shell: pwsh
+        run: .\scripts\sync_version.ps1 -Tag $env:GITHUB_REF_NAME
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -61,7 +65,7 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) { throw "TAURI_SIGNING_PRIVATE_KEY is not configured" }
           if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) { throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is not configured" }
 
-      - name: Prepare backend sidecar
+      - name: Prepare backend bundle
         shell: pwsh
         run: .\scripts\prepare_sidecar.ps1
 

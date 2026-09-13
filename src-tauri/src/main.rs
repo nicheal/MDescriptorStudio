@@ -18,11 +18,10 @@ use tauri::{Emitter, EventTarget, Manager};
 const PROTOCOL_VERSION: u64 = 1;
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_REQUESTS: usize = 1024;
-const TRIPLE: &str = "x86_64-pc-windows-msvc";
 const BACKEND_EVENT: &str = "backend-message";
 const BACKEND_EXIT_EVENT: &str = "backend-exit";
 const MAIN_WEBVIEW: &str = "main";
-const EMBEDDED_SIDECAR_SHA256: Option<&str> = option_env!("MDS_SIDECAR_SHA256");
+const EMBEDDED_BUNDLE_SHA256: Option<&str> = option_env!("MDS_BACKEND_BUNDLE_SHA256");
 
 // Request ids only need to be unique among pending requests, which are
 // cleared on restart, so a monotonic counter cannot collide within a run.
@@ -346,8 +345,9 @@ fn clean_command_environment(command: &mut Command, temp_dir: &Path) {
             command.env_remove(key);
         }
     }
-    // PyInstaller one-file executables need a writable extraction directory.
-    // Use the app-local directory consistently for all temp-variable names.
+    // Keep backend scratch files (tempfile users like dpdata) inside the
+    // app-local directory instead of the shared user TEMP. One variable set
+    // consistently, because the runtimes that read these names differ.
     command
         .env("TEMP", temp_dir)
         .env("TMP", temp_dir)
@@ -389,7 +389,7 @@ fn backend_temp_dir() -> Result<PathBuf, String> {
 fn backend_command() -> Result<(Command, &'static str), String> {
     let temp_dir = backend_temp_dir()?;
 
-    // A release build must use a verified bundled sidecar. Falling back to a
+    // A release build must use a verified bundled backend. Falling back to a
     // developer Python environment would make the released trust boundary
     // depend on the user's PATH and site packages.
     if !cfg!(debug_assertions) {
@@ -397,16 +397,14 @@ fn backend_command() -> Result<(Command, &'static str), String> {
         let dir = exe
             .parent()
             .ok_or_else(|| "application directory is unavailable".to_string())?;
-        for name in [format!("backend-{TRIPLE}.exe"), "backend.exe".to_string()] {
-            let sidecar = dir.join(&name);
-            if sidecar.is_file() {
-                verify_sidecar(&sidecar, EMBEDDED_SIDECAR_SHA256)?;
-                let mut command = Command::new(&sidecar);
-                clean_command_environment(&mut command, &temp_dir);
-                return Ok((command, "verified-sidecar"));
-            }
+        let bundle = dir.join("backend");
+        if bundle.join("backend.exe").is_file() {
+            verify_backend_bundle(&bundle, EMBEDDED_BUNDLE_SHA256)?;
+            let mut command = Command::new(bundle.join("backend.exe"));
+            clean_command_environment(&mut command, &temp_dir);
+            return Ok((command, "verified-sidecar"));
         }
-        return Err("verified backend sidecar was not found".into());
+        return Err("verified backend bundle was not found".into());
     }
 
     // dev: project .venv python running the backend package from ../backend
@@ -427,35 +425,68 @@ fn backend_command() -> Result<(Command, &'static str), String> {
     Ok((command, "dev-python"))
 }
 
-fn verify_sidecar(sidecar: &Path, expected: Option<&str>) -> Result<(), String> {
+fn verify_backend_bundle(bundle: &Path, expected: Option<&str>) -> Result<(), String> {
     let expected = expected
         .map(str::trim)
-        .filter(|value| {
-            value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit())
-        })
+        .filter(|value| value.len() == 64 && value.chars().all(|character| character.is_ascii_hexdigit()))
         .map(str::to_ascii_lowercase)
-        .ok_or_else(|| "embedded sidecar hash is missing or malformed".to_string())?;
+        .ok_or_else(|| "embedded backend bundle hash is missing or malformed".to_string())?;
 
-    let mut file =
-        File::open(sidecar).map_err(|error| format!("could not open backend sidecar: {error}"))?;
-    let mut hasher = Sha256::new();
-    // Hashing runs on the Windows main thread; keep the 1 MiB buffer off its stack.
-    let mut buffer = vec![0_u8; 1024 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|error| format!("could not hash backend sidecar: {error}"))?;
-        if count == 0 {
-            break;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    let actual = format!("{:x}", hasher.finalize());
-    if actual != expected {
+    // The build embeds the manifest's SHA-256; matching it first makes the
+    // per-file entries below trustworthy even though they travel in the clear.
+    let manifest_path = bundle.join("backend-manifest.json");
+    let manifest = fs::read(&manifest_path)
+        .map_err(|error| format!("could not read backend bundle manifest: {error}"))?;
+    if format!("{:x}", Sha256::digest(&manifest)) != expected {
         return Err(format!(
-            "backend sidecar hash mismatch: {}",
-            sidecar.display()
+            "backend bundle manifest hash mismatch: {}",
+            manifest_path.display()
         ));
+    }
+    let entries: Vec<Value> = serde_json::from_slice(&manifest)
+        .map_err(|error| format!("backend bundle manifest is malformed: {error}"))?;
+
+    // Every file, every launch: the release replaces the onefile exe hash with
+    // a whole-bundle hash. ~1s for the ~470 MB bundle, paid instead of the
+    // several-second onefile extraction it removes.
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    for entry in &entries {
+        let path = entry
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "backend bundle manifest entry is missing 'path'".to_string())?;
+        let size = entry
+            .get("size")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("backend bundle manifest entry {path} is missing 'size'"))?;
+        let expected_hash = entry
+            .get("sha256")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("backend bundle manifest entry {path} is missing 'sha256'"))?;
+        if path.is_empty() || path.split('/').any(|segment| segment.is_empty() || segment == "..") {
+            return Err("backend bundle manifest contains an unsafe path".to_string());
+        }
+        let file_path = bundle.join(path);
+        let metadata = fs::metadata(&file_path)
+            .map_err(|_| format!("backend bundle is missing {path}"))?;
+        if !metadata.is_file() || metadata.len() != size {
+            return Err(format!("backend bundle file {path} has an unexpected size"));
+        }
+        let mut file = File::open(&file_path)
+            .map_err(|error| format!("could not open backend bundle file {path}: {error}"))?;
+        let mut hasher = Sha256::new();
+        loop {
+            let count = file
+                .read(&mut buffer)
+                .map_err(|error| format!("could not hash backend bundle file {path}: {error}"))?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        if format!("{:x}", hasher.finalize()) != expected_hash {
+            return Err(format!("backend bundle file {path} hash mismatch"));
+        }
     }
     Ok(())
 }
@@ -493,15 +524,40 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn write_bundle(dir: &Path, files: &[(&str, &[u8])]) -> String {
+        let entries: Vec<Value> = files
+            .iter()
+            .map(|(path, contents)| {
+                let file_path = dir.join(path);
+                fs::create_dir_all(file_path.parent().unwrap()).unwrap();
+                fs::write(&file_path, contents).unwrap();
+                json!({
+                    "path": path,
+                    "size": contents.len(),
+                    "sha256": format!("{:x}", Sha256::digest(*contents)),
+                })
+            })
+            .collect();
+        let manifest = serde_json::to_vec(&entries).unwrap();
+        fs::write(dir.join("backend-manifest.json"), &manifest).unwrap();
+        format!("{:x}", Sha256::digest(&manifest))
+    }
+
     #[test]
-    fn sidecar_verification_fits_a_small_stack_and_rejects_wrong_hash() {
-        let executable = std::env::current_exe().unwrap();
-        let expected = format!("{:x}", Sha256::digest(fs::read(&executable).unwrap()));
+    fn bundle_verification_fits_a_small_stack_and_rejects_mismatches() {
+        let root = std::env::temp_dir().join(format!("mds-bundle-test-{}", std::process::id()));
         thread::Builder::new()
             .stack_size(256 * 1024)
             .spawn(move || {
-                verify_sidecar(&executable, Some(&expected)).unwrap();
-                assert!(verify_sidecar(&executable, Some(&"0".repeat(64))).is_err());
+                fs::create_dir_all(&root).unwrap();
+                let expected = write_bundle(&root, &[("backend.exe", b"bootloader"), ("_internal/app.py", b"print(1)")]);
+                assert!(verify_backend_bundle(&root, Some(&expected)).is_ok());
+                assert!(verify_backend_bundle(&root, Some(&"0".repeat(64))).is_err());
+                assert!(verify_backend_bundle(&root, None).is_err());
+                // a same-length tamper in a bundled file is caught per entry
+                fs::write(root.join("_internal/app.py"), b"print(2)").unwrap();
+                assert!(verify_backend_bundle(&root, Some(&expected)).is_err());
+                drop(fs::remove_dir_all(&root));
             })
             .unwrap()
             .join()

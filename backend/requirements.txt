@@ -1,7 +1,11 @@
 # Runtime pins for the offline Studio sidecar (Python 3.12, Windows x64).
 # The MDescriptor engine remains the only descriptor implementation; these
 # packages provide CPU-first post-processing in Studio Backend.
-mdescriptor==0.2.8
+# Release builds install the latest PyPI mdescriptor at build time (pip leaves
+# an already-satisfied dev .venv untouched). The floor is the version that
+# started shipping the CUDA plugin (_cuda.pyd + cudart64_12.dll) in the wheel;
+# older wheels declare device "cuda" in schemas but raise DEVICE_UNAVAILABLE.
+mdescriptor>=0.3.2
 numpy==2.5.2
 scipy==1.18.1
 scikit-learn==1.9.0
