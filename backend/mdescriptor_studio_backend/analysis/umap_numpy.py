@@ -1,0 +1,224 @@
+"""Pure numpy/scipy UMAP embedding for the Studio analysis engine.
+
+Replaces umap-learn (and its numba/llvmlite/pynndescent chain) with a
+self-contained implementation of the same algorithm:
+
+1. exact k-nearest-neighbor search — chunked brute force, deterministic and
+   robust in the 100+-dimensional descriptor spaces the Studio feeds it,
+2. the fuzzy simplicial set — smooth-kNN sigma calibration plus sparse
+   symmetrization (fuzzy union = max),
+3. SGD layout optimization with negative sampling, vectorized per epoch with
+   scatter aggregation instead of numba's per-edge compiled loop. Every edge
+   contributes once per epoch (umap-learn visits edges on weight-dependent
+   schedules); the weight stays in the force term, which preserves embedding
+   quality while keeping the whole step branch-free.
+
+The embedding is a projection aid, not a bit-for-bit clone of umap-learn:
+coordinates match it in quality (trustworthiness) but not point for point.
+What the contract does fix is reproducibility — PCA axes are sign-canonical
+and every random choice (negative samples) derives from ``seed`` — so the
+same inputs and parameters yield bitwise-identical coordinates on every run.
+
+Compute runs in float32; coordinates are returned as float64 like every other
+analysis array. The scipy imports stay inside ``fit_umap``: module import must
+stay cheap for backend startup, and the first scipy import must happen on a
+request thread after the analysis warmup gate so it cannot race the background
+sklearn import for the Windows DLL loader.
+"""
+
+from __future__ import annotations
+
+from typing import Callable
+
+import numpy as np
+
+Progress = Callable[[float, str], None]
+
+_NEGATIVE_SAMPLES_PER_EDGE = 5
+_NEGATIVE_SAMPLE_CAP = 250_000  # per-epoch repulsive-sample budget on large graphs
+_GAMMA = 1.0
+_SPREAD = 1.0
+
+
+def _knn_indices_and_distances(x: np.ndarray, k: int, metric: str) -> tuple[np.ndarray, np.ndarray]:
+    """Exact kNN with self at column 0, chunked to bound temporary memory."""
+    n = x.shape[0]
+    if metric == "manhattan":
+        from scipy.spatial.distance import cdist
+    elif metric == "cosine":
+        x = x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-12)
+    sq = (x * x).sum(1)
+    idx = np.empty((n, k + 1), dtype=np.int64)
+    dist = np.empty((n, k + 1), dtype=np.float32)
+    block = max(256, min(2048, (1 << 23) // max(n, 1)))
+    for start in range(0, n, block):
+        stop = min(start + block, n)
+        if metric == "manhattan":
+            d = cdist(x[start:stop], x, metric="cityblock")
+        elif metric == "cosine":
+            d = np.clip(1.0 - x[start:stop] @ x.T, 0.0, 2.0)
+        else:
+            d2 = sq[start:stop, None] + sq[None, :] - 2.0 * (x[start:stop] @ x.T)
+            d = np.sqrt(np.maximum(d2, 0.0))
+        part = np.argpartition(d, k, axis=1)[:, : k + 1]
+        near = np.take_along_axis(d, part, 1)
+        order = np.argsort(near, axis=1)
+        idx[start:stop] = np.take_along_axis(part, order, 1)
+        dist[start:stop] = np.take_along_axis(near, order, 1)
+    return idx, dist
+
+
+def _smooth_knn_weights(dist: np.ndarray, k: int) -> np.ndarray:
+    """Per-point sigma so sum(exp(-(d - rho) / sigma)) hits log2(k) over the kNN."""
+    rho = dist[:, 1]
+    target = np.log2(k)
+
+    def membership(sigma: np.ndarray) -> np.ndarray:
+        return np.exp(-np.maximum(dist[:, 1:] - rho[:, None], 0.0) / sigma[:, None]).sum(1)
+
+    lo = np.zeros(dist.shape[0], dtype=np.float32)
+    hi = np.maximum(dist[:, 1:].mean(1) * 2.0, 1e-8)
+    for _ in range(8):  # stretch bounds that cannot reach the target even at hi
+        hi = np.where(membership(hi) < target, hi * 2.0, hi)
+    for _ in range(64):
+        mid = (lo + hi) / 2.0
+        low = membership(mid) < target
+        lo = np.where(low, mid, lo)
+        hi = np.where(low, hi, mid)
+    sigma = np.maximum((lo + hi) / 2.0, 1e-12)
+    return np.exp(-np.maximum(dist[:, 1:] - rho[:, None], 0.0) / sigma[:, None])
+
+
+def _fuzzy_simplicial_edges(
+    idx: np.ndarray, weights: np.ndarray, n: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Symmetrized kNN membership graph (fuzzy union = max) as edge arrays."""
+    from scipy.sparse import coo_matrix
+
+    rows = np.repeat(np.arange(n, dtype=np.int64), idx.shape[1] - 1)
+    graph = coo_matrix((weights.ravel(), (rows, idx[:, 1:].ravel())), shape=(n, n)).tocsr()
+    graph = graph.maximum(graph.T)
+    graph.setdiag(0.0)
+    graph.eliminate_zeros()
+    edges = graph.tocoo()
+    return (
+        edges.row.astype(np.int64),
+        edges.col.astype(np.int64),
+        edges.data.astype(np.float32),
+    )
+
+
+def _ab_params(min_dist: float) -> tuple[float, float]:
+    """UMAP's a/b kernel parameters, fitted to the min_dist target curve."""
+    from scipy.optimize import curve_fit
+
+    def curve(r: np.ndarray, a: float, b: float) -> np.ndarray:
+        return 1.0 / (1.0 + a * r ** (2 * b))
+
+    r = np.linspace(0.0, 3.0 * _SPREAD, 300)
+    target = np.where(r <= min_dist, 1.0, np.exp(-(r - min_dist) / _SPREAD))
+    (a, b), _ = curve_fit(curve, r, target)
+    return float(a), float(b)
+
+
+def _pca_init(x: np.ndarray) -> np.ndarray:
+    """Sign-canonical two-axis PCA scaled to umap's [0, 10] init magnitude."""
+    centered = x - x.mean(axis=0)
+    _, _, axes = np.linalg.svd(centered, full_matrices=False)
+    axes = axes[:2]
+    # LAPACK sign conventions are platform-dependent; a flipped axis would
+    # mirror the whole embedding, so pin each axis to a positive lead entry.
+    flip = axes[np.arange(2), np.argmax(np.abs(axes), axis=1)] < 0
+    axes = np.where(flip[:, None], -axes, axes)
+    emb = (centered @ axes.T).astype(np.float32)
+    span = np.maximum(np.ptp(emb, axis=0), 1e-9)
+    return ((10.0 * (emb - emb.min(axis=0))) / span).astype(np.float32)
+
+
+def _optimize(
+    emb: np.ndarray,
+    heads: np.ndarray,
+    tails: np.ndarray,
+    weights: np.ndarray,
+    a: float,
+    b: float,
+    seed: int,
+    n_epochs: int,
+    progress: Progress | None,
+) -> np.ndarray:
+    """Batched cross-entropy SGD: per-epoch attractive + negative-sample forces."""
+    rng = np.random.default_rng(seed)
+    n, dim = emb.shape
+    n_edges = heads.shape[0]
+    for epoch in range(n_epochs):
+        alpha = 1.0 * (1.0 - epoch / n_epochs)
+
+        diff = emb[heads] - emb[tails]
+        r2 = np.maximum((diff * diff).sum(1), 1e-8)
+        coeff = (-2.0 * a * b * r2 ** (b - 1.0)) / (a * r2 ** b + 1.0)
+        force = weights[:, None] * coeff[:, None] * diff
+        np.clip(force, -4.0, 4.0, out=force)
+
+        # With-replacement edge draws keep the repulsive budget O(cap) and
+        # deterministic; edges missed in one epoch simply contribute later.
+        pick = np.arange(n_edges)
+        n_samples = n_edges * _NEGATIVE_SAMPLES_PER_EDGE
+        if n_samples > _NEGATIVE_SAMPLE_CAP:
+            pick = rng.integers(0, n_edges, size=_NEGATIVE_SAMPLE_CAP // _NEGATIVE_SAMPLES_PER_EDGE)
+            n_samples = pick.size * _NEGATIVE_SAMPLES_PER_EDGE
+        negatives = rng.integers(0, n, size=n_samples)
+        heads_rep = np.repeat(heads[pick], _NEGATIVE_SAMPLES_PER_EDGE)
+        diff_rep = emb[heads_rep] - emb[negatives]
+        r2_rep = (diff_rep * diff_rep).sum(1)
+        coeff_rep = np.where(
+            r2_rep > 0,
+            (2.0 * _GAMMA * b) / ((0.001 + r2_rep) * (a * r2_rep**b + 1.0)),
+            0.0,
+        )
+        force_rep = coeff_rep[:, None] * diff_rep
+        np.clip(force_rep, -4.0, 4.0, out=force_rep)
+
+        update = np.empty_like(emb)
+        for axis in range(dim):
+            update[:, axis] = (
+                np.bincount(heads, force[:, axis], n)
+                - np.bincount(tails, force[:, axis], n)
+                + np.bincount(heads_rep, force_rep[:, axis], n)
+            )
+        emb += (alpha * update).astype(np.float32)
+        if progress is not None:
+            progress(0.2 + 0.78 * (epoch + 1) / n_epochs, "fitting UMAP")
+    return emb
+
+
+def fit_umap(
+    x: np.ndarray,
+    *,
+    n_neighbors: int,
+    min_dist: float,
+    metric: str,
+    seed: int,
+    progress: Progress | None = None,
+) -> np.ndarray:
+    """Embed x (n_samples, n_features) into 2-D UMAP coordinates (float64).
+
+    ``progress`` receives (fraction, "fitting UMAP") checkpoints from 0.05 to
+    0.98; the caller emits the terminal callback. n_neighbors must already be
+    clamped to [2, n_samples - 1] and metric to the three supported values —
+    the engine owns that validation.
+    """
+    # See module docstring: lazy scipy imports, after the warmup gate.
+    x = np.ascontiguousarray(x, dtype=np.float32)
+    n = x.shape[0]
+    if progress is not None:
+        progress(0.05, "fitting UMAP")
+    idx, dist = _knn_indices_and_distances(x, n_neighbors, metric)
+    if progress is not None:
+        progress(0.15, "fitting UMAP")
+    weights = _smooth_knn_weights(dist, n_neighbors)
+    heads, tails, edge_weights = _fuzzy_simplicial_edges(idx, weights, n)
+    a, b = _ab_params(min_dist)
+    emb = _pca_init(x)
+    n_epochs = 500 if n <= 10_000 else 200
+    emb = _optimize(emb, heads, tails, edge_weights, a, b, seed, n_epochs, progress)
+    return emb.astype(np.float64)

@@ -10,58 +10,11 @@ scikit-learn keyword.
 from __future__ import annotations
 
 import json
-import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import product
 from typing import Any, Callable
-
-# Newer Numba releases may recognize this flag. The runtime guard below is
-# still required for the versions supported by the Studio, which currently do
-# not implement it.
-os.environ["NUMBA_DISABLE_JIT_CACHE"] = "1"
-
-_NUMBA_CACHE_GUARD_INSTALLED = False
-
-
-def _disable_numba_disk_cache() -> bool:
-    """Make Numba's ``cache=True`` decorators use an in-memory no-op cache.
-
-    Numba cache entries contain pickle-bearing data. ``NUMBA_DISABLE_JIT_CACHE``
-    is not understood by all supported Numba versions, so relying on that
-    environment variable alone would leave a writable cache load path. The
-    guard is installed immediately before optional UMAP imports; decorators
-    created afterwards receive ``NullCache`` and never read or write disk.
-
-    Returning ``False`` is fail-closed for callers that are about to import an
-    optional package which may use Numba. This keeps an unknown Numba API from
-    silently re-opening the cache boundary.
-    """
-
-    global _NUMBA_CACHE_GUARD_INSTALLED
-    if _NUMBA_CACHE_GUARD_INSTALLED:
-        return True
-
-    try:
-        from numba.core import caching, dispatcher
-    except ImportError:
-        return False
-
-    enable_caching = getattr(dispatcher.Dispatcher, "enable_caching", None)
-    if not callable(enable_caching):
-        return False
-    if getattr(enable_caching, "_mdescriptor_no_disk_cache", False):
-        _NUMBA_CACHE_GUARD_INSTALLED = True
-        return True
-
-    def _use_null_cache(self) -> None:
-        self._cache = caching.NullCache()
-
-    _use_null_cache._mdescriptor_no_disk_cache = True
-    dispatcher.Dispatcher.enable_caching = _use_null_cache
-    _NUMBA_CACHE_GUARD_INSTALLED = True
-    return True
 
 import numpy as np
 
@@ -71,10 +24,11 @@ from ..errors import (
     ANALYSIS_INSUFFICIENT_SAMPLES,
     AppError,
 )
+from .umap_numpy import fit_umap
 
 
 # Deferred-warmup gate. backend.ready is emitted before the background warmup
-# thread imports sklearn/umap/hdbscan, so _safe_import waits until that import
+# thread imports sklearn/hdbscan, so _safe_import waits until that import
 # pass has finished: the heavy modules are still imported exactly once and
 # never race a request, but they no longer block startup. The event starts set
 # so direct users (tests, scripts) are unaffected.
@@ -215,8 +169,6 @@ def _safe_import(module: str, package: str | None = None):
         # Hold heavy-module imports until the background warmup pass is done
         # (no-op once warm; see module docstring of the warmup gate).
         _warmup_gate.wait()
-        if module == "umap" and not _disable_numba_disk_cache():
-            raise ImportError("Numba disk-cache guard is unavailable")
         # A non-wildcard fromlist returns the requested module without walking
         # package ``__all__``. sklearn.model_selection deliberately exposes
         # experimental names there that raise during wildcard import.
@@ -737,27 +689,20 @@ class AnalysisEngine:
     def warmup() -> dict[str, bool]:
         """Import optional numeric backends on the background warmup thread.
 
-        UMAP/numba and some native sklearn dependencies can acquire process
-        import locks or initialize DLL state during their first import. Doing
-        that work in a single dedicated thread before any request touches
-        these modules (gated via ``_safe_import``) keeps a Windows sidecar
-        from hanging at ``loading descriptor results`` on its first
-        UMAP/HDBSCAN request while no longer blocking ``backend.ready``.
-        Missing optional packages are reported and are still converted to
+        Native sklearn and hdbscan dependencies can acquire process import
+        locks or initialize DLL state during their first import. Doing that
+        work in a single dedicated thread before any request touches these
+        modules (gated via ``_safe_import``) keeps a Windows sidecar from
+        hanging at ``loading descriptor results`` on its first analysis
+        request while no longer blocking ``backend.ready``. Missing optional
+        packages are reported and are still converted to
         ANALYSIS_DEPENDENCY_MISSING when selected.
         """
         import importlib
 
-        # Numba's cache format contains pickle data. Install the runtime guard
-        # before importing UMAP, whose module-level decorators request
-        # ``cache=True``.
-
         try:
             availability: dict[str, bool] = {}
-            for name in ("sklearn", "umap", "hdbscan"):
-                if name == "umap" and not _disable_numba_disk_cache():
-                    availability[name] = False
-                    continue
+            for name in ("sklearn", "hdbscan"):
                 try:
                     importlib.import_module(name)
                 except ImportError:
@@ -799,7 +744,6 @@ class AnalysisEngine:
     @staticmethod
     def umap(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
         _check_samples(samples.values, 3)
-        umap_mod = _safe_import("umap", "umap-learn")
         x, warnings, keep = _preprocess(samples.values, params, "raw")
         n_neighbors = _int_param(params, "n_neighbors", 15, 2)
         if n_neighbors >= x.shape[0]:
@@ -810,20 +754,14 @@ class AnalysisEngine:
         metric = params.get("metric", "euclidean")
         if metric not in ("euclidean", "cosine", "manhattan"):
             raise AppError(ANALYSIS_INPUT_INVALID, "UMAP metric must be euclidean, cosine, or manhattan")
-        if progress:
-            progress(0.1, "fitting UMAP")
-        reducer = umap_mod.UMAP(
-            n_components=2,
+        coords = fit_umap(
+            x,
             n_neighbors=n_neighbors,
             min_dist=min_dist,
             metric=metric,
-            random_state=_seed(params),
-            transform_seed=_seed(params),
-            n_jobs=1,
+            seed=_seed(params),
+            progress=progress,
         )
-        coords = reducer.fit_transform(x).astype(np.float64)
-        if progress:
-            progress(1.0, "UMAP complete")
         return {
             "arrays": {"coords": coords},
             "preview": {"kind": "projection", "x_label": "UMAP-1", "y_label": "UMAP-2", "parameters": {"n_neighbors": n_neighbors, "min_dist": min_dist, "metric": metric}},

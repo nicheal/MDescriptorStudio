@@ -45,11 +45,11 @@
 
 | ID | 标题 | 最终定级 | CWE | 位置 |
 |---|---|---|---|---|
-| RT-01 | numba JIT 缓存投毒 → pickle RCE | **High**（共享 `MDS_DATA_DIR` 时 Critical） | CWE-502/427 | `analysis/engine.py:604-635` |
+| RT-01 | numba JIT 缓存投毒 → pickle RCE | **已消除**：UMAP 改为内置 numpy 实现，numba/llvmlite/umap-learn 已从依赖中移除（ADR-24） | CWE-502/427 | 原 `analysis/engine.py` Numba 守卫已删除 |
 | RT-02 | `analysis.export` 的 `output_path` 无校验 → 任意路径写 | **High** | CWE-22/73/497 | `services/analysis_service.py:669-673, 1335-1357` |
 | RT-03 | `backend_send` 全权限 IPC 代理 + 帧注入 + 响应伪造 | **High** | CWE-345/93/807 | `src-tauri/src/main.rs:22-35,86-96` |
 | RT-04 | Release 从 exe 同目录加载 sidecar，无完整性校验 | Medium | CWE-427/426 | `main.rs:106-126`；`backend/backend.spec:55-68` |
-| RT-05 | pip 自更新信任 PyPI 版本号，未锁索引/哈希 | Medium | CWE-494/829 | `services/update_service.py:73-116` |
+| RT-05 | 应用内引擎 pip 自更新 | **已消除**：应用内引擎更新 IPC 与 UpdateService 已删除，引擎随安装包发布 | CWE-494/829 | — |
 | RT-06 | `dataset.register` 任意路径解析（`format` 可绕过扩展名检查） | Medium | CWE-22/209/73 | `services/dataset_service.py:128-140`；`datasets/base.py:69-84` |
 | RT-07 | 数据集指纹只哈希 size+mtime，不含内容 | Medium | CWE-354/345 | `datasets/fingerprint.py:9-22` |
 | RT-08 | extxyz `natoms` 无上限 + 全量载帧 → OOM DoS | Medium | CWE-789/400 | `datasets/extxyz.py:38-50,99-100` |
@@ -58,7 +58,7 @@
 | BLUE-01 | 协议版本不匹配时 `os._exit(2)` 直接杀死整个后端 | Medium | CWE-703/754 | `protocol/server.py:51-60` |
 | BLUE-02 | 后端 stdin 按行读取无长度上限（8 MB 检查在读取之后） | Medium | CWE-400/770 | `protocol/server.py:41` |
 | BLUE-03 | `dataset.frame` 是**任意文件读取 oracle**（DB 投毒路径，不需要 webview 代码执行） | Medium | CWE-22/200 | `services/dataset_service.py:113-121,376-388` |
-| BLUE-04 | 子进程环境未清洗：`PYTHONPATH`/`PIP_*`/`TEMP` 全部继承 | Medium | CWE-426/427 | `main.rs:106-138`；`update_service.py:101-110` |
+| BLUE-04 | 子进程环境未清洗：`PYTHONPATH`/`PIP_*`/`TEMP` 全部继承 | Medium | CWE-426/427 | `main.rs:106-138` |
 | RT-11 | `MDS_DATA_DIR` 完全受控无校验（RT-01/RT-10 的放大器） | Low | CWE-15/426 | `config.py:12-21`；`main.rs:117-121` |
 | RT-12 | 供应链：依赖无哈希锁定、npm 全 `^`、165 MB 二进制入库无校验和 | Low | CWE-494/1357 | `requirements.txt`；`frontend/package.json`；`scripts/package.ps1` |
 | RT-13 | CSP 缺 `object-src`/`base-uri`/`frame-ancestors`，保留 `style-src 'unsafe-inline'` | Low | CWE-1021/693 | `src-tauri/tauri.conf.json:25` |
@@ -127,7 +127,7 @@
 - [ ] **P1-7 · BLUE-01 · S · 低风险**
       协议版本不匹配只回错误帧**不退出**；若确需终止用 `self._closed.set()` + `self.close()`。`main.rs:89` 的 ready 检测改解析 JSON 判断 `event=="backend.ready"`（现在是字符串 `contains`，脆弱）。
 - [ ] **P1-8 · BLUE-04 · S~M · 中风险**
-      子进程环境清洗：`main.rs` 的 dev 与 release 两个分支都 `.env_remove("PYTHONPATH"/"PYTHONSTARTUP"/"PYTHONHOME"/"PIP_*")`；`update_service.py:101` 传 `env=clean_env`。
+      子进程环境清洗：`main.rs` 的 dev 与 release 两个分支都 `.env_remove("PYTHONPATH"/"PYTHONSTARTUP"/"PYTHONHOME"/"PIP_*")`。
       ⚠ Windows 上**不要**用 `env_clear()`（会破坏 DLL 解析），必须黑名单 `env_remove`，改完实测启动。
 
 ### P2 — 后续迭代（15 项，摘要）

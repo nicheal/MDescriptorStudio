@@ -637,6 +637,22 @@ class AnalysisService:
                 view = self._usable_view(str(view_id), run_rows[index]["dataset_id"])
                 side = "reference" if index == 0 else "query"
                 params[f"{side}_selection_hash"] = view["selection_hash"]
+        elif params.get("view_id"):
+            # Single-run analyses scope to a dataset view by slicing the run's
+            # samples to the view frames (same lens the cross-dataset modules
+            # use). The selection hash joins the cache key so a view's content,
+            # not just its id, decides reuse.
+            if len(run_rows) != 1:
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    "view_id applies to single-run analyses only",
+                    {"analysis_type": analysis_type},
+                )
+            view_id = params["view_id"]
+            if not isinstance(view_id, str) or not view_id.strip():
+                raise AppError(INVALID_PARAMS, "view_id must be a non-empty string")
+            view = self._usable_view(view_id, run_rows[0]["dataset_id"])
+            params["selection_hash"] = view["selection_hash"]
         if analysis_type == "sensitivity":
             descriptor_names = {str(row["descriptor_name"]) for row in run_rows}
             if len(descriptor_names) > 1:
@@ -696,7 +712,7 @@ class AnalysisService:
                 view_ids = (
                     [params.get("reference_view_id"), params.get("query_view_id")]
                     if cross_dataset
-                    else [None] * len(run_rows)
+                    else [params.get("view_id")] * len(run_rows)
                 )
                 samples = [
                     self._load_samples(

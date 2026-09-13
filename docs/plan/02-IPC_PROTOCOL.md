@@ -81,8 +81,6 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `result.heatmap` | {run_id, frame_index, max_features?} → {atoms, features, values, atomOffset}；max_features 硬上限 256（§25） | 否 |
 | `settings.get` | {key} → {key, value\|null}（settings 表 KV） | 否 |
 | `settings.set` | {key, value} → {ok} | 否 |
-| `engine.check_update` | {} → {installed, latest, has_update, status: idle\|checking\|up_to_date\|available\|error\|unsupported, error?, restart_required?}；后台线程查 PyPI，完成后再次广播 `engine.update.state` 事件（同结构） | 否（后台线程） |
-| `engine.update` | {version?}（缺省用 latest）→ {job_id, target_version}；pip 升级 job，终态后需重启后端生效；frozen 构建报 `ENGINE_UPDATE_UNSUPPORTED` | 是 |
 | `job.list` / `job.get` / `job.cancel` | 见 §4 | 否 |
 
 数据集视图不是新的 `DatasetMeta`，不能递归包含子视图，也不会替换全局
@@ -121,7 +119,7 @@ Analysis API 统一使用同一结果模型：计算型方法立即返回
 空输入、样本不足、未声明且未验证的 atom row_offsets 返回结构化错误；
 zero-variance 特征可确定性忽略并记录 warnings。完整数组以 float64 落盘。
 
-## 6. 错误码全集（25）
+## 6. 错误码全集（24）
 
 ```text
 DATASET_NOT_FOUND        DATASET_CHANGED         INVALID_DATASET
@@ -130,7 +128,7 @@ DESCRIPTOR_CONFIGURATION_ERROR                   MODEL_NOT_FOUND
 DEVICE_UNAVAILABLE
 OUT_OF_MEMORY            JOB_CANCELLED           RESULT_INCOMPATIBLE
 INTERNAL_ERROR           PROTOCOL_VERSION_MISMATCH       JOB_NOT_FOUND
-INVALID_PARAMS           ENGINE_UPDATE_UNSUPPORTED
+INVALID_PARAMS
 ANALYSIS_NOT_FOUND       ANALYSIS_DEPENDENCY_MISSING
 ANALYSIS_INPUT_INVALID   ANALYSIS_INSUFFICIENT_SAMPLES
 ANALYSIS_STALE           ARTIFACT_INVALID

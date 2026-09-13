@@ -17,7 +17,7 @@
 ## ADR-2 引擎依赖：PyPI 安装，发布用最新版（`mdescriptor>=0.3.2`）
 
 **背景**：设计文档 §48/§50 的开发模式假设本地 editable 引擎仓库；实际无本地引擎仓库，PyPI 可达且 cp312 wheel 存在。0.2.8 发布版曾因 wheel 未携带 CUDA 插件而使 CUDA 选择必报 `DEVICE_UNAVAILABLE`，暴露了固定 pin 滞后于上游修复的问题。
-**决策**：开发与 Release 一律从 PyPI 安装，`backend/requirements.txt` 以 `mdescriptor>=0.3.2`（2026-09-13 由 `==0.2.8` 升级并放开；0.3.2 起 `_cuda.pyd` + `cudart64_12.dll` 随 wheel 发布，下限保证 CUDA 插件在位）约束下限；**发布构建时安装 PyPI 最新版**，开发 `.venv` 已满足下限时 pip 不自动升级；不做 editable 安装；引擎无本地仓库，PyPI 为唯一来源；应用内 UpdateService 走同一 pip 安装路径；引擎升级后走 05 文档 §2 流程（重跑 probe → diff JSON → 回归）后再发版。
+**决策**：开发与 Release 一律从 PyPI 安装 mdescriptor，`backend/requirements.txt` 以 `mdescriptor>=0.3.2`（2026-09-13 由 `==0.2.8` 升级并放开；0.3.2 起 `_cuda.pyd` + `cudart64_12.dll` 随 wheel 发布，下限保证 CUDA 插件在位）约束下限；**发布构建时安装 PyPI 最新版**，开发 `.venv` 已满足下限时 pip 不自动升级；不做 editable 安装；引擎无本地仓库，PyPI 为唯一来源；引擎升级后走 05 文档 §2 流程（重跑 probe → diff JSON → 回归）后再发版。
 **后果**：不再需要「GUI 侧 schema 兜底」与引擎 Phase 0 需求清单；引擎缺陷走上游 issue。
 
 ## ADR-3 桌面壳：Tauri 2，无浏览器过渡态
@@ -175,8 +175,8 @@
 
 ## ADR-24 分析依赖与离线发布
 
-**决策**：scikit-learn、umap-learn、hdbscan 固定在 backend/requirements.txt，并通过 PyInstaller spec 进入 sidecar；Plotly 作为前端本地依赖，仅 Analysis 使用。
-**后果**：安装后的 Analysis 不依赖联网下载包，Overview/Explore 的现有图形技术保持不变。
+**决策**：scikit-learn、hdbscan 固定在 backend/requirements.txt，并通过 PyInstaller spec 进入 sidecar；UMAP 由 Studio 内置 numpy/scipy 实现（analysis/umap_numpy.py，2026-09 起），不引入 umap-learn/numba/llvmlite；Plotly 作为前端本地依赖，仅 Analysis 使用。
+**后果**：安装后的 Analysis 不依赖联网下载包，Overview/Explore 的现有图形技术保持不变；numba JIT 缓存投毒面（RT-01）随依赖移除而消除，UMAP 不再有冷启动 JIT 编译与单线程 random_state 限制。
 
 ## ADR-25 选择、导出与跨 Run 比较
 
@@ -193,6 +193,6 @@
 
 ## ADR-27 Job 类别线程池与协作式关停（2026-09-06）
 
-**背景**：JobService 此前为全局 2 线程 FIFO：被取消但仍卡在原生调用里的「僵尸计算」可占满全部工作线程；`shutdown()` 不协作取消且非 daemon 线程会在解释器退出时 join，卡住的原生调用可挂住后端进程；`engine.update` 的 pip 安装可与 `descriptor.compute` 并行（Windows 锁定已加载的原生扩展）；`compute.default_threads` 设置无任何后端读取。
-**决策**：JobService 改为按类别的三个线程池——`engine`（1 线程，承载 `descriptor.compute` 与 `engine.update`，共享单 worker 天然实现互斥）、`analysis`（2）、`dataset`（2，兜底未知类型）；`submit` 签名与队列背压不变。`shutdown()` 先对所有存活 context 调 `cancel()`（触发引擎 ComputeControl 取消并结算 run 行）再关池，`main()` 在清理完成后 `os._exit` 绕过 atexit join。RUNNING 状态更新补 `AND status='QUEUED'` 守卫。`job.get`/`job.list` 加入 RPC 控制通道；`descriptor.submit` 增加在途去重（`_submit_lock` + cache_key JOIN 查询，`force` 绕过）；`_load_samples`/`_pool_per_structure` 增加取消检查点并改用 `np.add.reduceat` 向量化池化；`result.heatmap` 改 mmap 读取；`compute.default_threads` 经 threadpoolctl 作用于分析计算（进程级、不恢复，描述符引擎线程仍由引擎管理）。QUEUED 任务在 `job.get`/`job.list` 附带 `queue_position`（按类别池内排队序，created_at 秒级精度下用 rowid 次级排序），前端 JobsDrawer 显示「第 N 位」。
+**背景**：JobService 此前为全局 2 线程 FIFO：被取消但仍卡在原生调用里的「僵尸计算」可占满全部工作线程；`shutdown()` 不协作取消且非 daemon 线程会在解释器退出时 join，卡住的原生调用可挂住后端进程；`compute.default_threads` 设置无任何后端读取。
+**决策**：JobService 改为按类别的三个线程池——`engine`（1 线程，承载 `descriptor.compute`）、`analysis`（2）、`dataset`（2，兜底未知类型）；`submit` 签名与队列背压不变。`shutdown()` 先对所有存活 context 调 `cancel()`（触发引擎 ComputeControl 取消并结算 run 行）再关池，`main()` 在清理完成后 `os._exit` 绕过 atexit join。RUNNING 状态更新补 `AND status='QUEUED'` 守卫。`job.get`/`job.list` 加入 RPC 控制通道；`descriptor.submit` 增加在途去重（`_submit_lock` + cache_key JOIN 查询，`force` 绕过）；`_load_samples`/`_pool_per_structure` 增加取消检查点并改用 `np.add.reduceat` 向量化池化；`result.heatmap` 改 mmap 读取；`compute.default_threads` 经 threadpoolctl 作用于分析计算（进程级、不恢复，描述符引擎线程仍由引擎管理）。QUEUED 任务在 `job.get`/`job.list` 附带 `queue_position`（按类别池内排队序，created_at 秒级精度下用 rowid 次级排序），前端 JobsDrawer 显示「第 N 位」。
 **后果**：最坏并发从全局 2 变为按类别 1+2+2；类别内 FIFO 不变。僵尸计算的最坏影响被限制在 engine 池内；关停不再依赖「计算及时返回」；values 结果 LRU 缓存与僵尸池占用可视化暂缓（见 docs/plan/scheduling-fix-plan.md）。

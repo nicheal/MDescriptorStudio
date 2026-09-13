@@ -68,7 +68,7 @@ ADR-1～4 承自 v0.1；ADR-5～17 为 grilling 共识。全文与背景见 `doc
 | 21 | Analysis 使用 CPU-first、分块/memmap、预览上限 20,000；磁盘 float64，IPC 只传 preview/chunk |
 | 22 | 分析结果统一为 analysis_runs + manifest.json + metadata.json + named npy；临时目录原子提交，缓存键含输入 Run、规范化参数和算法版本 |
 | 23 | 源数据 fingerprint 变化时旧 Descriptor/Analysis Run 保留并标记 STALE；可审计但不可作为新分析输入 |
-| 24 | 分析依赖固定为 scikit-learn、umap-learn、hdbscan，随 PyInstaller sidecar 离线打包；Plotly 仅 Analysis 使用 |
+| 24 | 分析依赖固定为 scikit-learn、hdbscan，随 PyInstaller sidecar 离线打包；UMAP 为内置 numpy/scipy 实现（analysis/umap_numpy.py），无 numba 栈；Plotly 仅 Analysis 使用 |
 | 25 | Analysis 选择采用 click 单点 + box/lasso 框选；Parameter Sensitivity 只比较已有 Completed Run，不隐式重算 |
 | 26 | 计算设备选择（0.2.8 起）：设备下拉按 schema `execution.devices` 渲染，`descriptor.submit` 新增 `device`（默认 cpu、按 schema 校验、计入缓存键与 metadata）；无运行时的设备报 `DEVICE_UNAVAILABLE` |
 

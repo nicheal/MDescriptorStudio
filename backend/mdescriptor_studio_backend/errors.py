@@ -20,7 +20,6 @@ INTERNAL_ERROR = "INTERNAL_ERROR"
 PROTOCOL_VERSION_MISMATCH = "PROTOCOL_VERSION_MISMATCH"
 JOB_NOT_FOUND = "JOB_NOT_FOUND"
 INVALID_PARAMS = "INVALID_PARAMS"
-ENGINE_UPDATE_UNSUPPORTED = "ENGINE_UPDATE_UNSUPPORTED"
 # Analysis is intentionally a separate error family so the UI can distinguish
 # invalid scientific input from a missing optional runtime dependency or a
 # stale artifact.  These codes are stable IPC contract, not sklearn errors.
@@ -74,7 +73,6 @@ _PUBLIC_MESSAGES = {
     INTERNAL_ERROR: "The backend failed to complete the request.",
     PROTOCOL_VERSION_MISMATCH: "The backend protocol version is incompatible.",
     JOB_NOT_FOUND: "Job not found.",
-    ENGINE_UPDATE_UNSUPPORTED: "Engine updates require a new installer.",
     ANALYSIS_NOT_FOUND: "Analysis result not found.",
     ANALYSIS_DEPENDENCY_MISSING: "An optional analysis dependency is unavailable.",
     ANALYSIS_INPUT_INVALID: "Analysis input is invalid.",

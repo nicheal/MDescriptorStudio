@@ -1,9 +1,9 @@
-"""Job scheduling: category pools, engine/update mutual exclusion, cooperative
-shutdown, queue positions, and descriptor in-flight dedup (scheduling-fix-plan).
+"""Job scheduling: category pools, cooperative shutdown, queue positions, and
+descriptor in-flight dedup (scheduling-fix-plan).
 
-The engine pool is single-worker and shared by descriptor.compute and
-engine.update; analysis and dataset pools are isolated so a blocked compute
-cannot starve scans, and shutdown cancels live jobs before settling rows.
+The descriptor pool is single-worker; analysis and dataset pools are isolated
+so a blocked compute cannot starve scans, and shutdown cancels live jobs before
+settling rows.
 """
 
 import threading
@@ -68,31 +68,6 @@ def test_engine_pool_does_not_block_dataset_jobs(tmp_path) -> None:
 
     release.set()
     _wait_terminal(jobs, heavy)
-    jobs.shutdown()
-
-
-def test_engine_update_waits_for_running_compute(tmp_path) -> None:
-    db, jobs = _env(tmp_path)
-    release = threading.Event()
-    compute_started = threading.Event()
-
-    def compute(ctx):
-        compute_started.set()
-        release.wait(10)
-
-    compute_id = jobs.submit("descriptor.compute", compute)
-    assert compute_started.wait(10)
-
-    update_id = jobs.submit("engine.update", lambda ctx: "updated")
-    time.sleep(0.2)
-    # both job types share the single-worker engine pool: the pip update must
-    # never run while a compute holds the engine's native extensions open
-    assert jobs.get_job(update_id)["status"] == "QUEUED"
-
-    release.set()
-    _wait_terminal(jobs, compute_id)
-    row = _wait_terminal(jobs, update_id)
-    assert row["status"] == "COMPLETED"
     jobs.shutdown()
 
 

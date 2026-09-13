@@ -149,6 +149,8 @@ export interface AnalysisParams {
   queryRunId: string | null;
   referenceViewId: string | null;
   queryViewId: string | null;
+  /** Dataset view scoping the single-run modules (null = full dataset). */
+  viewId: string | null;
 }
 
 /**
@@ -160,13 +162,13 @@ export interface AnalysisParams {
 export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
   switch (tab) {
     case "projection":
-      return [p.projection, p.mode, p.preprocess, p.projection === "tsne" ? p.tsnePerplexity : ""].join("|");
+      return [p.projection, p.mode, p.preprocess, p.projection === "tsne" ? p.tsnePerplexity : "", p.viewId ?? "full"].join("|");
     case "similarity":
-      return [p.similarityMode, p.mode, p.k, p.similarityMode === "query" ? String(p.queryIndex) : ""].join("|");
+      return [p.similarityMode, p.mode, p.k, p.similarityMode === "query" ? String(p.queryIndex) : "", p.viewId ?? "full"].join("|");
     case "clusters":
-      return [p.clusterAlgorithm, p.nClusters, p.mode].join("|");
+      return [p.clusterAlgorithm, p.nClusters, p.mode, p.viewId ?? "full"].join("|");
     case "outliers":
-      return [p.outlierAlgorithm, p.k, p.contamination, p.mode].join("|");
+      return [p.outlierAlgorithm, p.k, p.contamination, p.mode, p.viewId ?? "full"].join("|");
     case "sampling":
       return [
         p.samplingAlgorithm,
@@ -175,36 +177,35 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
         p.samplingAlgorithm === "uncertainty_diversity" ? p.uncertaintyK : "",
         p.samplingAlgorithm === "novelty_fps" || p.samplingAlgorithm === "uncertainty_diversity"
           ? [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")
-          : "",
+          : p.viewId ?? "full",
       ].join("|");
     case "coverage":
       return [p.coverageMode, p.mode, p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join("|");
     case "compare":
       return [p.compareMode, p.mode, p.compareMode === "mantel" ? `${p.mantelMethod}|${p.mantelPermutations}` : ""].join("|");
     case "local":
-      return [p.nClusters, p.k, p.localCutoff].join("|");
+      return [p.nClusters, p.k, p.localCutoff, p.viewId ?? "full"].join("|");
     case "kernel":
-      return [p.kernelName, p.mode].join("|");
+      return [p.kernelName, p.mode, p.viewId ?? "full"].join("|");
     case "overview":
       {
-        const keyParts = [
-          p.overviewAnalysis,
+        const moduleParts =
           p.overviewAnalysis === "property_correlation"
             ? `${p.propertyName}|${p.propertyFolds}|${p.propertyReliabilityK}|${p.propertyDistanceMetric}|${p.propertySparsePercentile}|${p.propertyOodPercentile}`
-            : "",
-          p.overviewAnalysis === "perturbation_sensitivity"
-            ? `${p.perturbationType}|${p.perturbationCount}|${p.perturbationMaximum}|${p.perturbationMetric}|${p.perturbationStructures}`
-            : p.overviewAnalysis === "feature_variance"
-              ? `${p.nearZeroThreshold}|${p.lowVariationThreshold}`
-              : p.overviewAnalysis === "feature_correlation"
-                ? `${p.featureCorrelationMethod}|${p.featureCorrelationThreshold}`
-                : p.overviewAnalysis === "effective_dimension"
-                  ? p.effectiveDimensionPreprocess
-                  : p.overviewAnalysis === "drift"
-                    ? [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")
-                    : "",
-        ];
-        return keyParts.join("|");
+            : p.overviewAnalysis === "perturbation_sensitivity"
+              ? `${p.perturbationType}|${p.perturbationCount}|${p.perturbationMaximum}|${p.perturbationMetric}|${p.perturbationStructures}`
+              : p.overviewAnalysis === "feature_variance"
+                ? `${p.nearZeroThreshold}|${p.lowVariationThreshold}`
+                : p.overviewAnalysis === "feature_correlation"
+                  ? `${p.featureCorrelationMethod}|${p.featureCorrelationThreshold}`
+                  : p.overviewAnalysis === "effective_dimension"
+                    ? p.effectiveDimensionPreprocess
+                    : "";
+        if (p.overviewAnalysis === "drift") {
+          // Cross-dataset: scoped by its reference/query views, not viewId.
+          return [p.overviewAnalysis, moduleParts, [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")].join("|");
+        }
+        return [p.overviewAnalysis, moduleParts, p.viewId ?? "full"].join("|");
       }
     default:
       return "";

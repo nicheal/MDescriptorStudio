@@ -10,6 +10,7 @@ numpy==2.5.2
 scipy==1.18.1
 scikit-learn==1.9.0
 threadpoolctl==3.6.0
-umap-learn==0.5.12
 hdbscan==0.8.44
 dpdata==1.1.0
+# UMAP is implemented in-repo (analysis/umap_numpy.py, pure numpy/scipy);
+# the numba/llvmlite/pynndescent stack is deliberately absent.

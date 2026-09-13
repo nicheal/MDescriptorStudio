@@ -1120,13 +1120,6 @@ const METHODS: Record<string, Handler> = {
   },
   "settings.get": (p) => ({ value: p?.key === "workspace.activeDatasetId" ? "ds-gaas" : null }),
   "settings.set": () => ({}),
-  "engine.check_update": () => ({
-    installed: "0.3.2",
-    latest: "0.3.2",
-    hasUpdate: false,
-    status: "up_to_date",
-    error: null,
-  }),
   "descriptor.list": () => MOCK_DESCRIPTORS,
   "descriptor.describe": (p) => {
     const meta = MOCK_DESCRIPTORS.find((x) => x.name === (p.name ?? "dpa2")) ?? MOCK_DESCRIPTORS[0];

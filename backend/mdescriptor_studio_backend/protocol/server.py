@@ -193,7 +193,7 @@ class Server:
         """Non-blocking stdin availability probe for Windows pipe stdin, or None.
 
         On Windows, a blocking stdin ReadFile that is in flight while another
-        thread imports the numeric stack (sklearn/numba loading their DLLs
+        thread imports the numeric stack (sklearn/hdbscan loading their DLLs
         after the engine's torch DLLs are resident) deadlocks the DLL loader:
         the importing thread hangs forever inside a C-extension create_module.
         The warmup thread therefore runs against a polling loop, which keeps

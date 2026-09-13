@@ -415,6 +415,7 @@ export default function Analysis() {
   const [queryRunId, setQueryRunId] = useState<string | null>(null);
   const [referenceViewId, setReferenceViewId] = useState<string | null>(null);
   const [queryViewId, setQueryViewId] = useState<string | null>(null);
+  const [viewId, setViewId] = useState<string | null>(null);
   const [exportFormat, setExportFormat] = useState("csv");
   const [exportPath, setExportPath] = useState("");
   const [k, setK] = useState(10);
@@ -450,7 +451,7 @@ export default function Analysis() {
     propertyFolds, propertyReliabilityK, propertyDistanceMetric, propertySparsePercentile, propertyOodPercentile,
     perturbationType, perturbationCount, perturbationMaximum, perturbationStructures, perturbationMetric,
     nearZeroThreshold, lowVariationThreshold, featureCorrelationMethod, featureCorrelationThreshold,
-    referenceRunId, queryRunId, referenceViewId, queryViewId,
+    referenceRunId, queryRunId, referenceViewId, queryViewId, viewId,
   };
   const paramsKey = buildParamsKey(tab, analysisParams);
   // {tab, paramsKey, params} as of the latest render. Runs capture this when
@@ -473,6 +474,10 @@ export default function Analysis() {
   const crossDatasetModule = tab === "coverage"
     || (tab === "sampling" && (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity"))
     || (tab === "overview" && overviewAnalysis === "drift");
+  // Modules that consume the single-run Scope selector (dataset view slicing);
+  // compare/sensitivity take two runs and cross-dataset modules carry their
+  // own reference/query views.
+  const singleRunModule = !crossDatasetModule && tab !== "compare" && !(tab === "overview" && overviewAnalysis === "sensitivity");
   const completedAllRuns = useMemo(() => allRuns.filter((run) => run.status === "COMPLETED"), [allRuns]);
   const referenceRuns = useMemo(() => completedAllRuns.filter((run) => run.dataset_id === referenceDatasetId), [completedAllRuns, referenceDatasetId]);
   const referenceRunRow = referenceRuns.find((run) => run.id === referenceRunId) ?? null;
@@ -484,6 +489,8 @@ export default function Analysis() {
   const queryRunRow = queryRuns.find((run) => run.id === queryRunId) ?? null;
   const referenceViews = useMemo(() => datasetViews.filter((view) => view.dataset_id === referenceDatasetId && !view.stale), [datasetViews, referenceDatasetId]);
   const queryViews = useMemo(() => datasetViews.filter((view) => view.dataset_id === queryDatasetId && !view.stale), [datasetViews, queryDatasetId]);
+  // Views of the active dataset, for the single-run modules' Scope selector.
+  const activeViews = useMemo(() => datasetViews.filter((view) => view.dataset_id === dataset?.id && !view.stale), [datasetViews, dataset?.id]);
   const crossInputsReady = !!referenceRunRow && !!queryRunRow;
   const pointDataset = crossDatasetModule
     ? st.datasets.find((item) => item.id === queryDatasetId) ?? dataset
@@ -581,6 +588,10 @@ export default function Analysis() {
     setQueryRunId((current) => queryRuns.some((run) => run.id === current) ? current : queryRuns[0]?.id ?? null);
     setQueryViewId((current) => queryViews.some((view) => view.id === current) ? current : null);
   }, [queryRuns, queryViews]);
+
+  useEffect(() => {
+    setViewId((current) => activeViews.some((view) => view.id === current) ? current : null);
+  }, [activeViews]);
 
   useEffect(() => {
     operationRef.current += 1;
@@ -838,7 +849,7 @@ export default function Analysis() {
       setInspectedPoint(null);
       useWorkspace.getState().setSelectedSample(null);
       try {
-        const response = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: requestRunId, mode: activeMode, seed: 42, preprocess: activePreprocess });
+        const response = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: requestRunId, mode: activeMode, seed: 42, preprocess: activePreprocess, ...(viewId ? { view_id: viewId } : {}) });
         let id = response.analysis_id;
         if (response.job_id) {
           const watched = await watchAnalysisJob(response.job_id, "analysis.pca", "PCA", isCurrent);
@@ -871,10 +882,10 @@ export default function Analysis() {
       return;
     }
     const projectionParams = projection === "umap"
-      ? { mode: activeMode, preprocess: activePreprocess, n_neighbors: 15, min_dist: 0.1 }
-      : { mode: activeMode, preprocess: activePreprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000 };
+      ? { mode: activeMode, preprocess: activePreprocess, n_neighbors: 15, min_dist: 0.1, ...(viewId ? { view_id: viewId } : {}) }
+      : { mode: activeMode, preprocess: activePreprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000, ...(viewId ? { view_id: viewId } : {}) };
     await runRequest(`analysis.${projection}`, projectionParams, projection.toUpperCase());
-  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, message, mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity, t, tr, watchAnalysisJob]);
+  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, message, mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity, t, tr, viewId, watchAnalysisJob]);
 
   const handlePreprocessChange = useCallback((value: string) => {
     setPreprocess(value);
@@ -908,6 +919,8 @@ export default function Analysis() {
       setQueryDatasetId(query.dataset_id);
       setQueryRunId(query.id);
       setQueryViewId(typeof row.parameters?.query_view_id === "string" ? row.parameters.query_view_id : null);
+    } else {
+      setViewId(typeof row.parameters?.view_id === "string" ? row.parameters.view_id : null);
     }
 
     const operation = ++operationRef.current;
@@ -928,6 +941,8 @@ export default function Analysis() {
       loadedParams.queryRunId = inputRunIds[1] ?? null;
       loadedParams.referenceViewId = typeof row.parameters?.reference_view_id === "string" ? row.parameters.reference_view_id : null;
       loadedParams.queryViewId = typeof row.parameters?.query_view_id === "string" ? row.parameters.query_view_id : null;
+    } else {
+      loadedParams.viewId = typeof row.parameters?.view_id === "string" ? row.parameters.view_id : null;
     }
     setTab(analysisTab);
     if (analysisTab === "overview" && ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"].includes(analysisType)) {
@@ -1100,13 +1115,13 @@ export default function Analysis() {
     if (tab === "similarity") {
       const method = similarityMode === "pairwise" ? "analysis.pairwise" : similarityMode === "all_neighbors" ? "analysis.neighbors" : "analysis.similarity";
       const parameters = similarityMode === "pairwise"
-        ? { metric: "cosine", preprocess: "raw", mode, max_samples: 400 }
-        : { k, query_index: queryIndex, metric: "cosine", preprocess: "raw", mode };
+        ? { metric: "cosine", preprocess: "raw", mode, max_samples: 400, ...(viewId ? { view_id: viewId } : {}) }
+        : { k, query_index: queryIndex, metric: "cosine", preprocess: "raw", mode, ...(viewId ? { view_id: viewId } : {}) };
       await runRequest(method, parameters, similarityMode === "pairwise" ? t("Pairwise similarity") : similarityMode === "all_neighbors" ? t("Neighbor graph") : t("Similarity"));
     } else if (tab === "clusters") {
-      await runRequest("analysis.cluster", { algorithm: clusterAlgorithm, n_clusters: nClusters, preprocess: "standardized", mode }, clusterAlgorithm.toUpperCase());
+      await runRequest("analysis.cluster", { algorithm: clusterAlgorithm, n_clusters: nClusters, preprocess: "standardized", mode, ...(viewId ? { view_id: viewId } : {}) }, clusterAlgorithm.toUpperCase());
     } else if (tab === "outliers") {
-      await runRequest("analysis.outlier", { algorithm: outlierAlgorithm, k, contamination, preprocess: "standardized", mode }, outlierAlgorithm.toUpperCase());
+      await runRequest("analysis.outlier", { algorithm: outlierAlgorithm, k, contamination, preprocess: "standardized", mode, ...(viewId ? { view_id: viewId } : {}) }, outlierAlgorithm.toUpperCase());
     } else if (tab === "sampling") {
       if (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity") {
         if (!crossInputsReady || !referenceRunId || !queryRunId) {
@@ -1116,7 +1131,7 @@ export default function Analysis() {
         const uncertainty = samplingAlgorithm === "uncertainty_diversity";
         await runRequest("analysis.acquisition", { reference_run_id: referenceRunId, query_run_id: queryRunId, ...(referenceViewId ? { reference_view_id: referenceViewId } : {}), ...(queryViewId ? { query_view_id: queryViewId } : {}), n_samples: nSamples, mode, acquisition_method: samplingAlgorithm, novelty_weight: 0.65, uncertainty_weight: 0.65, uncertainty_k: uncertaintyK }, uncertainty ? t("Uncertainty acquisition") : t("Novelty acquisition"), { contextRunId: referenceRunId, followActiveRun: false });
       } else {
-        await runRequest("analysis.sampling", { algorithm: samplingAlgorithm, n_samples: nSamples, mode }, t("Sampling"));
+        await runRequest("analysis.sampling", { algorithm: samplingAlgorithm, n_samples: nSamples, mode, ...(viewId ? { view_id: viewId } : {}) }, t("Sampling"));
       }
     } else if (tab === "coverage") {
       if (!crossInputsReady || !referenceRunId || !queryRunId) {
@@ -1135,9 +1150,9 @@ export default function Analysis() {
         : { left_run_id: selectedRun, right_run_id: secondRun, mode };
       await runRequest(method, parameters, compareMode === "mantel" ? t("Mantel test") : t("Compare"));
     } else if (tab === "local") {
-      await runRequest("analysis.local_diversity", { mode: "atom", n_clusters: nClusters, k, cutoff: localCutoff, max_neighbors: 128 }, t("Local diversity"));
+      await runRequest("analysis.local_diversity", { mode: "atom", n_clusters: nClusters, k, cutoff: localCutoff, max_neighbors: 128, ...(viewId ? { view_id: viewId } : {}) }, t("Local diversity"));
     } else if (tab === "kernel") {
-      await runRequest("analysis.kernel", { kernel: kernelName, mode, max_samples: 400 }, t("Kernel diagnostics"));
+      await runRequest("analysis.kernel", { kernel: kernelName, mode, max_samples: 400, ...(viewId ? { view_id: viewId } : {}) }, t("Kernel diagnostics"));
     } else if (tab === "overview") {
       if (overviewAnalysis === "drift" && (!crossInputsReady || !referenceRunId || !queryRunId)) {
         message.warning(t("Select compatible reference and query runs"));
@@ -1172,9 +1187,10 @@ export default function Analysis() {
                 : overviewAnalysis === "feature_variance"
                   ? { top_k: 20, near_zero_relative_threshold: nearZeroThreshold, low_variance_relative_threshold: lowVariationThreshold }
                   : { top_k: 20 };
+      if (viewId && overviewAnalysis !== "drift" && overviewAnalysis !== "sensitivity") overviewParams.view_id = viewId;
       await runRequest(`analysis.${overviewAnalysis}`, overviewParams, tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]), overviewAnalysis === "drift" ? { contextRunId: referenceRunId, followActiveRun: false } : undefined);
     }
-  }, [clusterAlgorithm, contamination, coverageMode, crossInputsReady, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationStructures, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, queryRunId, queryViewId, referenceRunId, referenceViewId, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, setLowVariationThreshold, setNearZeroThreshold, similarityMode, tab, t, tr, uncertaintyK, message, compareMode]);
+  }, [clusterAlgorithm, contamination, coverageMode, crossInputsReady, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationStructures, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, queryRunId, queryViewId, referenceRunId, referenceViewId, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, setLowVariationThreshold, setNearZeroThreshold, similarityMode, tab, t, tr, uncertaintyK, viewId, message, compareMode]);
 
   const inspectPoint = useCallback((point: Point) => {
     setInspectedPoint(point);
@@ -1390,6 +1406,20 @@ export default function Analysis() {
               }))}
             />
             <Tag color={selectedRunRow?.status === "COMPLETED" ? "green" : "orange"}>{selectedRunRow ? jobStatusLabel(tr, selectedRunRow.status) : t("No run")}</Tag>
+            {singleRunModule && activeViews.length > 0 && <>
+              <Typography.Text>{t("Scope")}</Typography.Text>
+              <Select
+                aria-label={t("Scope")}
+                value={viewId ?? "__full__"}
+                style={{ width: 200 }}
+                disabled={busy}
+                options={[
+                  { value: "__full__", label: t("Full dataset") },
+                  ...activeViews.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString()}` })),
+                ]}
+                onChange={(value) => setViewId(value === "__full__" ? null : value)}
+              />
+            </>}
           </>}
           <Button size="small" icon={<ArrowSync16Regular />} onClick={() => void refresh()}>{t("Refresh")}</Button>
         </Space>

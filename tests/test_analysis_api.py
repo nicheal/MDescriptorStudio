@@ -181,6 +181,77 @@ def test_cross_dataset_analysis_applies_views_and_persists_selection_identity(tm
     db.close()
 
 
+def test_single_run_analysis_scopes_to_dataset_view(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, file_size, created_at)"
+        " VALUES ('ds_1', 'Reference', 'extxyz', ?, 12, '[]', '{}', '{}', 'fp_1', 0, '2026-01-01T00:00:00+00:00')",
+        (str(tmp_path / "reference.extxyz"),),
+    )
+    db.execute(
+        "INSERT INTO dataset_views (id, dataset_id, name, role, filter_json, frame_indices_json, selection_hash, dataset_fingerprint, created_at, updated_at)"
+        " VALUES ('view_v1', 'ds_1', 'v1', 'filtered', '{}', ?, 'selection_v1', 'fp_1', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        (json.dumps([2, 4, 6, 8]),),
+    )
+
+    submitted = service.cluster({"run_id": "run_1", "algorithm": "kmeans", "n_clusters": 2, "seed": 42, "view_id": "view_v1"})
+
+    row = db.query_one("SELECT params_json FROM analysis_runs WHERE id = ?", (submitted["analysis_id"],))
+    saved = json.loads(row["params_json"])
+    assert saved["view_id"] == "view_v1"
+    assert saved["selection_hash"] == "selection_v1"
+    preview = service.preview({"analysis_id": submitted["analysis_id"], "limit": 20})
+    assert {item["frame"] for item in preview["rows"]} == {2, 4, 6, 8}
+
+    # The selection hash joins the cache key: the identical request reuses the
+    # artifact, a different view computes fresh.
+    cached = service.cluster({"run_id": "run_1", "algorithm": "kmeans", "n_clusters": 2, "seed": 42, "view_id": "view_v1"})
+    assert cached["job_id"] is None
+    assert cached["cache"]["existing_analysis_id"] == submitted["analysis_id"]
+    db.execute(
+        "INSERT INTO dataset_views (id, dataset_id, name, role, filter_json, frame_indices_json, selection_hash, dataset_fingerprint, created_at, updated_at)"
+        " VALUES ('view_v2', 'ds_1', 'v2', 'filtered', '{}', ?, 'selection_v2', 'fp_1', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        (json.dumps([1, 3, 5]),),
+    )
+    other = service.cluster({"run_id": "run_1", "algorithm": "kmeans", "n_clusters": 2, "seed": 42, "view_id": "view_v2"})
+    assert other["analysis_id"] != submitted["analysis_id"]
+    assert jobs.calls == 2
+
+    # A stale view fingerprint must be rejected before enqueue.
+    db.execute(
+        "INSERT INTO dataset_views (id, dataset_id, name, role, filter_json, frame_indices_json, selection_hash, dataset_fingerprint, created_at, updated_at)"
+        " VALUES ('view_stale', 'ds_1', 'stale', 'filtered', '{}', ?, 'selection_stale', 'fp_old', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        (json.dumps([0, 1]),),
+    )
+    with pytest.raises(AppError, match="is stale"):
+        service.cluster({"run_id": "run_1", "algorithm": "kmeans", "n_clusters": 2, "seed": 42, "view_id": "view_stale"})
+    db.close()
+
+
+def test_single_run_view_id_rejected_for_two_run_analyses(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    result_dir = tmp_path / "results" / "run_2"
+    result_dir.mkdir(parents=True)
+    values = np.arange(96, dtype=np.float32).reshape(12, 8)
+    np.save(result_dir / "values.npy", values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_2", "level": "structure", "row_semantics": "structure", "shape": list(values.shape)}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES ('run_2', 'ds_1', 'ACSF', 'test', '{}',"
+        " 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(result_dir),),
+    )
+
+    with pytest.raises(AppError, match="view_id applies to single-run analyses only"):
+        service.compare({"left_run_id": "run_1", "right_run_id": "run_2", "mode": "structure", "view_id": "view_v1"})
+
+    assert jobs.calls == 0
+    db.close()
+
+
 def test_dataset_view_slice_preserves_original_frame_identity() -> None:
     samples = SampleMatrix(
         values=np.arange(20, dtype=np.float64).reshape(5, 4),

@@ -44,8 +44,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE4MUQ5Qzc5OTZCODIwNwpSV1FIZ211Wng5bUJBWGhtR1EwaVNZaTNweGlobjJUOFZya3Mvak5mbm1lOTQ5ZnNpWW1hRVdHQQo=",
       "endpoints": [
-        "https://github.com/nicheal/MDescriptorStudio/releases/latest/download/latest.json",
-        "https://github.com/nicheal/MDescriptorStudio/releases/download/v0.1.0.rc/latest.json"
+        "https://github.com/nicheal/MDescriptorStudio/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

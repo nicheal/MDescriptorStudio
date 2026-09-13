@@ -11,11 +11,6 @@ import sys
 import threading
 import time
 
-# Numba cache entries are pickle-bearing. Keep this defense-in-depth flag for
-# releases that recognize it; AnalysisEngine also installs a runtime NullCache
-# guard because the supported Numba version does not.
-os.environ["NUMBA_DISABLE_JIT_CACHE"] = "1"
-
 from . import __version__
 from .analysis import AnalysisEngine, arm_analysis_warmup_gate
 from .config import data_dir
@@ -29,7 +24,6 @@ from .services.dataset_service import DatasetService
 from .services.descriptor_service import DescriptorService
 from .services.job_service import JobService
 from .services.result_service import ResultService
-from .services.update_service import UpdateService
 from .storage.database import Database
 
 log = logging.getLogger(__name__)
@@ -60,7 +54,7 @@ def _configure_stdio() -> None:
             reconfigure(encoding="utf-8", errors="strict")
 
 
-def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root, updates):
+def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root):
     def system_info(_params):
         return {
             "backend_version": __version__,
@@ -71,25 +65,14 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
             "mdescriptor_baseline_version": engine_info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": engine_info.get("descriptor_info_schema_version"),
             "analysis_api_version": 1,
-            "analysis_algorithm_version": "studio-analysis-2",
+            "analysis_algorithm_version": "studio-analysis-3",
             "analysis_dependencies": {
                 name: _dependency_version(name)
-                for name in ("scikit-learn", "umap-learn", "hdbscan")
+                for name in ("scikit-learn", "hdbscan")
             },
             "data_dir": str(root),
             "cpu_threads": platform.os.cpu_count(),
         }
-
-    def engine_check_update(_params):
-        return updates.start_check()
-
-    def engine_update(params):
-        snap = updates.snapshot()
-        target = (params or {}).get("version") or snap.get("latest")
-        if not target:
-            raise AppError(INVALID_PARAMS, "no target version — call engine.check_update first")
-        job_id = jobs.submit("engine.update", lambda ctx: updates.update_runner(ctx, str(target)))
-        return {"job_id": job_id, "target_version": str(target)}
 
     def settings_get(params):
         key = params.get("key")
@@ -181,8 +164,6 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
         "analysis.sensitivity": analysis.sensitivity,
         "analysis.perturbation_sensitivity": analysis.perturbation_sensitivity,
         "analysis.export": analysis.submit_export,
-        "engine.check_update": engine_check_update,
-        "engine.update": engine_update,
     }
 
 
@@ -206,9 +187,8 @@ def main() -> int:
         db, adapter, jobs, datasets, root, info.get("version", "unknown")
     )
     analysis = AnalysisService(db, jobs, results, datasets, root)
-    updates = UpdateService(server.emit, info.get("version", "unknown"))
     server.methods = build_methods(
-        jobs, datasets, descriptors, results, analysis, db, info, root, updates
+        jobs, datasets, descriptors, results, analysis, db, info, root
     )
 
     # Arm both warmup gates before the handshake: the heavy warmups below run
@@ -221,7 +201,7 @@ def main() -> int:
     # First-import every remaining DLL-bearing package here, serially, before
     # any request can run: concurrent first-imports of native packages
     # deadlock the Windows DLL loader on this platform (observed between the
-    # sklearn/numba chain and scipy.spatial cKDTree). Runtime paths — dataset
+    # sklearn chain and scipy.spatial cKDTree). Runtime paths — dataset
     # scan jobs, DeepMD reads — only touch these preloaded modules afterwards;
     # the numeric stack itself is imported by the background warmup pass,
     # whose analysis consumers wait on the gate above.
@@ -243,12 +223,9 @@ def main() -> int:
             "mdescriptor_baseline_version": info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": info.get("descriptor_info_schema_version"),
             "analysis_api_version": 1,
-            "analysis_algorithm_version": "studio-analysis-2",
+            "analysis_algorithm_version": "studio-analysis-3",
         },
     )
-    # non-blocking PyPI check so the UI can offer an engine update (ADR-2)
-    updates.start_check()
-
     def _warmup() -> None:
         # Engine first, then analysis dependencies: one thread, one import
         # pass. Safe alongside serve_forever only because the stdin loop

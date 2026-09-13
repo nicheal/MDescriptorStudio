@@ -21,16 +21,14 @@ log = logging.getLogger(__name__)
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 
-# Pool sizes per job category. The engine pool is deliberately size 1:
-# descriptor compute is the heaviest work in the process, and engine.update's
-# pip install must never run while a compute holds the engine's native
-# extensions open (Windows locks loaded DLLs) — sharing one single-worker
-# pool serializes exactly those two without any extra locking.
+# Pool sizes per job category. The descriptor pool is deliberately size 1:
+# descriptor compute is the heaviest work in the process and must not overlap
+# with another descriptor run while the engine's native extensions are loaded.
 _POOL_SIZES = {"engine": 1, "analysis": 2, "dataset": 2}
 
 
 def _category(job_type: str) -> str:
-    if job_type.startswith(("descriptor.", "engine.")):
+    if job_type.startswith("descriptor."):
         return "engine"
     if job_type.startswith("analysis."):
         return "analysis"

@@ -31,7 +31,6 @@ for pkg in (
     "dpdata",
     "sklearn",
     "scipy",
-    "umap",
     "hdbscan",
     "array_api_compat",
 ):
@@ -39,7 +38,7 @@ for pkg in (
     datas += d
     binaries += b
     hiddenimports += h
-hiddenimports += ["numpy", "joblib", "numba", "llvmlite"]
+hiddenimports += ["numpy", "joblib"]
 
 # Native statistics geometry kernel (optional at runtime — datasets.native
 # falls back to scipy when absent).  Bundled at its package-relative location

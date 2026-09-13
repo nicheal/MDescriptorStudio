@@ -6,7 +6,6 @@ import { Settings16Regular } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { useAppUpdate } from "../stores/appUpdate";
 import { getVersion } from "@tauri-apps/api/app";
-import EngineVersionCheck from "./EngineVersionCheck";
 import { useI18n, useT } from "../i18n";
 
 interface SystemInfo {
@@ -120,49 +119,6 @@ export default function SettingsDrawer() {
           {t("Logs: {path}", { path: info ? `${info.data_dir}\\logs\\backend.log` : "—" })}
         </Typography.Text>
 
-        {open && <EngineVersionCheck installed={info?.mdescriptor_version} />}
-
-        <Typography.Text strong style={{ fontSize: 12, color: "#616161", display: "block", marginTop: 24 }}>
-          {t("Studio application update")}
-        </Typography.Text>
-        <div style={{ marginTop: 8, fontSize: 13 }}>
-          <Row k={t("Installed")} v={appUpdate.current || "—"} />
-          <Row k={t("Latest release")} v={appUpdate.latest ?? "—"} />
-          <Row k={t("Status")} v={appStatusLabel(appUpdate.status, t)} />
-          {appUpdate.notes && (
-            <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "6px 0" }}>
-              {appUpdate.notes}
-            </Typography.Paragraph>
-          )}
-          {appUpdate.progress !== null && (
-            <Progress percent={appUpdate.progress} size="small" showInfo={false} style={{ margin: "4px 0" }} />
-          )}
-          {appUpdate.error && (
-            <Typography.Text type="danger" style={{ fontSize: 11 }}>
-              {appUpdate.error}
-            </Typography.Text>
-          )}
-          <div style={{ marginTop: 8 }}>
-            <Space direction="vertical" size={6}>
-              <Space>
-                <Button size="small" onClick={() => void appUpdate.refresh()} loading={appUpdate.status === "checking"} disabled={appUpdate.status === "installing"}>
-                  {t("Check for updates")}
-                </Button>
-                {appUpdate.status === "available" && (
-                  <Button type="primary" onClick={() => void appUpdate.install()}>
-                    {t("Install and restart")}
-                  </Button>
-                )}
-              </Space>
-              {appUpdate.status === "installing" && (
-                <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                  {t("The app will close and restart to finish the update.")}
-                </Typography.Text>
-              )}
-            </Space>
-          </div>
-        </div>
-
         <Typography.Text strong style={{ fontSize: 12, color: "#616161", display: "block", marginTop: 24 }}>
           {t("ABOUT")}
         </Typography.Text>
@@ -174,7 +130,54 @@ export default function SettingsDrawer() {
           labelStyle={{ width: 150, color: "#616161", fontSize: 13 }}
           contentStyle={{ fontSize: 13, fontVariantNumeric: "tabular-nums" }}
         >
-          <Descriptions.Item label="MDescriptor Studio">{appUpdate.current || "—"}</Descriptions.Item>
+          <Descriptions.Item label="MDescriptor Studio">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <span>{appUpdate.current || "—"}</span>
+              <Button
+                size="small"
+                onClick={() => void appUpdate.refresh()}
+                loading={appUpdate.status === "checking"}
+                disabled={appUpdate.status === "installing"}
+              >
+                {t("Check for updates")}
+              </Button>
+            </div>
+            {appUpdate.status === "available" && (
+              <div style={{ marginTop: 6 }}>
+                <Space size={8}>
+                  <Button type="primary" size="small" onClick={() => void appUpdate.install()}>
+                    {t("Install and restart")}
+                  </Button>
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                    {t("Latest release")}: {appUpdate.latest}
+                  </Typography.Text>
+                </Space>
+                {appUpdate.notes && (
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "6px 0 0" }}>
+                    {appUpdate.notes}
+                  </Typography.Paragraph>
+                )}
+              </div>
+            )}
+            {appUpdate.progress !== null && (
+              <Progress percent={appUpdate.progress} size="small" showInfo={false} style={{ margin: "4px 0 0" }} />
+            )}
+            {(appUpdate.status === "installing" || appUpdate.status === "installed") && (
+              <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+                {t("The app will close and restart to finish the update.")}
+              </Typography.Text>
+            )}
+            {appUpdate.status === "up_to_date" && (
+              <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+                {t("Up to date")}
+              </Typography.Text>
+            )}
+            {appUpdate.error && (
+              <Typography.Text type="danger" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+                {appUpdate.error}
+              </Typography.Text>
+            )}
+          </Descriptions.Item>
           <Descriptions.Item label={t("Backend")}>{info?.backend_version ?? "—"}</Descriptions.Item>
           <Descriptions.Item label="MDescriptor">{info?.mdescriptor_version ?? "—"}</Descriptions.Item>
           <Descriptions.Item label={t("Protocol")}>{info?.protocol_version ?? "—"}</Descriptions.Item>
@@ -189,33 +192,5 @@ export default function SettingsDrawer() {
         </Typography.Text>
       </Drawer>
     </>
-  );
-}
-
-function appStatusLabel(s: string, t: (key: string) => string): string {
-  switch (s) {
-    case "up_to_date":
-      return t("Up to date");
-    case "available":
-      return t("Update available");
-    case "installing":
-      return t("Installing update…");
-    case "installed":
-      return t("Updated — restarting");
-    case "checking":
-      return t("Checking for updates…");
-    case "error":
-      return t("Check failed");
-    default:
-      return t("Not checked");
-  }
-}
-
-function Row({ k, v }: { k: string; v: string }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
-      <span style={{ color: "#616161" }}>{k}</span>
-      <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 500 }}>{v}</span>
-    </div>
   );
 }

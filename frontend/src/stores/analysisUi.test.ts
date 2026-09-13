@@ -39,9 +39,9 @@ const persistedView = {
   featureCorrelationThreshold: 0.9,
 };
 
-const slotA: AnalysisSlot = { runId: "run-1", analysisId: "ana-a", tab: "similarity", paramsKey: "query|structure|10|0", updatedAt: 100, seq: 1 };
-const slotB: AnalysisSlot = { runId: "run-1", analysisId: "ana-b", tab: "projection", paramsKey: "pca|structure|raw|", updatedAt: 200, seq: 2 };
-const slotC: AnalysisSlot = { runId: "run-1", analysisId: "ana-c", tab: "projection", paramsKey: "umap|atom|raw|", updatedAt: 300, seq: 3 };
+const slotA: AnalysisSlot = { runId: "run-1", analysisId: "ana-a", tab: "similarity", paramsKey: "query|structure|10|0|full", updatedAt: 100, seq: 1 };
+const slotB: AnalysisSlot = { runId: "run-1", analysisId: "ana-b", tab: "projection", paramsKey: "pca|structure|raw|full", updatedAt: 200, seq: 2 };
+const slotC: AnalysisSlot = { runId: "run-1", analysisId: "ana-c", tab: "projection", paramsKey: "umap|atom|raw|full", updatedAt: 300, seq: 3 };
 
 const baseParams: AnalysisParams = {
   projection: "pca", mode: "structure", preprocess: "raw", effectiveDimensionPreprocess: "standardized", tsnePerplexity: 30,
@@ -56,47 +56,49 @@ const baseParams: AnalysisParams = {
   propertyFolds: 5, propertyReliabilityK: 5, propertyDistanceMetric: "euclidean", propertySparsePercentile: 90, propertyOodPercentile: 99,
   perturbationType: "jitter", perturbationCount: 8, perturbationMaximum: 0.2, perturbationStructures: 64, perturbationMetric: "euclidean",
   nearZeroThreshold: 1e-4, lowVariationThreshold: 1e-2, featureCorrelationMethod: "pearson", featureCorrelationThreshold: 0.95,
-  referenceRunId: "run-ref", queryRunId: "run-query", referenceViewId: null, queryViewId: "view-query",
+  referenceRunId: "run-ref", queryRunId: "run-query", referenceViewId: null, queryViewId: "view-query", viewId: null,
 };
 
 describe("buildParamsKey", () => {
   it("keys the projection tab by method, granularity and preprocess", () => {
-    expect(buildParamsKey("projection", baseParams)).toBe("pca|structure|raw|");
-    expect(buildParamsKey("projection", { ...baseParams, projection: "umap", mode: "atom" })).toBe("umap|atom|raw|");
-    expect(buildParamsKey("projection", { ...baseParams, projection: "tsne", tsnePerplexity: 45 })).toBe("tsne|structure|raw|45");
+    expect(buildParamsKey("projection", baseParams)).toBe("pca|structure|raw||full");
+    expect(buildParamsKey("projection", { ...baseParams, projection: "umap", mode: "atom" })).toBe("umap|atom|raw||full");
+    expect(buildParamsKey("projection", { ...baseParams, projection: "tsne", tsnePerplexity: 45 })).toBe("tsne|structure|raw|45|full");
     // perplexity only matters for t-SNE
-    expect(buildParamsKey("projection", { ...baseParams, tsnePerplexity: 45 })).toBe("pca|structure|raw|");
+    expect(buildParamsKey("projection", { ...baseParams, tsnePerplexity: 45 })).toBe("pca|structure|raw||full");
+    // the single-run dataset view scope is part of every single-run key
+    expect(buildParamsKey("projection", { ...baseParams, viewId: "view-1" })).toBe("pca|structure|raw||view-1");
   });
 
   it("keys module-specific parameters only for their module", () => {
-    expect(buildParamsKey("similarity", baseParams)).toBe("query|structure|10|0");
-    expect(buildParamsKey("similarity", { ...baseParams, similarityMode: "all_neighbors" })).toBe("all_neighbors|structure|10|");
-    expect(buildParamsKey("overview", baseParams)).toBe("feature_variance||0.0001|0.01");
-    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "feature_correlation", featureCorrelationMethod: "spearman", featureCorrelationThreshold: 0.9 })).toBe("feature_correlation||spearman|0.9");
-    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "effective_dimension", effectiveDimensionPreprocess: "standardized" })).toBe("effective_dimension||standardized");
+    expect(buildParamsKey("similarity", baseParams)).toBe("query|structure|10|0|full");
+    expect(buildParamsKey("similarity", { ...baseParams, similarityMode: "all_neighbors" })).toBe("all_neighbors|structure|10||full");
+    expect(buildParamsKey("overview", baseParams)).toBe("feature_variance|0.0001|0.01|full");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "feature_correlation", featureCorrelationMethod: "spearman", featureCorrelationThreshold: 0.9 })).toBe("feature_correlation|spearman|0.9|full");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "effective_dimension", effectiveDimensionPreprocess: "standardized" })).toBe("effective_dimension|standardized|full");
     expect(buildParamsKey("coverage", baseParams)).toBe("coverage|structure|run-ref|full|run-query|view-query");
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "drift" })).toBe("drift||run-ref:full:run-query:view-query");
     // The trajectory module is configured entirely inside its result view, so
     // one completed trajectory per descriptor run stays reusable.
-    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "trajectory" })).toBe("trajectory||");
-    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "property_correlation" })).toBe("property_correlation|energy_per_atom|5|5|euclidean|90|99|");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "trajectory" })).toBe("trajectory||full");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "property_correlation" })).toBe("property_correlation|energy_per_atom|5|5|euclidean|90|99|full");
     expect(buildParamsKey("overview", {
       ...baseParams,
       overviewAnalysis: "perturbation_sensitivity",
       perturbationType: "strain", perturbationCount: 4, perturbationMaximum: 0.1, perturbationMetric: "cosine",
-    })).toBe("perturbation_sensitivity||strain|4|0.1|cosine|64");
+    })).toBe("perturbation_sensitivity|strain|4|0.1|cosine|64|full");
     // The structure cap changes what the descriptor sweep actually computed.
     expect(buildParamsKey("overview", {
       ...baseParams,
       overviewAnalysis: "perturbation_sensitivity",
       perturbationStructures: 256,
-    })).toBe("perturbation_sensitivity||jitter|8|0.2|euclidean|256");
+    })).toBe("perturbation_sensitivity|jitter|8|0.2|euclidean|256|full");
   });
 
   it("lets a single parameter be probed against the rest of the current combination", () => {
     const probed = { ...baseParams, projection: "umap" as const };
-    expect(buildParamsKey("projection", probed)).toBe("umap|structure|raw|");
-    expect(buildParamsKey("projection", { ...probed, preprocess: "standardized" })).toBe("umap|structure|standardized|");
+    expect(buildParamsKey("projection", probed)).toBe("umap|structure|raw||full");
+    expect(buildParamsKey("projection", { ...probed, preprocess: "standardized" })).toBe("umap|structure|standardized||full");
   });
 });
 
@@ -158,10 +160,10 @@ describe("slot lookups", () => {
   };
 
   it("slotForParams matches tab + run + parameters exactly", () => {
-    expect(slotForParams(slots, "similarity", "run-1", "query|structure|10|0")).toEqual(slotA);
+    expect(slotForParams(slots, "similarity", "run-1", "query|structure|10|0|full")).toEqual(slotA);
     expect(slotForParams(slots, "similarity", "run-1", "other")).toBeNull();
-    expect(slotForParams(slots, "similarity", "run-2", "query|structure|10|0")).toBeNull();
-    expect(slotForParams(slots, "similarity", null, "query|structure|10|0")).toBeNull();
+    expect(slotForParams(slots, "similarity", "run-2", "query|structure|10|0|full")).toBeNull();
+    expect(slotForParams(slots, "similarity", null, "query|structure|10|0|full")).toBeNull();
   });
 
   it("latestSlotForTab picks the newest slot of a tab regardless of parameters", () => {

@@ -19,7 +19,7 @@
 `shutdown()`(`services/job_service.py:289-304`)只 `cancel_futures`(未启动的任务),从不调用运行中任务的 `ctx.cancel()`;等 3 秒后 sweep 数据行并 `db.close()`。仍在跑的 job 线程(此时并未 detach)之后任何 `db.execute`/`ctx.progress` 都会打到已关闭的连接上。更严重的是 CPython 3.9+ 的 `ThreadPoolExecutor` 线程是非 daemon 的,解释器退出时会 join 所有线程——一个卡在原生调用里的计算会**阻止后端进程退出**。
 
 **3. 调度器完全无类型感知**
-所有 job 共享一个 FIFO 队列、固定 2 并发:重计算(`descriptor.compute`、`analysis.umap/tsne`)、轻任务(`dataset.statistics`、`dataset.export`)、网络型(`engine.update` 的 pip 下载)同权重。后果:
+所有 job 共享一个 FIFO 队列、固定 2 并发:重计算(`descriptor.compute`、`analysis.umap/tsne`)、轻任务(`dataset.statistics`、`dataset.export`)同权重。后果:
 - 两个重计算并行时 CPU(无线程数配置,全靠 BLAS 默认)和内存双双争用——每个 compute 把全部 frames 逐个 append 进内存(`services/descriptor_service.py:473-486`),2GB 输入预算是**单任务**的,并发的总内存无准入控制;
 - 一个轻量统计任务可能排在两个长计算后面出不来,无优先级、无队列位置展示。
 
@@ -31,13 +31,10 @@
 **5. `descriptor.submit` 没有在途去重**
 只查 `status = 'COMPLETED'` 的缓存命中(`services/descriptor_service.py:214-222`),同一 cache_key 已有 QUEUED/RUNNING 任务时照样再排一个完整计算。对比 analysis 路径有 active 去重(`services/analysis_service.py:615-626`)。双击或双入口提交会把同一个重计算跑两遍。
 
-**6. `engine.update` 与计算任务缺互斥**
-`update_runner` 直接 `pip install --upgrade mdescriptor`(`services/update_service.py:116-137`)。2 线程池下它可以和 `descriptor.compute` 并行;Windows 上引擎的 .pyd 正被加载锁定,pip 会失败或装出不一致状态。调度器不知道这两类 job 冲突。
-
-**7. 重计算期间 RPC 通道饥饿,进度会停更**
+**6. 重计算期间 RPC 通道饥饿,进度会停更**
 job 线程里存在长 GIL 段:PCA 逐点构建 2 万条 payload(`services/analysis_service.py:162-176`)、`_pool_per_structure` 的 Python 逐结构循环(`services/analysis_service.py:315-320`)、atom 模式百万级 `sample_ids` 字符串列表(`services/analysis_service.py:1078`)。RPC 池只有 4 线程,前端 `watchJob` 每 500ms 轮询 `job.get`(`frontend/src/stores/jobs.ts:143`),`jobs.ts:156-160` 的 BUSY 退避注释已自认了这个拥塞。但控制通道只保留了 `job.cancel`(`protocol/server.py:26`)——**`job.get` 不在保留通道上,重负载下进度条会停更**。
 
-**8. `result.heatmap` 在 RPC 线程上全量加载矩阵**
+**7. `result.heatmap` 在 RPC 线程上全量加载矩阵**
 `heatmap` 每次调用 `load_values` 把整个 `values.npy` `np.load` 进内存(`services/result_service.py:194`,内部在 `result_service.py:108-117`),只为切出一个结构的小块——帧浏览场景下每帧一次大 I/O,无 mmap、无缓存,还会挤占 RPC worker。
 
 ### P2 — 竞态与细节
@@ -53,7 +50,7 @@ job 线程里存在长 GIL 段:PCA 逐点构建 2 万条 payload(`services/analy
 
 `backend/mdescriptor_studio_backend/services/job_service.py`:
 - 单一 `_executor` 改为按类别的 3 个池(模块级常量 `_POOL_SIZES`,便于调整):
-  - `"engine"`(max_workers=1):`descriptor.compute`、`engine.update` —— 共享单 worker 天然实现互斥:pip 升级引擎期间描述符计算排队,反之亦然;
+  - `"engine"`(max_workers=1):`descriptor.compute` —— 描述符计算共享单 worker，避免引擎原生扩展并发加载;
   - `"analysis"`(max_workers=2):所有 `analysis.*`;
   - `"dataset"`(max_workers=2,兜底):`dataset.*` 及未知类型。
 - `_category(job_type)` 按前缀映射;`submit()` 内部路由,签名与队列背压 `_queue_slots`(64)不变;`_run`/取消/结算逻辑全部不动。
@@ -101,7 +98,6 @@ job 线程里存在长 GIL 段:PCA 逐点构建 2 万条 payload(`services/analy
 新增 `tests/test_job_scheduling.py`(沿用 `tests/test_run_settlement.py` 的真实 Database+JobService+假 runner 模式):
 
 - 类别隔离:engine 池被阻塞时 dataset 任务正常完成;
-- 互斥:`descriptor.compute` 运行中提交 `engine.update` 保持 QUEUED,compute 结束后才启动;
 - 协作式关停:运行中任务在 `shutdown()` 后变为 CANCELLED('backend_shutdown')且 runner 收到取消;
 - 队列位置:池占满后多个排队任务的 `queue_position` 正确;
 - 描述符在途去重:同参数二次 submit 返回既有 job_id,force 创建新 run。

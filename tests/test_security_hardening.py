@@ -11,7 +11,6 @@ import pytest
 from mdescriptor_studio_backend.datasets import compute_fingerprint
 from mdescriptor_studio_backend.datasets.extxyz import ExtXYZAdapter
 from mdescriptor_studio_backend.errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
-from mdescriptor_studio_backend.analysis.engine import _disable_numba_disk_cache
 from mdescriptor_studio_backend.protocol.frames import parse_request, response_err
 from mdescriptor_studio_backend.security import UnsafePathError, validate_local_path
 from mdescriptor_studio_backend.services.analysis_service import AnalysisService
@@ -35,19 +34,6 @@ def test_protocol_rejects_deep_json_without_killing_dispatch() -> None:
     with pytest.raises(AppError) as exc:
         parse_request("{" + '"x":[' * 1200 + "0" + "]" * 1200 + "}")
     assert exc.value.code == INVALID_PARAMS
-
-
-def test_numba_cache_guard_turns_cache_true_into_null_cache() -> None:
-    numba = pytest.importorskip("numba")
-    assert _disable_numba_disk_cache()
-
-    @numba.njit(cache=True)
-    def add_one(value):
-        return value + 1
-
-    assert add_one(2) == 3
-    assert type(add_one._cache).__name__ == "NullCache"
-    assert add_one._cache.cache_path is None
 
 
 def test_local_path_policy_rejects_namespace_ads_and_device_forms(tmp_path: Path) -> None:

@@ -87,7 +87,7 @@
 | 6 | [P2] job.get 未知 id → result:null 违反协议 | 抛 JOB_NOT_FOUND |
 | 7 | [P3] 奇异晶胞 → frame 500 | 退化按非周期处理（det 判定 + inv 守卫） |
 | 8 | [P3] 畸形 extxyz/deepmd 输入裸异常 | 解析层统一转 INVALID_DATASET |
-| 附 | engine.update 取消后 pip 孤儿进程；heatmap max_features 无上限 | 取消即 kill pip；硬上限 256 |
+| 附 | heatmap max_features 无上限 | 硬上限 256 |
 
 蓝队审计确认：产物（59MB setup.exe / 56MB sidecar）、12,480 帧数据集、0.2.3 三处一致、16 错误码逐字对齐、ADR-6/7/17 与 §57 暂缓清单经 grep 证实无违规、无硬性造假声明。
 
