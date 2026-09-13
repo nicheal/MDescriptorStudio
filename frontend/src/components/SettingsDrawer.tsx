@@ -126,9 +126,6 @@ export default function SettingsDrawer() {
           {t("Studio application update")}
         </Typography.Text>
         <div style={{ marginTop: 8, fontSize: 13 }}>
-          <Typography.Paragraph type="secondary">
-            {t("Studio updates require a publicly accessible release source; the current repository is private.")}
-          </Typography.Paragraph>
           <Row k={t("Installed")} v={appUpdate.current || "—"} />
           <Row k={t("Latest release")} v={appUpdate.latest ?? "—"} />
           <Row k={t("Status")} v={appStatusLabel(appUpdate.status, t)} />

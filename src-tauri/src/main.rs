@@ -173,6 +173,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
             return;
         }
     };
+    hide_backend_console(&mut command);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -352,6 +353,18 @@ fn clean_command_environment(command: &mut Command, temp_dir: &Path) {
         .env("TMP", temp_dir)
         .env("TMPDIR", temp_dir);
 }
+
+#[cfg(target_os = "windows")]
+fn hide_backend_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    // Keep the console executable so redirected stdio remains available, but
+    // do not create a visible console window for the desktop child process.
+    command.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_backend_console(_command: &mut Command) {}
 
 fn backend_temp_dir() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]

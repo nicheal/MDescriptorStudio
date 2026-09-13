@@ -32,6 +32,7 @@ for pkg in (
     "scipy",
     "umap",
     "hdbscan",
+    "array_api_compat",
 ):
     d, b, h = collect_runtime(pkg)
     datas += d

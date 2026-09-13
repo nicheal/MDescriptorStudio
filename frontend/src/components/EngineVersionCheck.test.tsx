@@ -27,7 +27,7 @@ it("checks the engine, keeps a fast completion event, and unsubscribes", async (
     expect(request).toHaveBeenCalledWith("engine.check_update");
     expect(container.textContent).toContain("Latest (PyPI): 0.3.3");
     expect(container.textContent).toContain("Update available");
-    expect(container.textContent).toContain("install a newer Studio package");
+    expect(container.textContent).not.toContain("install a newer Studio package");
     expect(container.textContent).not.toContain("Checking PyPI");
     await act(async () => container.querySelector("button")!.click());
     expect(request).toHaveBeenCalledTimes(2);

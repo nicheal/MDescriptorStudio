@@ -47,11 +47,6 @@ export default function EngineVersionCheck({ installed }: { installed?: string }
       <div>{t("Latest (PyPI)")}: {state.latest ?? "—"}</div>
       <div role="status">{t("Status")}: {t(status)}</div>
       {state.error && <div role="alert"><Typography.Text type="danger">{t(state.error)}</Typography.Text></div>}
-      {state.installer_required && (
-        <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>
-          {t("Engine ships inside the installer — install a newer Studio package to upgrade.")}
-        </Typography.Paragraph>
-      )}
       <Button size="small" style={{ marginTop: 8 }} loading={state.status === "checking"}
         disabled={state.status === "checking"} onClick={() => setAttempt((value) => value + 1)}>
         {t("Check MDescriptor version")}

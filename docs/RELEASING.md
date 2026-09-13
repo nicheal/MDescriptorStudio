@@ -35,7 +35,7 @@ CI 则设置 `TAURI_SIGNING_PRIVATE_KEY` 和 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
 如需只在本地验证产物，可运行 `scripts\package.ps1`；它会在 `src-tauri\target\release\bundle\nsis\` 生成同样的安装包和更新清单。
 
-`v0.1.0.rc` 这类预发布 tag 只适合验证 CI 构建流程；它不会作为稳定版本被 `releases/latest` 更新地址选中。要验证应用内升级，需要先发布一个较低的稳定版本，再发布更高的稳定版本。
+`v0.1.0.rc` 这类预发布 tag 不会被 `releases/latest` 更新地址选中。当前配置保留了该 RC 的固定地址作为回退，因此预发布包不会因 `latest.json` 的 404 报错；正式稳定版本发布后，Updater 会优先使用 `releases/latest`。要验证稳定版本升级，仍需先发布一个较低的稳定版本，再发布更高的稳定版本。
 
 ## 用户升级
 
