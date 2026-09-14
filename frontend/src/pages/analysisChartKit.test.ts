@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Data } from "plotly.js";
 
 vi.mock("react-plotly.js", () => ({ default: () => null }));
+vi.mock("antd", () => ({ Empty: () => null, Typography: { Text: () => null } }));
 
 async function importFresh() {
   vi.resetModules();
@@ -17,12 +18,17 @@ const SVG_TRACE = { type: "bar", x: [1], y: [2] } as Data;
 
 describe("plotData", () => {
   it("downgrades scattergl to SVG scatter when WebGL is unavailable (jsdom has no canvas)", async () => {
-    const { plotData, webglAvailable } = await importFresh();
-    expect(webglAvailable()).toBe(false);
-    const result = plotData([GL_TRACE, SVG_TRACE]);
-    expect(result[0].type).toBe("scatter");
-    expect((result[0] as { mode?: unknown }).mode).toBe("markers");
-    expect(result[1]).toBe(SVG_TRACE);
+    const getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    try {
+      const { plotData, webglAvailable } = await importFresh();
+      expect(webglAvailable()).toBe(false);
+      const result = plotData([GL_TRACE, SVG_TRACE]);
+      expect(result[0].type).toBe("scatter");
+      expect((result[0] as { mode?: unknown }).mode).toBe("markers");
+      expect(result[1]).toBe(SVG_TRACE);
+    } finally {
+      getContextSpy.mockRestore();
+    }
   });
 
   it("passes traces through untouched when WebGL is available", async () => {
