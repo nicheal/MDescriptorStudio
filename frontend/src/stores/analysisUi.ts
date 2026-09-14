@@ -123,6 +123,14 @@ export interface AnalysisParams {
   samplingAlgorithm: string;
   nSamples: number;
   uncertaintyK: number;
+  samplingStrategy: string;
+  samplingScaling: string;
+  samplingMinDistance: number;
+  samplingExistingRunId: string | null;
+  /** Composite sampling space: ASCII block names; empty = plain descriptor. */
+  samplingBlocks: string[];
+  samplingBudgetMode: string;
+  samplingCoverage: number;
   coverageMode: string;
   compareMode: string;
   mantelMethod: string;
@@ -175,6 +183,16 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
         p.nSamples,
         p.mode,
         p.samplingAlgorithm === "uncertainty_diversity" ? p.uncertaintyK : "",
+        p.samplingAlgorithm === "fps"
+          ? [
+              p.samplingStrategy,
+              p.samplingScaling,
+              p.samplingMinDistance,
+              p.samplingExistingRunId ?? "none",
+              p.samplingBlocks.length ? p.samplingBlocks.join("+") : "descriptor",
+              p.samplingBudgetMode === "coverage" ? `cov${p.samplingCoverage}` : "count",
+            ].join(":")
+          : "",
         p.samplingAlgorithm === "novelty_fps" || p.samplingAlgorithm === "uncertainty_diversity"
           ? [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")
           : p.viewId ?? "full",

@@ -23,6 +23,7 @@ from pathlib import Path
 import numpy as np
 
 from ..analysis import AnalysisEngine, SampleMatrix
+from ..analysis.sampling import FeatureBlock, group_sizes, sqrt_quota
 from ..errors import (
     ANALYSIS_INPUT_INVALID,
     ANALYSIS_INSUFFICIENT_SAMPLES,
@@ -51,7 +52,7 @@ log = logging.getLogger(__name__)
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 _ANALYSIS_SCHEMA_VERSION = 1
-_ALGORITHM_VERSION = "studio-analysis-3"
+_ALGORITHM_VERSION = "studio-analysis-4"
 _MAX_PREVIEW_POINTS = 20_000
 _ANALYSIS_ID_RE = re.compile(r"^ana_[A-Za-z0-9_-]{1,64}$")
 _ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
@@ -89,6 +90,76 @@ _PREVIEW_ARRAY_KEYS = (
 )
 
 
+def _block_names(params: dict) -> list[str]:
+    """Validated composite block list from the request (empty = plain descriptor)."""
+    raw = params.get("blocks")
+    if raw in (None, "", []):
+        return []
+    if not isinstance(raw, list):
+        raise AppError(ANALYSIS_INPUT_INVALID, "blocks must be a list of block names")
+    names: list[str] = []
+    for value in raw:
+        name = str(value)
+        if name not in AnalysisService.COMPOSITE_BLOCKS:
+            raise AppError(ANALYSIS_INPUT_INVALID, f"unknown sampling block {name!r}", {"blocks": list(AnalysisService.COMPOSITE_BLOCKS)})
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _cell_parameters(cell: np.ndarray) -> np.ndarray:
+    """a, b, c, α, β, γ of a 3×3 lattice matrix (angles in degrees)."""
+    vectors = np.asarray(cell, dtype=np.float64)
+    lengths = np.linalg.norm(vectors, axis=1)
+    angles: list[float] = []
+    for i, j in ((1, 2), (0, 2), (0, 1)):
+        denominator = lengths[i] * lengths[j]
+        cosine = float(vectors[i] @ vectors[j]) / denominator if denominator > 0 else 1.0
+        angles.append(float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))))
+    return np.asarray([*lengths.tolist(), *angles], dtype=np.float64)
+
+
+def _descriptor_summary(values: np.ndarray) -> np.ndarray:
+    """Per-structure descriptor mean, std, and tail magnitudes.
+
+    A compact companion block: it lets a composite space react to where a
+    structure sits in descriptor-summary space even when its raw vector is
+    dominated by a few large components.
+    """
+    x = np.asarray(values, dtype=np.float64)
+    magnitude = np.linalg.norm(x, axis=1)
+    return np.column_stack([x.mean(axis=1), x.std(axis=1), magnitude])
+
+
+def _composition_matrix(atom_numbers: list[list[int]], element_list: list[str]) -> np.ndarray:
+    """Element fractions per structure, laid out along a shared element list."""
+    from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
+
+    index = {symbol: position for position, symbol in enumerate(element_list)}
+    fractions = np.zeros((len(atom_numbers), len(element_list)), dtype=np.float64)
+    for row, numbers in enumerate(atom_numbers):
+        total = max(len(numbers), 1)
+        for z in numbers:
+            symbol = _Z_TO_SYMBOL.get(int(z), f"Z{int(z)}")
+            position = index.get(symbol)
+            if position is not None:
+                fractions[row, position] += 1.0
+        fractions[row] /= total
+    return fractions
+
+
+def _require_finite(values: np.ndarray, name: str, description: str) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    if not bool(np.isfinite(array).all()):
+        missing = int((~np.isfinite(array)).sum())
+        raise AppError(
+            ANALYSIS_INPUT_INVALID,
+            f"the {name} block is incomplete: {missing} sample(s) lack {description}",
+            {"block": name, "missing": missing},
+        )
+    return array
+
+
 def _pool_rows(values: np.ndarray, offsets: np.ndarray) -> np.ndarray:
     """Mean-pool atom/pair rows per structure in one vectorized pass.
 
@@ -124,6 +195,9 @@ class AnalysisService:
         # cache-lookup/create section so two identical requests cannot enqueue
         # duplicate PCA jobs; the actual calculation still runs in JobService.
         self._pca_submit_lock = threading.Lock()
+        # Element-set labels of completed runs are immutable; a tiny LRU keeps
+        # the grouped-FPS quota preview cheap across parameter twiddling.
+        self._group_labels_cache: dict[tuple[str, str, str | None], np.ndarray] = {}
 
     def pca(self, params: dict) -> dict:
         params = dict(params or {})
@@ -400,7 +474,7 @@ class AnalysisService:
         """Energy/force/volume per frame for color-by (aligned to frame index)."""
         frame_scope = run_row["scope"] == "frame"
         need = max(n_points, (run_row["frame_index"] + 1) if frame_scope else n_points)
-        props: list[dict] = [{"energy": None, "force_max": None, "volume": None} for _ in range(need)]
+        props: list[dict] = [{"energy_per_atom": None, "force_max": None, "volume": None} for _ in range(need)]
         dataset_row = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
         if dataset_row is None:
             return props
@@ -411,7 +485,12 @@ class AnalysisService:
                 f = adapter.get_frame(i)
             except AppError:
                 continue
-            entry = {"energy": f.energy, "force_max": None, "volume": None}
+            natoms = len(f.numbers)
+            entry = {
+                "energy_per_atom": f.energy / natoms if f.energy is not None and natoms else None,
+                "force_max": None,
+                "volume": None,
+            }
             if f.forces is not None and len(f.forces):
                 mags = np.linalg.norm(np.asarray(f.forces), axis=1)
                 entry["force_max"] = round(float(mags.max()), 5)
@@ -614,13 +693,15 @@ class AnalysisService:
         input_ids = self._input_ids(analysis_type, params)
         run_rows = [self._usable_run(run_id) for run_id in input_ids]
         cross_dataset = analysis_type in ("coverage", "overlap", "acquisition", "drift")
-        if cross_dataset:
+        warm_start_fps = analysis_type == "fps" and len(input_ids) == 2
+        if cross_dataset or warm_start_fps:
             signatures_and_meta = [self.results.feature_space_signature(run_id) for run_id in input_ids]
             signatures = [item[0] for item in signatures_and_meta]
             if not signatures[0] or signatures[0] != signatures[1]:
+                side = "reference and query" if cross_dataset else "candidate and existing"
                 raise AppError(
                     ANALYSIS_INPUT_INVALID,
-                    "reference and query runs must use the same descriptor feature space",
+                    f"{side} runs must use the same descriptor feature space",
                     {
                         "reference_run_id": input_ids[0],
                         "query_run_id": input_ids[1],
@@ -641,8 +722,9 @@ class AnalysisService:
             # Single-run analyses scope to a dataset view by slicing the run's
             # samples to the view frames (same lens the cross-dataset modules
             # use). The selection hash joins the cache key so a view's content,
-            # not just its id, decides reuse.
-            if len(run_rows) != 1:
+            # not just its id, decides reuse.  Warm-start FPS scopes the view
+            # to the candidate run; the existing set is always used whole.
+            if len(run_rows) != 1 and not warm_start_fps:
                 raise AppError(
                     ANALYSIS_INPUT_INVALID,
                     "view_id applies to single-run analyses only",
@@ -661,6 +743,10 @@ class AnalysisService:
                     "parameter sensitivity requires the same descriptor; use Compare for different descriptors",
                     {"descriptors": sorted(descriptor_names)},
                 )
+        if analysis_type == "fps":
+            # Validate the composite block vocabulary before enqueuing: a typo
+            # should fail the request, not create a job that fails a minute later.
+            _block_names(params)
         canonical_params = self._canonical_params(params)
         cache_key = self._analysis_cache_key(analysis_type, input_ids, canonical_params)
         with self._pca_submit_lock:
@@ -699,7 +785,7 @@ class AnalysisService:
                         cache_key,
                         _ANALYSIS_SCHEMA_VERSION,
                         _ALGORITHM_VERSION,
-                        json.dumps({"preprocess": params.get("preprocess")}, ensure_ascii=False),
+                        json.dumps({"preprocess": params.get("preprocess"), "scaling": params.get("scaling")}, ensure_ascii=False),
                         json.dumps([], ensure_ascii=False),
                         json.dumps({}, ensure_ascii=False),
                         now,
@@ -712,6 +798,8 @@ class AnalysisService:
                 view_ids = (
                     [params.get("reference_view_id"), params.get("query_view_id")]
                     if cross_dataset
+                    else [params.get("view_id"), None]
+                    if warm_start_fps
                     else [params.get("view_id")] * len(run_rows)
                 )
                 samples = [
@@ -780,11 +868,16 @@ class AnalysisService:
             raise AppError(ANALYSIS_INPUT_INVALID, "export requires exactly one run_id")
         run = self._usable_run(input_ids[0])
         export_format = str(params.get("format") or params.get("output_format") or "json").lower()
-        if export_format not in ("json", "csv", "extxyz", "deepmd"):
-            raise AppError(ANALYSIS_INPUT_INVALID, "format must be json, csv, extxyz, or deepmd")
+        if export_format not in ("json", "csv", "extxyz", "deepmd", "indices", "report"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "format must be json, csv, extxyz, deepmd, indices, or report")
         mode = str(params.get("mode") or "structure")
         if mode not in ("structure", "atom"):
             raise AppError(ANALYSIS_INPUT_INVALID, "mode must be structure or atom")
+        # The sampling report carries the provenance of the analysis it came
+        # from; every other format only needs the run plus the selection.
+        report_analysis = self._analysis_row(str(params["analysis_id"])) if export_format == "report" and params.get("analysis_id") else None
+        if export_format == "report" and report_analysis is None:
+            raise AppError(ANALYSIS_INPUT_INVALID, "report export requires the analysis_id of a completed analysis")
         selected = params.get("indices")
         if selected is None:
             selected = []
@@ -799,7 +892,15 @@ class AnalysisService:
             target = str(validate_local_path(target, field="export output path"))
         except UnsafePathError as exc:
             raise AppError(ANALYSIS_INPUT_INVALID, "export output must be an absolute local path") from exc
-        canonical = self._canonical_params({"format": export_format, "indices": sorted(set(selected)), "output_path": target, "mode": mode})
+        # The analysis id is part of a report's identity: two different
+        # sampling analyses must never share one report cache entry.
+        canonical = self._canonical_params({
+            "format": export_format,
+            "indices": sorted(set(selected)),
+            "output_path": target,
+            "mode": mode,
+            **({"analysis_id": str(params["analysis_id"])} if export_format == "report" and params.get("analysis_id") else {}),
+        })
         cache_key = self._analysis_cache_key("export", input_ids, canonical)
 
         with self._pca_submit_lock:
@@ -827,7 +928,7 @@ class AnalysisService:
             def runner(ctx):
                 self._mark_run_running(analysis_id)
                 ctx.progress(0, 1, "writing export")
-                path = self._write_export(run, selected, export_format, mode, Path(target), ctx)
+                path = self._write_export(run, selected, export_format, mode, Path(target), ctx, report_analysis)
                 out_dir, manifest = self._commit_artifact(
                     analysis_id,
                     "export",
@@ -896,7 +997,25 @@ class AnalysisService:
         if analysis_type in ("knn", "lof", "isolation_forest", "isolation-forest", "iforest", "mahalanobis", "mahalanobis_distance"):
             return AnalysisEngine.outlier(samples[0], params, analysis_type, progress)
         if analysis_type in ("fps", "random", "stratified", "cluster_representative", "cluster", "per_element", "element"):
-            return AnalysisEngine.sampling(samples[0], params, analysis_type, progress)
+            existing = samples[1] if analysis_type == "fps" and len(samples) > 1 else None
+            group_labels = None
+            blocks = None
+            existing_blocks = None
+            if analysis_type == "fps":
+                block_names = _block_names(params)
+                if str(params.get("strategy") or "global") == "grouped":
+                    group_labels = self._element_group_labels(rows[0], samples[0], (params.get("selection_hash"), samples[0].n_samples))
+                if block_names:
+                    # Composition fractions must share one element layout across
+                    # candidate and existing sets, so use their union.
+                    element_list = sorted({
+                        *self._dataset_elements(rows[0]),
+                        *(self._dataset_elements(rows[1]) if existing is not None else []),
+                    })
+                    blocks = self._sampling_blocks(rows[0], samples[0], block_names, params, element_list)
+                    if existing is not None:
+                        existing_blocks = self._sampling_blocks(rows[1], samples[1], block_names, params, element_list)
+            return AnalysisEngine.sampling(samples[0], params, analysis_type, progress, existing=existing, group_labels=group_labels, blocks=blocks, existing_blocks=existing_blocks)
         if analysis_type == "sensitivity":
             return AnalysisEngine.sensitivity(list(zip(rows, samples)), params, progress)
         if analysis_type == "perturbation_sensitivity":
@@ -1068,6 +1187,9 @@ class AnalysisService:
     def _input_ids(self, analysis_type: str, params: dict) -> list[str]:
         if analysis_type in ("coverage", "overlap", "acquisition", "drift"):
             ids = [params.get("reference_run_id"), params.get("query_run_id")]
+        elif analysis_type == "fps" and params.get("existing_run_id"):
+            # Warm-start FPS: candidates plus the existing training set.
+            ids = [params.get("run_id"), params.get("existing_run_id")]
         elif analysis_type in ("compare", "mantel"):
             ids = [params.get("left_run_id") or params.get("reference_run_id"), params.get("right_run_id") or params.get("query_run_id")]
         elif analysis_type == "sensitivity":
@@ -1082,6 +1204,99 @@ class AnalysisService:
         if analysis_type in ("coverage", "overlap", "acquisition", "drift", "compare", "mantel") and len(ids) != 2:
             raise AppError(ANALYSIS_INPUT_INVALID, f"{analysis_type} requires reference and query run IDs")
         return ids
+
+    def _element_group_labels(self, run_row: dict, samples: SampleMatrix, scope: tuple) -> np.ndarray:
+        """One element-set label ("C", "C-O-Si", …) per sample, for grouped FPS.
+
+        Atom-mode rows already carry their central element; structure-mode rows
+        resolve their composition through the dataset adapter.  A failure here
+        is fatal for grouped FPS — silently degrading the groups would change
+        the scientific result without telling anyone.  ``scope`` identifies the
+        sample set (view selection hash + size) for the label cache; completed
+        runs are immutable, so cached labels cannot go stale.
+        """
+        cache_key = (str(run_row["id"]), samples.mode) + tuple(str(part) for part in scope)
+        cached = self._group_labels_cache.get(cache_key)
+        if cached is not None and len(cached) == samples.n_samples:
+            return cached
+        from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
+
+        if samples.mode == "atom" and samples.elements is not None and len(samples.elements) == samples.n_samples:
+            labels = np.asarray(
+                [_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in np.asarray(samples.elements).tolist()],
+                dtype=object,
+            )
+        else:
+            if self.datasets is None:
+                raise AppError(ANALYSIS_INPUT_INVALID, "grouped FPS requires dataset access to read element metadata")
+            dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
+            if dataset is None:
+                raise AppError(ANALYSIS_INPUT_INVALID, f"dataset {run_row['dataset_id']} does not exist")
+            adapter = self.datasets._adapter_for(dataset)
+            count = len(adapter)
+            frame_cache: dict[int, str] = {}
+            labels_list: list[str] = []
+            for frame_index in np.asarray(samples.frame, dtype=np.int64).tolist():
+                label = frame_cache.get(frame_index)
+                if label is None:
+                    if not 0 <= frame_index < count:
+                        raise AppError(ANALYSIS_INPUT_INVALID, f"sample frame {frame_index} is outside dataset {dataset['id']}")
+                    frame = adapter.get_frame(frame_index)
+                    label = "-".join(sorted({_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in np.asarray(frame.numbers).tolist()}))
+                    frame_cache[frame_index] = label
+                labels_list.append(label)
+            labels = np.asarray(labels_list, dtype=object)
+        if len(labels) != samples.n_samples:
+            raise AppError(ANALYSIS_INPUT_INVALID, "element metadata does not align with the descriptor samples")
+        self._group_labels_cache[cache_key] = labels
+        while len(self._group_labels_cache) > 8:
+            self._group_labels_cache.pop(next(iter(self._group_labels_cache)))
+        return labels
+
+    def fps_quota(self, params: dict) -> dict:
+        """√N_g quota preview for grouped FPS: budget per element set, before running."""
+        params = dict(params or {})
+        run_id = params.get("run_id")
+        if not run_id:
+            raise AppError(INVALID_PARAMS, "'run_id' is required")
+        run = self._usable_run(str(run_id))
+        mode = str(params.get("mode") or "structure")
+        if mode not in ("structure", "atom"):
+            raise AppError(ANALYSIS_INPUT_INVALID, "mode must be structure or atom")
+        try:
+            n_samples = int(params.get("n_samples") or 1000)
+        except (TypeError, ValueError) as exc:
+            raise AppError(ANALYSIS_INPUT_INVALID, "n_samples must be an integer") from exc
+        if n_samples < 1:
+            raise AppError(ANALYSIS_INPUT_INVALID, "n_samples must be >= 1")
+        view_id = params.get("view_id")
+        view = self._usable_view(str(view_id), run["dataset_id"]) if view_id else None
+        samples = self._load_samples(run, {"mode": mode}, "fps", view_id=view_id)
+        labels = self._element_group_labels(run, samples, (view["selection_hash"] if view else "", samples.n_samples))
+        names, sizes = group_sizes(labels)
+        quota = sqrt_quota(sizes, min(n_samples, samples.n_samples))
+        payload = {
+            "run_id": run["id"],
+            "mode": mode,
+            "n_candidates": int(samples.n_samples),
+            "requested_samples": int(n_samples),
+            "groups": [
+                {"group": name, "structures": int(size), "quota": int(share)}
+                for name, size, share in zip(names, sizes, quota)
+            ],
+        }
+        # A composite space changes what the grouping runs on and how large the
+        # space is; report both so the preview matches the eventual run.
+        block_names = _block_names(params)
+        if block_names:
+            element_list = self._dataset_elements(run)
+            blocks = self._sampling_blocks(run, samples, block_names, params, element_list)
+            payload["blocks"] = [
+                {"name": block.name, "dimension": int(np.asarray(block.values).shape[1]), "weight": float(block.weight), "scaling": block.scaling}
+                for block in blocks
+            ]
+            payload["sampling_dimension"] = int(sum(item["dimension"] for item in payload["blocks"]))
+        return self._json_safe(payload)
 
     def _usable_run(self, run_id: str) -> dict:
         row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (run_id,))
@@ -1314,6 +1529,119 @@ class AnalysisService:
                     values["volume"][sample_index] = volume
         return {name: array for name, array in values.items() if bool(np.isfinite(array).any())}
 
+    # Composite sampling blocks.  ``descriptor`` and ``descriptor_summary``
+    # derive from the descriptor matrix; the rest are physical signals read from
+    # the dataset.  Names are the API vocabulary shared with the GUI.
+    COMPOSITE_BLOCKS = ("descriptor", "descriptor_summary", "lattice", "composition", "energy", "force")
+    _PHYSICAL_BLOCKS = ("lattice", "composition", "energy", "force")
+
+    def _dataset_elements(self, run_row: dict) -> list[str]:
+        """Chemical element symbols declared by the run's dataset (sorted)."""
+        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
+        if dataset is None:
+            return []
+        raw = dataset.get("elements")
+        try:
+            values = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(values, list):
+            return []
+        return sorted({str(value) for value in values if str(value)})
+
+    def _sampling_blocks(self, run_row: dict, samples: SampleMatrix, block_names: list[str], params: dict, element_list: list[str] | None) -> list[FeatureBlock]:
+        """Build the requested composite blocks for one sample set.
+
+        Every block's raw (unscaled) values are returned; scaling and the 1/√D
+        weight are applied by the sampling layer, on the reference set when
+        warm-starting.
+        """
+        weights = params.get("block_weights") if isinstance(params.get("block_weights"), dict) else {}
+        scaling = str(params.get("scaling") or "robust")
+        physical = [name for name in block_names if name in self._PHYSICAL_BLOCKS]
+        if physical and samples.mode != "structure":
+            # Atom rows have no composition or per-structure energy; inventing
+            # them would silently change what the sampling space means.
+            raise AppError(ANALYSIS_INPUT_INVALID, "composite sampling blocks require structure granularity")
+        signals = self._physical_signals(run_row, samples, physical) if physical else {}
+        blocks: list[FeatureBlock] = []
+        for name in block_names:
+            if name == "descriptor":
+                values = np.asarray(samples.values, dtype=np.float64)
+            elif name == "descriptor_summary":
+                values = _descriptor_summary(np.asarray(samples.values, dtype=np.float64))
+            elif name == "lattice":
+                values = signals["lattice"]
+            elif name == "composition":
+                if not element_list:
+                    raise AppError(ANALYSIS_INPUT_INVALID, "composition sampling requires a known element list")
+                values = _composition_matrix(signals["composition"], element_list)
+            else:
+                values = signals[name]
+            try:
+                weight = float(weights.get(name, 1.0))
+            except (TypeError, ValueError) as exc:
+                raise AppError(ANALYSIS_INPUT_INVALID, f"block weight for {name!r} must be a number") from exc
+            blocks.append(FeatureBlock(name=name, values=values, weight=weight, scaling=scaling))
+        return blocks
+
+    def _physical_signals(self, run_row: dict, samples: SampleMatrix, names: list[str]) -> dict[str, np.ndarray]:
+        """Read lattice/composition/energy/force signals aligned to the samples.
+
+        Missing metadata is an error rather than a silently dropped block: a
+        composite space the user did not ask for is worse than a clear failure.
+        """
+        if self.datasets is None:
+            raise AppError(ANALYSIS_INPUT_INVALID, "composite sampling requires dataset access")
+        from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
+
+        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
+        if dataset is None:
+            raise AppError(ANALYSIS_INPUT_INVALID, f"dataset {run_row['dataset_id']} does not exist")
+        adapter = self.datasets._adapter_for(dataset)
+        count = len(adapter)
+        n = samples.n_samples
+        lattice = np.full((n, 6), np.nan, dtype=np.float64)
+        energy = np.full(n, np.nan, dtype=np.float64)
+        force = np.full((n, 3), np.nan, dtype=np.float64)
+        elements: list[list[int]] = []
+        frame_cache: dict[int, object] = {}
+        wanted = set(names)
+        for sample_index, frame_index in enumerate(np.asarray(samples.frame, dtype=np.int64).tolist()):
+            frame = frame_cache.get(frame_index)
+            if frame is None:
+                if not 0 <= frame_index < count:
+                    raise AppError(ANALYSIS_INPUT_INVALID, f"sample frame {frame_index} is outside dataset {dataset['id']}")
+                frame = adapter.get_frame(frame_index)
+                frame_cache[frame_index] = frame
+            numbers = np.asarray(frame.numbers, dtype=np.int64)
+            if "composition" in wanted:
+                elements.append(numbers.tolist())
+            if "lattice" in wanted:
+                cell = np.asarray(frame.cell, dtype=np.float64)
+                if cell.shape == (3, 3) and np.abs(cell).sum() > 1e-12:
+                    lattice[sample_index] = _cell_parameters(cell)
+            if "energy" in wanted and frame.energy is not None:
+                energy[sample_index] = float(frame.energy) / max(int(numbers.size), 1)
+            if "force" in wanted and frame.forces is not None and len(frame.forces):
+                magnitudes = np.linalg.norm(np.asarray(frame.forces, dtype=np.float64), axis=1)
+                force[sample_index] = (magnitudes.mean(), magnitudes.max(), magnitudes.std())
+        signals: dict[str, np.ndarray] = {}
+        for name in names:
+            if name == "lattice":
+                signals["lattice"] = _require_finite(lattice, "lattice", "lattice parameters (periodic cells)")
+            elif name == "energy":
+                signals["energy"] = _require_finite(energy.reshape(-1, 1), "energy", "per-atom energies")
+            elif name == "force":
+                signals["force"] = _require_finite(force, "force", "force statistics")
+            elif name == "composition":
+                # Atom numbers are not a numeric feature space; they become
+                # element fractions once the shared element list is known.
+                signals["composition"] = elements
+        if "composition" in signals and len(elements) != n:
+            raise AppError(ANALYSIS_INPUT_INVALID, "composition metadata does not align with the descriptor samples")
+        return signals
+
     def _result_metadata(self, row: dict) -> dict:
         try:
             root = self._result_root(row)
@@ -1521,7 +1849,25 @@ class AnalysisService:
             self._rmtree_quiet(staging)
             raise
 
-    def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx) -> Path:
+    def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None) -> Path:
+        # Sample-index and provenance exports need neither the dataset service
+        # nor a frame resolution, so they short-circuit before any loading.
+        if export_format == "indices":
+            if not selected:
+                raise AppError(EXPORT_FAILED, "export selection is empty")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            ensure_no_reparse_points(target.parent)
+            with open_text_for_write(target) as fh:
+                for index in sorted(set(int(i) for i in selected)):
+                    fh.write(f"{index}\n")
+            return target
+        if export_format == "report":
+            if not selected:
+                raise AppError(EXPORT_FAILED, "export selection is empty")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            ensure_no_reparse_points(target.parent)
+            self._write_sampling_report(run, report_analysis or {}, sorted(set(int(i) for i in selected)), target)
+            return target
         if self.datasets is None:
             raise AppError(EXPORT_FAILED, "dataset service is unavailable")
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run["dataset_id"],))
@@ -1570,6 +1916,74 @@ class AnalysisService:
         ensure_no_reparse_points(target)
         self._write_deepmd(adapter, frames, target, ctx)
         return target
+
+    def _write_sampling_report(self, run: dict, analysis_row: dict, selected: list[int], target: Path) -> None:
+        """Write the reprovenance JSON for a sampling selection.
+
+        Everything needed to reproduce — and to plot — the selection lives in
+        one file: parameters, coverage statistics, the coverage curve, and the
+        selected sample indices.
+        """
+        params = self._json_load(analysis_row.get("params_json"), {})
+        preview = self._json_load(analysis_row.get("preview_json"), {})
+        input_ids = self._json_load(analysis_row.get("input_run_ids_json"), [run["id"]])
+        existing_run_id = params.get("existing_run_id")
+        curve: dict[str, list] = {"samples": [], "coverage_radius": [], "mean_residual": []}
+        try:
+            if analysis_row.get("result_path"):
+                root = self._managed_artifact_path(str(analysis_row["id"]), analysis_row.get("result_path"))
+                manifest = self._json_load(analysis_row.get("artifact_manifest_json"), {})
+                files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
+                for name, key in (("coverage_radius_curve", "coverage_radius"), ("coverage_mean_curve", "mean_residual"), ("coverage_r2_curve", "coverage_r2")):
+                    meta = files.get(name)
+                    if not isinstance(meta, dict):
+                        continue
+                    path = self._artifact_file(root, meta.get("path"))
+                    if path is not None and path.is_file():
+                        curve[key] = np.load(path, mmap_mode="r", allow_pickle=False).tolist()
+                curve["samples"] = list(range(1, len(curve["coverage_radius"]) + 1))
+        except (OSError, ValueError, TypeError, UnsafePathError):
+            curve = {"samples": [], "coverage_radius": [], "mean_residual": []}
+        report = {
+            "algorithm": "farthest_point_sampling",
+            "strategy": params.get("strategy") or "global",
+            "descriptor": run.get("descriptor_name"),
+            "descriptor_run_id": run["id"],
+            "dataset_id": run["dataset_id"],
+            "descriptor_dimension": preview.get("sampling_dimension"),
+            "granularity": params.get("mode") or "structure",
+            "scaling": preview.get("scaling"),
+            "initialization": preview.get("initialization"),
+            "min_distance": preview.get("min_distance"),
+            "target_coverage": preview.get("target_coverage"),
+            "requested_samples": preview.get("requested_count"),
+            "selected_samples": len(selected),
+            "n_candidates": preview.get("n_candidates"),
+            "stop_reason": preview.get("stop_reason"),
+            "warm_start": bool(existing_run_id),
+            "existing_descriptor_run_id": existing_run_id,
+            "input_run_ids": input_ids,
+            "sampling_space": preview.get("sampling_space"),
+            "feature_blocks": preview.get("blocks"),
+            "group_allocation": preview.get("allocation"),
+            "coverage": {
+                "radius": preview.get("coverage_radius"),
+                "r2": preview.get("coverage_r2"),
+                "mean_residual": preview.get("mean_residual"),
+                "p50_residual": preview.get("p50_residual"),
+                "p90_residual": preview.get("p90_residual"),
+                "p95_residual": preview.get("p95_residual"),
+                "p99_residual": preview.get("p99_residual"),
+                "max_residual": preview.get("max_residual"),
+            },
+            "coverage_curve": curve,
+            "selected_sample_indices": selected,
+            "sampling_analysis_id": analysis_row.get("id"),
+            "algorithm_version": _ALGORITHM_VERSION,
+            "generated_at": _NOW(),
+        }
+        with open_text_for_write(target) as fh:
+            json.dump(report, fh, ensure_ascii=False, indent=2)
 
     @staticmethod
     def _write_extxyz(adapter, frames: list[int], target: Path, ctx) -> None:

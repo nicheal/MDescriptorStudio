@@ -44,7 +44,7 @@ def test_pca_and_heatmap(tmp_path: Path) -> None:
         assert len(pts) == 8
         assert pts[0]["frame"] == 0 and pts[7]["frame"] == 7
         assert payload["result"]["explained_variance"][0] > 0
-        assert pts[0]["energy"] is not None  # color-by data attached
+        assert pts[0]["energy_per_atom"] is not None  # color-by data attached
 
         # repeated request reuses the persisted PCA artifact instead of
         # creating another analysis job

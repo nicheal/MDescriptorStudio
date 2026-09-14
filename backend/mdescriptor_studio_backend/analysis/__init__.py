@@ -7,5 +7,13 @@ test every algorithm with synthetic runs.
 """
 
 from .engine import AnalysisEngine, SampleMatrix, arm_analysis_warmup_gate
+from .sampling import FPSResult, coverage_statistics, farthest_point_sampling
 
-__all__ = ["AnalysisEngine", "SampleMatrix", "arm_analysis_warmup_gate"]
+__all__ = [
+    "AnalysisEngine",
+    "FPSResult",
+    "SampleMatrix",
+    "arm_analysis_warmup_gate",
+    "coverage_statistics",
+    "farthest_point_sampling",
+]

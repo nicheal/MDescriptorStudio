@@ -1263,7 +1263,7 @@ const METHODS: Record<string, Handler> = {
         frame: i % 6320,
         pc1: Math.round((rawShift + scale * (cluster ? 3 : -3) + noiseX + Math.sin(i / 17) * 0.4) * 1e4) / 1e4,
         pc2: Math.round((scale * (cluster ? 1.5 : -1.5) + noiseY + Math.cos(i / 23) * 0.35) * 1e4) / 1e4,
-        energy: cluster ? -3.2 : -4.4,
+        energy_per_atom: cluster ? -3.2 : -4.4,
         force_max: Math.round((2.4 + Math.abs(Math.sin(i / 9))) * 1e4) / 1e4,
         volume: Math.round((650 + Math.sin(i / 11) * 70) * 10) / 10,
       };

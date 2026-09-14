@@ -148,6 +148,7 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
         "analysis.outlier": analysis.outlier,
         "analysis.fps": analysis.fps,
         "analysis.sampling": analysis.sampling,
+        "analysis.fps_quota": analysis.fps_quota,
         "analysis.coverage": analysis.coverage,
         "analysis.overlap": analysis.overlap,
         "analysis.acquisition": analysis.acquisition,

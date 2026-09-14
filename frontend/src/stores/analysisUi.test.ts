@@ -48,7 +48,8 @@ const baseParams: AnalysisParams = {
   similarityMode: "query", k: 10, queryIndex: 0,
   clusterAlgorithm: "kmeans", nClusters: 6,
   outlierAlgorithm: "lof", contamination: 0.01,
-  samplingAlgorithm: "fps", nSamples: 1000, uncertaintyK: 8,
+  samplingAlgorithm: "fps", nSamples: 1000, uncertaintyK: 8, samplingStrategy: "global", samplingScaling: "robust", samplingMinDistance: 0, samplingExistingRunId: null,
+  samplingBlocks: [], samplingBudgetMode: "count", samplingCoverage: 95,
   coverageMode: "coverage", compareMode: "geometry",
   mantelMethod: "pearson", mantelPermutations: 999,
   localCutoff: 3, kernelName: "rbf",
@@ -78,6 +79,12 @@ describe("buildParamsKey", () => {
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "effective_dimension", effectiveDimensionPreprocess: "standardized" })).toBe("effective_dimension|standardized|full");
     expect(buildParamsKey("coverage", baseParams)).toBe("coverage|structure|run-ref|full|run-query|view-query");
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "drift" })).toBe("drift||run-ref:full:run-query:view-query");
+    // FPS keys its strategy, scaling, distance threshold, warm-start run,
+    // composite blocks, and budget mode; other methods leave those blank.
+    expect(buildParamsKey("sampling", baseParams)).toBe("fps|1000|structure||global:robust:0:none:descriptor:count|full");
+    expect(buildParamsKey("sampling", { ...baseParams, samplingStrategy: "grouped", samplingScaling: "raw", samplingMinDistance: 0.25, samplingExistingRunId: "run-warm" })).toBe("fps|1000|structure||grouped:raw:0.25:run-warm:descriptor:count|full");
+    expect(buildParamsKey("sampling", { ...baseParams, samplingBlocks: ["descriptor", "lattice"], samplingBudgetMode: "coverage", samplingCoverage: 95 })).toBe("fps|1000|structure||global:robust:0:none:descriptor+lattice:cov95|full");
+    expect(buildParamsKey("sampling", { ...baseParams, samplingAlgorithm: "random" })).toBe("random|1000|structure|||full");
     // The trajectory module is configured entirely inside its result view, so
     // one completed trajectory per descriptor run stays reusable.
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "trajectory" })).toBe("trajectory||full");

@@ -19,6 +19,7 @@ import {
   Progress,
   Select,
   Space,
+  Spin,
   Table,
   Tabs,
   Tag,
@@ -55,7 +56,7 @@ import SaveViewModal from "../components/SaveViewModal";
 import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
 import AnalysisResultVisualization, { type AnalysisArrays } from "./analysisVisualizations";
 import { getAnalysisMethodGuide, type AnalysisMethodGuide } from "./analysisMethodGuides";
-import { NoData as OverviewNoData, formatCount, num as finiteNumber, nums as numericArray, records as recordArray } from "./analysisChartKit";
+import { HIGH_CONTRAST_COLORSCALE, NoData as OverviewNoData, formatCount, num as finiteNumber, nums as numericArray, plotData, records as recordArray } from "./analysisChartKit";
 import type {
   AnalysisJobResponse,
   AnalysisChunk,
@@ -316,6 +317,7 @@ const ARTIFACT_ARRAYS: Record<string, string[]> = {
   perturbation_sensitivity: ["amplitudes", "mean_response", "median_response", "p95_response", "max_response", "response_matrix", "sample_indices"],
   local_diversity: ["coords", "sample_indices", "labels", "scores", "cluster_labels", "elements", "coordination", "neighbor_offsets", "neighbor_indices", "neighbor_distances"],
   kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
+  sampling: ["coverage_radius_curve", "coverage_mean_curve"],
 };
 
 function pcaPayloadPoints(payload: PcaPayload): Point[] {
@@ -325,7 +327,7 @@ function pcaPayloadPoints(payload: PcaPayload): Point[] {
     row: point.atom,
     x: point.pc1,
     y: point.pc2,
-    energy: point.energy,
+    energy_per_atom: point.energy_per_atom,
     force_max: point.force_max,
     volume: point.volume,
   }));
@@ -395,6 +397,15 @@ export default function Analysis() {
   const [clusterAlgorithm, setClusterAlgorithm] = useState("kmeans");
   const [outlierAlgorithm, setOutlierAlgorithm] = useState("lof");
   const [samplingAlgorithm, setSamplingAlgorithm] = useState("fps");
+  const [samplingStrategy, setSamplingStrategy] = useState("global");
+  const [samplingScaling, setSamplingScaling] = useState("robust");
+  const [samplingMinDistance, setSamplingMinDistance] = useState(0);
+  const [samplingExistingRunId, setSamplingExistingRunId] = useState<string | null>(null);
+  const [samplingBlocks, setSamplingBlocks] = useState<string[]>([]);
+  const [samplingBudgetMode, setSamplingBudgetMode] = useState<"count" | "coverage">("count");
+  const [samplingCoverage, setSamplingCoverage] = useState(95);
+  const [samplingQuota, setSamplingQuota] = useState<{ groups: { group: string; structures: number; quota: number }[]; n_candidates: number } | null>(null);
+  const [samplingQuotaBusy, setSamplingQuotaBusy] = useState(false);
   const [similarityMode, setSimilarityMode] = useState<"query" | "all_neighbors" | "pairwise">("query");
   const [compareMode, setCompareMode] = useState<CompareMode>("geometry");
   const [mantelMethod, setMantelMethod] = useState<"pearson" | "spearman">("pearson");
@@ -446,7 +457,9 @@ export default function Analysis() {
   const analysisParams: AnalysisParams = {
     projection, mode, preprocess, effectiveDimensionPreprocess, tsnePerplexity, similarityMode, k, queryIndex,
     clusterAlgorithm, nClusters, outlierAlgorithm, contamination, samplingAlgorithm,
-    nSamples, uncertaintyK, coverageMode, compareMode, mantelMethod, mantelPermutations,
+    nSamples, uncertaintyK, samplingStrategy, samplingScaling, samplingMinDistance, samplingExistingRunId,
+    samplingBlocks, samplingBudgetMode, samplingCoverage,
+    coverageMode, compareMode, mantelMethod, mantelPermutations,
     localCutoff, kernelName, overviewAnalysis, propertyName,
     propertyFolds, propertyReliabilityK, propertyDistanceMetric, propertySparsePercentile, propertyOodPercentile,
     perturbationType, perturbationCount, perturbationMaximum, perturbationStructures, perturbationMetric,
@@ -487,6 +500,14 @@ export default function Analysis() {
       && run.feature_space_signature === referenceRunRow.feature_space_signature,
   ), [completedAllRuns, queryDatasetId, referenceRunRow?.feature_space_signature]);
   const queryRunRow = queryRuns.find((run) => run.id === queryRunId) ?? null;
+  // Warm-start FPS: completed runs sharing the active run's feature space.
+  // The existing training set may live in a different dataset file, so the
+  // descriptor signature — not the dataset — decides compatibility here.
+  const warmStartRuns = useMemo(() => {
+    const active = completedAllRuns.find((run) => run.id === selectedRun);
+    if (!active?.feature_space_signature) return [];
+    return completedAllRuns.filter((run) => run.id !== selectedRun && run.feature_space_signature === active.feature_space_signature);
+  }, [completedAllRuns, selectedRun]);
   const referenceViews = useMemo(() => datasetViews.filter((view) => view.dataset_id === referenceDatasetId && !view.stale), [datasetViews, referenceDatasetId]);
   const queryViews = useMemo(() => datasetViews.filter((view) => view.dataset_id === queryDatasetId && !view.stale), [datasetViews, queryDatasetId]);
   // Views of the active dataset, for the single-run modules' Scope selector.
@@ -515,7 +536,7 @@ export default function Analysis() {
   // and can be re-displayed without rerunning. One parameter can be probed
   // with a candidate value; the others stay at their current value.
   const isCached = useCallback(
-    (param: string, value: string | number | null) =>
+    (param: string, value: string | number | string[] | null) =>
       !!analysisContextRunId && slotForParams(slots, tab, analysisContextRunId, buildParamsKey(tab, { ...analysisParams, [param]: value } as AnalysisParams)) !== null,
     [analysisContextRunId, analysisParams, slots, tab],
   );
@@ -708,6 +729,35 @@ export default function Analysis() {
 
     return () => { disposed = true; };
   }, [analysisId, preview]);
+
+  // Grouped-FPS budget preview: how the requested sample count splits across
+  // element sets, fetched before running so the allocation is never a surprise.
+  // Debounced because the preview resolves element metadata from the dataset,
+  // and typing a sample count should not trigger one request per keystroke.
+  useEffect(() => {
+    if (tab !== "sampling" || samplingAlgorithm !== "fps" || samplingStrategy !== "grouped" || !selectedRun) {
+      setSamplingQuota(null);
+      setSamplingQuotaBusy(false);
+      return;
+    }
+    let disposed = false;
+    setSamplingQuotaBusy(true);
+    const timer = window.setTimeout(() => {
+      void ipc.request<{ groups: { group: string; structures: number; quota: number }[]; n_candidates: number }>("analysis.fps_quota", {
+        run_id: selectedRun,
+        mode,
+        n_samples: nSamples,
+        ...(viewId ? { view_id: viewId } : {}),
+      }).then((payload) => {
+        if (!disposed) setSamplingQuota(payload);
+      }).catch(() => {
+        if (!disposed) setSamplingQuota(null);
+      }).finally(() => {
+        if (!disposed) setSamplingQuotaBusy(false);
+      });
+    }, 400);
+    return () => { disposed = true; window.clearTimeout(timer); };
+  }, [tab, samplingAlgorithm, samplingStrategy, selectedRun, mode, nSamples, viewId]);
 
   // The two points-fetch variants behind an analysis: bounded preview arrays
   // (with normalized points) and the PCA payload (points only).
@@ -1006,6 +1056,34 @@ export default function Analysis() {
         loadedParams.preprocess = savedPreprocessValue;
       }
     }
+    if (analysisTab === "sampling" && ["fps", "random", "stratified", "cluster_representative", "per_element"].includes(analysisType)) {
+      setSamplingAlgorithm(analysisType);
+      loadedParams.samplingAlgorithm = analysisType;
+      if (analysisType === "fps") {
+        const savedStrategy = row.parameters?.strategy === "grouped" ? "grouped" : "global";
+        const savedScaling = row.parameters?.scaling === "raw" || row.parameters?.scaling === "standardized" ? row.parameters.scaling : "robust";
+        const savedMinDistance = Math.max(0, finiteNumber(row.parameters?.min_distance) ?? 0);
+        const savedExisting = typeof row.parameters?.existing_run_id === "string" && row.parameters.existing_run_id ? row.parameters.existing_run_id : null;
+        const savedBlocks = Array.isArray(row.parameters?.blocks) ? row.parameters.blocks.map(String) : [];
+        const savedCoverage = finiteNumber(row.parameters?.target_coverage);
+        const savedBudgetMode = savedCoverage != null && savedCoverage > 0 ? "coverage" : "count";
+        const savedCoveragePercent = savedCoverage != null && savedCoverage > 0 ? Math.round(savedCoverage * 100) : 95;
+        setSamplingStrategy(savedStrategy);
+        setSamplingScaling(savedScaling);
+        setSamplingMinDistance(savedMinDistance);
+        setSamplingExistingRunId(savedExisting);
+        setSamplingBlocks(savedBlocks);
+        setSamplingBudgetMode(savedBudgetMode);
+        setSamplingCoverage(savedCoveragePercent);
+        loadedParams.samplingStrategy = savedStrategy;
+        loadedParams.samplingScaling = savedScaling;
+        loadedParams.samplingMinDistance = savedMinDistance;
+        loadedParams.samplingExistingRunId = savedExisting;
+        loadedParams.samplingBlocks = savedBlocks;
+        loadedParams.samplingBudgetMode = savedBudgetMode;
+        loadedParams.samplingCoverage = savedCoveragePercent;
+      }
+    }
     const loadedContext = { tab: analysisTab, paramsKey: buildParamsKey(analysisTab, loadedParams) };
     if (analysisType === "pairwise" || analysisType === "pairwise_similarity") setSimilarityMode("pairwise");
     if (analysisType === "overlap") setCoverageMode("overlap");
@@ -1131,7 +1209,17 @@ export default function Analysis() {
         const uncertainty = samplingAlgorithm === "uncertainty_diversity";
         await runRequest("analysis.acquisition", { reference_run_id: referenceRunId, query_run_id: queryRunId, ...(referenceViewId ? { reference_view_id: referenceViewId } : {}), ...(queryViewId ? { query_view_id: queryViewId } : {}), n_samples: nSamples, mode, acquisition_method: samplingAlgorithm, novelty_weight: 0.65, uncertainty_weight: 0.65, uncertainty_k: uncertaintyK }, uncertainty ? t("Uncertainty acquisition") : t("Novelty acquisition"), { contextRunId: referenceRunId, followActiveRun: false });
       } else {
-        await runRequest("analysis.sampling", { algorithm: samplingAlgorithm, n_samples: nSamples, mode, ...(viewId ? { view_id: viewId } : {}) }, t("Sampling"));
+        const fpsParams = samplingAlgorithm === "fps"
+          ? {
+              strategy: samplingStrategy,
+              scaling: samplingScaling,
+              min_distance: samplingMinDistance,
+              ...(samplingExistingRunId ? { existing_run_id: samplingExistingRunId } : {}),
+              ...(samplingBlocks.length ? { blocks: samplingBlocks } : {}),
+              ...(samplingBudgetMode === "coverage" ? { target_coverage: samplingCoverage / 100 } : {}),
+            }
+          : {};
+        await runRequest("analysis.sampling", { algorithm: samplingAlgorithm, n_samples: nSamples, mode, ...fpsParams, ...(viewId ? { view_id: viewId } : {}) }, t("Sampling"));
       }
     } else if (tab === "coverage") {
       if (!crossInputsReady || !referenceRunId || !queryRunId) {
@@ -1190,7 +1278,7 @@ export default function Analysis() {
       if (viewId && overviewAnalysis !== "drift" && overviewAnalysis !== "sensitivity") overviewParams.view_id = viewId;
       await runRequest(`analysis.${overviewAnalysis}`, overviewParams, tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]), overviewAnalysis === "drift" ? { contextRunId: referenceRunId, followActiveRun: false } : undefined);
     }
-  }, [clusterAlgorithm, contamination, coverageMode, crossInputsReady, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationStructures, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, queryRunId, queryViewId, referenceRunId, referenceViewId, runProjection, runRequest, runs, samplingAlgorithm, secondRun, selectedRun, setLowVariationThreshold, setNearZeroThreshold, similarityMode, tab, t, tr, uncertaintyK, viewId, message, compareMode]);
+  }, [clusterAlgorithm, contamination, coverageMode, crossInputsReady, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationStructures, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, queryRunId, queryViewId, referenceRunId, referenceViewId, runProjection, runRequest, runs, samplingAlgorithm, samplingBlocks, samplingBudgetMode, samplingCoverage, samplingExistingRunId, samplingMinDistance, samplingScaling, samplingStrategy, secondRun, selectedRun, setLowVariationThreshold, setNearZeroThreshold, similarityMode, tab, t, tr, uncertaintyK, viewId, message, compareMode]);
 
   const inspectPoint = useCallback((point: Point) => {
     setInspectedPoint(point);
@@ -1250,24 +1338,24 @@ export default function Analysis() {
 
   const plot = useMemo(() => {
     if (!points.length) return null;
-    const values = points.map((point) => colorBy === "energy" ? point.energy : colorBy === "force_max" ? point.force_max : colorBy === "volume" ? point.volume : undefined);
+    const values = points.map((point) => colorBy === "energy" ? point.energy_per_atom : colorBy === "force_max" ? point.force_max : colorBy === "volume" ? point.volume : undefined);
     const hasColor = values.some((value) => value != null && Number.isFinite(value));
     const displayedSelected = selectedDisplayIndices(points, selectedIndices);
-    const colorByLabel = colorBy === "energy" ? t("energy") : colorBy === "force_max" ? t("force_max") : colorBy === "volume" ? t("volume") : colorBy;
+    const colorByLabel = colorBy === "energy" ? t("Energy / atom") : colorBy === "force_max" ? t("force_max") : colorBy === "volume" ? t("volume") : colorBy;
     return (
       <Plot
         key={`${analysisId ?? "pending"}:${projection}:${mode}:${preprocess}`}
-        data={[{
+        data={plotData([{
           type: "scattergl",
           mode: "markers",
           x: points.map((point) => point.x),
           y: points.map((point) => point.y),
           text: points.map((point) => `${t("frame {frame}", { frame: point.frame })}${point.row == null ? "" : t(" · row {row}", { row: point.row })}`),
           customdata: points.map((point) => [point.i, point.frame, point.row ?? -1]),
-          marker: hasColor ? { size: 7, color: values as number[], colorscale: "Viridis", showscale: true, colorbar: { title: { text: colorByLabel } } } : { size: 7, color: "#0F6CBD" },
+          marker: hasColor ? { size: 7, color: values as number[], colorscale: HIGH_CONTRAST_COLORSCALE, showscale: true, colorbar: { title: { text: colorByLabel } } } : { size: 7, color: "#0F6CBD" },
            selectedpoints: displayedSelected,
           hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>",
-        }]}
+        }])}
         layout={{ autosize: true, margin: { l: 56, r: 24, t: 16, b: 48 }, paper_bgcolor: "#FFFFFF", plot_bgcolor: "#FFFFFF", dragmode: "lasso", hovermode: "closest", xaxis: { title: projection === "pca" ? "PC1" : `${projection.toUpperCase()}-1`, gridcolor: "#F0F1F3" }, yaxis: { title: projection === "pca" ? "PC2" : `${projection.toUpperCase()}-2`, gridcolor: "#F0F1F3" }, showlegend: false }}
         config={{ responsive: true, displaylogo: false, modeBarButtonsToAdd: ["select2d", "lasso2d"], modeBarButtonsToRemove: ["toImage"] }}
         style={{ width: "100%", height: "100%" }}
@@ -1296,9 +1384,13 @@ export default function Analysis() {
       message.warning(t("Choose an output path first"));
       return;
     }
+    if (exportFormat === "report" && !analysisId) {
+      message.warning(t("Run a sampling analysis first"));
+      return;
+    }
     const indices = selectedIndices.length ? selectedIndices : points.map((point) => point.i);
     try {
-      const response = await ipc.request<AnalysisJobResponse>("analysis.export", { run_id: selectedRun, indices, mode, format: exportFormat, output_path: exportPath.trim() });
+      const response = await ipc.request<AnalysisJobResponse>("analysis.export", { run_id: selectedRun, indices, mode, format: exportFormat, output_path: exportPath.trim(), ...(exportFormat === "report" && analysisId ? { analysis_id: analysisId } : {}) });
       if (!response.job_id) {
         message.success(t("Export loaded from cache"));
         return;
@@ -1369,7 +1461,15 @@ export default function Analysis() {
         : tab === "outliers"
           ? `outlier.${outlierAlgorithm}`
           : tab === "sampling"
-            ? `sampling.${samplingAlgorithm}`
+            ? `sampling.${samplingAlgorithm !== "fps"
+                ? samplingAlgorithm
+                : samplingBudgetMode === "coverage"
+                  ? "coverage_target_fps"
+                  : samplingBlocks.length
+                    ? "composite_fps"
+                    : samplingStrategy === "grouped"
+                      ? "grouped_fps"
+                      : "fps"}`
             : tab === "coverage"
               ? `coverage.${coverageMode}`
               : tab === "compare"
@@ -1444,7 +1544,26 @@ export default function Analysis() {
             {tab === "similarity" && <Space wrap><Typography.Text>{t("View")}</Typography.Text><Select value={similarityMode} onChange={setSimilarityMode} options={markOptions("similarityMode", [{ value: "query", label: t("Query neighbors") }, { value: "all_neighbors", label: t("All-neighbor graph") }, { value: "pairwise", label: t("Pairwise matrix") }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
             {tab === "clusters" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={markOptions("clusterAlgorithm", ["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() })))} /><ParamLabel label={t("Clusters")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
             {tab === "outliers" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={markOptions("outlierAlgorithm", ["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() })))} /><ParamLabel label={t("Contamination")} cached={cachedParam("contamination")} /><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
-            {tab === "sampling" && <Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={markOptions("samplingAlgorithm", ["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: tr(SAMPLING_LABELS[value] ?? { en: value, zh: value }) })))} /><ParamLabel label={t("Target")} cached={cachedParam("nSamples")} /><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom") }])} />{samplingAlgorithm === "uncertainty_diversity" && <><ParamLabel label="kNN" cached={cachedParam("uncertaintyK")} /><InputNumber min={2} value={uncertaintyK} onChange={(value) => setUncertaintyK(value ?? 8)} /></>}</Space>}
+            {tab === "sampling" && <><Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={markOptions("samplingAlgorithm", ["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: tr(SAMPLING_LABELS[value] ?? { en: value, zh: value }) })))} /><ParamLabel label={t("Maximum samples")} cached={cachedParam("nSamples")} /><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom") }])} />{samplingAlgorithm === "uncertainty_diversity" && <><ParamLabel label="kNN" cached={cachedParam("uncertaintyK")} /><InputNumber min={2} value={uncertaintyK} onChange={(value) => setUncertaintyK(value ?? 8)} /></>}{samplingAlgorithm === "fps" && <><ParamLabel label={t("Strategy")} cached={cachedParam("samplingStrategy")} /><Select value={samplingStrategy} onChange={setSamplingStrategy} options={markOptions("samplingStrategy", [{ value: "global", label: t("Global FPS") }, { value: "grouped", label: t("Grouped FPS") }])} /><ParamLabel label={t("Feature scaling")} cached={cachedParam("samplingScaling")} /><Select value={samplingScaling} onChange={setSamplingScaling} options={markOptions("samplingScaling", [{ value: "robust", label: t("Robust") }, { value: "standardized", label: t("Standardized") }, { value: "raw", label: t("Raw") }])} /><ParamLabel label={t("Sampling space")} cached={cachedParam("samplingBlocks")} /><Select mode="multiple" allowClear value={samplingBlocks} onChange={(value) => setSamplingBlocks(value ?? [])} style={{ minWidth: 240 }} placeholder={t("Descriptor only")} options={[{"value":"descriptor","label":t("Descriptor")},{"value":"descriptor_summary","label":t("Descriptor summary")},{"value":"lattice","label":t("Lattice")},{"value":"composition","label":t("Composition")},{"value":"energy","label":t("Energy")},{"value":"force","label":t("Force statistics")}]} /><ParamLabel label={t("Sample budget")} cached={cachedParam("samplingBudgetMode")} /><Select value={samplingBudgetMode} onChange={setSamplingBudgetMode} options={markOptions("samplingBudgetMode", [{ value: "count", label: t("Fixed sample count") }, { value: "coverage", label: t("Target coverage") }])} />{samplingBudgetMode === "coverage" && <><ParamLabel label={t("Target coverage")} cached={cachedParam("samplingCoverage")} /><InputNumber min={1} max={99} value={samplingCoverage} onChange={(value) => setSamplingCoverage(Math.min(99, Math.max(1, Math.round(value ?? 95))))} addonAfter="%" /></>}<ParamLabel label={t("Min descriptor distance")} cached={cachedParam("samplingMinDistance")} /><InputNumber min={0} step={0.001} value={samplingMinDistance} onChange={(value) => setSamplingMinDistance(Math.max(0, value ?? 0))} /><Typography.Text type="secondary">{t("Initialization: Center")}</Typography.Text><ParamLabel label={t("Existing dataset")} cached={cachedParam("samplingExistingRunId")} /><Select allowClear placeholder={t("None")} value={samplingExistingRunId} onChange={(value) => setSamplingExistingRunId(value ?? null)} style={{ minWidth: 180 }} options={warmStartRuns.map((run) => ({ value: run.id, label: `${run.descriptor_name} · ${run.dataset_name ?? run.dataset_id}` }))} /></>}</Space>
+            {samplingAlgorithm === "fps" && samplingStrategy === "grouped" && (
+              <div style={{ marginTop: 12 }} aria-busy={samplingQuotaBusy}>
+                <Typography.Text type="secondary">{t("Sampling quota preview (√N per element set)")}</Typography.Text>
+                {samplingQuotaBusy ? <Spin size="small" style={{ marginLeft: 8 }} /> : samplingQuota && samplingQuota.groups.length ? (
+                  <Table
+                    size="small"
+                    style={{ marginTop: 8, maxWidth: 480 }}
+                    rowKey="group"
+                    pagination={false}
+                    dataSource={samplingQuota.groups}
+                    columns={[
+                      { title: t("Element set"), dataIndex: "group" },
+                      { title: t("Structures"), dataIndex: "structures", align: "right" as const, render: (value: number) => value.toLocaleString() },
+                      { title: t("Sampling quota"), dataIndex: "quota", align: "right" as const },
+                    ]}
+                  />
+                ) : !samplingQuotaBusy ? <Typography.Text type="secondary" style={{ marginLeft: 8 }}>{t("Element metadata is unavailable for this run")}</Typography.Text> : null}
+              </div>
+            )}</>}
             {tab === "coverage" && <Space wrap><Typography.Text>{t("Analysis")}</Typography.Text><Select value={coverageMode} onChange={setCoverageMode} options={markOptions("coverageMode", [{ value: "coverage", label: t("Coverage") }, { value: "overlap", label: t("Train / test overlap") }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
             {tab === "local" && <Space wrap><ParamLabel label={t("Clusters / element")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><ParamLabel label={t("Descriptor kNN")} cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><ParamLabel label={t("Neighbor cutoff")} cached={cachedParam("localCutoff")} /><InputNumber min={0.1} max={10} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value == null ? 3 : Math.max(0.1, Math.min(10, value)))} addonAfter="Å" /><Typography.Text type="secondary">{t("Coordinates and periodic images determine coordination.")}</Typography.Text></Space>}
             {tab === "kernel" && <Space wrap><Typography.Text>{t("Kernel")}</Typography.Text><Select value={kernelName} onChange={setKernelName} options={markOptions("kernelName", ["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() })))} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
@@ -1527,7 +1646,7 @@ export default function Analysis() {
                 <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.tab === tab && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={crossDatasetModule ? !crossInputsReady : !selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
                 {/* Only the Projection canvas recolors by property; every
                     other module owns its coloring inside the result view. */}
-                {tab === "projection" && points.length > 0 && <Select size="small" aria-label={t("Color by")} value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
+                {tab === "projection" && points.length > 0 && <Select size="small" style={{ width: 132 }} aria-label={t("Color by")} value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy / atom") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
                 {overviewModuleHint}
               </Space>
               <Button
@@ -1576,7 +1695,7 @@ export default function Analysis() {
             handlePoint({ i: index, frame, row: row.row == null ? undefined : Number(row.row), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, label: row.labels == null ? undefined : Number(row.labels), score: row.scores == null ? undefined : Number(row.scores), distance: row.distances == null ? undefined : Number(row.distances), element: row.element == null ? undefined : Number(row.element), cluster: row.cluster_labels == null ? undefined : Number(row.cluster_labels), coordination: row.coordination == null ? undefined : Number(row.coordination), novelty: row.novelty == null ? undefined : Number(row.novelty), uncertainty: row.uncertainty == null ? undefined : Number(row.uncertainty), diversity: row.diversity == null ? undefined : Number(row.diversity) });
           }} />}
 
-          {tab === "sampling" && <section className="analysis-card"><SectionHeading title={t("EXPORT SELECTED SET")} meta={t("Source data is never modified")} /><Space.Compact style={{ width: "100%" }}><Select value={exportFormat} onChange={setExportFormat} options={["json", "csv", "extxyz", "deepmd"].map((value) => ({ value, label: value.toUpperCase() }))} style={{ width: 120 }} /><Input readOnly placeholder={t("Choose an export destination")} value={exportPath} aria-label={t("Export destination")} /><Button onClick={() => void chooseExportPath()}>{t("Choose…")}</Button><Button icon={<ArrowDownload16Regular />} onClick={() => void exportSelection()}>{t("Export")}</Button></Space.Compact></section>}
+          {tab === "sampling" && <section className="analysis-card"><SectionHeading title={t("EXPORT SELECTED SET")} meta={t("Source data is never modified")} /><Space.Compact style={{ width: "100%" }}><Select value={exportFormat} onChange={setExportFormat} options={["json", "csv", "extxyz", "deepmd", "indices", "report"].map((value) => ({ value, label: value.toUpperCase() }))} style={{ width: 120 }} /><Input readOnly placeholder={t("Choose an export destination")} value={exportPath} aria-label={t("Export destination")} /><Button onClick={() => void chooseExportPath()}>{t("Choose…")}</Button><Button icon={<ArrowDownload16Regular />} onClick={() => void exportSelection()}>{t("Export")}</Button></Space.Compact></section>}
         </main>
 
         <aside className="analysis-inspector">
@@ -2224,7 +2343,7 @@ type SpectrumRange = "20" | "50" | "all";
 
 function OverviewPlot({ data, layout, ariaLabel, compact = false, className, style, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; className?: string; style?: CSSProperties; onClick?: (event: Readonly<PlotMouseEvent>) => void }) {
   const classes = ["analysis-overview-chart-frame", compact ? "compact" : "", className ?? ""].filter(Boolean).join(" ");
-  return <div className={classes} style={style} aria-label={ariaLabel}><Plot data={data} layout={layout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={onClick} /></div>;
+  return <div className={classes} style={style} aria-label={ariaLabel}><Plot data={plotData(data)} layout={layout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={onClick} /></div>;
 }
 
 function MetricStrip({ metrics }: { metrics: Metric[] }) {

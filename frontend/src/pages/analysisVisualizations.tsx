@@ -6,7 +6,7 @@ import { formatLabel } from "../util/format";
 import type { AnalysisPreview } from "../types/protocol";
 import type { AnalysisPoint } from "./analysisPreview";
 import TrajectoryView from "./trajectoryView";
-import { Metrics, NoData, PlotFrame, fmt, formatCount, formatFixed, formatPercent, layout, matrix, num, nums, quantile, records, strings } from "./analysisChartKit";
+import { HIGH_CONTRAST_COLORSCALE, Metrics, NoData, PlotFrame, fmt, formatCount, formatFixed, formatPercent, layout, matrix, num, nums, quantile, records, strings } from "./analysisChartKit";
 
 export type AnalysisArrays = Record<string, unknown[]>;
 
@@ -73,7 +73,7 @@ function Visualization({ kind, preview, arrays, points, selectedIndices, onSelec
   if (kind === "pairwise_similarity") return <MatrixView preview={preview} matrix={matrix(arrays.similarity_matrix)} label="Similarity" />;
   if (kind === "clusters") return <ClusterView preview={preview} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
   if (kind === "outliers") return <OutlierView preview={preview} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
-  if (kind === "sampling" || kind === "acquisition") return <SamplingView preview={preview} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
+  if (kind === "sampling" || kind === "acquisition") return <SamplingView preview={preview} arrays={arrays} points={points} selectedIndices={selectedIndices} onSelect={onSelect} />;
   if (kind === "coverage" || kind === "overlap" || kind === "drift") return <CoverageView preview={preview} arrays={arrays} />;
   if (kind === "compare") return <CompareView preview={preview} arrays={arrays} />;
   if (kind === "mantel") return <MantelView preview={preview} arrays={arrays} />;
@@ -139,16 +139,90 @@ function OutlierView({ preview, points, selectedIndices, onSelect }: Pick<Props,
   </>;
 }
 
-function SamplingView({ preview, points, selectedIndices, onSelect }: Pick<Props, "preview" | "points" | "selectedIndices" | "onSelect">) {
+function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pick<Props, "preview" | "arrays" | "points" | "selectedIndices" | "onSelect">) {
   const { t } = useT();
   const kind = String(preview?.kind ?? "sampling");
   const uncertaintyDriven = preview?.algorithm === "uncertainty_diversity";
+  const fps = preview?.algorithm === "fps" && kind === "sampling";
+  const radiusCurve = fps ? nums(arrays.coverage_radius_curve) : [];
+  const meanCurve = fps ? nums(arrays.coverage_mean_curve) : [];
+  const r2Curve = fps ? nums(arrays.coverage_r2_curve) : [];
+  const stopReason = fps
+    ? preview?.stop_reason === "min_distance"
+      ? t("Minimum descriptor distance")
+      : preview?.stop_reason === "exhausted"
+        ? t("All candidates used")
+        : preview?.stop_reason === "coverage"
+          ? t("Target coverage reached")
+          : preview?.stop_reason === "target"
+            ? t("Target reached")
+            : undefined
+    : undefined;
+  const explained = fps ? nums(preview?.pc_explained_variance) : [];
+  const scaling = fps && typeof preview?.scaling === "string" ? preview.scaling : null;
+  const allocation = fps && preview?.strategy === "grouped" ? records(preview.allocation) : [];
+  const blocks = fps ? records(preview?.blocks) : [];
+  const metricValues = fps
+    ? [
+        { k: t("Selected"), text: preview?.n_candidates != null ? `${formatCount(preview.selected_count)} / ${formatCount(preview.n_candidates)}` : formatCount(preview.selected_count) },
+        { k: t("Coverage radius"), v: preview?.coverage_radius },
+        { k: t("Coverage R²"), v: preview?.coverage_r2 },
+        { k: t("Mean residual"), v: preview?.mean_residual },
+        { k: t("P95 residual"), v: preview?.p95_residual },
+        { k: t("Stop reason"), text: stopReason },
+        { k: t("Feature scaling"), v: scaling },
+      ]
+    : [
+        { k: t("Selected"), v: preview?.selected_count },
+        { k: t("Candidates"), v: preview?.candidate_pool ?? points.length },
+        { k: t("Method"), v: preview?.algorithm },
+        { k: uncertaintyDriven ? t("Mean uncertainty") : t("Mean novelty"), v: uncertaintyDriven ? preview?.mean_selected_uncertainty : preview?.mean_selected_novelty },
+      ];
   return <>
-    <Metrics values={[{ k: t("Selected"), v: preview?.selected_count }, { k: t("Candidates"), v: preview?.candidate_pool ?? points.length }, { k: t("Method"), v: preview?.algorithm }, { k: uncertaintyDriven ? t("Mean uncertainty") : t("Mean novelty"), v: uncertaintyDriven ? preview?.mean_selected_uncertainty : preview?.mean_selected_novelty }]} />
+    <Metrics values={metricValues} />
+    {blocks.length > 0 && <>
+      <Typography.Text type="secondary">{t("Composite sampling space (each block scaled, weighted 1/√D)")}</Typography.Text>
+      <Table
+        size="small"
+        style={{ marginTop: 8, maxWidth: 560 }}
+        rowKey={(row) => String(row.name)}
+        pagination={false}
+        dataSource={blocks}
+        columns={[
+          { title: t("Block"), dataIndex: "name", render: (value) => String(value) },
+          { title: t("Dimensions"), dataIndex: "dimension", align: "right" as const, render: (value) => formatCount(value) },
+          { title: t("Weight"), dataIndex: "weight", align: "right" as const, render: (value) => formatFixed(value, 3) },
+          { title: t("Scaling"), dataIndex: "scaling", render: (value) => String(value) },
+        ]}
+      />
+    </>}
+    {allocation.length > 0 && <>
+      <Typography.Text type="secondary">{t("Group allocation (√N per element set)")}</Typography.Text>
+      <Table
+        size="small"
+        style={{ marginTop: 8, maxWidth: 480 }}
+        rowKey={(row) => String(row.group)}
+        pagination={false}
+        dataSource={allocation}
+        columns={[
+          { title: t("Element set"), dataIndex: "group", render: (value) => String(value) },
+          { title: t("Structures"), dataIndex: "structures", align: "right" as const, render: (value) => formatCount(value) },
+          { title: t("Sampling quota"), dataIndex: "quota", align: "right" as const, render: (value) => formatCount(value) },
+        ]}
+      />
+    </>}
     <div className="analysis-chart-grid">
       <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color={kind === "acquisition" ? uncertaintyDriven ? "uncertainty" : "distance" : "selected"} ariaLabel={t("Selected representative samples in descriptor space")} />
-      <PlotFrame compact ariaLabel={t("Selection score distribution")} data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? uncertaintyDriven ? point.uncertainty ?? 0 : point.distance ?? 0 : point.x), marker: { color: uncertaintyDriven ? "#D13438" : "#8764B8" } }]} layout={layout({ xaxis: { title: kind === "acquisition" ? uncertaintyDriven ? t("kNN extrapolation uncertainty") : t("Novelty distance") : t("PC1 distribution") }, yaxis: { title: t("Samples") } })} />
+      {fps && radiusCurve.length
+        ? <PlotFrame compact ariaLabel={t("Coverage curve")} data={[
+            { type: "scatter", mode: "lines", x: radiusCurve.map((_, index) => index + 1), y: radiusCurve, name: t("Coverage radius"), line: { color: "#0F6CBD", width: 2 } },
+            { type: "scatter", mode: "lines", x: meanCurve.map((_, index) => index + 1), y: meanCurve, name: t("Mean residual"), line: { color: "#F7630C", width: 2, dash: "dot" } },
+          ]} layout={layout({ xaxis: { title: t("Selected samples") }, yaxis: { title: t("Descriptor distance") }, showlegend: true })} />
+        : <PlotFrame compact ariaLabel={t("Selection score distribution")} data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? uncertaintyDriven ? point.uncertainty ?? 0 : point.distance ?? 0 : point.x), marker: { color: uncertaintyDriven ? "#D13438" : "#8764B8" } }]} layout={layout({ xaxis: { title: kind === "acquisition" ? uncertaintyDriven ? t("kNN extrapolation uncertainty") : t("Novelty distance") : t("PC1 distribution") }, yaxis: { title: t("Samples") } })} />}
     </div>
+    {fps && r2Curve.length > 0 && <PlotFrame compact ariaLabel={t("Coverage R² curve")} data={[{ type: "scatter", mode: "lines", x: r2Curve.map((_, index) => index + 1), y: r2Curve, line: { color: "#107C10", width: 2 }, hovertemplate: `${t("Selected samples")}=%{x}<br>R²=%{y:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: t("Selected samples") }, yaxis: { title: "R²", range: [0, 1] } })} />}
+    {fps && typeof preview?.target_coverage === "number" && <Typography.Text type="secondary">{t("Stopped on target coverage of {percent}.", { percent: formatPercent(preview.target_coverage) })}</Typography.Text>}
+    {fps && explained.length === 2 && <Typography.Text type="secondary">{t("FPS ran in the full scaled descriptor space; the plot is only a PC1–PC2 projection ({percent} variance).", { percent: formatPercent(explained[0] + explained[1]) })}</Typography.Text>}
   </>;
 }
 
@@ -546,7 +620,7 @@ function PointPlot({ points, selectedIndices, onSelect, color, ariaLabel }: { po
   if (!points.length) return <NoData message={t("No projected samples are available.")} />;
   const selected = new Set(selectedIndices);
   const colorValues = points.map((point) => color === "label" ? point.label ?? -1 : color === "score" ? point.score ?? 0 : color === "distance" ? point.distance ?? 0 : color === "uncertainty" ? point.uncertainty ?? 0 : color === "element" ? point.element ?? 0 : selected.has(point.i) ? 1 : 0);
-  return <PlotFrame compact ariaLabel={ariaLabel} onClick={(index) => points[index] && onSelect(points[index])} data={[{ type: "scattergl", mode: "markers", x: points.map((point) => point.x), y: points.map((point) => point.y), text: points.map((point) => `${point.sample_id ?? t("sample {index}", { index: point.i })}${point.row == null ? "" : t(" · atom {row}", { row: point.row })}`), marker: { size: color === "selected" ? points.map((point) => selected.has(point.i) ? 10 : 5) : 7, color: colorValues, colorscale: color === "selected" ? [[0, "#C8CDD4"], [1, "#D13438"]] : "Viridis", showscale: color !== "selected", colorbar: { title: { text: tr(POINT_COLOR_LABELS[color]) } }, opacity: 0.8 }, hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: "PC1" }, yaxis: { title: "PC2" }, showlegend: false })} />;
+  return <PlotFrame compact ariaLabel={ariaLabel} onClick={(index) => points[index] && onSelect(points[index])} data={[{ type: "scattergl", mode: "markers", x: points.map((point) => point.x), y: points.map((point) => point.y), text: points.map((point) => `${point.sample_id ?? t("sample {index}", { index: point.i })}${point.row == null ? "" : t(" · atom {row}", { row: point.row })}`), marker: { size: color === "selected" ? points.map((point) => selected.has(point.i) ? 10 : 5) : 7, color: colorValues, colorscale: color === "selected" ? [[0, "#C8CDD4"], [1, "#D13438"]] : HIGH_CONTRAST_COLORSCALE, showscale: color !== "selected", colorbar: { title: { text: tr(POINT_COLOR_LABELS[color]) } }, opacity: 0.8 }, hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: "PC1" }, yaxis: { title: "PC2" }, showlegend: false })} />;
 }
 
 function AssociationBars({ rows, method }: { rows: { feature: number; value: number }[]; method: "pearson" | "spearman" | "mutual_information" }) {

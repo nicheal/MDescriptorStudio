@@ -5,8 +5,55 @@ import Plot from "react-plotly.js";
 import type { Data, Layout } from "plotly.js";
 import { Empty, Typography } from "antd";
 
+/** Plotly's scattergl (regl) generates its GL commands with `new Function` at chart
+ * creation. When that is unavailable — no WebGL context (some WebView2 environments)
+ * or a CSP without 'unsafe-eval' — Plotly shows a misleading "WebGL is not supported"
+ * banner instead of the chart, so such environments get the SVG scatter downgrade. */
+let webglSupported: boolean | null = null;
+export function webglAvailable(): boolean {
+  if (webglSupported === null) {
+    try {
+      const canvas = document.createElement("canvas");
+      const hasGL = Boolean(canvas.getContext("webgl2") || canvas.getContext("webgl") || canvas.getContext("experimental-webgl"));
+      webglSupported = hasGL && new Function("return 1")() === 1;
+    } catch {
+      webglSupported = false;
+    }
+  }
+  return webglSupported;
+}
+
+/** Plotly trace data with scattergl traces swapped to SVG scatter when WebGL is missing. */
+export function plotData(data: Data[]): Data[] {
+  if (webglAvailable()) return data;
+  return data.map((trace) => (trace.type === "scattergl" ? { ...trace, type: "scatter" as const } : trace));
+}
+
+/** Property-colored scatter scale: Google Turbo sampled every 1/16 — high
+ * contrast between adjacent values, unlike the low-separation Viridis. Inlined
+ * because plotly.js 2.x ships no Turbo colorscale. */
+export const HIGH_CONTRAST_COLORSCALE: Array<[number, string]> = [
+  [0, "#30123B"],
+  [0.0625, "#4040A2"],
+  [0.125, "#466BE3"],
+  [0.1875, "#4294FF"],
+  [0.25, "#28BCEB"],
+  [0.3125, "#18DDC2"],
+  [0.375, "#32F298"],
+  [0.4375, "#6DFE62"],
+  [0.5, "#A4FC3C"],
+  [0.5625, "#CBED34"],
+  [0.625, "#ECD13A"],
+  [0.6875, "#FDAE35"],
+  [0.75, "#FB8122"],
+  [0.8125, "#EC530F"],
+  [0.875, "#D23105"],
+  [0.9375, "#AC1701"],
+  [1, "#7A0403"],
+];
+
 export function PlotFrame({ data, layout: plotLayout, ariaLabel, compact = false, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; onClick?: (index: number, curve: number) => void }) {
-  return <div className={compact ? "analysis-purpose-chart compact" : "analysis-purpose-chart"} aria-label={ariaLabel}><Plot data={data} layout={plotLayout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={(event) => { const point = event.points?.[0]; if (point && typeof point.pointIndex === "number") onClick?.(point.pointIndex, point.curveNumber ?? 0); }} /></div>;
+  return <div className={compact ? "analysis-purpose-chart compact" : "analysis-purpose-chart"} aria-label={ariaLabel}><Plot data={plotData(data)} layout={plotLayout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={(event) => { const point = event.points?.[0]; if (point && typeof point.pointIndex === "number") onClick?.(point.pointIndex, point.curveNumber ?? 0); }} /></div>;
 }
 
 /** Metric strip. `text` wins over `v` so counts and rounded values keep the

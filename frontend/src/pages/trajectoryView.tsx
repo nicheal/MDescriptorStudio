@@ -14,7 +14,7 @@ import { useT } from "../i18n";
 import type { AnalysisPreview } from "../types/protocol";
 import type { AnalysisPoint } from "./analysisPreview";
 import type { AnalysisArrays } from "./analysisVisualizations";
-import { Metrics, NoData, PlotFrame, layout, matrix, num, nums, quantile } from "./analysisChartKit";
+import { HIGH_CONTRAST_COLORSCALE, Metrics, NoData, PlotFrame, layout, matrix, num, nums, quantile } from "./analysisChartKit";
 import { decimate, METHOD_DEFAULT_SENSITIVITY, stepPercentiles, stepStats, trajectoryThreshold, EVENT_METHODS, type EventMethod, type StepStats } from "./trajectoryMath";
 
 type Props = {
@@ -239,7 +239,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
       marker: {
         size: mode === "events" ? visibleIndices.map((index) => eventFlags.has(index) ? 11 : 5) : 6,
         color: colorValues,
-        colorscale: colorBy === "event" ? eventColorscale : "Viridis",
+        colorscale: colorBy === "event" ? eventColorscale : HIGH_CONTRAST_COLORSCALE,
         showscale: colorBy !== "event",
         colorbar: { title: { text: colorBy === "frame" ? t("Frame") : colorBy === "step" ? t("Step distance") : "" }, thickness: 12 },
         opacity: mode === "events" ? 0.9 : 0.75,

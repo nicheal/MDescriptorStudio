@@ -21,7 +21,7 @@ export interface AnalysisPoint {
   distance?: number;
   element?: number;
   cluster?: number;
-  energy?: number | null;
+  energy_per_atom?: number | null;
   force_max?: number | null;
   volume?: number | null;
   coordination?: number | null;

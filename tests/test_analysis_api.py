@@ -612,3 +612,350 @@ def test_structural_perturbation_service_recomputes_descriptor_sweep(tmp_path: P
     assert len(curve["data"]) == 3
     assert curve["data"][0] == pytest.approx(0.0)
     db.close()
+
+
+def _insert_compatible_run(db: Database, tmp_path: Path, run_id: str = "run_2", descriptor_name: str = "SOAP") -> None:
+    result_dir = tmp_path / "results" / run_id
+    result_dir.mkdir(parents=True)
+    values = (np.arange(96, dtype=np.float32).reshape(12, 8) + 0.5)
+    np.save(result_dir / "values.npy", values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": run_id, "level": "structure", "row_semantics": "structure", "shape": [12, 8]}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES (?, 'ds_1', ?, 'test', '{}',"
+        " 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (run_id, descriptor_name, str(result_dir)),
+    )
+
+
+def test_fps_warm_start_rejects_mismatched_feature_space(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    _insert_compatible_run(db, tmp_path, descriptor_name="ACSF")
+
+    with pytest.raises(AppError, match="same descriptor feature space") as exc:
+        service.sampling({"run_id": "run_1", "algorithm": "fps", "existing_run_id": "run_2", "n_samples": 5})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+    assert jobs.calls == 0
+    db.close()
+
+
+def test_fps_warm_start_runs_and_exports_report_and_indices(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    _insert_compatible_run(db, tmp_path)
+
+    submitted = service.sampling(
+        {"run_id": "run_1", "algorithm": "fps", "n_samples": 5, "scaling": "raw", "existing_run_id": "run_2", "mode": "structure"}
+    )
+    assert submitted["job_id"] == "job_1"
+    analysis_id = submitted["analysis_id"]
+
+    preview = service.preview({"analysis_id": analysis_id, "limit": 20})
+    assert preview["warm_start"] is True
+    assert preview["scaling"] == "raw"
+    saved_params = json.loads(db.query_one("SELECT params_json FROM analysis_runs WHERE id = ?", (analysis_id,))["params_json"])
+    assert saved_params["existing_run_id"] == "run_2"
+    assert preview["stop_reason"] == "target"
+    assert preview["selected_count"] == 5
+    assert preview["coverage_radius"] >= 0.0
+    assert preview["sampling_dimension"] == 8
+
+    curve = service.chunk({"analysis_id": analysis_id, "array": "coverage_radius_curve", "limit": 10})
+    assert curve["shape"] == [5]
+    assert len(curve["data"]) == 5
+
+    report_path = tmp_path / "sampling_report.json"
+    service.submit_export(
+        {
+            "run_id": "run_1",
+            "indices": [0, 2, 4],
+            "format": "report",
+            "output_path": str(report_path),
+            "analysis_id": analysis_id,
+        }
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["algorithm"] == "farthest_point_sampling"
+    assert report["strategy"] == "global"
+    assert report["descriptor"] == "SOAP"
+    assert report["scaling"] == "raw"
+    assert report["warm_start"] is True
+    assert report["existing_descriptor_run_id"] == "run_2"
+    assert report["selected_samples"] == 3
+    assert report["selected_sample_indices"] == [0, 2, 4]
+    assert len(report["coverage_curve"]["coverage_radius"]) == 5
+
+    indices_path = tmp_path / "selected_indices.txt"
+    service.submit_export({"run_id": "run_1", "indices": [4, 0, 2], "format": "indices", "output_path": str(indices_path)})
+    assert indices_path.read_text(encoding="utf-8").splitlines() == ["0", "2", "4"]
+    db.close()
+
+
+def _grouped_service(tmp_path: Path, frames: list[DatasetFrame]):
+    """Service whose run_1 has 4 structure samples with distinct compositions."""
+    db, jobs, service = _service(tmp_path)
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, file_size, created_at)"
+        " VALUES ('ds_1', 'Grouped', 'deepmd', ?, ?, '[\"C\", \"Si\", \"O\"]', '{}', '{}', 'fp_1', 0, '2026-01-01T00:00:00+00:00')",
+        (str(tmp_path / "grouped"), len(frames)),
+    )
+    result_dir = tmp_path / "results" / "run_grouped"
+    result_dir.mkdir(parents=True)
+    values = np.arange(32, dtype=np.float32).reshape(4, 8)
+    np.save(result_dir / "values.npy", values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_grouped", "level": "structure", "row_semantics": "structure", "shape": [4, 8]}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES ('run_grouped', 'ds_1', 'SOAP', 'test',"
+        " '{\"species\": [6, 14]}', 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(result_dir),),
+    )
+
+    class _Adapter:
+        def __len__(self):
+            return len(frames)
+
+        def get_frame(self, index):
+            return frames[index]
+
+    class _Datasets:
+        def _adapter_for(self, _dataset):
+            return _Adapter()
+
+    service.datasets = _Datasets()
+    # The fixture dataset has no real file behind it; skip the freshness probe.
+    service._assert_dataset_current = lambda _row: None
+    return db, jobs, service
+
+
+def test_element_group_labels_use_shared_element_sets(tmp_path: Path) -> None:
+    frames = [
+        DatasetFrame(numbers=np.array([6, 6, 14, 14]), positions=np.zeros((4, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([6, 6, 6]), positions=np.zeros((3, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([14, 14]), positions=np.zeros((2, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([6, 8, 14]), positions=np.zeros((3, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+    ]
+    db, _jobs, service = _grouped_service(tmp_path, frames)
+    run = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_grouped'")
+    samples = service._load_samples(run, {"mode": "structure"}, "fps")
+    labels = service._element_group_labels(run, samples, ("", samples.n_samples))
+    assert labels.tolist() == ["C-Si", "C", "Si", "C-O-Si"]
+
+    quota = service.fps_quota({"run_id": "run_grouped", "mode": "structure", "n_samples": 4})
+    assert [row["group"] for row in quota["groups"]] == ["C", "C-O-Si", "C-Si", "Si"]
+    assert all(row["structures"] == 1 for row in quota["groups"])
+    assert all(row["quota"] == 1 for row in quota["groups"])
+    assert quota["n_candidates"] == 4
+    db.close()
+
+
+def test_grouped_fps_run_persists_allocation_and_rejects_missing_metadata(tmp_path: Path) -> None:
+    frames = [
+        DatasetFrame(numbers=np.array([6, 6, 14, 14]), positions=np.zeros((4, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([6, 6, 6]), positions=np.zeros((3, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([14, 14]), positions=np.zeros((2, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([6, 8, 14]), positions=np.zeros((3, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+    ]
+    db, jobs, service = _grouped_service(tmp_path, frames)
+    submitted = service.sampling(
+        {"run_id": "run_grouped", "algorithm": "fps", "strategy": "grouped", "n_samples": 4, "scaling": "raw"}
+    )
+    assert submitted["job_id"] == "job_1"
+    preview = service.preview({"analysis_id": submitted["analysis_id"], "limit": 20})
+    assert preview["strategy"] == "grouped"
+    allocation = preview["allocation"]
+    assert {row["group"] for row in allocation} == {"C", "C-Si", "Si", "C-O-Si"}
+    assert sum(row["quota"] for row in allocation) == 4
+    assert preview["selected_count"] == 4
+
+    # Without dataset access the groups cannot be resolved: the run must fail
+    # loudly instead of silently degrading to a global selection.
+    db2, jobs2, service2 = _service(tmp_path / "no-datasets")
+    with pytest.raises(AppError, match="dataset access") as exc:
+        service2.sampling({"run_id": "run_1", "algorithm": "fps", "strategy": "grouped", "n_samples": 3})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+    # The failed submission leaves no analysis row behind.
+    assert db2.query_one("SELECT id FROM analysis_runs WHERE analysis_type = 'fps'") is None
+    assert jobs2.calls == 1
+    db.close()
+    db2.close()
+
+
+def test_element_group_labels_use_central_atom_in_atom_mode(tmp_path: Path) -> None:
+    db, _jobs, service = _service(tmp_path)
+    samples = SampleMatrix(
+        np.arange(7 * 4, dtype=np.float64).reshape(7, 4),
+        np.zeros(7, dtype=np.int64),
+        elements=np.array([6, 6, 14, 14, 6, 8, 14], dtype=np.int64),
+        mode="atom",
+    )
+    # Atom rows group by their central element, not by the frame composition.
+    labels = service._element_group_labels({"id": "run_atoms", "dataset_id": "ds_1"}, samples, ("", 7))
+    assert labels.tolist() == ["C", "C", "Si", "Si", "C", "O", "Si"]
+    db.close()
+
+
+def _composite_service(tmp_path: Path):
+    """Service whose run_composite has lattice/energy/force metadata available."""
+    db, jobs, service = _service(tmp_path)
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, file_size, created_at)"
+        " VALUES ('ds_1', 'Composite', 'deepmd', ?, 3, '[\"C\", \"Si\"]', '{}', '{}', 'fp_1', 0, '2026-01-01T00:00:00+00:00')",
+        (str(tmp_path / "composite"),),
+    )
+    result_dir = tmp_path / "results" / "run_composite"
+    result_dir.mkdir(parents=True)
+    values = np.arange(3 * 4, dtype=np.float32).reshape(3, 4)
+    np.save(result_dir / "values.npy", values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_composite", "level": "structure", "row_semantics": "structure", "shape": [3, 4]}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES ('run_composite', 'ds_1', 'ACE', 'test', '{}',"
+        " 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(result_dir),),
+    )
+    frames = [
+        DatasetFrame(
+            numbers=np.array([6, 6, 14]),
+            positions=np.zeros((3, 3)),
+            cell=np.diag([3.0 + index, 4.0, 5.0]),
+            pbc=np.ones(3, dtype=bool),
+            energy=-1.0 * index - 3.0,
+            forces=np.full((3, 3), 0.1 * (index + 1)),
+        )
+        for index in range(3)
+    ]
+
+    class _Adapter:
+        def __len__(self):
+            return len(frames)
+
+        def get_frame(self, index):
+            return frames[index]
+
+    class _Datasets:
+        def _adapter_for(self, _dataset):
+            return _Adapter()
+
+    service.datasets = _Datasets()
+    service._assert_dataset_current = lambda _row: None
+    return db, jobs, service
+
+
+def test_composite_sampling_builds_requested_blocks_and_reports_layout(tmp_path: Path) -> None:
+    db, jobs, service = _composite_service(tmp_path)
+    submitted = service.sampling({
+        "run_id": "run_composite",
+        "algorithm": "fps",
+        "n_samples": 3,
+        "scaling": "robust",
+        "blocks": ["descriptor", "lattice", "composition", "energy", "force"],
+    })
+    assert submitted["job_id"] == "job_1"
+    preview = service.preview({"analysis_id": submitted["analysis_id"], "limit": 20})
+    assert preview["sampling_space"] == "composite"
+    blocks = {item["name"]: item for item in preview["blocks"]}
+    assert blocks["descriptor"]["dimension"] == 4
+    assert blocks["lattice"]["dimension"] == 6  # a, b, c, α, β, γ
+    assert blocks["composition"]["dimension"] == 2  # C and Si fractions
+    assert blocks["energy"]["dimension"] == 1
+    assert blocks["force"]["dimension"] == 3  # mean, max, std
+    assert preview["sampling_dimension"] == 16
+    assert preview["selected_count"] == 3
+
+    # The report carries the same provenance for later reproduction.
+    report_path = tmp_path / "composite_report.json"
+    service.submit_export({
+        "run_id": "run_composite",
+        "indices": [0, 1, 2],
+        "format": "report",
+        "output_path": str(report_path),
+        "analysis_id": submitted["analysis_id"],
+    })
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["sampling_space"] == "composite"
+    assert {item["name"] for item in report["feature_blocks"]} == {"descriptor", "lattice", "composition", "energy", "force"}
+    assert report["coverage"]["r2"] is not None
+    db.close()
+
+
+def test_composite_sampling_rejects_unknown_blocks_before_enqueue(tmp_path: Path) -> None:
+    db, jobs, service = _composite_service(tmp_path)
+    with pytest.raises(AppError, match="unknown sampling block") as exc:
+        service.sampling({"run_id": "run_composite", "algorithm": "fps", "blocks": ["magic"]})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+    # A physics-only space is a legitimate explicit choice, not an error.
+    physics_only = service.sampling({"run_id": "run_composite", "algorithm": "fps", "n_samples": 2, "blocks": ["lattice"]})
+    assert service.preview({"analysis_id": physics_only["analysis_id"], "limit": 5})["sampling_dimension"] == 6
+    with pytest.raises(AppError, match="unknown sampling block"):
+        service.sampling({"run_id": "run_composite", "algorithm": "fps", "blocks": ["lattice", "bogus"]})
+    db.close()
+
+
+def test_composite_sampling_requires_the_metadata_it_promises(tmp_path: Path) -> None:
+    db, jobs, service = _composite_service(tmp_path)
+    # An isolated frame carries no periodic cell: a requested lattice block
+    # must fail loudly rather than being silently dropped.
+    frames = [
+        DatasetFrame(
+            numbers=np.array([6]),
+            positions=np.zeros((1, 3)),
+            cell=np.zeros((3, 3)),
+            pbc=np.zeros(3, dtype=bool),
+            energy=-1.0,
+        )
+        for _ in range(3)
+    ]
+
+    class _Adapter:
+        def __len__(self):
+            return len(frames)
+
+        def get_frame(self, index):
+            return frames[index]
+
+    class _Datasets:
+        def _adapter_for(self, _dataset):
+            return _Adapter()
+
+    service.datasets = _Datasets()
+    with pytest.raises(AppError, match="lattice parameters") as exc:
+        service.sampling({"run_id": "run_composite", "algorithm": "fps", "blocks": ["descriptor", "lattice"]})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+    db.close()
+
+
+def test_fps_quota_reports_composite_dimension(tmp_path: Path) -> None:
+    db, _jobs, service = _composite_service(tmp_path)
+    quota = service.fps_quota({"run_id": "run_composite", "mode": "structure", "n_samples": 3, "blocks": ["descriptor", "lattice"]})
+    assert quota["requested_samples"] == 3
+    assert sum(row["quota"] for row in quota["groups"]) == 3
+    assert [item["name"] for item in quota["blocks"]] == ["descriptor", "lattice"]
+    assert quota["sampling_dimension"] == 10
+    db.close()
+
+
+def test_coverage_target_run_reports_stop_reason(tmp_path: Path) -> None:
+    db, _jobs, service = _service(tmp_path)
+    submitted = service.sampling({
+        "run_id": "run_1",
+        "algorithm": "fps",
+        "n_samples": 12,
+        "scaling": "raw",
+        "target_coverage": 0.9,
+    })
+    preview = service.preview({"analysis_id": submitted["analysis_id"], "limit": 20})
+    assert preview["stop_reason"] in ("coverage", "target")
+    assert preview["target_coverage"] == pytest.approx(0.9)
+    assert 0.0 <= preview["coverage_r2"] <= 1.0
+    curve = service.chunk({"analysis_id": submitted["analysis_id"], "array": "coverage_r2_curve", "limit": 20})
+    assert curve["shape"][0] == preview["selected_count"]
+    db.close()

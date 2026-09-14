@@ -374,7 +374,7 @@ export interface PcaPayload {
     atom?: number;
     pc1: number;
     pc2: number;
-    energy: number | null;
+    energy_per_atom: number | null;
     force_max: number | null;
     volume: number | null;
   }[];

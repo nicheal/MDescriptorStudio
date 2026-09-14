@@ -88,8 +88,23 @@ export const ANALYSIS_METHOD_GUIDES: Readonly<Record<string, AnalysisMethodGuide
 
   "sampling.fps": {
     title: { en: "Farthest Point Sampling (FPS)", zh: "最远点采样（FPS）" },
-    theory: { en: "FPS greedily adds the sample farthest from the selected set under the descriptor metric. This approximates a max-min covering strategy and spreads selected points across descriptor space.", zh: "FPS 在每一步贪心地加入相对于已选集合最远的样本。这近似于最大化最小距离的覆盖策略，使选中点分散在描述符空间中。" },
-    application: { en: "Use FPS to build a diverse initial training subset, reduce redundant labeling, or cover a descriptor domain with a fixed sample budget.", zh: "可用 FPS 构建多样化的初始训练子集，减少冗余标注，或在固定样本预算下覆盖描述符域。" },
+    theory: { en: "FPS greedily adds the sample farthest from the selected set under the descriptor metric, starting from the structure closest to the descriptor-space centroid. Sampling runs in the full scaled descriptor space (robust scaling by default), and the coverage radius and residual statistics report how completely the selection spans the data.", zh: "FPS 在每一步贪心地加入相对于已选集合最远的样本，并从距描述符空间中心最近的结构出发。采样在完整的缩放描述符空间中进行（默认稳健缩放），覆盖半径与残差统计反映选中集对数据的覆盖程度。" },
+    application: { en: "Use FPS to build a diverse initial training subset, reduce redundant labeling, or cover a descriptor domain with a fixed sample budget. With an existing dataset as warm start it targets the regions that dataset covers worst; a minimum descriptor distance can stop the run once no candidate adds new information.", zh: "可用 FPS 构建多样化的初始训练子集，减少冗余标注，或在固定样本预算下覆盖描述符域。指定已有数据集进行热启动时，FPS 会优先挑选该数据集覆盖最差的区域；设置最小描述符距离后，当没有候选再带来新信息时可提前停止。" },
+  },
+  "sampling.grouped_fps": {
+    title: { en: "Grouped FPS", zh: "分组 FPS" },
+    theory: { en: "Grouped FPS runs an independent farthest-point pass inside each element-set group (C, C-O, C-O-Si, …) and allocates the budget by a √N_g share, giving every group at least one sample when the target covers them all. Global FPS can let the most abundant composition class dominate the selection; √N weighting keeps minority classes visible without over-representing them.", zh: "分组 FPS 在每个元素组合（C、C-O、C-O-Si 等）内部独立执行最远点采样，并按 √N_g 分配样本预算；当目标数足以覆盖所有组时，每组至少获得一个样本。全局 FPS 容易让数量最多的组分主导选择，而 √N 权重在不过度放大小组的同时保证少数组分不被淹没。" },
+    application: { en: "Use it for multi-element datasets whose composition classes differ greatly in size, or when the training set must retain representatives of every chemistry present. The quota preview lists the per-element-set budget before the run; the coverage statistics are computed over the merged selection.", zh: "适用于各组分数量差异很大的多元素数据集，或训练集必须覆盖每一种化学组成的场景。运行前的配额预览会列出各元素组合的样本预算；覆盖度统计基于合并后的整体选择计算。" },
+  },
+  "sampling.composite_fps": {
+    title: { en: "Composite Feature Sampling", zh: "复合特征采样" },
+    theory: { en: "Composite sampling builds one Euclidean space from several named feature blocks — descriptor, descriptor summary, lattice, composition, energy, force statistics — where each block is scaled on its own (robust by default) and divided by √D so a wide block cannot outvote a narrow one. The weight then sets how much each block matters, and markers are selected to be representative in the combined space rather than in the descriptor alone.", zh: "复合采样把若干具名特征块（描述符、描述符汇总、晶格、组分、能量、受力统计）组合成一个欧氏空间：每块先独立缩放（默认稳健缩放），再除以 √D，使宽块无法压制窄块。权重决定各块的相对重要性，选点则在合并空间而非仅描述符空间中保持代表性。" },
+    application: { en: "Use it when a training set must also cover lattice geometry, composition, or energy range, not just descriptor similarity — the case NepTrainKit handles with a physics FPS. Unlike that fixed recipe, the blocks here are chosen explicitly, so the sampling space is always something you asked for and can be reported. Physical blocks require structure granularity and the corresponding metadata; a missing block fails the run instead of being silently dropped.", zh: "当训练集除了描述符相似性外还必须覆盖晶格几何、组分或能量范围时使用（这正是 NepTrainKit 用 physics FPS 处理的情形）。与那套固定配方不同，这里的特征块由用户显式选择，因此采样空间始终是用户要求的、可被报告的内容。物理块要求结构粒度与相应元数据；缺少某块会直接报错，而不是被静默丢弃。" },
+  },
+  "sampling.coverage_target_fps": {
+    title: { en: "Target-coverage FPS", zh: "目标覆盖度 FPS" },
+    theory: { en: "Instead of a fixed sample count, the budget is expressed as a coverage target. Sampling stops once the explained-spread fraction R² = 1 − Σ d_i² / Σ ||x_i − x̄||² reaches the requested value, so the data decides how many structures are enough. R² is monotone in the number of picks, which is what makes it a usable stopping rule.", zh: "样本预算不再固定为数量，而表示为覆盖度目标。当被解释的离散度 R² = 1 − Σ d_i² / Σ ||x_i − x̄||² 达到设定值时采样停止，由数据决定需要多少结构。R² 随选点数单调递增，这正是它能作为停止判据的原因。" },
+    application: { en: "Use it to answer “how many samples do I actually need?”: run with a generous maximum and a 95% target, then watch where the R² and coverage-radius curves flatten. A target that is reached with very few samples means the dataset is highly redundant; a curve still climbing at the maximum means the budget, not the data, was the binding constraint.", zh: "用于回答“到底需要多少样本？”：把最大样本数设得宽松、目标覆盖度设为 95%，观察 R² 与覆盖半径曲线在哪里变平。很少样本就达标说明数据集高度冗余；达到上限时曲线仍在上升则说明限制来自预算而非数据。" },
   },
   "sampling.novelty_fps": {
     title: { en: "Novelty-aware FPS", zh: "新颖性感知 FPS" },

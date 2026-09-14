@@ -18,7 +18,7 @@ import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, vi
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import { parseViewerAtoms } from "../util/viewerAtoms";
 import type { ClickedAtom, ViewerAtom, ViewerModel } from "../util/viewerAtoms";
-import type { DatasetHealth, FramePayload, HealthFindings } from "../types/protocol";
+import type { DatasetHealth, DatasetView, FramePayload, HealthFindings } from "../types/protocol";
 
 const DEFAULT_BOND_CUTOFF = 2.4;
 const MIN_BOND_CUTOFF = 0.1;
@@ -200,6 +200,27 @@ export default function Explore() {
     };
   }, [d?.id, st.statsTick]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Dataset views, for the inspector "Views" row: membership is stored on the
+  // view (frame indices), so the frame's views are found by reverse lookup.
+  // Refreshed on dataset switch and whenever views change elsewhere.
+  const [views, setViews] = useState<DatasetView[]>([]);
+  useEffect(() => {
+    let disposed = false;
+    const refresh = () => {
+      ipc.request<DatasetView[]>("dataset.view.list", {})
+        .then((list) => {
+          if (!disposed) setViews(list);
+        })
+        .catch((e) => console.error("dataset.view.list failed", e));
+    };
+    refresh();
+    window.addEventListener("dataset-views-changed", refresh);
+    return () => {
+      disposed = true;
+      window.removeEventListener("dataset-views-changed", refresh);
+    };
+  }, [d?.id]);
+
   const idx = frame?.index ?? st.activeFrameIndex;
   // checks that flag the frame currently shown in the viewer
   const flaggedChecks = useMemo(() => {
@@ -220,6 +241,11 @@ export default function Explore() {
     if (frame.virial_present === false) absent.push("virial");
     return absent.filter((p) => declared.includes(p));
   }, [frame, flaggedSet, health]);
+  // names of the views whose stored frame indices include the shown frame
+  const frameViews = useMemo(
+    () => (d ? views.filter((v) => v.dataset_id === d.id && v.frame_indices.includes(idx)).map((v) => v.name) : []),
+    [views, d, idx],
+  );
 
   // Shared selection logic for the atom table and viewer click-to-select:
   // clicking the selected atom again clears the selection. Browse selections
@@ -718,6 +744,7 @@ export default function Explore() {
           <InspectorRows
             rows={[
               [t("Frame"), String(idx)],
+              [t("Views"), frameViews.length > 0 ? frameViews.join(" · ") : "—"],
               [t("Formula"), frame?.formula ?? "—"],
               [t("Atoms"), String(frame?.natoms ?? "—")],
               [t("E / atom"), frame?.energy_per_atom != null ? `${frame.energy_per_atom.toFixed(4)} eV` : "—"],
