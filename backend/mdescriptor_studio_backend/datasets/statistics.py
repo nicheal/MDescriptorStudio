@@ -23,6 +23,7 @@ if not _native.native_available():
     from scipy.spatial import cKDTree  # noqa: F401
 
 BINS = 40
+STATS_VERSION = 3
 EXTREME_FORCE_EV_A = 50.0  # per-atom |F| above this flags the frame (health panel)
 # ‖ΣF‖ above this flags the frame (force-balance check; NepTrainKit's default
 # force_balance_threshold — DFT labels should be translationally balanced)
@@ -286,15 +287,18 @@ def _hill_formula(counts: Counter[str]) -> str:
 
 
 def _int_hist(values: list[int]) -> dict | None:
-    """Histogram with one bin per integer value (edges on half-integers so each
-    count lands in its own bar); falls back to _hist when the range would need
-    more than 100 bins."""
+    """Histogram with one bin per integer value.
+
+    The atom-count chart labels each bin by its integer value, so falling back
+    to a regular 40-bin histogram for a wide range would make a bin containing
+    C64 appear as (for example) C59.  Keep these bins discrete even when the
+    range is wide; the frontend can then map every bar back to the exact atom
+    count.
+    """
     arr = np.asarray(values, dtype=np.int64)
     if arr.size == 0:
         return None
     lo, hi = int(arr.min()), int(arr.max())
-    if hi - lo >= 100:
-        return _hist(arr)
     counts = np.bincount(arr - lo, minlength=hi - lo + 1)
     edges = [float(lo - 0.5 + i) for i in range(hi - lo + 2)]
     return {"edges": [round(e, 6) for e in edges], "counts": [int(c) for c in counts]}
@@ -347,12 +351,14 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
     # (frame index, declared-property bits) — indices feed health_findings
     present_bits: list[tuple[int, int]] = []
     invalid_cell = 0
+    energy_anomaly = 0
     extreme_force = 0
     net_force = 0
     nonphysical = 0
     # frame indices flagged per health check (capped in the return payload)
     findings: dict[str, list[int]] = {
         "missing_values": [],
+        "energy_anomaly": [],
         "invalid_cell": [],
         "duplicate_structures": [],
         # parallel to duplicate_structures: the first-occurrence frame each
@@ -387,7 +393,11 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         else:
             bits |= 1
             props["energy"] = True
-            energy_per_atom.append(float(frame.energy) / max(n, 1))
+            frame_energy_per_atom = float(frame.energy) / max(n, 1)
+            energy_per_atom.append(frame_energy_per_atom)
+            if frame_energy_per_atom >= 0.0:
+                energy_anomaly += 1
+                findings["energy_anomaly"].append(pos)
         if frame.forces is None:
             prop_missing["forces"] += 1
         else:
@@ -456,6 +466,7 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
     )
     periodicity = pbc_summary(pbc_set)
     return {
+        "stats_version": STATS_VERSION,
         "structures": int(len(natoms)),
         "atoms_total": int(sum(natoms)),
         "elements": [
@@ -504,6 +515,7 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
             "missing_values": missing_values,
             # per-property breakdown of missing_values (declared properties only)
             "missing_by_property": missing_by_property,
+            "energy_anomaly": energy_anomaly,
             "invalid_cell": invalid_cell,
             "duplicate_structures": duplicates,
             "extreme_force": extreme_force,

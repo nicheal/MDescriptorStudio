@@ -256,6 +256,7 @@ export default function HealthFindingsDrawer() {
   // columns plus the single column behind that check's finding
   const showDupOf = activeTab === "duplicate_structures" && dupOf.size > 0;
   const showMissing = activeTab === "missing_values";
+  const showEnergy = activeTab === "energy_anomaly";
   const showMaxForce = activeTab === "extreme_force";
   const showMinDistance = activeTab === "nonphysical_structures";
   const tabItems = [
@@ -346,8 +347,8 @@ export default function HealthFindingsDrawer() {
               // Fixed px widths on the shared trio + one widthless LAST column
               // that absorbs the drawer's leftover space: the trio renders
               // pixel-identical on every card, whether that card's extra
-              // column exists (the four metric checks) or not (invalid cell /
-              // net force / excluded, and legacy caches without the duplicate
+              // column exists (the metric checks) or not (invalid cell /
+              // net force / energy / excluded, and legacy caches without the duplicate
               // mapping — a blank filler, invisible on the borderless table).
               // The specified widths (+32px selection) stay well under the
               // 560px drawer, so it never scrolls sideways; excluded rows are
@@ -425,7 +426,18 @@ export default function HealthFindingsDrawer() {
                     },
                   ]
                 : []),
-              ...(!showDupOf && !showMaxForce && !showMinDistance && !showMissing
+              ...(showEnergy
+                ? [
+                    {
+                      title: t("E / atom"),
+                      dataIndex: "energy_per_atom",
+                      key: "energy_per_atom",
+                      align: "right" as const,
+                      render: (v: number | null | undefined) => (v == null ? "—" : `${v.toFixed(4)} eV/atom`),
+                    },
+                  ]
+                : []),
+              ...(!showDupOf && !showEnergy && !showMaxForce && !showMinDistance && !showMissing
                 ? [{ title: "", key: "filler" }]
                 : []),
             ]}

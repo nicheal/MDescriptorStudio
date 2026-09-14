@@ -747,7 +747,11 @@ export default function Explore() {
               [t("Views"), frameViews.length > 0 ? frameViews.join(" · ") : "—"],
               [t("Formula"), frame?.formula ?? "—"],
               [t("Atoms"), String(frame?.natoms ?? "—")],
-              [t("E / atom"), frame?.energy_per_atom != null ? `${frame.energy_per_atom.toFixed(4)} eV` : "—"],
+              [
+                t("E / atom"),
+                frame?.energy_per_atom != null ? `${frame.energy_per_atom.toFixed(4)} eV` : "—",
+                flaggedSet.has("energy_anomaly") ? HEALTH_RED : undefined,
+              ],
               [
                 t("Max |F|"),
                 frame?.force_max != null ? `${frame.force_max.toFixed(4)} eV/Å` : "—",

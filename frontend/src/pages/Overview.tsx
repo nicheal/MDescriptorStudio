@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Segmented, Typography } from "antd";
 import ReactECharts from "echarts-for-react";
 import Histogram from "../components/Histogram";
+import { createCartesianDataZoom } from "../components/chartInteraction";
 import { ipc } from "../ipc/client";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
@@ -447,6 +448,7 @@ function AtomCountRow({ symbol, hist }: { symbol: string; hist: Hist }) {
       axisLabel: { fontSize: 10, color: "#616161" },
       splitLine: { lineStyle: { color: "#F0F1F3" } },
     },
+    dataZoom: createCartesianDataZoom(),
     series: [
       {
         type: "bar",

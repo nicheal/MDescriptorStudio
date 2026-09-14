@@ -121,7 +121,7 @@ fn backend_restart(app: tauri::AppHandle, state: tauri::State<BackendState>) -> 
         BACKEND_EXIT_EVENT,
         (),
     );
-    spawn_backend(&app);
+    spawn_backend_async(app);
     Ok(())
 }
 
@@ -156,6 +156,13 @@ fn kill_backend(state: &BackendState) {
             }
         }
     }
+}
+
+// Bundle verification is disk-bound and can take seconds on a cold install.
+// Keep it off Tauri's setup/command thread so the WebView can paint the
+// startup screen while the verified backend is being prepared.
+fn spawn_backend_async(app: tauri::AppHandle) {
+    thread::spawn(move || spawn_backend(&app));
 }
 
 fn spawn_backend(app: &tauri::AppHandle) {
@@ -506,7 +513,7 @@ fn main() {
             backend_ready_line
         ])
         .setup(|app| {
-            spawn_backend(app.handle());
+            spawn_backend_async(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

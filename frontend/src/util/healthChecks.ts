@@ -3,6 +3,7 @@
 // keys stay the single source of truth across rail, drawer, and inspector.
 export const CHECK_KEYS = [
   "missing_values",
+  "energy_anomaly",
   "invalid_cell",
   "duplicate_structures",
   "extreme_force",
@@ -14,6 +15,7 @@ type HealthCheckKey = (typeof CHECK_KEYS)[number];
 
 const CHECK_TITLES: Record<HealthCheckKey, string> = {
   missing_values: "Missing values",
+  energy_anomaly: "Energy anomaly",
   invalid_cell: "Invalid cell",
   duplicate_structures: "Duplicate structures",
   extreme_force: "Extreme force",

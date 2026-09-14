@@ -21,7 +21,7 @@ from ..datasets import (
     detect_format,
     is_v2_fingerprint,
 )
-from ..datasets.statistics import _frame_geometry
+from ..datasets.statistics import STATS_VERSION, _frame_geometry
 from ..errors import (
     AppError,
     DATASET_CHANGED,
@@ -661,11 +661,14 @@ class DatasetService:
         required = {
             "health", "min_distance", "compositions", "formulas",
             "element_atom_counts", "health_findings", "excluded_frames",
+            "stats_version",
         }
         if not isinstance(stats, dict) or not required <= stats.keys():
             return None
+        if stats["stats_version"] != STATS_VERSION:
+            return None
         health = stats["health"]
-        if not isinstance(health, dict) or not {"nonphysical_structures", "net_force"} <= health.keys():
+        if not isinstance(health, dict) or not {"energy_anomaly", "nonphysical_structures", "net_force"} <= health.keys():
             return None
         if "duplicate_structures_of" not in (stats.get("health_findings") or {}):
             # per-copy first-occurrence mapping behind the findings table's
@@ -729,6 +732,7 @@ class DatasetService:
         check = params.get("check")
         known = {
             "missing_values",
+            "energy_anomaly",
             "invalid_cell",
             "duplicate_structures",
             "extreme_force",
@@ -790,12 +794,16 @@ class DatasetService:
                 min_d, _ = _frame_geometry(f.positions, f.numbers, cell, f.pbc)
                 if min_d is not None:
                     min_distance = round(float(min_d), 5)
+            energy_per_atom = None
+            if f.energy is not None:
+                energy_per_atom = round(float(f.energy) / max(len(symbols), 1), 5)
             rows.append(
                 {
                     "index": idx,
                     "natoms": len(symbols),
                     "formula": formula_of(symbols),
                     "force_max": force_max,
+                    "energy_per_atom": energy_per_atom,
                     "volume": round(det, 4) if det > 1e-8 else None,
                     "min_distance": min_distance,
                     "missing_props": [name for name in declared_props if not present[name]],

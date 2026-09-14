@@ -1,5 +1,6 @@
 // Persistent right rail, page-aware:
-//  • Overview/Explore — Data Health panel: missing values / invalid cells /
+//  • Overview/Explore — Data Health panel: missing values / non-negative
+//    per-atom energy / invalid cells /
 //    duplicate structures / extreme forces / non-physical structures /
 //    net-force imbalance from the last scan, plus scan status and a Rescan
 //    trigger.
@@ -14,6 +15,7 @@ import { App as AntApp, Button, Progress, Tooltip, Typography } from "antd";
 import {
   ArrowSync16Regular,
   BroadActivityFeed16Regular,
+  Calculator16Regular,
   CheckmarkCircle16Filled,
   CheckmarkCircle16Regular,
   Clock16Regular,
@@ -169,6 +171,14 @@ function DataHealthRail() {
       check: "missing_values",
     },
     {
+      key: "energy",
+      icon: <Calculator16Regular />,
+      title: t("Energy anomaly"),
+      subtitle: t("Per-atom energy ≥ 0 eV/atom"),
+      count: health ? health.energy_anomaly : null,
+      check: "energy_anomaly",
+    },
+    {
       key: "cell",
       icon: <Cube16Regular />,
       title: t("Invalid cell"),
@@ -243,7 +253,7 @@ function DataHealthRail() {
           <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
             {t("Data Health")}
           </Typography.Text>
-          <Tooltip title={t("Quality checks from the last full scan: property values missing on some structures, non-positive or degenerate cells, exact duplicate structures (content hash), any atom force above the threshold, atom pairs closer than the covalent-radii bound (non-physical structures), and net force above the threshold.")}>
+          <Tooltip title={t("Quality checks from the last full scan: property values missing on some structures, structures with non-negative per-atom energy, non-positive or degenerate cells, exact duplicate structures (content hash), any atom force above the threshold, atom pairs closer than the covalent-radii bound (non-physical structures), and net force above the threshold.")}>
             <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
               <Info16Regular />
             </span>
@@ -481,7 +491,9 @@ function HealthRow({
   clickable?: boolean;
   onClick?: () => void;
 }) {
-  const pct = count !== null && total ? (count / total) * 100 : 0;
+  const safeCount = typeof count === "number" && Number.isFinite(count) ? count : 0;
+  const safeTotal = typeof total === "number" && Number.isFinite(total) ? total : 0;
+  const pct = safeTotal > 0 ? (safeCount / safeTotal) * 100 : 0;
   return (
     <div
       onClick={clickable ? onClick : undefined}
@@ -521,11 +533,11 @@ function HealthRow({
           flex: "0 0 auto",
         }}
       >
-        {loading ? "—" : `${(count ?? 0).toLocaleString()} (${pct.toFixed(2)}%)`}
+        {loading ? "—" : `${safeCount.toLocaleString()} (${pct.toFixed(2)}%)`}
       </span>
       <span
         style={{
-          color: loading ? "#C9CDD4" : (count ?? 0) > 0 ? ORANGE : GREEN,
+          color: loading ? "#C9CDD4" : safeCount > 0 ? ORANGE : GREEN,
           display: "inline-flex",
           flex: "0 0 auto",
         }}

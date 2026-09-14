@@ -122,6 +122,57 @@ export default function SettingsDrawer() {
         <Typography.Text strong style={{ fontSize: 12, color: "#616161", display: "block", marginTop: 24 }}>
           {t("ABOUT")}
         </Typography.Text>
+        <div className="settings-about-update">
+          <div className="settings-about-update-header">
+            <div className="settings-about-update-title">
+              <Typography.Text strong>MDescriptor Studio</Typography.Text>
+              <Typography.Text type="secondary" className="settings-about-update-version">
+                {appUpdate.current || "—"}
+              </Typography.Text>
+            </div>
+            <Button
+              size="small"
+              onClick={() => void appUpdate.refresh()}
+              loading={appUpdate.status === "checking"}
+              disabled={appUpdate.status === "installing"}
+            >
+              {t("Check for updates")}
+            </Button>
+          </div>
+          {appUpdate.status === "available" && (
+            <div className="settings-about-update-details">
+              <Typography.Text type="secondary" className="settings-about-update-release">
+                {t("Latest release")}: {appUpdate.latest}
+              </Typography.Text>
+              <Button type="primary" size="small" onClick={() => void appUpdate.install()}>
+                {t("Install and restart")}
+              </Button>
+            </div>
+          )}
+          {appUpdate.status === "available" && appUpdate.notes && (
+            <Typography.Paragraph type="secondary" className="settings-about-update-notes">
+              {appUpdate.notes}
+            </Typography.Paragraph>
+          )}
+          {appUpdate.progress !== null && (
+            <Progress percent={appUpdate.progress} size="small" showInfo={false} style={{ margin: "8px 0 0" }} />
+          )}
+          {(appUpdate.status === "installing" || appUpdate.status === "installed") && (
+            <Typography.Text type="secondary" className="settings-about-update-message">
+              {t("The app will close and restart to finish the update.")}
+            </Typography.Text>
+          )}
+          {appUpdate.status === "up_to_date" && (
+            <Typography.Text type="secondary" className="settings-about-update-message">
+              {t("Up to date")}
+            </Typography.Text>
+          )}
+          {appUpdate.error && (
+            <Typography.Text type="danger" className="settings-about-update-message">
+              {appUpdate.error}
+            </Typography.Text>
+          )}
+        </div>
         <Descriptions
           column={1}
           size="small"
@@ -130,54 +181,6 @@ export default function SettingsDrawer() {
           labelStyle={{ width: 150, color: "#616161", fontSize: 13 }}
           contentStyle={{ fontSize: 13, fontVariantNumeric: "tabular-nums" }}
         >
-          <Descriptions.Item label="MDescriptor Studio">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-              <span>{appUpdate.current || "—"}</span>
-              <Button
-                size="small"
-                onClick={() => void appUpdate.refresh()}
-                loading={appUpdate.status === "checking"}
-                disabled={appUpdate.status === "installing"}
-              >
-                {t("Check for updates")}
-              </Button>
-            </div>
-            {appUpdate.status === "available" && (
-              <div style={{ marginTop: 6 }}>
-                <Space size={8}>
-                  <Button type="primary" size="small" onClick={() => void appUpdate.install()}>
-                    {t("Install and restart")}
-                  </Button>
-                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                    {t("Latest release")}: {appUpdate.latest}
-                  </Typography.Text>
-                </Space>
-                {appUpdate.notes && (
-                  <Typography.Paragraph type="secondary" style={{ fontSize: 11, margin: "6px 0 0" }}>
-                    {appUpdate.notes}
-                  </Typography.Paragraph>
-                )}
-              </div>
-            )}
-            {appUpdate.progress !== null && (
-              <Progress percent={appUpdate.progress} size="small" showInfo={false} style={{ margin: "4px 0 0" }} />
-            )}
-            {(appUpdate.status === "installing" || appUpdate.status === "installed") && (
-              <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
-                {t("The app will close and restart to finish the update.")}
-              </Typography.Text>
-            )}
-            {appUpdate.status === "up_to_date" && (
-              <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
-                {t("Up to date")}
-              </Typography.Text>
-            )}
-            {appUpdate.error && (
-              <Typography.Text type="danger" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
-                {appUpdate.error}
-              </Typography.Text>
-            )}
-          </Descriptions.Item>
           <Descriptions.Item label={t("Backend")}>{info?.backend_version ?? "—"}</Descriptions.Item>
           <Descriptions.Item label="MDescriptor">{info?.mdescriptor_version ?? "—"}</Descriptions.Item>
           <Descriptions.Item label={t("Protocol")}>{info?.protocol_version ?? "—"}</Descriptions.Item>

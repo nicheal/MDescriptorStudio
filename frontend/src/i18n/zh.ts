@@ -70,9 +70,11 @@ export const zhDict: Record<string, string> = {
 
   // Right rail — Data Health
   "Data Health": "数据健康",
-  "Quality checks from the last full scan: property values missing on some structures, non-positive or degenerate cells, exact duplicate structures (content hash), any atom force above the threshold, atom pairs closer than the covalent-radii bound (non-physical structures), and net force above the threshold.": "上次完整扫描的质量检查结果：部分结构缺失的属性值、非正或退化的晶胞、完全重复的结构（内容哈希）、超过阈值的原子受力、原子间距小于共价半径下限的非物理结构，以及超过阈值的净力。",
+  "Quality checks from the last full scan: property values missing on some structures, structures with non-negative per-atom energy, non-positive or degenerate cells, exact duplicate structures (content hash), any atom force above the threshold, atom pairs closer than the covalent-radii bound (non-physical structures), and net force above the threshold.": "上次完整扫描的质量检查结果：部分结构缺失属性值、单原子能量非负的结构、非正或退化的晶胞、完全重复的结构（内容哈希）、超过阈值的原子受力、原子间距小于共价半径下限的非物理结构，以及超过阈值的净力。",
   "Register a dataset to see its health.": "注册数据集后即可查看其健康状态。",
   "Missing values": "缺失值",
+  "Energy anomaly": "能量异常",
+  "Per-atom energy ≥ 0 eV/atom": "单原子能量 ≥ 0 eV/atom",
   "Missing": "缺失属性",
   "Across all properties": "所有属性合计",
   "Invalid cell": "无效晶胞",

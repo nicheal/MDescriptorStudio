@@ -220,6 +220,7 @@ const STATS: Record<string, unknown> = {
     health: {
       missing_values: 5,
       missing_by_property: { energy: 2, virial: 5 },
+      energy_anomaly: 2,
       invalid_cell: 0,
       duplicate_structures: 2,
       extreme_force: 3,
@@ -232,6 +233,7 @@ const STATS: Record<string, unknown> = {
     health_findings: {
       cap: 5000,
       missing_values: [3, 21, 204, 512, 866],
+      energy_anomaly: [88, 902],
       invalid_cell: [],
       duplicate_structures: [17, 421],
       // parallel to duplicate_structures: the first-occurrence frames
@@ -273,6 +275,7 @@ const STATS: Record<string, unknown> = {
     health: {
       missing_values: 0,
       missing_by_property: { energy: 0, forces: 0 },
+      energy_anomaly: 0,
       invalid_cell: 0,
       duplicate_structures: 0,
       extreme_force: 0,
@@ -285,6 +288,7 @@ const STATS: Record<string, unknown> = {
     health_findings: {
       cap: 5000,
       missing_values: [],
+      energy_anomaly: [],
       invalid_cell: [],
       duplicate_structures: [],
       extreme_force: [],
@@ -1061,6 +1065,7 @@ const METHODS: Record<string, Handler> = {
         natoms: 4 + (i % 6),
         formula: "Ga2As2",
         force_max: 0.4 + (i % 7) * 0.1,
+        energy_per_atom: 0.01 + (i % 5) * 0.01,
         volume: 618.2,
         // plausible only on the non-physical tab (the sole consumer); a couple
         // of rows dip below the short-contact bound, the rest sit at ~2 Å

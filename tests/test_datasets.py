@@ -12,6 +12,7 @@ from mdescriptor_studio_backend.datasets import (
     create_adapter,
     detect_format,
 )
+from mdescriptor_studio_backend.datasets.statistics import _int_hist
 from mdescriptor_studio_backend.errors import AppError
 
 
@@ -128,6 +129,17 @@ def test_statistics(tmp_path: Path) -> None:
         assert hist is not None and len(hist["counts"]) == 40
         assert sum(hist["counts"]) == (6 if key != "force_magnitude" else 6 * 64)
     assert stats["periodicity"]["fully_periodic"] is True
+
+
+def test_element_atom_counts_keep_wide_integer_bins() -> None:
+    hist = _int_hist([4, 64, 512])
+    assert hist is not None
+    assert len(hist["counts"]) == 509
+    assert hist["edges"][0:2] == [3.5, 4.5]
+    assert hist["counts"][0] == 1
+    assert hist["edges"][60:62] == [63.5, 64.5]
+    assert hist["counts"][60] == 1
+    assert hist["counts"][-1] == 1
 
 
 def test_min_distance_per_structure(tmp_path: Path) -> None:

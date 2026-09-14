@@ -1,7 +1,7 @@
 """Data health metrics (health panel): missing values / invalid cell /
-duplicate structures / extreme force / non-physical structures (short
-contact) / net force, plus dataset.rescan and the one-scan-per-dataset
-dedupe, unit- and IPC-level."""
+duplicate structures / energy anomalies / extreme force / non-physical
+structures (short contact) / net force, plus dataset.rescan and the
+one-scan-per-dataset dedupe, unit- and IPC-level."""
 
 import json
 import sqlite3
@@ -44,6 +44,7 @@ def write_pathological_xyz(path: Path) -> None:
 
 def assert_health(health: dict, structures: int) -> None:
     assert health["missing_values"] == 1
+    assert health["energy_anomaly"] == 0
     assert health["invalid_cell"] == 1
     assert health["duplicate_structures"] == 1
     assert health["extreme_force"] == 1
@@ -131,9 +132,9 @@ def write_physics_xyz(path: Path) -> None:
     rows = [
         f'2\nLattice="{lat}" {header}energy=-10.0\n'
         "Si 0.0 0.0 0.0 0.50 0.00 0.00\nSi 2.35 0.0 0.0 -0.50 0.00 0.00\n",
-        f'2\nLattice="{lat}" {header}energy=-10.1\n'
+        f'2\nLattice="{lat}" {header}energy=0.1\n'
         "Si 0.0 0.0 0.0 0.00 0.30 0.00\nSi 1.2 0.0 0.0 0.00 -0.30 0.00\n",
-        f'2\nLattice="{lat}" {header}energy=-10.2\n'
+        f'2\nLattice="{lat}" {header}energy=0.0\n'
         "Si 0.0 0.0 0.0 0.60 0.00 0.00\nSi 2.35 0.0 0.0 0.00 0.00 0.00\n",
     ]
     path.write_text("".join(rows), encoding="utf-8")
@@ -145,12 +146,14 @@ def test_health_nonphysical_and_net_force(tmp_path: Path) -> None:
     stats = compute_statistics(create_adapter(p))
     health = stats["health"]
     assert health["nonphysical_structures"] == 1
+    assert health["energy_anomaly"] == 2
     assert health["short_contact_coefficient"] == 0.7
     assert health["net_force"] == 1
     assert health["net_force_threshold"] == 0.001
     # findings carry the original file positions behind the counts
     assert stats["health_findings"]["nonphysical_structures"] == [1]
     assert stats["health_findings"]["net_force"] == [2]
+    assert stats["health_findings"]["energy_anomaly"] == [1, 2]
     assert stats["health_findings"]["invalid_cell"] == []
     # f2 repeats f0's geometry with different labels: flagged as a copy of
     # f0 — exactly the same-geometry/different-label case the "Duplicate of"
@@ -329,6 +332,7 @@ def test_health_findings_exclude_and_export(tmp_path: Path) -> None:
         stats = bp.request(2, "dataset.statistics", {"id": ds_id})["result"]["stats"]
         assert stats["health_findings"]["nonphysical_structures"] == [1]
         assert stats["health_findings"]["net_force"] == [2]
+        assert stats["health_findings"]["energy_anomaly"] == [1, 2]
         assert stats["excluded_frames"] == {"count": 0, "indices": []}
 
         rows = bp.request(3, "dataset.findings", {"id": ds_id, "check": "nonphysical_structures"})["result"]
@@ -340,55 +344,59 @@ def test_health_findings_exclude_and_export(tmp_path: Path) -> None:
         assert rows["rows"][0]["min_distance"] == 1.2
         assert rows["rows"][0]["excluded"] is False
 
+        energy_rows = bp.request(4, "dataset.findings", {"id": ds_id, "check": "energy_anomaly"})["result"]
+        assert energy_rows["total"] == 2
+        assert [(r["index"], r["energy_per_atom"]) for r in energy_rows["rows"]] == [(1, 0.05), (2, 0.0)]
+
         # explicit-indices mode (drawer excluded tab): no min-distance pass
-        rows2 = bp.request(4, "dataset.findings", {"id": ds_id, "indices": [0, 1, 2]})["result"]
+        rows2 = bp.request(5, "dataset.findings", {"id": ds_id, "indices": [0, 1, 2]})["result"]
         assert [r["index"] for r in rows2["rows"]] == [0, 1, 2]
         assert rows2["rows"][0]["min_distance"] is None
 
         # exclude the short-contact frame: statistics describe the remainder,
         # findings no longer flag it, remaining indices stay stable
-        ex = bp.request(5, "dataset.exclude", {"id": ds_id, "indices": [1]})
+        ex = bp.request(6, "dataset.exclude", {"id": ds_id, "indices": [1]})
         wait_job(bp, ex["result"]["job_id"])
-        stats2 = bp.request(6, "dataset.statistics", {"id": ds_id})["result"]["stats"]
+        stats2 = bp.request(7, "dataset.statistics", {"id": ds_id})["result"]["stats"]
         assert stats2["structures"] == 2
         assert stats2["health"]["nonphysical_structures"] == 0
         assert stats2["health_findings"]["net_force"] == [2]
         assert stats2["excluded_frames"] == {"count": 1, "indices": [1]}
-        rows3 = bp.request(7, "dataset.findings", {"id": ds_id, "check": "nonphysical_structures"})["result"]
+        rows3 = bp.request(8, "dataset.findings", {"id": ds_id, "check": "nonphysical_structures"})["result"]
         assert rows3["total"] == 0
 
-        exc = bp.request(8, "dataset.excluded", {"id": ds_id})["result"]
+        exc = bp.request(9, "dataset.excluded", {"id": ds_id})["result"]
         assert exc["indices"] == [1]
 
-        rs = bp.request(9, "dataset.restore", {"id": ds_id, "indices": [1]})
+        rs = bp.request(10, "dataset.restore", {"id": ds_id, "indices": [1]})
         wait_job(bp, rs["result"]["job_id"])
-        stats3 = bp.request(10, "dataset.statistics", {"id": ds_id})["result"]["stats"]
+        stats3 = bp.request(11, "dataset.statistics", {"id": ds_id})["result"]["stats"]
         assert stats3["structures"] == 3
         assert stats3["health"]["nonphysical_structures"] == 1
 
         # out-of-range indices are a params error, never a partial write
-        err = bp.request(11, "dataset.exclude", {"id": ds_id, "indices": [99]})
+        err = bp.request(12, "dataset.exclude", {"id": ds_id, "indices": [99]})
         assert err["error"]["code"] == "INVALID_PARAMS"
 
         # cleaned-copy export: frame 1 dropped, registered as a new dataset
-        ex2 = bp.request(12, "dataset.exclude", {"id": ds_id, "indices": [1]})
+        ex2 = bp.request(13, "dataset.exclude", {"id": ds_id, "indices": [1]})
         wait_job(bp, ex2["result"]["job_id"])
         dest = tmp_path / "cleaned.xyz"
-        exp = bp.request(13, "dataset.export_cleaned", {"id": ds_id, "dest_path": str(dest)})
+        exp = bp.request(14, "dataset.export_cleaned", {"id": ds_id, "dest_path": str(dest)})
         done_exp = wait_job(bp, exp["result"]["job_id"])
         assert done_exp["status"] == "COMPLETED", done_exp
         assert done_exp["result"]["frames_written"] == 2
-        reg = bp.request(14, "dataset.register", {"path": str(dest), "name": "cleaned"})
+        reg = bp.request(15, "dataset.register", {"path": str(dest), "name": "cleaned"})
         done_reg = wait_job(bp, reg["result"]["job_id"])
         new_id = done_reg["result"]["dataset_id"]
-        st_new = bp.request(15, "dataset.statistics", {"id": new_id})["result"]["stats"]
+        st_new = bp.request(16, "dataset.statistics", {"id": new_id})["result"]["stats"]
         assert st_new["structures"] == 2
         assert st_new["health"]["nonphysical_structures"] == 0
         # the source dataset keeps its own exclusions
-        assert bp.request(16, "dataset.excluded", {"id": ds_id})["result"]["indices"] == [1]
+        assert bp.request(17, "dataset.excluded", {"id": ds_id})["result"]["indices"] == [1]
 
         # refusing to overwrite an existing destination
-        err2 = bp.request(17, "dataset.export_cleaned", {"id": ds_id, "dest_path": str(dest)})
+        err2 = bp.request(18, "dataset.export_cleaned", {"id": ds_id, "dest_path": str(dest)})
         assert err2["error"]["code"] == "INVALID_DATASET"
 
         # a pre-findings cache upgrades the same way as the older health passes
@@ -402,11 +410,11 @@ def test_health_findings_exclude_and_export(tmp_path: Path) -> None:
             con.commit()
         finally:
             con.close()
-        stale = bp.request(18, "dataset.statistics", {"id": ds_id})
+        stale = bp.request(19, "dataset.statistics", {"id": ds_id})
         assert stale["result"]["recalculating"] is True
         done_st = wait_job(bp, stale["result"]["job_id"])
         assert done_st["status"] == "COMPLETED", done_st
-        fresh = bp.request(19, "dataset.statistics", {"id": ds_id})["result"]["stats"]
+        fresh = bp.request(20, "dataset.statistics", {"id": ds_id})["result"]["stats"]
         assert fresh["health_findings"]["net_force"] == [2]
     finally:
         assert bp.close() == 0

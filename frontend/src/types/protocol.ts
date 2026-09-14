@@ -64,6 +64,8 @@ export interface Hist {
 }
 
 export interface Stats {
+  /** statistics algorithm version; used to invalidate incompatible caches */
+  stats_version?: number;
   structures: number;
   atoms_total: number;
   elements: { symbol: string; count: number }[];
@@ -111,6 +113,7 @@ export interface Stats {
 export interface HealthFindings {
   cap: number;
   missing_values: number[];
+  energy_anomaly: number[];
   invalid_cell: number[];
   duplicate_structures: number[];
   /** parallel to duplicate_structures: first-occurrence frame behind each
@@ -127,6 +130,8 @@ export interface FindingsRow {
   natoms: number;
   formula: string;
   force_max: number | null;
+  /** per-atom energy (eV/atom); populated for findings rows with energy */
+  energy_per_atom?: number | null;
   volume: number | null;
   /** shortest interatomic distance (Å); computed only for the
    * non-physical-structures check, null elsewhere */
@@ -139,6 +144,8 @@ export interface FindingsRow {
 export interface DatasetHealth {
   /** frames missing at least one property other frames carry */
   missing_values: number;
+  /** frames with total energy / atom count >= 0 eV/atom */
+  energy_anomaly: number;
   /** frames missing each property the check watches (declared properties
    * only); present since the missing-values breakdown, undefined on legacy
    * caches */

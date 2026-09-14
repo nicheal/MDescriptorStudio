@@ -120,6 +120,60 @@ body {
   background: transparent;
 }
 
+.settings-about-update {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid #eaecf0;
+  border-radius: 6px;
+  background: #fafafa;
+}
+
+.settings-about-update-header,
+.settings-about-update-details {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.settings-about-update-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-about-update-version {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-about-update-details {
+  margin-top: 8px;
+}
+
+.settings-about-update-release {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.settings-about-update-notes {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.settings-about-update-message {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
 /* Sidebar dataset rows: reveal the per-row ⋯ menu on hover or while open. */
 .dataset-item .dataset-item-actions {
   opacity: 0;

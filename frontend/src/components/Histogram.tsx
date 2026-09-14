@@ -6,6 +6,22 @@ import type { Hist } from "../types/protocol";
 import { createCartesianDataZoom } from "./chartInteraction";
 import { useT } from "../i18n";
 
+const GRID_LEFT = 58;
+const GRID_RIGHT = 12;
+
+export function formatHistogramTooltip(
+  hist: Hist | null,
+  point: { data: unknown; dataIndex: number } | undefined,
+  xLabel: string,
+  countLabel: string,
+): string {
+  if (!hist || !point) return "";
+  const lo = hist.edges[point.dataIndex];
+  const hi = hist.edges[point.dataIndex + 1];
+  const count = Array.isArray(point.data) ? point.data[1] : point.data;
+  return `${xLabel}: ${lo.toFixed(2)} – ${hi.toFixed(2)}<br/>${countLabel}: <b>${count}</b>`;
+}
+
 export default function Histogram({
   title,
   unit,
@@ -17,54 +33,62 @@ export default function Histogram({
 }) {
   const { t } = useT();
   const option = useMemo(
-    () => ({
-      grid: { left: 46, right: 12, top: 8, bottom: 24 },
-      tooltip: {
-        trigger: "axis",
-        axisPointer: { type: "shadow" },
-        formatter: (params: unknown) => {
-          const p = (params as { data: number; dataIndex: number }[])[0];
-          if (!hist) return "";
-          const lo = hist.edges[p.dataIndex];
-          const hi = hist.edges[p.dataIndex + 1];
-          return `${lo.toFixed(2)} – ${hi.toFixed(2)}<br/>${t("count")}: <b>${p.data}</b>`;
+    () => {
+      const xLabel = unit ? `${title} (${unit})` : title;
+      const countLabel = t("count");
+      return {
+        grid: { left: GRID_LEFT, right: GRID_RIGHT, top: 8, bottom: 38 },
+        tooltip: {
+          trigger: "axis",
+          axisPointer: { type: "shadow" },
+          formatter: (params: unknown) => {
+            return formatHistogramTooltip(hist, (params as { data: unknown; dataIndex: number }[])[0], xLabel, countLabel);
+          },
         },
-      },
-      xAxis: {
-        type: "value",
-        min: hist?.edges[0],
-        max: hist?.edges[hist.edges.length - 1],
-        axisLabel: { fontSize: 11, color: "#616161" },
-        axisLine: { lineStyle: { color: "#E1E4E8" } },
-        splitLine: { show: false },
-      },
-      yAxis: {
-        type: "value",
-        axisLabel: { fontSize: 11, color: "#616161" },
-        splitLine: { lineStyle: { color: "#F0F1F3" } },
-      },
-      dataZoom: createCartesianDataZoom(),
-      series: [
-        {
-          type: "bar",
-          // value-axis pairs so bars land inside [edges0, edgesN]
-          data:
-            hist?.counts.map((c, i) => [
-              (hist.edges[i] + hist.edges[i + 1]) / 2,
-              c,
-            ]) ?? [],
-          itemStyle: { color: "#0F6CBD", borderRadius: [1, 1, 0, 0] },
-          barCategoryGap: "8%",
+        xAxis: {
+          type: "value",
+          name: xLabel,
+          nameLocation: "middle",
+          nameGap: 26,
+          nameTextStyle: { fontSize: 10, color: "#616161" },
+          min: hist?.edges[0],
+          max: hist?.edges[hist.edges.length - 1],
+          axisLabel: { fontSize: 11, color: "#616161" },
+          axisLine: { lineStyle: { color: "#E1E4E8" } },
+          splitLine: { show: false },
         },
-      ],
-      animation: false,
-    }),
+        yAxis: {
+          type: "value",
+          name: countLabel,
+          nameLocation: "middle",
+          nameGap: 42,
+          nameTextStyle: { fontSize: 10, color: "#616161" },
+          axisLabel: { fontSize: 11, color: "#616161" },
+          splitLine: { lineStyle: { color: "#F0F1F3" } },
+        },
+        dataZoom: createCartesianDataZoom(),
+        series: [
+          {
+            type: "bar",
+            // value-axis pairs so bars land inside [edges0, edgesN]
+            data:
+              hist?.counts.map((c, i) => [
+                (hist.edges[i] + hist.edges[i + 1]) / 2,
+                c,
+              ]) ?? [],
+            itemStyle: { color: "#0F6CBD", borderRadius: [1, 1, 0, 0] },
+            barCategoryGap: "8%",
+          },
+        ],
+        animation: false,
+      };
+    },
     [hist, t, title, unit],
   );
 
   return (
     <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
-      <div style={{ fontSize: 12.5, fontWeight: 600, color: "#242424", padding: "0 2px 2px" }}>
+      <div style={{ marginLeft: GRID_LEFT, marginRight: GRID_RIGHT, display: "flex", justifyContent: "center", alignItems: "center", fontSize: 12.5, fontWeight: 600, color: "#242424", padding: "0 2px 2px", textAlign: "center" }}>
         {unit ? `${title} (${unit})` : title}
       </div>
       <ReactECharts
