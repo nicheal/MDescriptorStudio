@@ -88,7 +88,8 @@ describe("buildParamsKey", () => {
     // The trajectory module is configured entirely inside its result view, so
     // one completed trajectory per descriptor run stays reusable.
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "trajectory" })).toBe("trajectory||full");
-    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "property_correlation" })).toBe("property_correlation|energy_per_atom|5|5|euclidean|90|99|full");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "property_correlation" })).toBe("property_correlation|structure|energy_per_atom|5|5|euclidean|90|99|full");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "property_correlation", mode: "atom" })).toBe("property_correlation|atom|energy_per_atom|5|5|euclidean|90|99|full");
     expect(buildParamsKey("overview", {
       ...baseParams,
       overviewAnalysis: "perturbation_sensitivity",

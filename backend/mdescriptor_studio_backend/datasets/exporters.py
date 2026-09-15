@@ -1,7 +1,7 @@
-"""Writers for cleaned dataset copies (design doc: health-panel curation).
+"""Writers for materialized dataset-view selections.
 
-Both writers consume the adapter's frames (already skipping excluded ones)
-and never touch the source files.  The extxyz writer mirrors the reader's
+Both writers consume selected adapter frames and never touch the source files.
+The extxyz writer mirrors the reader's
 comment-line conventions (Lattice / Properties / energy / virial / pbc); the
 DeepMD writer reproduces the raw npy layout the loader expects.
 """
@@ -72,7 +72,7 @@ def write_deepmd(path: Path, frames: Iterable) -> int:
     path.mkdir(parents=True, exist_ok=True)
     frame_list = list(frames)
     if not frame_list:
-        raise AppError(INVALID_DATASET, "nothing to export: every frame is excluded")
+        raise AppError(INVALID_DATASET, "nothing to write: the view contains no frames")
     natoms = int(frame_list[0].numbers.size)
     if any(int(f.numbers.size) != natoms for f in frame_list):
         raise AppError(

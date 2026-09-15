@@ -106,8 +106,6 @@ export interface Stats {
   /** frame indices behind the health counts (original file positions, capped
    * per check); undefined on caches older than the findings pass */
   health_findings?: HealthFindings;
-  /** frames soft-deleted by the user; statistics describe the remainder */
-  excluded_frames?: { count: number; indices: number[] };
 }
 
 export interface HealthFindings {
@@ -138,7 +136,6 @@ export interface FindingsRow {
   min_distance: number | null;
   /** declared properties this frame lacks (missing-values finding) */
   missing_props?: string[];
-  excluded: boolean;
 }
 
 export interface DatasetHealth {

@@ -1,15 +1,13 @@
 // Data-health findings drawer: the actionable half of the health rail.
 // Opens from a health-rail row click, lists the flagged frames behind each
 // check (capped by the backend), previews rows in the Explore viewer, and
-// soft-deletes (exclude/restore) or writes a cleaned copy without ever
-// touching the source files.
+// saves selected frames as reusable views without ever touching the source
+// files.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { App as AntApp, Button, Drawer, Empty, Table, Tabs, Tag, Tooltip, Typography } from "antd";
-import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { Button, Drawer, Empty, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import {
   ArrowLeft16Regular,
   ArrowRight16Regular,
-  ArrowExportLtr16Regular,
   Eye16Regular,
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
@@ -26,26 +24,23 @@ type StatisticsResponse = {
   stats: Stats | null;
 };
 
-const EXCLUDED_TAB = "__excluded__";
-
 /** Localized labels for per-frame missing-property tags (dataset properties). */
 const PROP_LABELS: Record<string, string> = { energy: "Energy", forces: "Forces", virial: "Virial" };
 
 export default function HealthFindingsDrawer() {
-  const { message } = AntApp.useApp();
   const { t } = useT();
   const st = useWorkspace();
   const d = activeDataset(st);
   const open = st.findingsDrawerOpen;
   const [stats, setStats] = useState<Stats | null>(null);
-  const [activeTab, setActiveTab] = useState<string>(EXCLUDED_TAB);
+  const [activeTab, setActiveTab] = useState<string>(CHECK_KEYS[0]);
   const [rows, setRows] = useState<FindingsRow[]>([]);
   const [rowsTotal, setRowsTotal] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<number[]>([]);
   const [current, setCurrent] = useState<number | null>(null);
   const [saveViewOpen, setSaveViewOpen] = useState(false);
+  const [saveViewMode, setSaveViewMode] = useState<"save" | "subtract">("save");
   const tabRef = useRef(activeTab);
   tabRef.current = activeTab;
 
@@ -88,17 +83,7 @@ export default function HealthFindingsDrawer() {
     async (s: Stats | null, tab: string) => {
       if (!d || !s) return;
       const dsId = d.id;
-      let indices: number[] | null = null;
-      if (tab === EXCLUDED_TAB) {
-        const exc = await ipc.request<{ indices: number[] }>("dataset.excluded", { id: dsId });
-        indices = exc.indices;
-        if (useWorkspace.getState().activeDatasetId !== dsId) return;
-      } else {
-        indices = null; // resolved server-side from health_findings[check]
-      }
-      const params: Record<string, unknown> = { id: dsId, limit: 1000 };
-      if (tab !== EXCLUDED_TAB) params.check = tab;
-      if (indices !== null) params.indices = indices;
+      const params: Record<string, unknown> = { id: dsId, check: tab, limit: 1000 };
       let r = await ipc.request<{ recalculating: boolean; job_id: string | null; total: number; returned: number; rows: FindingsRow[] }>(
         "dataset.findings",
         params,
@@ -127,10 +112,7 @@ export default function HealthFindingsDrawer() {
           // (or the drawer may have opened without one): snap to the first
           // tab that actually has rows instead of rendering a headless table
           const countFor = (k: (typeof CHECK_KEYS)[number]) => s.health_findings?.[k]?.length ?? 0;
-          const known = new Set([
-            ...CHECK_KEYS.filter((k) => countFor(k) > 0),
-            ...((s.excluded_frames?.count ?? 0) > 0 ? [EXCLUDED_TAB] : []),
-          ]);
+          const known = new Set<string>(CHECK_KEYS.filter((k) => countFor(k) > 0));
           if (!known.has(tabRef.current)) {
             const first = CHECK_KEYS.find((k) => countFor(k) > 0);
             if (first) setActiveTab(first);
@@ -148,79 +130,6 @@ export default function HealthFindingsDrawer() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, d?.id, st.statsTick, activeTab]);
-
-  const refreshAll = useCallback(async () => {
-    await refetchDatasets();
-    useWorkspace.getState().bumpStatsTick();
-  }, []);
-
-  const runMutate = useCallback(
-    async (method: "dataset.exclude" | "dataset.restore", indices: number[]) => {
-      if (!d || indices.length === 0) return;
-      setBusy(true);
-      try {
-        const r = await ipc.request<{ job_id: string }>(method, { id: d.id, indices });
-        await jobDone(r.job_id);
-        await refreshAll();
-        message.success(
-          method === "dataset.exclude"
-            ? t("Excluded {n} frames", { n: indices.length })
-            : t("Restored {n} frames", { n: indices.length }),
-        );
-      } catch (e) {
-        const err = e as { code: string; message: string };
-        message.error(`${err.code}: ${err.message}`);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [d, refreshAll, message, t],
-  );
-
-  const exportCleaned = useCallback(async () => {
-    if (!d) return;
-    const isDeepmd = d.format === "deepmd";
-    let dest: string | null = null;
-    try {
-      if (isDeepmd) {
-        dest = await saveDialog({
-          title: t("Choose where to write the cleaned DeepMD dataset"),
-          defaultPath: `${d.name}.cleaned`,
-        });
-      } else {
-        dest = await saveDialog({
-          title: t("Choose where to write the cleaned extxyz file"),
-          defaultPath: `${d.name}.cleaned.xyz`,
-          filters: [{ name: "extxyz", extensions: ["xyz", "extxyz"] }],
-        });
-      }
-    } catch {
-      message.error(t("Could not open the file dialog"));
-      return;
-    }
-    if (!dest) return;
-    setBusy(true);
-    try {
-      const r = await ipc.request<{ job_id: string; dest_path: string }>("dataset.export_cleaned", {
-        id: d.id,
-        dest_path: dest,
-      });
-      await jobDone(r.job_id, () => undefined);
-      // register the cleaned copy so it shows up next to the source dataset
-      const reg = await ipc.request<{ job_id: string }>("dataset.register", {
-        path: r.dest_path,
-        name: `${d.name} (cleaned)`,
-      });
-      await jobDone(reg.job_id);
-      await refreshAll();
-      message.success(t("Cleaned dataset exported and registered"));
-    } catch (e) {
-      const err = e as { code: string; message: string };
-      message.error(`${err.code}: ${err.message}`);
-    } finally {
-      setBusy(false);
-    }
-  }, [d, refreshAll, message, t]);
 
   const preview = useCallback(
     (index: number) => {
@@ -244,7 +153,6 @@ export default function HealthFindingsDrawer() {
   if (!d) return null;
 
   const findings = stats?.health_findings;
-  const excludedCount = stats?.excluded_frames?.count ?? 0;
   // duplicate → first-occurrence mapping behind the "Duplicate of" column
   // (absent on caches from before the mapping existed)
   const dupOf = new Map<number, number>();
@@ -264,11 +172,7 @@ export default function HealthFindingsDrawer() {
       key: k,
       label: `${title(k)} ${(findings?.[k]?.length ?? 0).toLocaleString()}`,
     })),
-    ...(excludedCount > 0
-      ? [{ key: EXCLUDED_TAB, label: `${t("Excluded")} ${excludedCount.toLocaleString()}` }]
-      : []),
   ];
-  const selectionType = activeTab === EXCLUDED_TAB ? "restore" : "exclude";
 
   return (
     <Drawer
@@ -336,11 +240,10 @@ export default function HealthFindingsDrawer() {
             scroll={{ y: 360 }}
             dataSource={rows}
             rowKey="index"
-            rowClassName={(row) => (row.index === current ? "findings-row-current" : row.excluded ? "findings-row-excluded" : "")}
+            rowClassName={(row) => (row.index === current ? "findings-row-current" : "")}
             rowSelection={{
               selectedRowKeys: selected,
               onChange: (keys) => setSelected(keys.map(Number)),
-              getCheckboxProps: () => ({ disabled: busy }),
             }}
             onRow={(row) => ({ onClick: () => preview(row.index), style: { cursor: "pointer" } })}
             columns={[
@@ -348,11 +251,10 @@ export default function HealthFindingsDrawer() {
               // that absorbs the drawer's leftover space: the trio renders
               // pixel-identical on every card, whether that card's extra
               // column exists (the metric checks) or not (invalid cell /
-              // net force / energy / excluded, and legacy caches without the duplicate
+              // net force / energy, and legacy caches without the duplicate
               // mapping — a blank filler, invisible on the borderless table).
               // The specified widths (+32px selection) stay well under the
-              // 560px drawer, so it never scrolls sideways; excluded rows are
-              // marked by the strikethrough row style, not a column
+              // 560px drawer, so it never scrolls sideways.
               { title: t("Frame"), dataIndex: "index", key: "index", width: 64 },
               { title: t("Formula"), dataIndex: "formula", key: "formula", width: 140, ellipsis: true },
               { title: t("Atoms"), dataIndex: "natoms", key: "natoms", width: 64, align: "right" },
@@ -443,45 +345,27 @@ export default function HealthFindingsDrawer() {
             ]}
           />
           <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", flexWrap: "wrap" }}>
-            {selectionType === "exclude" ? (
-              <Button
-                size="small"
-                danger
-                disabled={selected.length === 0 || busy}
-                onClick={() => void runMutate("dataset.exclude", selected)}
-              >
-                {t("Exclude selected ({n})", { n: selected.length })}
-              </Button>
-            ) : (
-              <Button
-                size="small"
-                disabled={selected.length === 0 || busy}
-                onClick={() => void runMutate("dataset.restore", selected)}
-              >
-                {t("Restore selected ({n})", { n: selected.length })}
-              </Button>
-            )}
-            <Tooltip title={t("Writes a new dataset that skips excluded frames and registers it; the source files are never modified.")}>
-              <Button
-                size="small"
-                icon={<ArrowExportLtr16Regular />}
-                disabled={busy}
-                onClick={() => void exportCleaned()}
-              >
-                {t("Export cleaned copy")}
-              </Button>
-            </Tooltip>
             <Button
               size="small"
-              disabled={selected.length === 0 || busy}
-              onClick={() => setSaveViewOpen(true)}
+              disabled={selected.length === 0}
+              onClick={() => {
+                setSaveViewMode("save");
+                setSaveViewOpen(true);
+              }}
             >
               {t("Save selection as view")}
             </Button>
+            <Button
+              size="small"
+              disabled={selected.length === 0}
+              onClick={() => {
+                setSaveViewMode("subtract");
+                setSaveViewOpen(true);
+              }}
+            >
+              {t("Subtract selection from base scope")}
+            </Button>
           </div>
-          <Typography.Paragraph type="secondary" style={{ fontSize: 11, marginTop: 10, marginBottom: 0 }}>
-            {t("Excluding only affects statistics and exports — descriptor runs still use the full source dataset; export a cleaned copy to train on the kept frames.")}
-          </Typography.Paragraph>
           {d && (
             <SaveViewModal
               open={saveViewOpen}
@@ -489,6 +373,7 @@ export default function HealthFindingsDrawer() {
               datasetId={d.id}
               frames={selected}
               totalFrames={d.number_of_frames}
+              initialMode={saveViewMode}
               defaultName={`${title(activeTab)} ${selected.length}`}
               source={{ source: "health_findings", check: activeTab }}
             />

@@ -67,6 +67,20 @@ def test_pca_and_heatmap(tmp_path: Path) -> None:
         assert a_pts[20]["frame"] == 1 and a_pts[20]["atom"] == 4
         assert a_pts[127]["frame"] == 7 and a_pts[127]["atom"] == 15
 
+        # Property correlation must use the same verified atom rows and finish
+        # as a real analysis job; force_magnitude is only available at atom
+        # granularity.
+        property_atom = bp.request(
+            19,
+            "analysis.property_correlation",
+            {"run_id": run_id, "mode": "atom", "property": "force_magnitude", "folds": 3},
+        )
+        property_done = wait_job(bp, property_atom["result"]["job_id"], timeout=120)
+        assert property_done["status"] == "COMPLETED", property_done
+        property_preview = bp.request(20, "analysis.get", {"analysis_id": property_done["result"]["analysis_id"]})
+        assert property_preview["result"]["preview"]["property"] == "force_magnitude"
+        assert property_preview["result"]["preview"]["sample_count"] == 8 * 16
+
         # bad mode rejected before any job is created
         bad = bp.request(17, "analysis.pca", {"run_id": run_id, "mode": "bogus"})
         assert bad["error"]["code"] == "INVALID_PARAMS", bad

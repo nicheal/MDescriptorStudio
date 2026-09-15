@@ -10,7 +10,7 @@ import { ipc } from "../ipc/client";
 import { useT } from "../i18n";
 import type { DatasetView } from "../types/protocol";
 
-export default function SaveViewModal({ open, onClose, datasetId, frames, totalFrames, source, defaultName = "", onSaved }: {
+export default function SaveViewModal({ open, onClose, datasetId, frames, totalFrames, source, defaultName = "", initialMode = "save", onSaved }: {
   open: boolean;
   onClose: () => void;
   datasetId: string;
@@ -21,12 +21,14 @@ export default function SaveViewModal({ open, onClose, datasetId, frames, totalF
   /** Provenance merged into the view's filter spec (e.g. {source, check}). */
   source: Record<string, unknown>;
   defaultName?: string;
+  /** Operation selected by the caller before the modal opens. */
+  initialMode?: "save" | "subtract";
   onSaved?: (view: DatasetView) => void;
 }) {
   const { message } = AntApp.useApp();
   const { t } = useT();
   const [views, setViews] = useState<DatasetView[]>([]);
-  const [mode, setMode] = useState<"save" | "subtract">("save");
+  const [mode, setMode] = useState<"save" | "subtract">(initialMode);
   const [baseViewId, setBaseViewId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,13 +36,13 @@ export default function SaveViewModal({ open, onClose, datasetId, frames, totalF
   useEffect(() => {
     if (!open) return;
     setName(defaultName);
-    setMode("save");
+    setMode(initialMode);
     setBaseViewId(null);
     setViews([]);
     ipc.request<DatasetView[]>("dataset.view.list", {})
       .then((all) => setViews(all.filter((view) => view.dataset_id === datasetId && !view.stale)))
       .catch(() => setViews([]));
-  }, [open, datasetId, defaultName]);
+  }, [open, datasetId, defaultName, initialMode]);
 
   const baseView = views.find((view) => view.id === baseViewId) ?? null;
   const resultFrames = useMemo(() => {

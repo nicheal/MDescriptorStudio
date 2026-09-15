@@ -209,7 +209,7 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
       {
         const moduleParts =
           p.overviewAnalysis === "property_correlation"
-            ? `${p.propertyName}|${p.propertyFolds}|${p.propertyReliabilityK}|${p.propertyDistanceMetric}|${p.propertySparsePercentile}|${p.propertyOodPercentile}`
+            ? `${p.mode}|${p.propertyName}|${p.propertyFolds}|${p.propertyReliabilityK}|${p.propertyDistanceMetric}|${p.propertySparsePercentile}|${p.propertyOodPercentile}`
             : p.overviewAnalysis === "perturbation_sensitivity"
               ? `${p.perturbationType}|${p.perturbationCount}|${p.perturbationMaximum}|${p.perturbationMetric}|${p.perturbationStructures}`
               : p.overviewAnalysis === "feature_variance"

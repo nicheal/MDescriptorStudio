@@ -242,7 +242,6 @@ const STATS: Record<string, unknown> = {
       nonphysical_structures: [155],
       net_force: [12, 47, 233, 519],
     },
-    excluded_frames: { count: 0, indices: [] },
   },
   "ds-cho": {
     structures: 3813,
@@ -295,7 +294,6 @@ const STATS: Record<string, unknown> = {
       nonphysical_structures: [27, 1180],
       net_force: [],
     },
-    excluded_frames: { count: 1, indices: [27] },
   },
 };
 
@@ -1043,12 +1041,8 @@ const METHODS: Record<string, Handler> = {
   "dataset.frame": (p) => mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4)),
   "dataset.findings": (p) => {
     const stats = STATS[p.id as string] as { health_findings?: { [k: string]: number[] } } | undefined;
-    let indices: number[];
-    if (p.check) indices = stats?.health_findings?.[p.check as string] ?? [];
-    else if (Array.isArray(p.indices)) indices = p.indices as number[];
-    else indices = [];
+    const indices = stats?.health_findings?.[p.check as string] ?? [];
     const limit = Math.min(Number(p.limit ?? 1000), 1000);
-    const mockExcluded = new Set(STATS["ds-cho"] && p.id === "ds-cho" ? [27] : []);
     // per-frame missing properties, consistent with MOCK_MISSING_INDICES and
     // the ds-gaas health mock (energy 2, virial 5)
     const mockMissingProps = (i: number): string[] => {
@@ -1071,35 +1065,12 @@ const METHODS: Record<string, Handler> = {
         // of rows dip below the short-contact bound, the rest sit at ~2 Å
         min_distance: i % 9 === 0 ? 0.72 + (i % 3) * 0.05 : 1.9 + (i % 5) * 0.08,
         missing_props: mockMissingProps(i),
-        excluded: mockExcluded.has(i),
       })),
     };
   },
-  "dataset.excluded": (p) => ({
-    indices: p.id === "ds-cho" ? [27] : [],
-    number_of_frames: 3813,
-  }),
-  "dataset.exclude": (p) => {
-    window.setTimeout(() => {
-      mockEmit("job.finished", { job_id: "job-exclude", status: "COMPLETED", result: null, error: null });
-    }, 600);
-    return { job_id: "job-exclude", excluded: (p.indices as number[]).length };
-  },
-  "dataset.restore": (p) => {
-    window.setTimeout(() => {
-      mockEmit("job.finished", { job_id: "job-restore", status: "COMPLETED", result: null, error: null });
-    }, 600);
-    return { job_id: "job-restore", restored: (p.indices as number[]).length };
-  },
-  "dataset.export_cleaned": () => {
-    window.setTimeout(() => {
-      mockEmit("job.finished", { job_id: "job-export", status: "COMPLETED", result: { path: "D:\preview\cleaned.xyz", frames_written: 3800 }, error: null });
-    }, 900);
-    return { job_id: "job-export", dest_path: "D:\preview\cleaned.xyz" };
-  },
   "dataset.register": () => {
     window.setTimeout(() => {
-      mockEmit("job.finished", { job_id: "job-register", status: "COMPLETED", result: { dataset_id: "ds-cleaned" }, error: null });
+      mockEmit("job.finished", { job_id: "job-register", status: "COMPLETED", result: { dataset_id: "ds-materialized" }, error: null });
     }, 800);
     return { job_id: "job-register" };
   },

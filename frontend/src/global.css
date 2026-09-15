@@ -236,13 +236,9 @@ body {
   background: #f0f4fa;
 }
 
-/* Flagged-frames drawer: the frame being previewed, and soft-deleted rows. */
+/* Flagged-frames drawer: the frame being previewed. */
 .findings-row-current > td {
   background: #ebf3fc !important;
-}
-.findings-row-excluded > td {
-  color: #8a8a8a;
-  text-decoration: line-through;
 }
 
 .results-structure-preview-shell {

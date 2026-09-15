@@ -52,6 +52,7 @@ describe("queue_position", () => {
 
 describe("watchJob", () => {
   afterEach(() => {
+    useJobs.setState({ jobs: {}, order: [] });
     vi.restoreAllMocks();
   });
 
@@ -65,6 +66,55 @@ describe("watchJob", () => {
     } as never);
 
     await expect(watchJob("job-fast")).resolves.toMatchObject({ status: "COMPLETED", result: { path: "saved.extxyz" }, error: null });
+  });
+
+  it("reconciles the tracked job when polling recovers a missed event", async () => {
+    trackJob("job-fast", "analysis.property_correlation");
+    vi.spyOn(ipc, "request").mockResolvedValue({
+      id: "job-fast",
+      job_type: "analysis.property_correlation",
+      dataset_id: null,
+      descriptor_run_id: null,
+      status: "COMPLETED",
+      progress: 1,
+      completed: null,
+      total: null,
+      message: null,
+      error: null,
+      created_at: "2026-09-15T00:00:00+00:00",
+      started_at: "2026-09-15T00:00:00+00:00",
+      finished_at: "2026-09-15T00:00:01+00:00",
+      result: { analysis_id: "ana-1" },
+    } as never);
+
+    await watchJob("job-fast");
+
+    expect(useJobs.getState().jobs["job-fast"]).toMatchObject({ status: "COMPLETED", progress: 1 });
+  });
+
+  it("reconciles a running job before its first progress event", async () => {
+    trackJob("job-running", "analysis.property_correlation");
+    const request = vi.spyOn(ipc, "request");
+    request.mockResolvedValueOnce({
+      id: "job-running",
+      job_type: "analysis.property_correlation",
+      dataset_id: null,
+      descriptor_run_id: null,
+      status: "RUNNING",
+      progress: 0,
+      completed: null,
+      total: null,
+      message: "loading descriptor results",
+      error: null,
+      created_at: "2026-09-15T00:00:00+00:00",
+      started_at: "2026-09-15T00:00:00+00:00",
+      finished_at: null,
+      result: null,
+    } as never);
+    const pending = watchJob("job-running");
+    await vi.waitFor(() => expect(useJobs.getState().jobs["job-running"]).toMatchObject({ status: "RUNNING", message: "loading descriptor results" }));
+    ipc.processLine(JSON.stringify({ protocol_version: 1, event: "job.finished", data: { job_id: "job-running", status: "COMPLETED", result: null, error: null } }));
+    await pending;
   });
 
   it("prefers the live finished event result", async () => {

@@ -19,7 +19,7 @@
 `shutdown()`(`services/job_service.py:289-304`)只 `cancel_futures`(未启动的任务),从不调用运行中任务的 `ctx.cancel()`;等 3 秒后 sweep 数据行并 `db.close()`。仍在跑的 job 线程(此时并未 detach)之后任何 `db.execute`/`ctx.progress` 都会打到已关闭的连接上。更严重的是 CPython 3.9+ 的 `ThreadPoolExecutor` 线程是非 daemon 的,解释器退出时会 join 所有线程——一个卡在原生调用里的计算会**阻止后端进程退出**。
 
 **3. 调度器完全无类型感知**
-所有 job 共享一个 FIFO 队列、固定 2 并发:重计算(`descriptor.compute`、`analysis.umap/tsne`)、轻任务(`dataset.statistics`、`dataset.export`)同权重。后果:
+所有 job 共享一个 FIFO 队列、固定 2 并发:重计算(`descriptor.compute`、`analysis.umap/tsne`)、轻任务(`dataset.statistics`)同权重。后果:
 - 两个重计算并行时 CPU(无线程数配置,全靠 BLAS 默认)和内存双双争用——每个 compute 把全部 frames 逐个 append 进内存(`services/descriptor_service.py:473-486`),2GB 输入预算是**单任务**的,并发的总内存无准入控制;
 - 一个轻量统计任务可能排在两个长计算后面出不来,无优先级、无队列位置展示。
 

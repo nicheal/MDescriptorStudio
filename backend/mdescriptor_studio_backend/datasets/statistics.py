@@ -23,7 +23,7 @@ if not _native.native_available():
     from scipy.spatial import cKDTree  # noqa: F401
 
 BINS = 40
-STATS_VERSION = 3
+STATS_VERSION = 4
 EXTREME_FORCE_EV_A = 50.0  # per-atom |F| above this flags the frame (health panel)
 # ‖ΣF‖ above this flags the frame (force-balance check; NepTrainKit's default
 # force_balance_threshold — DFT labels should be translationally balanced)

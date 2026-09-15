@@ -283,9 +283,6 @@ class DatasetService:
                     yield frame
 
             stats = compute_statistics(_CountingAdapter(adapter, counting_iter))
-            # fresh registration has no exclusions; the key keeps the stats
-            # payload shape stable for the cache-upgrade checks
-            stats["excluded_frames"] = {"count": 0, "indices": []}
             ctx.check_cancelled()
             # Registration establishes the source identity; do not use the
             # short-lived UI fingerprint cache at this commit point.
@@ -525,9 +522,7 @@ class DatasetService:
         return {"views": [self._view_meta(self._view_row(record[0])) for record in records]}
 
     def _export_destination(self, row: dict, params: dict, verb: str, extxyz_msg: str):
-        """Shared destination pipeline for view.materialize and export_cleaned:
-        validate/reject dest_path, keep it outside the source, and pick the
-        writer from the on-disk format. Returns (dest, fmt, writer)."""
+        """Validate a materialized-view destination and choose its writer."""
         raw_dest = params.get("dest_path")
         if not raw_dest or not isinstance(raw_dest, str):
             raise AppError(INVALID_PARAMS, "'dest_path' (string) is required")
@@ -660,7 +655,7 @@ class DatasetService:
         # required key is a pre-upgrade shape that one recompute fills in.
         required = {
             "health", "min_distance", "compositions", "formulas",
-            "element_atom_counts", "health_findings", "excluded_frames",
+            "element_atom_counts", "health_findings",
             "stats_version",
         }
         if not isinstance(stats, dict) or not required <= stats.keys():
@@ -676,57 +671,12 @@ class DatasetService:
             return None
         return stats
 
-    # -- health findings & excluded frames ------------------------------------
-    def _excluded_set(self, ds_id: str) -> set[int]:
-        rows = self.db.query(
-            "SELECT frame_index FROM dataset_excluded_frames WHERE dataset_id = ?",
-            (ds_id,),
-        )
-        return {int(r["frame_index"]) for r in rows}
-
-    def exclude(self, params: dict) -> dict:
-        """Soft-delete frames: statistics and exports skip them; the source
-        file is never modified and frames stay previewable/restorable."""
-        row = self._row(params.get("id"))
-        indices = _frame_indices(params.get("indices"), row["number_of_frames"])
-        if not indices:
-            raise AppError(INVALID_PARAMS, "'indices' must contain at least one frame index")
-        reason = params.get("reason")
-        if reason is not None and (not isinstance(reason, str) or len(reason) > 200):
-            raise AppError(INVALID_PARAMS, "'reason' must be a short string")
-        now = _NOW()
-        self.db.executemany(
-            "INSERT INTO dataset_excluded_frames (dataset_id, frame_index, reason, created_at)"
-            " VALUES (?, ?, ?, ?) ON CONFLICT(dataset_id, frame_index) DO NOTHING",
-            [(row["id"], i, reason or "health", now) for i in indices],
-        )
-        # statistics/histograms describe the effective (non-excluded) dataset
-        return {"excluded": len(indices), "job_id": self._submit_recompute(row["id"])}
-
-    def restore(self, params: dict) -> dict:
-        row = self._row(params.get("id"))
-        indices = _frame_indices(params.get("indices"), row["number_of_frames"])
-        if not indices:
-            raise AppError(INVALID_PARAMS, "'indices' must contain at least one frame index")
-        marks = ",".join("?" for _ in indices)
-        self.db.execute(
-            f"DELETE FROM dataset_excluded_frames WHERE dataset_id = ? AND frame_index IN ({marks})",
-            (row["id"], *indices),
-        )
-        return {"restored": len(indices), "job_id": self._submit_recompute(row["id"])}
-
-    def excluded(self, params: dict) -> dict:
-        row = self._row(params.get("id"))
-        return {
-            "indices": sorted(self._excluded_set(row["id"])),
-            "number_of_frames": row["number_of_frames"],
-        }
-
+    # -- health findings -----------------------------------------------------
     def findings(self, params: dict) -> dict:
-        """Per-frame summary rows behind one health check (or explicit indices).
+        """Per-frame summary rows behind one health check.
 
         Rows carry the original file index, so the UI can preview any flagged
-        frame with dataset.frame and soft-delete it with dataset.exclude.
+        frame with dataset.frame and save it as a dataset view.
         """
         row = self._row(params.get("id"))
         check = params.get("check")
@@ -739,12 +689,11 @@ class DatasetService:
             "nonphysical_structures",
             "net_force",
         }
-        if check is not None and check not in known:
+        if not isinstance(check, str) or check not in known:
             raise AppError(INVALID_PARAMS, f"'check' must be one of {sorted(known)}")
         cached = self._cached_stats(row)
         if cached is None:
             return {"recalculating": True, "job_id": self._submit_recompute(row["id"]), "rows": [], "total": 0, "returned": 0}
-        excluded = self._excluded_set(row["id"])
         # declared properties (carried by at least one frame) per the cached
         # stats — the same set the missing-values check watches
         props_meta = cached.get("properties") or {}
@@ -757,13 +706,7 @@ class DatasetService:
             )
             if flag
         ]
-        if check is not None:
-            indices = list(cached.get("health_findings", {}).get(check) or [])
-        else:
-            params_indices = params.get("indices")
-            if params_indices is None:
-                raise AppError(INVALID_PARAMS, "'check' or 'indices' is required")
-            indices = _frame_indices(params_indices, row["number_of_frames"])
+        indices = list(cached.get("health_findings", {}).get(check) or [])
         limit = params.get("limit", FINDINGS_ROW_LIMIT)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= FINDINGS_ROW_LIMIT:
             raise AppError(INVALID_PARAMS, f"'limit' must be an integer in [1, {FINDINGS_ROW_LIMIT}]")
@@ -807,7 +750,6 @@ class DatasetService:
                     "volume": round(det, 4) if det > 1e-8 else None,
                     "min_distance": min_distance,
                     "missing_props": [name for name in declared_props if not present[name]],
-                    "excluded": idx in excluded,
                 }
             )
         return {
@@ -816,39 +758,6 @@ class DatasetService:
             "returned": len(rows),
             "rows": rows,
         }
-
-    def export_cleaned(self, params: dict) -> dict:
-        """Write a new dataset file/dir that skips excluded frames (the source
-        is never modified); the UI registers the result via dataset.register."""
-        row = self._row(params.get("id"))
-        dest, fmt, writer = self._export_destination(
-            row, params, "export",
-            "exporting an extxyz dataset needs a .xyz / .extxyz destination",
-        )
-
-        def runner(ctx):
-            excluded = self._excluded_set(row["id"])
-            adapter = self._adapter_for(row)
-            total = max(len(adapter), 1)
-            count = 0
-
-            def frames():
-                nonlocal count
-                for i in range(len(adapter)):
-                    if i in excluded:
-                        continue
-                    count += 1
-                    if count % 250 == 0:
-                        ctx.progress(count, total, "writing frames")
-                    yield adapter.get_frame(i)
-
-            # the writer consumes lazily, so huge datasets never buffer fully
-            written = writer(dest, frames())
-            ctx.progress(total, total, "done")
-            return {"path": str(dest), "frames_written": written, "format": fmt}
-
-        job_id = self.jobs.submit("dataset.export", runner, dataset_id=row["id"])
-        return {"job_id": job_id, "dest_path": str(dest)}
 
     def _submit_recompute(self, ds_id: str) -> str:
         with self._scan_lock:
@@ -867,27 +776,18 @@ class DatasetService:
                 except UnsafePathError as exc:
                     raise AppError(INVALID_DATASET, "dataset source path is not a safe local path") from exc
                 adapter = self._adapter_for(row)
-                excluded = self._excluded_set(ds_id)
-                total = max(len(adapter) - len(excluded), 1)
+                total = max(len(adapter), 1)
                 count = 0
 
                 def counting_iter():
                     nonlocal count
                     for pos, frame in enumerate(adapter.iter_frames()):
-                        if pos in excluded:
-                            continue
                         count += 1
                         if count % 250 == 0 or count == total:
                             ctx.progress(count, total, "computing statistics")
                         yield frame
 
                 stats = compute_statistics(_CountingAdapter(adapter, counting_iter))
-                # exclusions are service state, not file state: the effective
-                # dataset is the scan minus the excluded frames
-                stats["excluded_frames"] = {
-                    "count": len(excluded),
-                    "indices": sorted(excluded),
-                }
                 fingerprint = compute_fingerprint(source, len(adapter), use_cache=False)
                 if (
                     not is_v2_fingerprint(old_fingerprint)

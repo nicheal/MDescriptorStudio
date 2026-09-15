@@ -789,12 +789,16 @@ export default function Analysis() {
     });
     const done = await watchJob(jobId);
     offProgress();
+    // The page-level history normally refreshes from job.finished. The
+    // watcher also recovers terminal state by polling, so refresh explicitly
+    // to cover a missed finished event.
+    void refresh();
     if (done.status !== "COMPLETED") {
       if (isCurrent()) message.error(`${label} ${jobStatusLabel(tr, done.status)}: ${done.error?.message ?? ""}`);
       return { failed: true };
     }
     return { failed: false, analysisId: typeof done.result?.analysis_id === "string" ? done.result.analysis_id : null };
-  }, [message, tr]);
+  }, [message, refresh, tr]);
 
   const runRequest = useCallback(async (
     method: string,
@@ -1024,11 +1028,13 @@ export default function Analysis() {
         setEffectiveDimensionPreprocess(nextPreprocess);
         loadedParams.effectiveDimensionPreprocess = nextPreprocess;
       } else if (analysisType === "property_correlation") {
+        const savedMode: PcaMode = row.parameters?.mode === "atom" ? "atom" : "structure";
         const nextFolds = Math.max(2, Math.round(finiteNumber(row.parameters?.folds) ?? 5));
         const nextK = Math.max(1, Math.round(finiteNumber(row.parameters?.reliability_k) ?? 5));
         const nextMetric = row.parameters?.distance_metric === "cosine" ? "cosine" : "euclidean";
         const nextSparse = Math.round((finiteNumber(row.parameters?.sparse_quantile) ?? 0.90) * 100);
         const nextOod = Math.round((finiteNumber(row.parameters?.ood_quantile) ?? 0.99) * 100);
+        setMode(savedMode);
         setPropertyName(String(row.parameters?.property ?? "energy_per_atom"));
         setPropertyFolds(nextFolds);
         setPropertyReliabilityK(nextK);
@@ -1041,6 +1047,7 @@ export default function Analysis() {
         loadedParams.propertyDistanceMetric = nextMetric;
         loadedParams.propertySparsePercentile = nextSparse;
         loadedParams.propertyOodPercentile = nextOod;
+        loadedParams.mode = savedMode;
       }
     }
     if (analysisTab === "projection") {
@@ -1130,7 +1137,7 @@ export default function Analysis() {
         setLoadingAnalysisId(null);
       }
     }
-  }, [allRuns, commitAnalysis, dataset, featureCorrelationThreshold, fetchAnalysisPoints, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setNearZeroThreshold, t]);
+  }, [allRuns, commitAnalysis, dataset, featureCorrelationThreshold, fetchAnalysisPoints, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setMode, setNearZeroThreshold, t]);
 
   // Keep the displayed result in step with the current tab + parameters: an
   // exact slot match (same tab, run, parameters) is re-displayed from the

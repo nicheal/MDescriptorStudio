@@ -1507,6 +1507,13 @@ class AnalysisService:
 
         names = ("energy", "energy_per_atom", "force_max", "force_magnitude", "volume")
         values = {name: np.full(frames.size, np.nan, dtype=np.float64) for name in names}
+        # Compute frame-wide quantities once, then map them to atom rows.
+        frame_properties = {}
+        for frame_index, frame in frame_cache.items():
+            magnitudes = np.linalg.norm(np.asarray(frame.forces, dtype=np.float64), axis=1) if frame.forces is not None and len(frame.forces) else None
+            cell = np.asarray(frame.cell, dtype=np.float64)
+            volume = abs(float(np.linalg.det(cell))) if cell.shape == (3, 3) else float("nan")
+            frame_properties[frame_index] = (magnitudes, float(magnitudes.max()) if magnitudes is not None else None, volume)
         for sample_index, frame_index in enumerate(frames.tolist()):
             frame = frame_cache.get(int(frame_index))
             if frame is None:
@@ -1515,18 +1522,15 @@ class AnalysisService:
             if frame.energy is not None:
                 values["energy"][sample_index] = float(frame.energy)
                 values["energy_per_atom"][sample_index] = float(frame.energy) / natoms
-            if frame.forces is not None and len(frame.forces):
-                magnitudes = np.linalg.norm(np.asarray(frame.forces, dtype=np.float64), axis=1)
-                values["force_max"][sample_index] = float(magnitudes.max())
+            magnitudes, force_max, volume = frame_properties[int(frame_index)]
+            if magnitudes is not None:
+                values["force_max"][sample_index] = force_max
                 if mode == "atom" and rows is not None:
                     atom = int(rows[sample_index])
                     if 0 <= atom < magnitudes.size:
                         values["force_magnitude"][sample_index] = float(magnitudes[atom])
-            cell = np.asarray(frame.cell, dtype=np.float64)
-            if cell.shape == (3, 3):
-                volume = abs(float(np.linalg.det(cell)))
-                if np.isfinite(volume) and volume > 0:
-                    values["volume"][sample_index] = volume
+            if np.isfinite(volume) and volume > 0:
+                values["volume"][sample_index] = volume
         return {name: array for name, array in values.items() if bool(np.isfinite(array).any())}
 
     # Composite sampling blocks.  ``descriptor`` and ``descriptor_summary``

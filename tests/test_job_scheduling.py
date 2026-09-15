@@ -111,7 +111,7 @@ def test_queue_positions_per_category(tmp_path) -> None:
     _wait_status(jobs, running, "RUNNING")
     first = jobs.submit("descriptor.compute", noop)
     second = jobs.submit("descriptor.compute", noop)
-    other_pool = jobs.submit("dataset.export", noop)
+    other_pool = jobs.submit("dataset.view.materialize", noop)
 
     time.sleep(0.2)  # let the pool slots settle
     row_first = jobs.get_job(first)

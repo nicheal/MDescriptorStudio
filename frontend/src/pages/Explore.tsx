@@ -165,7 +165,7 @@ export default function Explore() {
   const virial = useMemo(() => (frame ? virialSummary(frame.virial) : null), [frame]);
 
   // Health-check findings for the red inspector highlights; refetched on
-  // dataset switch and after any exclude/restore/rescan (statsTick).
+  // dataset switch and after a rescan (statsTick).
   const [health, setHealth] = useState<DatasetHealth | null>(null);
   const [healthFindings, setHealthFindings] = useState<HealthFindings | null>(null);
   useEffect(() => {

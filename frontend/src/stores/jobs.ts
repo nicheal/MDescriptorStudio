@@ -23,7 +23,6 @@ export interface JobState {
 const JOB_TYPE_PAIRS: Record<string, Pair> = {
   "dataset.register": { en: "Dataset scan & statistics", zh: "数据集扫描与统计" },
   "dataset.statistics": { en: "Dataset statistics", zh: "数据集统计" },
-  "dataset.export": { en: "Export cleaned dataset", zh: "导出清理副本" },
   "descriptor.compute": { en: "Descriptor compute", zh: "描述符计算" },
   "analysis.pca": { en: "PCA", zh: "PCA" },
   "analysis.umap": { en: "UMAP", zh: "UMAP" },
@@ -138,6 +137,7 @@ export function watchJob(jobId: string): Promise<{
     const inspect = async () => {
       try {
         const row = await ipc.request<JobRow>("job.get", { id: jobId });
+        reconcileTrackedJob(row);
         if (!terminal(row.status)) {
           schedule(500);
           return;
@@ -179,6 +179,14 @@ export function watchJob(jobId: string): Promise<{
       finish({ status: d.status, result: d.result ?? null, error: d.error ?? null });
     });
     void inspect();
+  });
+}
+
+/** Keep the live registry consistent when polling recovers a missed event. */
+function reconcileTrackedJob(row: JobRow): void {
+  useJobs.setState((st) => {
+    if (!st.jobs[row.id]) return st;
+    return { jobs: { ...st.jobs, [row.id]: fromJobRow(row) } };
   });
 }
 

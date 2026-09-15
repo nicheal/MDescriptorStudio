@@ -1852,6 +1852,8 @@ class AnalysisEngine:
 
     @staticmethod
     def property_correlation(samples: SampleMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
+        if progress:
+            progress(0.0, "preparing property correlations")
         property_name = str(params.get("property") or "energy_per_atom")
         target = samples.properties.get(property_name)
         if target is None:
@@ -1881,6 +1883,8 @@ class AnalysisEngine:
         ranked_y = (ranked_y - ranked_y.mean()) / ranked_y.std()
         spearman_correlations = (ranked_x.T @ ranked_y) / max(ranked_x.shape[0], 1)
 
+        if progress:
+            progress(0.1, "computing feature-property mutual information")
         sklearn_feature_selection = _safe_import("sklearn.feature_selection", "scikit-learn")
         mutual_information = np.asarray(
             sklearn_feature_selection.mutual_info_regression(
@@ -1916,7 +1920,9 @@ class AnalysisEngine:
         predictions = np.empty(y.shape[0], dtype=np.float64)
         baseline_predictions = np.empty(y.shape[0], dtype=np.float64)
         oof_distances = np.empty(y.shape[0], dtype=np.float64)
-        for train_indices, test_indices in splitter.split(model_x):
+        for fold_index, (train_indices, test_indices) in enumerate(splitter.split(model_x)):
+            if progress:
+                progress(0.25 + 0.65 * fold_index / folds, f"cross-validating property regression: fold {fold_index + 1}/{folds}")
             fold_model = sklearn_base.clone(model)
             fold_model.fit(model_x[train_indices], y[train_indices])
             predictions[test_indices] = fold_model.predict(model_x[test_indices])
@@ -1931,6 +1937,8 @@ class AnalysisEngine:
             distances, _neighbor_indices = neighbor_model.kneighbors(test_scaled)
             oof_distances[test_indices] = distances.mean(axis=1)
 
+        if progress:
+            progress(0.9, "summarizing property reliability")
         r2 = float(sklearn_metrics.r2_score(y, predictions))
         rmse = float(np.sqrt(sklearn_metrics.mean_squared_error(y, predictions)))
         mae = float(sklearn_metrics.mean_absolute_error(y, predictions))
