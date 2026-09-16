@@ -39,6 +39,7 @@ export const zhDict: Record<string, string> = {
   "Registering dataset…": "正在注册数据集…",
   "Dataset added": "数据集已添加",
   "Register failed: {message}": "注册失败：{message}",
+  "Dataset registered, but the list could not be refreshed": "数据集已注册，但列表刷新失败",
   "Select DeepMD dataset folder": "选择 DeepMD 数据集目录",
   "Select extxyz dataset file": "选择 extxyz 数据集文件",
   "Could not open the file dialog": "无法打开文件对话框",

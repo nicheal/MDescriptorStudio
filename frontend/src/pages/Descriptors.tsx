@@ -151,11 +151,12 @@ export default function Descriptors() {
 
   const schema = selected ? (schemas[selected] ?? null) : null;
 
-  const elementOptions = d?.elements ?? [];
+  const datasetElements = d?.elements;
+  const elementOptions = useMemo(() => datasetElements ?? [], [datasetElements]);
 
   useEffect(() => {
     setValues(schema ? collectDefaults(schema.parameters, elementOptions) : {});
-  }, [selected, schema, d?.id, elementOptions.join("\u0000")]);
+  }, [selected, schema, d?.id, elementOptions]);
 
   // ADR-11 precheck: disable descriptors incompatible with the dataset's periodicity
   const incompatibleReasons = useMemo(() => {
@@ -177,8 +178,6 @@ export default function Descriptors() {
     return out;
   }, [d, list, t]);
 
-  if (!d) return <Empty description={t("Register a dataset first")} style={{ marginTop: 120 }} />;
-
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return list;
@@ -188,6 +187,9 @@ export default function Descriptors() {
         .some((text) => text.toLowerCase().includes(needle)),
     );
   }, [list, query]);
+
+  if (!d) return <Empty description={t("Register a dataset first")} style={{ marginTop: 120 }} />;
+
   const availableDtypes = schema?.output.dtypes?.length ? schema.output.dtypes : [DEFAULT_OUTPUT_DTYPE];
   const effectiveDtype = availableDtypes.includes(dtype) ? dtype : availableDtypes[0];
   // Device choices are always the schema-declared list (Rule 3: nothing hardcoded);

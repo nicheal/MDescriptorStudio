@@ -1,5 +1,5 @@
 // Dev-only browser preview of the real App without the Tauri shell.
-// Open via `npm run dev` → http://localhost:1420/preview.html
+// Open via `npm run dev` → http://localhost:4173/preview.html
 // It stubs window.__TAURI_INTERNALS__ (invoke/transformCallback) and serves a
 // tiny in-browser mock backend over the same NDJSON protocol. Not part of the
 // production bundle (vite builds only index.html's entry).

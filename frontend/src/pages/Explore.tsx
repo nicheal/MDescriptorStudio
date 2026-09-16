@@ -10,6 +10,7 @@ import {
   Warning16Filled,
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
+import { waitForSuccessfulJob } from "../stores/jobs";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
@@ -17,6 +18,7 @@ import { forceArrowGeometry, frameMaxForce } from "../util/forces";
 import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, virialSummary } from "../util/structure";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import { parseViewerAtoms } from "../util/viewerAtoms";
+import { createExploreFrameLoader, type ExploreFrameLoader } from "./exploreFrameLoader";
 import type { ClickedAtom, ViewerAtom, ViewerModel } from "../util/viewerAtoms";
 import type { DatasetHealth, DatasetView, FramePayload, HealthFindings } from "../types/protocol";
 
@@ -35,6 +37,12 @@ const MISSING_PROP_LABELS: Record<string, string> = { energy: "Energy", forces: 
 const FORCE_ARROW_TARGET_LENGTH = 3.0;
 const FORCE_ARROW_START_OFFSET = 0.75;
 const FORCE_ARROW_COLOR = "#B4009E";
+
+export type ExploreStatisticsResponse = {
+  recalculating: boolean;
+  job_id: string | null;
+  stats: { health?: DatasetHealth; health_findings?: HealthFindings } | null;
+};
 
 function clampBondCutoff(value: number): number {
   return Math.max(MIN_BOND_CUTOFF, Math.min(MAX_BOND_CUTOFF, value));
@@ -57,9 +65,27 @@ function neighborsWithinCutoff(
     .sort((left, right) => left.distance - right.distance);
 }
 
+export async function loadExploreHealth(
+  datasetId: string,
+  requestStatistics: (datasetId: string) => Promise<ExploreStatisticsResponse>,
+  waitForJob: (jobId: string) => Promise<void>,
+  isCurrent: () => boolean,
+  commit: (stats: ExploreStatisticsResponse["stats"]) => void,
+): Promise<void> {
+  let response = await requestStatistics(datasetId);
+  if (!isCurrent()) return;
+  if (!response.stats && response.job_id) {
+    await waitForJob(response.job_id);
+    if (!isCurrent()) return;
+    response = await requestStatistics(datasetId);
+  }
+  if (isCurrent()) commit(response.stats);
+}
+
 export default function Explore() {
   const st = useWorkspace();
   const d = activeDataset(st);
+  const datasetId = d?.id;
   const { t } = useT();
   const [frame, setFrame] = useState<FramePayload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -96,6 +122,13 @@ export default function Explore() {
   const [viewerError, setViewerError] = useState<string | null>(null);
   const loadStart = useRef<number>(0);
   const renderedFrameRef = useRef<number | null>(null);
+  const frameLoaderRef = useRef<ExploreFrameLoader | null>(null);
+  if (!frameLoaderRef.current) {
+    frameLoaderRef.current = createExploreFrameLoader(
+      (method, params) => ipc.request<FramePayload>(method, params),
+      () => useWorkspace.getState().activeDatasetId,
+    );
+  }
   // The backend's xyz padding extent follows bond_cutoff. Keep track of the
   // last requested extent so enabling or enlarging a local shell can fetch
   // enough periodic images without refetching on every render.
@@ -169,28 +202,23 @@ export default function Explore() {
   const [health, setHealth] = useState<DatasetHealth | null>(null);
   const [healthFindings, setHealthFindings] = useState<HealthFindings | null>(null);
   useEffect(() => {
-    if (!d) return;
+    setHealth(null);
+    setHealthFindings(null);
+    if (!datasetId) return;
     let disposed = false;
-    const dsId = d.id;
+    const dsId = datasetId;
     (async () => {
       try {
-        let r = await ipc.request<{ recalculating: boolean; job_id: string | null; stats: { health?: DatasetHealth; health_findings?: HealthFindings } | null }>(
-          "dataset.statistics",
-          { id: dsId },
+        await loadExploreHealth(
+          dsId,
+          (id) => ipc.request<ExploreStatisticsResponse>("dataset.statistics", { id }),
+          waitForSuccessfulJob,
+          () => !disposed && useWorkspace.getState().activeDatasetId === dsId,
+          (stats) => {
+            if (stats?.health) setHealth(stats.health);
+            if (stats?.health_findings) setHealthFindings(stats.health_findings);
+          },
         );
-        if (!r.stats && r.job_id) {
-          await new Promise<void>((resolve) => {
-            const off = ipc.on("job.finished", (data) => {
-              const j = data as { job_id: string };
-              if (j.job_id !== r.job_id) return;
-              off();
-              resolve();
-            });
-          });
-          r = await ipc.request("dataset.statistics", { id: dsId });
-        }
-        if (!disposed && r.stats?.health) setHealth(r.stats.health);
-        if (!disposed && r.stats?.health_findings) setHealthFindings(r.stats.health_findings);
       } catch (e) {
         console.error("dataset.statistics failed", e);
       }
@@ -198,7 +226,7 @@ export default function Explore() {
     return () => {
       disposed = true;
     };
-  }, [d?.id, st.statsTick]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [datasetId, st.statsTick]);
 
   // Dataset views, for the inspector "Views" row: membership is stored on the
   // view (frame indices), so the frame's views are found by reverse lookup.
@@ -307,30 +335,29 @@ export default function Explore() {
   const fetchFrame = useCallback(
     async (index: number, requestedBondCutoff = bondCutoff) => {
       if (!d) return;
-      const idx = Math.max(0, Math.min(index, total - 1));
+      const dsId = d.id;
       const cutoff = clampBondCutoff(requestedBondCutoff);
       const requestCutoff = showLocalEnvironment && selectedAtom != null
         ? clampBondCutoff(Math.max(cutoff, localCutoff))
         : cutoff;
-      setLoading(true);
       loadStart.current = performance.now();
-      try {
-        const f = await ipc.request<FramePayload>("dataset.frame", {
-          id: d.id,
-          index: idx,
+      await frameLoaderRef.current!.load({
+        datasetId: dsId,
+        total,
+        index,
+        bondCutoff: cutoff,
+        requestCutoff,
+        onLoading: setLoading,
+        onFrame: (f, idx) => {
           // Keep the public display threshold separate from the larger
           // periodic-padding extent needed by an active local shell.
-          bond_cutoff: requestCutoff,
-        });
-        fetchedGhostCutoffRef.current = requestCutoff;
-        setFrame({ ...f, bond_cutoff: cutoff });
-        st.setActiveFrame(idx);
-        setJumpTo(null);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
+          fetchedGhostCutoffRef.current = requestCutoff;
+          setFrame(f);
+          st.setActiveFrame(idx);
+          setJumpTo(null);
+        },
+        onError: (error) => console.error(error),
+      });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [d, total, bondCutoff, localCutoff, selectedAtom, showLocalEnvironment],
@@ -338,11 +365,13 @@ export default function Explore() {
 
   // reset when dataset changes
   useEffect(() => {
+    frameLoaderRef.current!.invalidate();
     renderedFrameRef.current = null;
     fetchedGhostCutoffRef.current = 0;
     setFrame(null);
     setShowDistancePair(false);
     if (d && total > 0) void fetchFrame(st.activeFrameIndex || 0);
+    return () => frameLoaderRef.current!.invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d?.id]);
 
@@ -367,6 +396,7 @@ export default function Explore() {
 
   // 3Dmol lifecycle
   useEffect(() => {
+    const element = viewerDiv.current;
     let cancelled = false;
     (async () => {
       try {
@@ -374,8 +404,8 @@ export default function Explore() {
         const $3Dmol = ((mod as { default?: unknown }).default ?? mod) as {
           createViewer: (el: HTMLElement, opts: object) => never;
         };
-        if (cancelled || !viewerDiv.current) return;
-        viewerRef.current = $3Dmol.createViewer(viewerDiv.current, {
+        if (cancelled || !element) return;
+        viewerRef.current = $3Dmol.createViewer(element, {
           backgroundColor: "white",
           // Orthographic projection so crystal structures keep parallel cell
           // edges (no perspective foreshortening) while rotating.
@@ -392,7 +422,7 @@ export default function Explore() {
       setViewerReady(false);
       viewerRef.current?.clear();
       viewerRef.current = null;
-      if (viewerDiv.current) viewerDiv.current.innerHTML = "";
+      if (element) element.innerHTML = "";
     };
   }, []);
 

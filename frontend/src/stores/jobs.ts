@@ -87,6 +87,8 @@ interface JobsStore {
 
 export const useJobs = create<JobsStore>(() => ({ jobs: {}, order: [] }));
 
+const isTerminalStatus = (status: string) => status === "COMPLETED" || status === "FAILED" || status === "CANCELLED";
+
 export function trackJob(jobId: string, jobType: string, datasetId?: string | null) {
   useJobs.setState((st) => ({
     jobs: {
@@ -108,7 +110,7 @@ export function trackJob(jobId: string, jobType: string, datasetId?: string | nu
   }));
 }
 
-export function watchJob(jobId: string): Promise<{
+export function watchJob(jobId: string, onProgress?: (p: number) => void): Promise<{
   status: string;
   result: Record<string, unknown> | null;
   error: JobState["error"];
@@ -116,6 +118,7 @@ export function watchJob(jobId: string): Promise<{
   return new Promise((resolve) => {
     let settled = false;
     let off = () => {};
+    let offProgress = () => {};
     let timer: ReturnType<typeof setTimeout> | undefined;
     let failures = 0;
     const finish = (data: {
@@ -126,10 +129,10 @@ export function watchJob(jobId: string): Promise<{
       if (settled) return;
       settled = true;
       off();
+      offProgress();
       if (timer) clearTimeout(timer);
       resolve(data);
     };
-    const terminal = (status: string) => status === "COMPLETED" || status === "FAILED" || status === "CANCELLED";
     const schedule = (delay: number) => {
       if (settled) return;
       timer = setTimeout(() => void inspect(), delay);
@@ -137,8 +140,10 @@ export function watchJob(jobId: string): Promise<{
     const inspect = async () => {
       try {
         const row = await ipc.request<JobRow>("job.get", { id: jobId });
+        if (settled) return;
+        failures = 0;
         reconcileTrackedJob(row);
-        if (!terminal(row.status)) {
+        if (!isTerminalStatus(row.status)) {
           schedule(500);
           return;
         }
@@ -148,12 +153,14 @@ export function watchJob(jobId: string): Promise<{
           error: row.error ? { code: row.error, message: row.message ?? row.error } : null,
         });
       } catch (error) {
+        if (settled) return;
         const err = error as { code?: string; message?: string };
         // BUSY means the backend answered but its request queue is jammed (a
         // long native compute stalls the RPC workers until the poll slots
         // fill) — the job itself is alive, so back off and keep waiting
         // instead of failing the watch and popping a bogus error.
         if (err.code === "BUSY") {
+          failures = 0;
           schedule(2000);
           return;
         }
@@ -178,6 +185,12 @@ export function watchJob(jobId: string): Promise<{
       if (d.job_id !== jobId) return;
       finish({ status: d.status, result: d.result ?? null, error: d.error ?? null });
     });
+    if (onProgress) {
+      offProgress = ipc.on("job.progress", (data) => {
+        const d = data as { job_id: string; progress: number };
+        if (d.job_id === jobId) onProgress(d.progress);
+      });
+    }
     void inspect();
   });
 }
@@ -190,33 +203,24 @@ function reconcileTrackedJob(row: JobRow): void {
   });
 }
 
-/** Resolves when the backend job finishes; reports progress along the way. */
-export function jobDone(jobId: string, onProgress?: (p: number) => void): Promise<void> {
-  return new Promise((resolve) => {
-    const offDone = ipc.on("job.finished", (data) => {
-      const j = data as { job_id: string };
-      if (j.job_id !== jobId) return;
-      offDone();
-      offProgress();
-      resolve();
-    });
-    const offProgress = ipc.on("job.progress", (data) => {
-      const j = data as { job_id: string; progress: number };
-      if (j.job_id !== jobId) return;
-      onProgress?.(j.progress);
-    });
-  });
+/** Wait for successful completion and throw the backend's failure reason. */
+export async function waitForSuccessfulJob(jobId: string, onProgress?: (p: number) => void): Promise<void> {
+  const done = await watchJob(jobId, onProgress);
+  if (done.status === "COMPLETED") return;
+  throw done.error ?? {
+    code: done.status,
+    message: done.status === "CANCELLED" ? "The job was cancelled." : "The job failed.",
+  };
 }
 
-let wired = false;
-export function wireJobEvents(setRunning: (n: number) => void) {
-  if (wired) return;
-  wired = true;
-  ipc.on("job.progress", (data) => {
+let cleanupJobEvents: (() => void) | null = null;
+export function wireJobEvents(setRunning: (n: number) => void): () => void {
+  cleanupJobEvents?.();
+  const offProgress = ipc.on("job.progress", (data) => {
     const d = data as { job_id: string; progress: number; completed: number; total: number; message: string | null };
     useJobs.setState((st) => {
       const cur = st.jobs[d.job_id];
-      if (!cur) return st;
+      if (!cur || isTerminalStatus(cur.status)) return st;
       return {
         jobs: {
           ...st.jobs,
@@ -225,7 +229,7 @@ export function wireJobEvents(setRunning: (n: number) => void) {
       };
     });
   });
-  ipc.on("job.finished", (data) => {
+  const offFinished = ipc.on("job.finished", (data) => {
     const d = data as { job_id: string; status: JobState["status"]; result: Record<string, unknown> | null; error: JobState["error"] };
     useJobs.setState((st) => {
       const cur = st.jobs[d.job_id];
@@ -238,14 +242,23 @@ export function wireJobEvents(setRunning: (n: number) => void) {
       };
     });
   });
-  ipc.on("job.progress", () => {
+  const offProgressCount = ipc.on("job.progress", () => {
     const st = useJobs.getState();
     setRunning(Object.values(st.jobs).filter((j) => j.status === "RUNNING" || j.status === "QUEUED").length);
   });
-  ipc.on("job.finished", () => {
+  const offFinishedCount = ipc.on("job.finished", () => {
     const st = useJobs.getState();
     setRunning(Object.values(st.jobs).filter((j) => j.status === "RUNNING" || j.status === "QUEUED").length);
   });
+  const cleanup = () => {
+    offProgress();
+    offFinished();
+    offProgressCount();
+    offFinishedCount();
+    if (cleanupJobEvents === cleanup) cleanupJobEvents = null;
+  };
+  cleanupJobEvents = cleanup;
+  return cleanup;
 }
 
 export function fromJobRow(row: JobRow): JobState {

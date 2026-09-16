@@ -174,17 +174,24 @@ export default function Sidebar() {
         setPath("");
         setName("");
         message.info(t("Registering dataset…"));
-        const off = ipc.on("job.finished", (data) => {
-          const d = data as { job_id: string; status: string; error: { message: string } | null };
-          if (d.job_id !== r.job_id) return;
-          off();
-          if (d.status === "COMPLETED") {
-            void refreshAfterRegister();
-            message.success(t("Dataset added"));
-          } else {
-            message.error(t("Register failed: {message}", { message: d.error?.message ?? d.status }));
-          }
-        });
+        trackJob(r.job_id, "dataset.register");
+        void watchJob(r.job_id)
+          .then(async (done) => {
+            if (done.status !== "COMPLETED") {
+              message.error(t("Register failed: {message}", { message: done.error?.message ?? done.status }));
+              return;
+            }
+            try {
+              await refreshAfterRegister();
+              message.success(t("Dataset added"));
+            } catch {
+              message.warning(t("Dataset registered, but the list could not be refreshed"));
+            }
+          })
+          .catch((error) => {
+            const err = error as { code?: string; message?: string };
+            message.error(t("Register failed: {message}", { message: err.message ?? err.code ?? "unknown error" }));
+          });
       }
     } catch (e) {
       const err = e as { code: string; message: string };

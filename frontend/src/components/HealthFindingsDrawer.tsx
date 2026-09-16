@@ -12,16 +12,25 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import SaveViewModal from "./SaveViewModal";
-import { jobDone } from "../stores/jobs";
+import { waitForSuccessfulJob } from "../stores/jobs";
 import { activeDataset, refetchDatasets, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
+import { createAsyncRequestGuard } from "../util/asyncRequestGuard";
 import type { FindingsRow, Stats } from "../types/protocol";
 
 type StatisticsResponse = {
   recalculating: boolean;
   job_id: string | null;
   stats: Stats | null;
+};
+
+type FindingsResponse = {
+  recalculating: boolean;
+  job_id: string | null;
+  total: number;
+  returned: number;
+  rows: FindingsRow[];
 };
 
 /** Localized labels for per-frame missing-property tags (dataset properties). */
@@ -31,6 +40,8 @@ export default function HealthFindingsDrawer() {
   const { t } = useT();
   const st = useWorkspace();
   const d = activeDataset(st);
+  const datasetId = d?.id;
+  const findingsCheck = st.findingsCheck;
   const open = st.findingsDrawerOpen;
   const [stats, setStats] = useState<Stats | null>(null);
   const [activeTab, setActiveTab] = useState<string>(CHECK_KEYS[0]);
@@ -43,26 +54,28 @@ export default function HealthFindingsDrawer() {
   const [saveViewMode, setSaveViewMode] = useState<"save" | "subtract">("save");
   const tabRef = useRef(activeTab);
   tabRef.current = activeTab;
+  const pendingResetTabRef = useRef<string | undefined>(undefined);
+  const loadGuardRef = useRef(createAsyncRequestGuard());
 
   const title = (key: string): string => healthCheckTitle(key, t);
 
   // reset when the drawer opens for another dataset / scan
   useEffect(() => {
     if (!open) return;
+    pendingResetTabRef.current = findingsCheck ?? CHECK_KEYS[0];
     setStats(null);
     setRows([]);
     setSelected([]);
     setCurrent(null);
-    setActiveTab(st.findingsCheck ?? CHECK_KEYS[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, d?.id]);
+    setActiveTab(findingsCheck ?? CHECK_KEYS[0]);
+  }, [open, datasetId, findingsCheck]);
 
   const fetchStats = useCallback(async (): Promise<Stats | null> => {
-    if (!d) return null;
-    const dsId = d.id;
+    if (!datasetId) return null;
+    const dsId = datasetId;
     let r = await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId });
     if (!r.stats && r.job_id) {
-      await jobDone(r.job_id);
+      await waitForSuccessfulJob(r.job_id);
       await refetchDatasets();
       r = await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId });
     }
@@ -70,66 +83,95 @@ export default function HealthFindingsDrawer() {
     // fills in health_findings
     if (r.stats?.health && !r.stats.health_findings) {
       const rescan = await ipc.request<{ job_id: string }>("dataset.rescan", { id: dsId });
-      await jobDone(rescan.job_id);
+      await waitForSuccessfulJob(rescan.job_id);
       await refetchDatasets();
       r = await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId });
     }
     if (useWorkspace.getState().activeDatasetId !== dsId) return null;
-    setStats(r.stats);
     return r.stats;
-  }, [d]);
+  }, [datasetId]);
 
   const fetchRows = useCallback(
-    async (s: Stats | null, tab: string) => {
-      if (!d || !s) return;
-      const dsId = d.id;
+    async (s: Stats | null, tab: string): Promise<{ rows: FindingsRow[]; total: number } | null> => {
+      if (!datasetId || !s) return null;
+      const dsId = datasetId;
       const params: Record<string, unknown> = { id: dsId, check: tab, limit: 1000 };
-      let r = await ipc.request<{ recalculating: boolean; job_id: string | null; total: number; returned: number; rows: FindingsRow[] }>(
-        "dataset.findings",
-        params,
-      );
+      let r = await ipc.request<FindingsResponse>("dataset.findings", params);
       if (r.recalculating && r.job_id) {
-        await jobDone(r.job_id);
-        if (useWorkspace.getState().activeDatasetId !== dsId) return;
-        r = await ipc.request("dataset.findings", params);
+        await waitForSuccessfulJob(r.job_id);
+        if (useWorkspace.getState().activeDatasetId !== dsId) return null;
+        r = await ipc.request<FindingsResponse>("dataset.findings", params);
       }
-      setRows(r.rows ?? []);
-      setRowsTotal(r.total ?? r.rows?.length ?? 0);
-      setSelected([]);
+      if (useWorkspace.getState().activeDatasetId !== dsId) return null;
+      return { rows: r.rows ?? [], total: r.total ?? r.rows?.length ?? 0 };
     },
-    [d],
+    [datasetId],
   );
 
   useEffect(() => {
-    if (!open) return;
+    const loadGuard = loadGuardRef.current;
+    const loadRequestId = loadGuard.next();
     let disposed = false;
+    if (!open || !datasetId) {
+      return () => {
+        disposed = true;
+        loadGuard.invalidate();
+      };
+    }
+    const dsId = datasetId;
+    const resetTab = pendingResetTabRef.current;
+    pendingResetTabRef.current = undefined;
+    if (resetTab != null && resetTab !== activeTab) {
+      setActiveTab(resetTab);
+      return () => {
+        disposed = true;
+        loadGuard.invalidate();
+      };
+    }
+    const isCurrent = (tab?: string) =>
+      !disposed
+      && loadGuard.isCurrent(loadRequestId)
+      && useWorkspace.getState().findingsDrawerOpen
+      && useWorkspace.getState().activeDatasetId === dsId
+      && (tab == null || tabRef.current === tab);
     (async () => {
       setLoading(true);
+      setRows([]);
+      setRowsTotal(0);
       try {
         const s = await fetchStats();
-        if (!disposed && s) {
+        if (!isCurrent()) return;
+        if (s) {
+          setStats(s);
           // the check behind the rail click may have lost its findings since
           // (or the drawer may have opened without one): snap to the first
           // tab that actually has rows instead of rendering a headless table
           const countFor = (k: (typeof CHECK_KEYS)[number]) => s.health_findings?.[k]?.length ?? 0;
           const known = new Set<string>(CHECK_KEYS.filter((k) => countFor(k) > 0));
-          if (!known.has(tabRef.current)) {
+          const requestedTab = tabRef.current;
+          if (!known.has(requestedTab)) {
             const first = CHECK_KEYS.find((k) => countFor(k) > 0);
-            if (first) setActiveTab(first);
+            if (!first) return;
+            setActiveTab(first);
+            return;
           }
-          await fetchRows(s, tabRef.current);
+          const result = await fetchRows(s, requestedTab);
+          if (!result || !isCurrent(requestedTab)) return;
+          setRows(result.rows);
+          setRowsTotal(result.total);
+          setSelected([]);
         }
       } catch (e) {
         console.error("dataset.findings failed", e);
       } finally {
-        if (!disposed) setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
     })();
     return () => {
       disposed = true;
+      loadGuard.invalidate();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, d?.id, st.statsTick, activeTab]);
+  }, [open, datasetId, st.statsTick, activeTab, fetchStats, fetchRows]);
 
   const preview = useCallback(
     (index: number) => {

@@ -46,6 +46,99 @@ def _wait_terminal(jobs: JobService, job_id: str, timeout: float = 10.0) -> dict
     raise AssertionError(f"job {job_id} never reached a terminal state: {row}")
 
 
+def test_progress_ignores_terminal_jobs_but_updates_running_job(tmp_path: Path) -> None:
+    db = Database(tmp_path / "db.sqlite3")
+    events = []
+    jobs = JobService(db, emit=lambda *args: events.append(args))
+
+    def insert_job(job_id: str, status: str) -> None:
+        db.execute(
+            "INSERT INTO jobs (id, job_type, status, progress, completed, total, message, created_at)"
+            " VALUES (?, 'test.progress', ?, 0.25, 2, 8, 'old', '2026-01-01T00:00:00+00:00')",
+            (job_id, status),
+        )
+
+    try:
+        for status in _TERMINAL:
+            job_id = f"job_terminal_{status.lower()}"
+            insert_job(job_id, status)
+            jobs._update_progress(job_id, 0.9, 7, 8, "late")
+
+            row = jobs.get_job(job_id)
+            assert row is not None
+            assert row["status"] == status
+            assert row["progress"] == 0.25
+            assert row["completed"] == 2
+            assert row["total"] == 8
+            assert row["message"] == "old"
+            assert events == []
+
+        insert_job("job_running", "RUNNING")
+        jobs._update_progress("job_running", 0.5, 4, 8, "working")
+
+        row = jobs.get_job("job_running")
+        assert row is not None
+        assert row["progress"] == 0.5
+        assert row["completed"] == 4
+        assert row["total"] == 8
+        assert row["message"] == "working"
+        assert len(events) == 1
+        assert events[0] == (
+            "job.progress",
+            {
+                "job_id": "job_running",
+                "progress": 0.5,
+                "completed": 4,
+                "total": 8,
+                "message": "working",
+            },
+        )
+    finally:
+        jobs.shutdown()
+        db.close()
+
+
+def test_finalize_wins_once_and_ignores_late_terminal_states(tmp_path: Path) -> None:
+    db = Database(tmp_path / "db.sqlite3")
+    events = []
+    jobs = JobService(db, emit=lambda *args: events.append(args))
+
+    def insert_job(job_id: str) -> None:
+        db.execute(
+            "INSERT INTO jobs (id, job_type, status, created_at)"
+            " VALUES (?, 'test.finalize', 'RUNNING', '2026-01-01T00:00:00+00:00')",
+            (job_id,),
+        )
+
+    try:
+        insert_job("job_completed_first")
+        assert jobs._finalize("job_completed_first", "COMPLETED", None, {"ok": True}) is True
+        assert jobs._finalize(
+            "job_completed_first", "CANCELLED", {"code": "JOB_CANCELLED", "message": "late"}
+        ) is False
+        assert jobs._finalize("job_completed_first", "COMPLETED", None, {"ok": False}) is False
+
+        insert_job("job_cancelled_first")
+        cancel_error = {"code": "JOB_CANCELLED", "message": "cancelled"}
+        assert jobs._finalize("job_cancelled_first", "CANCELLED", cancel_error) is True
+        assert jobs._finalize("job_cancelled_first", "COMPLETED", None, {"ok": True}) is False
+        assert jobs._finalize("job_cancelled_first", "CANCELLED", {"code": "OTHER"}) is False
+
+        completed = jobs.get_job("job_completed_first")
+        assert completed is not None
+        assert completed["status"] == "COMPLETED"
+        assert completed["result"] == {"ok": True}
+        cancelled = jobs.get_job("job_cancelled_first")
+        assert cancelled is not None
+        assert cancelled["status"] == "CANCELLED"
+        assert cancelled["error"] == "JOB_CANCELLED"
+        assert len(events) == 2
+        assert [event[1]["status"] for event in events] == ["COMPLETED", "CANCELLED"]
+    finally:
+        jobs.shutdown()
+        db.close()
+
+
 def test_engine_pool_does_not_block_dataset_jobs(tmp_path) -> None:
     db, jobs = _env(tmp_path)
     release = threading.Event()

@@ -1,12 +1,16 @@
 // Typed IPC client over Tauri (docs/plan/04 §5).
 // The Rust bridge serializes the protocol frame; the webview never writes raw
 // bytes to the backend pipe.
-import { listen } from "@tauri-apps/api/event";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { PROTOCOL_VERSION, type ErrorFrame } from "../types/protocol";
 
 interface Pending {
   resolve: (value: unknown) => void;
+  reject: (err: ErrorFrame) => void;
+}
+
+interface PendingInvoke {
   reject: (err: ErrorFrame) => void;
 }
 
@@ -25,27 +29,111 @@ const MAX_ORPHAN_FRAMES = 128;
 
 class IpcClient {
   private pending = new Map<number, Pending>();
+  // backend_request resolves with an id asynchronously. Keep the caller's
+  // reject function until then so backend exit can settle requests whose id
+  // has not arrived yet.
+  private pendingInvokes = new Set<PendingInvoke>();
   private orphanFrames = new Map<number, ProtocolFrame>();
   private eventHandlers = new Map<string, Set<(data: unknown) => void>>();
   private connected = false;
+  private connecting: Promise<void> | null = null;
+  private connectionGeneration = 0;
+  private unlistenMessage: UnlistenFn | null = null;
+  private unlistenExit: UnlistenFn | null = null;
+  private onExit: (() => void) | undefined;
 
   get isReady() {
     return this.connected;
   }
 
   async connect(onExit?: () => void): Promise<void> {
-    await listen<string>(BACKEND_MESSAGE_EVENT, (evt) => this.onLine(evt.payload));
-    await listen<void>(BACKEND_EXIT_EVENT, () => {
-      this.connected = false;
-      for (const [, p] of this.pending) p.reject({ code: "BACKEND_DOWN", message: "backend exited" });
-      this.pending.clear();
-      this.orphanFrames.clear();
-      onExit?.();
-    });
-    this.connected = true;
+    this.onExit = onExit;
+    if (this.connected) return;
+    if (this.connecting) return this.connecting;
+
+    const generation = ++this.connectionGeneration;
+    const connection = (async () => {
+      const unlistenMessage = await listen<string>(BACKEND_MESSAGE_EVENT, (evt) => {
+        if (generation === this.connectionGeneration) this.onLine(evt.payload, generation);
+      });
+      if (generation !== this.connectionGeneration) {
+        unlistenMessage();
+        return;
+      }
+      this.unlistenMessage = unlistenMessage;
+      try {
+        const unlistenExit = await listen<void>(BACKEND_EXIT_EVENT, () => this.handleBackendExit(generation));
+        if (generation !== this.connectionGeneration) {
+          unlistenMessage();
+          unlistenExit();
+          if (this.unlistenMessage === unlistenMessage) this.unlistenMessage = null;
+          if (this.unlistenExit === unlistenExit) this.unlistenExit = null;
+          return;
+        }
+        this.unlistenExit = unlistenExit;
+      } catch (error) {
+        unlistenMessage();
+        if (this.unlistenMessage === unlistenMessage) this.unlistenMessage = null;
+        throw error;
+      }
+      this.connected = true;
+    })();
+    this.connecting = connection;
+    void connection.then(
+      () => {
+        if (this.connecting === connection) this.connecting = null;
+      },
+      () => {
+        if (this.connecting === connection) this.connecting = null;
+      },
+    );
+    return connection;
   }
 
-  private onLine(line: string) {
+  private handleBackendExit(generation: number) {
+    if (generation !== this.connectionGeneration) return;
+    this.connectionGeneration += 1;
+    this.connected = false;
+    this.connecting = null;
+    this.rejectPending({ code: "BACKEND_DOWN", message: "backend exited" });
+
+    const unlistenMessage = this.unlistenMessage;
+    const unlistenExit = this.unlistenExit;
+    this.unlistenMessage = null;
+    this.unlistenExit = null;
+    unlistenMessage?.();
+    unlistenExit?.();
+    const onExit = this.onExit;
+    this.onExit = undefined;
+    onExit?.();
+  }
+
+  /** Release native listeners when Vite replaces this module during HMR. */
+  disconnect() {
+    this.connectionGeneration += 1;
+    this.connected = false;
+    this.connecting = null;
+    this.rejectPending({ code: "BACKEND_DOWN", message: "backend disconnected" });
+    const unlistenMessage = this.unlistenMessage;
+    const unlistenExit = this.unlistenExit;
+    this.unlistenMessage = null;
+    this.unlistenExit = null;
+    unlistenMessage?.();
+    unlistenExit?.();
+    this.eventHandlers.clear();
+    this.onExit = undefined;
+  }
+
+  private rejectPending(error: ErrorFrame) {
+    for (const [, p] of this.pending) p.reject(error);
+    this.pending.clear();
+    for (const invocation of this.pendingInvokes) invocation.reject(error);
+    this.pendingInvokes.clear();
+    this.orphanFrames.clear();
+  }
+
+  private onLine(line: string, generation = this.connectionGeneration) {
+    if (generation !== this.connectionGeneration) return;
     let frame: ProtocolFrame;
     try {
       frame = JSON.parse(line);
@@ -77,9 +165,17 @@ class IpcClient {
     if (!this.connected) {
       return Promise.reject({ code: "BACKEND_DOWN", message: "backend not running" });
     }
+    const requestGeneration = this.connectionGeneration;
     return new Promise<T>((resolve, reject) => {
+      const invocation = { reject };
+      this.pendingInvokes.add(invocation);
       invoke<number>("backend_request", { method, params })
         .then((id) => {
+          this.pendingInvokes.delete(invocation);
+          if (requestGeneration !== this.connectionGeneration || !this.connected) {
+            reject({ code: "BACKEND_DOWN", message: "backend disconnected" });
+            return;
+          }
           if (!Number.isSafeInteger(id) || id < 0) {
             reject({ code: "BACKEND_DOWN", message: "backend returned an invalid request id" });
             return;
@@ -97,6 +193,7 @@ class IpcClient {
           });
         })
         .catch(() => {
+          this.pendingInvokes.delete(invocation);
           reject({ code: "BACKEND_DOWN", message: "backend request failed" });
         });
     });
@@ -119,3 +216,8 @@ class IpcClient {
 }
 
 export const ipc = new IpcClient();
+
+const hot = (import.meta as ImportMeta & { hot?: { dispose: (callback: () => void) => void } }).hot;
+if (hot) {
+  hot.dispose(() => ipc.disconnect());
+}

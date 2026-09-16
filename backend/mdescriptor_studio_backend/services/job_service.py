@@ -252,10 +252,13 @@ class JobService:
             )
 
     def _update_progress(self, job_id, fraction, completed, total, message) -> None:
-        self.db.execute(
-            "UPDATE jobs SET progress = ?, completed = ?, total = ?, message = ? WHERE id = ?",
+        changed = self.db.execute(
+            "UPDATE jobs SET progress = ?, completed = ?, total = ?, message = ?"
+            " WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
             (fraction, completed, total, message, job_id),
         )
+        if not changed:
+            return
         self.emit(
             "job.progress",
             {

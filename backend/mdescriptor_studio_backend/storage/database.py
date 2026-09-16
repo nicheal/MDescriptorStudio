@@ -139,6 +139,9 @@ MIGRATIONS: dict[int, str] = {
     8: """
     ALTER TABLE jobs ADD COLUMN result_json TEXT;
     """,
+    9: """
+    DROP TABLE IF EXISTS dataset_excluded_frames;
+    """,
 }
 
 
@@ -164,16 +167,31 @@ class Database:
             for version in sorted(MIGRATIONS):
                 if version > current:
                     log.info("applying migration %d -> %d", current, version)
-                    self._conn.executescript(MIGRATIONS[version])
-                    self._conn.execute("DELETE FROM schema_version")
-                    self._conn.execute("INSERT INTO schema_version VALUES (?)", (version,))
-                    self._conn.commit()
+                    script = "\n".join(
+                        (
+                            "BEGIN IMMEDIATE;",
+                            MIGRATIONS[version],
+                            "DELETE FROM schema_version;",
+                            f"INSERT INTO schema_version VALUES ({version});",
+                            "COMMIT;",
+                        )
+                    )
+                    try:
+                        self._conn.executescript(script)
+                    except BaseException:
+                        # executescript() does not rollback an explicit
+                        # transaction when a statement fails or is
+                        # interrupted.  Roll back the whole migration so it
+                        # can be retried against the same database.
+                        self._conn.rollback()
+                        raise
 
     def execute(self, sql: str, params: tuple = ()) -> int:
+        """Execute one statement and return its number of affected rows."""
         with self._write_lock:
             cur = self._conn.execute(sql, params)
             self._conn.commit()
-            return cur.lastrowid
+            return cur.rowcount
 
     def executemany(self, sql: str, seq) -> None:
         with self._write_lock:

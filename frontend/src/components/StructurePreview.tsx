@@ -75,6 +75,7 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
   selectHandlerRef.current = onSelectAtom;
 
   useEffect(() => {
+    const element = viewerDiv.current;
     let cancelled = false;
     void (async () => {
       try {
@@ -82,8 +83,8 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
         const $3Dmol = ((mod as { default?: unknown }).default ?? mod) as {
           createViewer: (element: HTMLElement, options: object) => Viewer;
         };
-        if (cancelled || !viewerDiv.current) return;
-        viewerRef.current = $3Dmol.createViewer(viewerDiv.current, { backgroundColor: "white" });
+        if (cancelled || !element) return;
+        viewerRef.current = $3Dmol.createViewer(element, { backgroundColor: "white" });
         setViewerReady(true);
       } catch (error) {
         console.error("structure preview init failed", error);
@@ -96,7 +97,7 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
       setViewerReady(false);
       viewerRef.current?.clear();
       viewerRef.current = null;
-      if (viewerDiv.current) viewerDiv.current.innerHTML = "";
+      if (element) element.innerHTML = "";
     };
   }, []);
 

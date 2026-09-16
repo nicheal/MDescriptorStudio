@@ -5,12 +5,12 @@ export default defineConfig({
   fullyParallel: true,
   reporter: "list",
   use: {
-    baseURL: "http://127.0.0.1:1420",
+    baseURL: "http://127.0.0.1:4173",
     trace: "on-first-retry",
   },
   webServer: {
-    command: "npm run dev -- --host 127.0.0.1",
-    url: "http://127.0.0.1:1420/preview.html",
+    command: "vite --host 127.0.0.1",
+    url: "http://127.0.0.1:4173/preview.html",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

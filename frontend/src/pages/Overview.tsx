@@ -2,17 +2,24 @@
 // Distribution column, 2×2 histograms (E/atom, Volume, Max|Force|, Min Distance),
 // Property Availability. Sized to the viewport — no scrollbar at default window
 // size. Quick Actions / Recent Jobs live in the persistent right rail (RightRail.tsx).
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Segmented, Typography } from "antd";
 import ReactECharts from "echarts-for-react";
 import Histogram from "../components/Histogram";
 import { createCartesianDataZoom } from "../components/chartInteraction";
 import { ipc } from "../ipc/client";
+import { waitForSuccessfulJob } from "../stores/jobs";
 import { activeDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import { formatLabel, formatSize } from "../util/format";
 import type { Hist, Stats } from "../types/protocol";
+
+type OverviewStatisticsResponse = {
+  recalculating: boolean;
+  job_id: string | null;
+  stats: Stats | null;
+};
 
 export default function Overview() {
   const st = useWorkspace();
@@ -22,34 +29,40 @@ export default function Overview() {
   const [recalculating, setRecalculating] = useState(false);
   const [distMode, setDistMode] = useState<DistMode>("combinations");
 
-  const loadStats = useCallback(async () => {
-    if (!d) return;
-    try {
-      const r = await ipc.request<{ recalculating: boolean; job_id: string | null; stats: Stats | null }>(
-        "dataset.statistics",
-        { id: d.id },
-      );
-      if (r.stats) {
-        setStats(r.stats);
-        setRecalculating(false);
-      } else if (r.recalculating && r.job_id) {
-        setRecalculating(true);
-        const off = ipc.on("job.finished", (data) => {
-          const j = data as { job_id: string; status: string };
-          if (j.job_id !== r.job_id) return;
-          off();
-          void loadStats();
-        });
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  }, [d, st.statsTick]);
-
   useEffect(() => {
     setStats(null);
-    void loadStats();
-  }, [loadStats]);
+    setRecalculating(false);
+    const datasetId = d?.id;
+    if (!datasetId) return;
+    let disposed = false;
+    const isCurrent = () => !disposed && useWorkspace.getState().activeDatasetId === datasetId;
+    void (async () => {
+      try {
+        let response = await ipc.request<OverviewStatisticsResponse>("dataset.statistics", { id: datasetId });
+        if (!isCurrent()) return;
+        if (!response.stats && response.recalculating && response.job_id) {
+          setRecalculating(true);
+          await waitForSuccessfulJob(response.job_id);
+          if (!isCurrent()) return;
+          response = await ipc.request<OverviewStatisticsResponse>("dataset.statistics", { id: datasetId });
+        }
+        if (!isCurrent()) return;
+        if (response.stats) {
+          setStats(response.stats);
+          setRecalculating(false);
+        } else {
+          setRecalculating(false);
+        }
+      } catch (error) {
+        if (!isCurrent()) return;
+        setRecalculating(false);
+        console.error(error);
+      }
+    })();
+    return () => {
+      disposed = true;
+    };
+  }, [d?.id, st.statsTick]);
 
   if (!d) {
     return <EmptyState />;

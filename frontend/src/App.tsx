@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, type ReactNode } from "react";
 import { App as AntApp } from "antd";
 import {
   Grid16Regular,
@@ -13,11 +13,6 @@ import StatusBar from "./components/layout/StatusBar";
 import RightRail from "./components/layout/RightRail";
 import TitleBar from "./components/layout/TitleBar";
 import HealthFindingsDrawer from "./components/HealthFindingsDrawer";
-import Overview from "./pages/Overview";
-import Explore from "./pages/Explore";
-import Descriptors from "./pages/Descriptors";
-import Results from "./pages/DescriptorResults";
-import Analysis from "./pages/Analysis";
 import { ipc } from "./ipc/client";
 import { useWorkspace, hydrateActiveRun } from "./stores/workspace";
 import { hydrateAnalysisUi } from "./stores/analysisUi";
@@ -25,6 +20,18 @@ import { wireJobEvents } from "./stores/jobs";
 import { getT, initLanguage, useT } from "./i18n";
 import type { DatasetMeta } from "./types/protocol";
 import { APP_ICON_URL } from "./brand";
+
+// Keep heavyweight page code out of the startup chunk. Vite caches these
+// imports after the first visit, so switching tabs keeps the same behavior.
+const Overview = lazy(() => import("./pages/Overview"));
+const Explore = lazy(() => import("./pages/Explore"));
+const Descriptors = lazy(() => import("./pages/Descriptors"));
+const Results = lazy(() => import("./pages/DescriptorResults"));
+const Analysis = lazy(() => import("./pages/Analysis"));
+
+function PageLoading() {
+  return <div style={{ padding: 24, color: "#616161" }}>Loading…</div>;
+}
 
 // Jobs is not a tab — the top-right Jobs button/drawer is the single jobs
 // surface, and the Descriptors/Results rail shows recent descriptor computes.
@@ -73,34 +80,40 @@ export default function App() {
   useEffect(() => {
     let disposed = false;
     let poller: ReturnType<typeof setInterval> | null = null;
+    let offReady: (() => void) | null = null;
+    let readyHandled = false;
+    const handleReady = async () => {
+      if (disposed || readyHandled) return;
+      readyHandled = true;
+      try {
+        // apply the persisted UI language before the main UI renders
+        await initLanguage();
+        const info = await ipc.request<{
+          mdescriptor_version: string;
+          mdescriptor_api_version: number;
+          mdescriptor_baseline_version?: string;
+          mdescriptor_descriptor_info_schema_version?: number;
+          cpu_threads?: number;
+        }>("system.info");
+        // restore the persisted analysis view + active run before any page
+        // renders so the Analysis page mounts on what was last on screen
+        await Promise.all([hydrateActiveRun(), hydrateAnalysisUi()]);
+        if (disposed) return;
+        setBackendReady(info.mdescriptor_version, info.cpu_threads ?? null);
+        await refreshDatasets();
+      } catch (e) {
+        console.error(e);
+        if (!disposed) setBackendError();
+      }
+    };
     (async () => {
       await ipc.connect(() => {
+        if (disposed) return;
         useWorkspace.getState().setBackendError();
         message.error(getT().t("Backend process exited"));
       });
-      const handleReady = async () => {
-        if (disposed) return;
-        try {
-          // apply the persisted UI language before the main UI renders
-          await initLanguage();
-          const info = await ipc.request<{
-            mdescriptor_version: string;
-            mdescriptor_api_version: number;
-            mdescriptor_baseline_version?: string;
-            mdescriptor_descriptor_info_schema_version?: number;
-            cpu_threads?: number;
-          }>("system.info");
-          // restore the persisted analysis view + active run before any page
-          // renders so the Analysis page mounts on what was last on screen
-          await Promise.all([hydrateActiveRun(), hydrateAnalysisUi()]);
-          setBackendReady(info.mdescriptor_version, info.cpu_threads ?? null);
-          await refreshDatasets();
-        } catch (e) {
-          console.error(e);
-          setBackendError();
-        }
-      };
-      ipc.on("backend.ready", handleReady);
+      if (disposed) return;
+      offReady = ipc.on("backend.ready", handleReady);
       wireJobEvents(useWorkspace.getState().setRunningJobs);
       // pull the ready snapshot in case the line arrived before our listener
       const { invoke } = await import("@tauri-apps/api/core");
@@ -124,6 +137,8 @@ export default function App() {
     })();
     return () => {
       disposed = true;
+      offReady?.();
+      offReady = null;
       if (poller) clearInterval(poller);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -218,11 +233,13 @@ export default function App() {
                 padding: "12px 24px 16px",
               }}
             >
-              {page === "overview" && <Overview />}
-              {page === "explore" && <Explore />}
-              {page === "descriptors" && <Descriptors />}
-              {page === "results" && <Results />}
-              {page === "analysis" && <Analysis />}
+              <Suspense fallback={<PageLoading />}>
+                {page === "overview" && <Overview />}
+                {page === "explore" && <Explore />}
+                {page === "descriptors" && <Descriptors />}
+                {page === "results" && <Results />}
+                {page === "analysis" && <Analysis />}
+              </Suspense>
             </div>
             <RightRail />
           </div>

@@ -4,12 +4,12 @@ import react from "@vitejs/plugin-react";
 
 const workspaceRoot = fileURLToPath(new URL("../", import.meta.url));
 
-// Tauri expects a fixed port; HMR over the Tauri WebView uses the same origin.
+// Tauri and Playwright share this fixed localhost port; it avoids Windows exclusions.
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
-    port: 1420,
+    port: 4173,
     strictPort: true,
     // The UI reuses the native Tauri icon from ../src-tauri/icons during dev.
     // Allow Vite to serve that source file through its /@fs asset URL.

@@ -19,7 +19,7 @@ from .logging_setup import setup_logging
 from .mdescriptor_adapter import EngineAdapter
 from .protocol import frames
 from .protocol.server import Server
-from .services.analysis_service import AnalysisService
+from .services.analysis_service import ANALYSIS_ALGORITHM_VERSION, AnalysisService
 from .services.dataset_service import DatasetService
 from .services.descriptor_service import DescriptorService
 from .services.job_service import JobService
@@ -65,7 +65,7 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
             "mdescriptor_baseline_version": engine_info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": engine_info.get("descriptor_info_schema_version"),
             "analysis_api_version": 1,
-            "analysis_algorithm_version": "studio-analysis-3",
+            "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
             "analysis_dependencies": {
                 name: _dependency_version(name)
                 for name in ("scikit-learn", "hdbscan")
@@ -220,7 +220,7 @@ def main() -> int:
             "mdescriptor_baseline_version": info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": info.get("descriptor_info_schema_version"),
             "analysis_api_version": 1,
-            "analysis_algorithm_version": "studio-analysis-3",
+            "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
         },
     )
     def _warmup() -> None:

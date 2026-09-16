@@ -32,7 +32,7 @@ import { activeDataset, refetchDatasets, useWorkspace } from "../../stores/works
 import { useT, type T } from "../../i18n";
 import {
   JOB_STATUS_COLOR as STATUS_COLOR,
-  jobDone,
+  waitForSuccessfulJob,
   jobStatusLabel,
   jobTypeLabel,
   mergeJobRows,
@@ -116,7 +116,7 @@ function DataHealthRail() {
         } else if (r.job_id) {
           // stale or pre-health cache: a recompute job is already running
           setScanning(0);
-          await jobDone(r.job_id, (p) => !disposed && setScanning(p));
+          await waitForSuccessfulJob(r.job_id, (p) => !disposed && setScanning(p));
           if (disposed) return;
           await refetchDatasets();
           applyStats(await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId }));
@@ -138,7 +138,7 @@ function DataHealthRail() {
     try {
       setScanning(0);
       const r = await ipc.request<{ job_id: string }>("dataset.rescan", { id: dsId });
-      await jobDone(r.job_id, (p) => setScanning(p));
+      await waitForSuccessfulJob(r.job_id, (p) => setScanning(p));
       await refetchDatasets();
       const fresh = await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId });
       if (useWorkspace.getState().activeDatasetId !== dsId) return;
@@ -151,7 +151,7 @@ function DataHealthRail() {
     } finally {
       setScanning(null);
     }
-  }, [d, scanning, applyStats, message]);
+  }, [d, scanning, applyStats, message, t]);
 
   const openFindings = useWorkspace((s) => s.openFindings);
   const rows: {

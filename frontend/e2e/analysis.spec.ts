@@ -169,7 +169,6 @@ test("browser preview explains effective dimension metrics and spectrum ranges",
   expect(chartState.annotations).toEqual(expect.arrayContaining(["90% · PC4", "95% · PC6", "99% · PC11"]));
 
   await expect(page.getByText("20 of 61 components shown", { exact: true })).toBeVisible();
-  const range = page.getByRole("combobox", { name: "Spectrum range" });
   const rangeSelect = page.locator(".analysis-spectrum-toolbar .ant-select");
   await rangeSelect.click();
   await page.getByText("First 50", { exact: true }).last().click();

@@ -2,8 +2,9 @@
 // from the individual module views so a module can live in its own file
 // without importing the component that renders it (no import cycle).
 import Plot from "react-plotly.js";
-import type { Data, Layout } from "plotly.js";
+import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 import { Empty, Typography } from "antd";
+import type { CSSProperties, ReactNode } from "react";
 
 /** Plotly's scattergl (regl) generates its GL commands with `new Function` at chart
  * creation. When that is unavailable — no WebGL context (some WebView2 environments)
@@ -56,6 +57,12 @@ export function PlotFrame({ data, layout: plotLayout, ariaLabel, compact = false
   return <div className={compact ? "analysis-purpose-chart compact" : "analysis-purpose-chart"} aria-label={ariaLabel}><Plot data={plotData(data)} layout={plotLayout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={(event) => { const point = event.points?.[0]; if (point && typeof point.pointIndex === "number") onClick?.(point.pointIndex, point.curveNumber ?? 0); }} /></div>;
 }
 
+/** Plot wrapper used by the legacy Overview modules while they are migrated. */
+export function OverviewPlot({ data, layout: plotLayout, ariaLabel, compact = false, className, style, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; className?: string; style?: CSSProperties; onClick?: (event: Readonly<PlotMouseEvent>) => void }) {
+  const classes = ["analysis-overview-chart-frame", compact ? "compact" : "", className ?? ""].filter(Boolean).join(" ");
+  return <div className={classes} style={style} aria-label={ariaLabel}><Plot data={plotData(data)} layout={plotLayout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={onClick} /></div>;
+}
+
 /** Metric strip. `text` wins over `v` so counts and rounded values keep the
  * formatting the module chose instead of being re-formatted from a string. */
 export function Metrics({ values }: { values: { k: string; v?: unknown; text?: string }[] }) {
@@ -65,6 +72,21 @@ export function Metrics({ values }: { values: { k: string; v?: unknown; text?: s
 
 export function NoData({ message }: { message: string }) {
   return <div className="analysis-overview-empty"><Empty description={message} /></div>;
+}
+
+export function ChartCaption({ children }: { children: ReactNode }) {
+  return <Typography.Text type="secondary" className="analysis-chart-caption">{children}</Typography.Text>;
+}
+
+export function overviewLayout(overrides: Partial<Layout> = {}): Partial<Layout> {
+  return {
+    autosize: true,
+    margin: { l: 64, r: 28, t: 18, b: 52 },
+    paper_bgcolor: "#FFFFFF",
+    plot_bgcolor: "#FFFFFF",
+    font: { family: "Segoe UI, sans-serif", size: 12, color: "#424242" },
+    ...overrides,
+  };
 }
 
 export function layout(overrides: Partial<Layout> = {}): Partial<Layout> {

@@ -9,12 +9,9 @@ from __future__ import annotations
 
 import json
 import hashlib
-import os
 import csv
 import logging
-import re
 import threading
-import unicodedata
 import uuid
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -36,6 +33,7 @@ from ..errors import (
     RESULT_INCOMPATIBLE,
 )
 from .result_service import ResultService
+from .analysis_artifact_store import AnalysisArtifactStore
 from ..storage.database import Database
 from .job_service import JobService
 from ..security import (
@@ -43,20 +41,15 @@ from ..security import (
     ensure_no_reparse_points,
     escape_like,
     open_text_for_write,
-    remove_managed_tree,
     validate_local_path,
-    validate_managed_path,
 )
 
 log = logging.getLogger(__name__)
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 _ANALYSIS_SCHEMA_VERSION = 1
-_ALGORITHM_VERSION = "studio-analysis-4"
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-4"
 _MAX_PREVIEW_POINTS = 20_000
-_ANALYSIS_ID_RE = re.compile(r"^ana_[A-Za-z0-9_-]{1,64}$")
-_ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,160}$")
-_RESERVED_ARTIFACT_NAME_RE = re.compile(r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE)
 
 # Analysis types dispatched straight to the same-named AnalysisEngine method
 # as AnalysisEngine.<analysis_type>(*samples, params, progress); the pair types
@@ -191,6 +184,11 @@ class AnalysisService:
         self.results = results
         self.datasets = datasets
         self.data_dir = Path(data_dir).resolve(strict=False)
+        self._artifacts = AnalysisArtifactStore(
+            self.data_dir,
+            algorithm_version=ANALYSIS_ALGORITHM_VERSION,
+            schema_version=_ANALYSIS_SCHEMA_VERSION,
+        )
         # RPC requests are handled concurrently. Serialize only the
         # cache-lookup/create section so two identical requests cannot enqueue
         # duplicate PCA jobs; the actual calculation still runs in JobService.
@@ -259,7 +257,7 @@ class AnalysisService:
                         json.dumps([row["dataset_id"]], ensure_ascii=False),
                         cache_key,
                         _ANALYSIS_SCHEMA_VERSION,
-                        _ALGORITHM_VERSION,
+                        ANALYSIS_ALGORITHM_VERSION,
                         json.dumps({"preprocess": preprocess}, ensure_ascii=False),
                         json.dumps([], ensure_ascii=False),
                         json.dumps({}, ensure_ascii=False),
@@ -784,7 +782,7 @@ class AnalysisService:
                         json.dumps(sorted({r["dataset_id"] for r in run_rows}), ensure_ascii=False),
                         cache_key,
                         _ANALYSIS_SCHEMA_VERSION,
-                        _ALGORITHM_VERSION,
+                        ANALYSIS_ALGORITHM_VERSION,
                         json.dumps({"preprocess": params.get("preprocess"), "scaling": params.get("scaling")}, ensure_ascii=False),
                         json.dumps([], ensure_ascii=False),
                         json.dumps({}, ensure_ascii=False),
@@ -922,7 +920,7 @@ class AnalysisService:
             if not active:
                 self.db.execute(
                     "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at, input_run_ids_json, dataset_ids_json, cache_key, schema_version, algorithm_version, updated_at) VALUES (?, ?, 'export', ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)",
-                    (analysis_id, run["id"], json.dumps(canonical, ensure_ascii=False, sort_keys=True), _NOW(), json.dumps(input_ids), json.dumps([run["dataset_id"]]), cache_key, _ANALYSIS_SCHEMA_VERSION, _ALGORITHM_VERSION, _NOW()),
+                    (analysis_id, run["id"], json.dumps(canonical, ensure_ascii=False, sort_keys=True), _NOW(), json.dumps(input_ids), json.dumps([run["dataset_id"]]), cache_key, _ANALYSIS_SCHEMA_VERSION, ANALYSIS_ALGORITHM_VERSION, _NOW()),
                 )
 
             def runner(ctx):
@@ -1788,70 +1786,16 @@ class AnalysisService:
         return self._json_safe(preview)
 
     def _commit_artifact(self, analysis_id: str, analysis_type: str, input_ids: list[str], params: dict, result: dict, preview: dict, ctx) -> tuple[Path, dict]:
-        root = self.data_dir / "analysis"
-        root.mkdir(parents=True, exist_ok=True)
-        ensure_no_reparse_points(root)
-        staging = root / f".{analysis_id}.tmp-{uuid.uuid4().hex[:8]}"
-        final = root / analysis_id
-        staging.mkdir(parents=True, exist_ok=False)
-        ensure_no_reparse_points(staging)
-        manifest = {
-            "analysis_id": analysis_id,
-            "analysis_type": analysis_type,
-            "input_run_ids": input_ids,
-            "algorithm_version": _ALGORITHM_VERSION,
-            "schema_version": _ANALYSIS_SCHEMA_VERSION,
-            "completed": False,
-            "files": {},
-        }
-        try:
-            arrays = result.get("arrays", {})
-            for name, value in arrays.items():
-                ctx.check_cancelled()
-                array = np.asarray(value)
-                if np.issubdtype(array.dtype, np.floating):
-                    array = array.astype(np.float64, copy=False)
-                if not isinstance(name, str) or not name:
-                    raise AppError(ARTIFACT_INVALID, "analysis artifact contains an invalid array name")
-                normalized_name = unicodedata.normalize("NFKC", name)
-                safe_name = (
-                    normalized_name
-                    if normalized_name not in (".", "..")
-                    and len(normalized_name) <= 64
-                    and not normalized_name.endswith((".", " "))
-                    and not _RESERVED_ARTIFACT_NAME_RE.fullmatch(normalized_name)
-                    and _ARTIFACT_NAME_RE.fullmatch(normalized_name)
-                    else f"array-{hashlib.sha256(name.encode('utf-8')).hexdigest()[:16]}"
-                )
-                np.save(staging / f"{safe_name}.npy", array, allow_pickle=False)
-                target = staging / f"{safe_name}.npy"
-                manifest["files"][name] = {"path": target.name, "shape": list(array.shape), "dtype": str(array.dtype), "bytes": target.stat().st_size}
-            metadata = {
-                "analysis_id": analysis_id,
-                "analysis_type": analysis_type,
-                "input_run_ids": input_ids,
-                "parameters": params,
-                "algorithm_version": _ALGORITHM_VERSION,
-                "warnings": list(result.get("warnings", [])),
-                "preview": preview,
-            }
-            metadata["created_at"] = _NOW()
-            with open_text_for_write(staging / "metadata.json") as fh:
-                json.dump(self._json_safe(metadata), fh, ensure_ascii=False, indent=2)
-            manifest["files"]["metadata"] = {"path": "metadata.json", "bytes": (staging / "metadata.json").stat().st_size}
-            manifest["completed"] = True
-            # The manifest describes the payload and metadata. It is not
-            # listed inside itself, which keeps the byte metadata stable.
-            with open_text_for_write(staging / "manifest.json") as fh:
-                json.dump(self._json_safe(manifest), fh, ensure_ascii=False, indent=2)
-            ensure_no_reparse_points(final)
-            if final.exists() or final.is_symlink():
-                raise AppError(ARTIFACT_INVALID, f"analysis artifact already exists: {final}")
-            os.replace(staging, final)
-            return final, manifest
-        except Exception:
-            self._rmtree_quiet(staging)
-            raise
+        return self._artifacts.commit(
+            analysis_id,
+            analysis_type,
+            input_ids,
+            params,
+            result,
+            preview,
+            ctx,
+            self._json_safe,
+        )
 
     def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None) -> Path:
         # Sample-index and provenance exports need neither the dataset service
@@ -1983,7 +1927,7 @@ class AnalysisService:
             "coverage_curve": curve,
             "selected_sample_indices": selected,
             "sampling_analysis_id": analysis_row.get("id"),
-            "algorithm_version": _ALGORITHM_VERSION,
+            "algorithm_version": ANALYSIS_ALGORITHM_VERSION,
             "generated_at": _NOW(),
         }
         with open_text_for_write(target) as fh:
@@ -2092,59 +2036,14 @@ class AnalysisService:
             raise AppError(ARTIFACT_INVALID, f"analysis {row['id']} has no complete artifact")
 
     def _managed_artifact_path(self, analysis_id: str, stored: object) -> Path:
-        if not _ANALYSIS_ID_RE.fullmatch(analysis_id or ""):
-            raise UnsafePathError("invalid analysis id")
-        return validate_managed_path(self.data_dir / "analysis", stored, analysis_id)
+        return self._artifacts.managed_path(analysis_id, stored)
 
     @staticmethod
     def _artifact_file(root: Path, raw_name: object) -> Path | None:
-        if (
-            not isinstance(raw_name, str)
-            or raw_name in (".", "..")
-            or raw_name.endswith((".", " "))
-            or _RESERVED_ARTIFACT_NAME_RE.fullmatch(raw_name)
-            or not _ARTIFACT_NAME_RE.fullmatch(raw_name)
-        ):
-            return None
-        candidate = root / raw_name
-        try:
-            ensure_no_reparse_points(candidate)
-        except UnsafePathError:
-            return None
-        return candidate
+        return AnalysisArtifactStore.artifact_file(root, raw_name)
 
     def _artifact_is_complete(self, row: dict) -> bool:
-        path = row.get("result_path")
-        if not path:
-            return False
-        try:
-            root = self._managed_artifact_path(str(row.get("id") or ""), path)
-        except (TypeError, ValueError, UnsafePathError):
-            return False
-        manifest_path = self._artifact_file(root, "manifest.json")
-        if manifest_path is None or not manifest_path.is_file():
-            # legacy PCA is valid through its compatibility artifact
-            target = self._artifact_file(root, "pca.json")
-            return bool(target and target.is_file())
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if not isinstance(manifest, dict) or manifest.get("completed") is not True:
-                return False
-            files = manifest.get("files")
-            if not isinstance(files, dict) or not files:
-                return False
-            for file_meta in files.values():
-                if not isinstance(file_meta, dict):
-                    return False
-                target = self._artifact_file(root, file_meta.get("path"))
-                if target is None or not target.is_file():
-                    return False
-                expected_bytes = file_meta.get("bytes")
-                if isinstance(expected_bytes, int) and expected_bytes != target.stat().st_size:
-                    return False
-            return True
-        except (OSError, TypeError, ValueError):
-            return False
+        return self._artifacts.is_complete(row)
 
     @staticmethod
     def _json_load(raw, fallback):
@@ -2177,7 +2076,7 @@ class AnalysisService:
                     "analysis_type": analysis_type,
                     "inputs": input_ids,
                     "params": params,
-                    "algorithm_version": _ALGORITHM_VERSION,
+                    "algorithm_version": ANALYSIS_ALGORITHM_VERSION,
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -2233,17 +2132,7 @@ class AnalysisService:
         return value
 
     def _rmtree_quiet(self, path: Path | None) -> None:
-        if not path:
-            return
-        try:
-            ensure_no_reparse_points(path)
-            root = self.data_dir / "analysis"
-            if Path(path).parent != root:
-                log.warning("refusing to remove an unmanaged analysis path")
-                return
-            remove_managed_tree(path)
-        except (OSError, UnsafePathError):
-            log.warning("could not remove managed analysis artifact", exc_info=True)
+        self._artifacts.remove_quiet(path)
 
 
 def _generic_pass_through(analysis_type: str):
