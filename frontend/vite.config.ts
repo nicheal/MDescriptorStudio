@@ -8,6 +8,9 @@ const workspaceRoot = fileURLToPath(new URL("../", import.meta.url));
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  define: {
+    global: "globalThis",
+  },
   server: {
     port: 4173,
     strictPort: true,

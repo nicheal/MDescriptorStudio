@@ -1,7 +1,7 @@
 // Shared Plotly/table primitives for the Analysis result views. Kept separate
 // from the individual module views so a module can live in its own file
 // without importing the component that renders it (no import cycle).
-import Plot from "react-plotly.js";
+import Plot from "../plotlyBundle";
 import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 import { Empty, Typography } from "antd";
 import type { CSSProperties, ReactNode } from "react";
@@ -54,13 +54,13 @@ export const HIGH_CONTRAST_COLORSCALE: Array<[number, string]> = [
 ];
 
 export function PlotFrame({ data, layout: plotLayout, ariaLabel, compact = false, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; onClick?: (index: number, curve: number) => void }) {
-  return <div className={compact ? "analysis-purpose-chart compact" : "analysis-purpose-chart"} aria-label={ariaLabel}><Plot data={plotData(data)} layout={plotLayout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={(event) => { const point = event.points?.[0]; if (point && typeof point.pointIndex === "number") onClick?.(point.pointIndex, point.curveNumber ?? 0); }} /></div>;
+  return <div className={compact ? "analysis-purpose-chart compact" : "analysis-purpose-chart"} aria-label={ariaLabel}><Plot data={plotData(data)} layout={plotLayout} config={{ responsive: true, displaylogo: false, showSendToCloud: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={(event) => { const point = event.points?.[0]; if (point && typeof point.pointIndex === "number") onClick?.(point.pointIndex, point.curveNumber ?? 0); }} /></div>;
 }
 
 /** Plot wrapper used by the legacy Overview modules while they are migrated. */
 export function OverviewPlot({ data, layout: plotLayout, ariaLabel, compact = false, className, style, onClick }: { data: Data[]; layout: Partial<Layout>; ariaLabel: string; compact?: boolean; className?: string; style?: CSSProperties; onClick?: (event: Readonly<PlotMouseEvent>) => void }) {
   const classes = ["analysis-overview-chart-frame", compact ? "compact" : "", className ?? ""].filter(Boolean).join(" ");
-  return <div className={classes} style={style} aria-label={ariaLabel}><Plot data={plotData(data)} layout={plotLayout} config={{ responsive: true, displaylogo: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={onClick} /></div>;
+  return <div className={classes} style={style} aria-label={ariaLabel}><Plot data={plotData(data)} layout={plotLayout} config={{ responsive: true, displaylogo: false, showSendToCloud: false, modeBarButtonsToRemove: ["toImage"] }} style={{ width: "100%", height: "100%" }} onClick={onClick} /></div>;
 }
 
 /** Metric strip. `text` wins over `v` so counts and rounded values keep the

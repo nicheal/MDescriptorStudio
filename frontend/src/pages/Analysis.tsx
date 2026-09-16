@@ -6,8 +6,8 @@
  * Explore remains 3Dmol.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import Plot from "react-plotly.js";
-import type { Data } from "plotly.js";
+import Plot from "../plotlyBundle";
+import type { Data, PlotDatum, PlotSelectionEvent } from "plotly.js";
 import {
   App as AntApp,
   Button,
@@ -1306,15 +1306,15 @@ export default function Analysis() {
            selectedpoints: displayedSelected,
           hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>",
         }])}
-        layout={{ autosize: true, margin: { l: 56, r: 24, t: 16, b: 48 }, paper_bgcolor: "#FFFFFF", plot_bgcolor: "#FFFFFF", dragmode: "lasso", hovermode: "closest", xaxis: { title: projection === "pca" ? "PC1" : `${projection.toUpperCase()}-1`, gridcolor: "#F0F1F3" }, yaxis: { title: projection === "pca" ? "PC2" : `${projection.toUpperCase()}-2`, gridcolor: "#F0F1F3" }, showlegend: false }}
-        config={{ responsive: true, displaylogo: false, modeBarButtonsToAdd: ["select2d", "lasso2d"], modeBarButtonsToRemove: ["toImage"] }}
+        layout={overviewLayout({ autosize: true, margin: { l: 56, r: 24, t: 16, b: 48 }, paper_bgcolor: "#FFFFFF", plot_bgcolor: "#FFFFFF", dragmode: "lasso", hovermode: "closest", xaxis: { title: { text: projection === "pca" ? "PC1" : `${projection.toUpperCase()}-1` }, gridcolor: "#F0F1F3" }, yaxis: { title: { text: projection === "pca" ? "PC2" : `${projection.toUpperCase()}-2` }, gridcolor: "#F0F1F3" }, showlegend: false })}
+        config={{ responsive: true, displaylogo: false, showSendToCloud: false, modeBarButtonsToAdd: ["select2d", "lasso2d"], modeBarButtonsToRemove: ["toImage"] }}
         style={{ width: "100%", height: "100%" }}
         onClick={(event) => {
           const index = event.points?.[0]?.pointIndex;
           if (typeof index === "number" && points[index]) handlePoint(points[index]);
         }}
-        onSelected={(event) => {
-          const displayIndices = (event?.points ?? []).map((point) => point.pointIndex).filter((index): index is number => typeof index === "number");
+        onSelected={(event: Readonly<PlotSelectionEvent>) => {
+          const displayIndices = (event?.points ?? []).map((point: PlotDatum) => point.pointIndex).filter((index): index is number => typeof index === "number");
           const indices = displayIndices.map((index) => points[index]?.i).filter((index): index is number => typeof index === "number");
           setSelectedIndices(indices);
           updateCachedSelection(indices);
@@ -1827,8 +1827,8 @@ function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview
       ]}
       layout={overviewLayout({
         margin: { l: 68, r: 28, t: 52, b: 52 },
-        xaxis: { title: t("Principal component"), type: "linear" },
-        yaxis: { title: t("Explained variance ratio (%)"), range: [0, 100] },
+        xaxis: { title: { text: t("Principal component") }, type: "linear" },
+        yaxis: { title: { text: t("Explained variance ratio (%)") }, range: [0, 100] },
         shapes: thresholdShapes,
         annotations: thresholdAnnotations,
         legend: { orientation: "h", y: 1.18, x: 0 },

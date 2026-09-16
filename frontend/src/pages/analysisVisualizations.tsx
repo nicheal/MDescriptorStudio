@@ -101,7 +101,7 @@ function NeighborView({ preview }: { preview: AnalysisPreview }) {
       y: reversed.map((row) => String(row.sample_id ?? t("sample {index}", { index: String(row.i ?? "?") }))),
       marker: { color: hasSimilarity ? "#107C10" : "#0F6CBD" },
       hovertemplate: `%{y}<br>${hasSimilarity ? t("similarity") : t("distance")}=%{x:.5g}<extra></extra>`,
-    }]} layout={layout({ xaxis: { title: hasSimilarity ? t("Similarity") : t("Distance") }, yaxis: { automargin: true } })} />
+    }]} layout={layout({ xaxis: { title: { text: hasSimilarity ? t("Similarity") : t("Distance") } }, yaxis: { automargin: true } })} />
     <DataTable rows={rows} />
   </>;
 }
@@ -112,7 +112,7 @@ function MatrixView({ preview, matrix: values, label }: { preview: AnalysisPrevi
   if (!values.length) return <NoData message={t("{label} matrix is unavailable.", { label: labelT })} />;
   return <>
     <Metrics values={[{ k: t("Samples"), v: preview.sample_count }, { k: t("Metric"), v: preview.metric ?? preview.kernel }, { k: t("Minimum"), v: preview.kernel_min ?? preview.distance_min }, { k: t("Maximum"), v: preview.kernel_max ?? preview.distance_max }]} />
-    <PlotFrame ariaLabel={t("{label} heatmap", { label: labelT })} data={[{ type: "heatmap", z: values, colorscale: "Viridis", colorbar: { title: { text: labelT } }, hovertemplate: `${t("row")}=%{y}<br>${t("column")}=%{x}<br>${t("value")}=%{z:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: t("Sample") }, yaxis: { title: t("Sample"), autorange: "reversed" } })} />
+    <PlotFrame ariaLabel={t("{label} heatmap", { label: labelT })} data={[{ type: "heatmap", z: values, colorscale: "Viridis", colorbar: { title: { text: labelT } }, hovertemplate: `${t("row")}=%{y}<br>${t("column")}=%{x}<br>${t("value")}=%{z:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Sample") } }, yaxis: { title: { text: t("Sample") }, autorange: "reversed" } })} />
   </>;
 }
 
@@ -123,7 +123,7 @@ function ClusterView({ preview, points, selectedIndices, onSelect }: Pick<Props,
     <Metrics values={[{ k: t("Clusters"), v: preview?.cluster_count }, { k: t("Noise"), v: preview?.noise_count }, { k: t("Samples"), v: points.length }]} />
     <div className="analysis-chart-grid">
       <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color="label" ariaLabel={t("Descriptor clusters in PCA space")} />
-      <PlotFrame compact ariaLabel={t("Samples per cluster")} data={[{ type: "bar", x: counts.map(([key]) => key === "-1" ? t("Noise") : `C${key}`), y: counts.map(([, value]) => value), marker: { color: counts.map((_, index) => COLORS[index % COLORS.length]) } }]} layout={layout({ xaxis: { title: t("Cluster") }, yaxis: { title: t("Samples") } })} />
+      <PlotFrame compact ariaLabel={t("Samples per cluster")} data={[{ type: "bar", x: counts.map(([key]) => key === "-1" ? t("Noise") : `C${key}`), y: counts.map(([, value]) => value), marker: { color: counts.map((_, index) => COLORS[index % COLORS.length]) } }]} layout={layout({ xaxis: { title: { text: t("Cluster") } }, yaxis: { title: { text: t("Samples") } } })} />
     </div>
   </>;
 }
@@ -134,7 +134,7 @@ function OutlierView({ preview, points, selectedIndices, onSelect }: Pick<Props,
     <Metrics values={[{ k: t("Outliers"), v: preview?.outlier_count }, { k: t("Algorithm"), v: preview?.algorithm }, { k: t("Contamination"), v: preview?.contamination }]} />
     <div className="analysis-chart-grid">
       <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color="score" ariaLabel={t("Outlier scores in descriptor space")} />
-      <PlotFrame compact ariaLabel={t("Outlier score distribution")} data={[{ type: "histogram", x: points.map((point) => point.score ?? 0), marker: { color: "#0F6CBD" } }]} layout={layout({ xaxis: { title: t("Outlier score") }, yaxis: { title: t("Samples") } })} />
+      <PlotFrame compact ariaLabel={t("Outlier score distribution")} data={[{ type: "histogram", x: points.map((point) => point.score ?? 0), marker: { color: "#0F6CBD" } }]} layout={layout({ xaxis: { title: { text: t("Outlier score") } }, yaxis: { title: { text: t("Samples") } } })} />
     </div>
   </>;
 }
@@ -217,10 +217,10 @@ function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pi
         ? <PlotFrame compact ariaLabel={t("Coverage curve")} data={[
             { type: "scatter", mode: "lines", x: radiusCurve.map((_, index) => index + 1), y: radiusCurve, name: t("Coverage radius"), line: { color: "#0F6CBD", width: 2 } },
             { type: "scatter", mode: "lines", x: meanCurve.map((_, index) => index + 1), y: meanCurve, name: t("Mean residual"), line: { color: "#F7630C", width: 2, dash: "dot" } },
-          ]} layout={layout({ xaxis: { title: t("Selected samples") }, yaxis: { title: t("Descriptor distance") }, showlegend: true })} />
-        : <PlotFrame compact ariaLabel={t("Selection score distribution")} data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? uncertaintyDriven ? point.uncertainty ?? 0 : point.distance ?? 0 : point.x), marker: { color: uncertaintyDriven ? "#D13438" : "#8764B8" } }]} layout={layout({ xaxis: { title: kind === "acquisition" ? uncertaintyDriven ? t("kNN extrapolation uncertainty") : t("Novelty distance") : t("PC1 distribution") }, yaxis: { title: t("Samples") } })} />}
+          ]} layout={layout({ xaxis: { title: { text: t("Selected samples") } }, yaxis: { title: { text: t("Descriptor distance") } }, showlegend: true })} />
+        : <PlotFrame compact ariaLabel={t("Selection score distribution")} data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? uncertaintyDriven ? point.uncertainty ?? 0 : point.distance ?? 0 : point.x), marker: { color: uncertaintyDriven ? "#D13438" : "#8764B8" } }]} layout={layout({ xaxis: { title: { text: kind === "acquisition" ? uncertaintyDriven ? t("kNN extrapolation uncertainty") : t("Novelty distance") : t("PC1 distribution") } }, yaxis: { title: { text: t("Samples") } } })} />}
     </div>
-    {fps && r2Curve.length > 0 && <PlotFrame compact ariaLabel={t("Coverage R² curve")} data={[{ type: "scatter", mode: "lines", x: r2Curve.map((_, index) => index + 1), y: r2Curve, line: { color: "#107C10", width: 2 }, hovertemplate: `${t("Selected samples")}=%{x}<br>R²=%{y:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: t("Selected samples") }, yaxis: { title: "R²", range: [0, 1] } })} />}
+    {fps && r2Curve.length > 0 && <PlotFrame compact ariaLabel={t("Coverage R² curve")} data={[{ type: "scatter", mode: "lines", x: r2Curve.map((_, index) => index + 1), y: r2Curve, line: { color: "#107C10", width: 2 }, hovertemplate: `${t("Selected samples")}=%{x}<br>R²=%{y:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Selected samples") } }, yaxis: { title: { text: "R²" }, range: [0, 1] } })} />}
     {fps && typeof preview?.target_coverage === "number" && <Typography.Text type="secondary">{t("Stopped on target coverage of {percent}.", { percent: formatPercent(preview.target_coverage) })}</Typography.Text>}
     {fps && explained.length === 2 && <Typography.Text type="secondary">{t("FPS ran in the full scaled descriptor space; the plot is only a PC1–PC2 projection ({percent} variance).", { percent: formatPercent(explained[0] + explained[1]) })}</Typography.Text>}
   </>;
@@ -238,8 +238,8 @@ function CoverageView({ preview, arrays }: { preview: AnalysisPreview; arrays: A
   return <>
     <Metrics values={coverageMetrics(preview, t)} />
     <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Reference and query descriptor-space projection")} data={[0, 1].map((group) => ({ type: "scattergl", mode: "markers", name: group ? t("Query") : t("Reference"), x: coords.flatMap((point, index) => source[index] === group ? [point[0]] : []), y: coords.flatMap((point, index) => source[index] === group ? [point[1]] : []), marker: { size: group ? 7 : 5, color: group ? "#D13438" : "#0F6CBD", opacity: group ? 0.82 : 0.45 }, hovertemplate: `${group ? t("Query") : t("Reference")}<br>PC1=%{x:.4g}<br>PC2=%{y:.4g}<extra></extra>` })) as Data[]} layout={layout({ xaxis: { title: t("Joint PC1") }, yaxis: { title: t("Joint PC2") }, legend: { orientation: "h" } })} />
-      <PlotFrame compact ariaLabel={t("Nearest-reference distance distribution")} data={distances.length ? [{ type: "histogram", x: distances, marker: { color: "#0F6CBD" } }] : [{ type: "bar", x: categories, y: categoryCounts, marker: { color: ["#107C10", "#F7630C", "#D13438"] } }]} layout={layout({ xaxis: { title: distances.length ? t("Nearest-reference distance") : t("Category") }, yaxis: { title: t("Samples") } })} />
+      <PlotFrame compact ariaLabel={t("Reference and query descriptor-space projection")} data={[0, 1].map((group) => ({ type: "scattergl", mode: "markers", name: group ? t("Query") : t("Reference"), x: coords.flatMap((point, index) => source[index] === group ? [point[0]] : []), y: coords.flatMap((point, index) => source[index] === group ? [point[1]] : []), marker: { size: group ? 7 : 5, color: group ? "#D13438" : "#0F6CBD", opacity: group ? 0.82 : 0.45 }, hovertemplate: `${group ? t("Query") : t("Reference")}<br>PC1=%{x:.4g}<br>PC2=%{y:.4g}<extra></extra>` })) as Data[]} layout={layout({ xaxis: { title: { text: t("Joint PC1") } }, yaxis: { title: { text: t("Joint PC2") } }, legend: { orientation: "h" } })} />
+      <PlotFrame compact ariaLabel={t("Nearest-reference distance distribution")} data={distances.length ? [{ type: "histogram", x: distances, marker: { color: "#0F6CBD" } }] : [{ type: "bar", x: categories, y: categoryCounts, marker: { color: ["#107C10", "#F7630C", "#D13438"] } }]} layout={layout({ xaxis: { title: { text: distances.length ? t("Nearest-reference distance") : t("Category") } }, yaxis: { title: { text: t("Samples") } } })} />
     </div>
     <DataTable rows={rows} />
   </>;
@@ -255,8 +255,8 @@ function CompareView({ preview, arrays }: { preview: AnalysisPreview; arrays: An
   return <>
     <Metrics values={[{ k: t("Pair-distance Pearson"), v: preview.pairwise_distance_pearson }, { k: t("Spearman"), v: preview.pairwise_distance_spearman }, { k: t("kNN overlap"), v: preview.neighbor_overlap }, { k: t("Cluster stability"), v: preview.clustering_stability }, { k: t("PCA topology error"), v: preview.pca_topology_error }, { k: t("Effective dimension"), v: `${fmt(preview.left_effective_dimension)} / ${fmt(preview.right_effective_dimension)}` }]} />
     <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Pairwise descriptor distances comparison")} data={[{ type: "scattergl", mode: "markers", x: leftPairs.slice(0, count), y: rightPairs.slice(0, count), marker: { size: 5, color: "#0F6CBD", opacity: 0.45 }, hovertemplate: `${t("left")}=%{x:.5g}<br>${t("right")}=%{y:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: t("Left pair distance") }, yaxis: { title: t("Right pair distance") } })} />
-      <PlotFrame compact ariaLabel={t("Descriptor PCA topology comparison")} data={[{ type: "scattergl", mode: "markers", name: t("Left"), x: leftCoords.map((row) => row[0]), y: leftCoords.map((row) => row[1]), marker: { size: 6, color: "#0F6CBD", opacity: 0.55 } }, { type: "scattergl", mode: "markers", name: t("Right"), x: rightCoords.map((row) => row[0]), y: rightCoords.map((row) => row[1]), marker: { size: 6, color: "#D13438", opacity: 0.55 } }]} layout={layout({ xaxis: { title: "PC1" }, yaxis: { title: "PC2" }, legend: { orientation: "h" } })} />
+      <PlotFrame compact ariaLabel={t("Pairwise descriptor distances comparison")} data={[{ type: "scattergl", mode: "markers", x: leftPairs.slice(0, count), y: rightPairs.slice(0, count), marker: { size: 5, color: "#0F6CBD", opacity: 0.45 }, hovertemplate: `${t("left")}=%{x:.5g}<br>${t("right")}=%{y:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Left pair distance") } }, yaxis: { title: { text: t("Right pair distance") } } })} />
+      <PlotFrame compact ariaLabel={t("Descriptor PCA topology comparison")} data={[{ type: "scattergl", mode: "markers", name: t("Left"), x: leftCoords.map((row) => row[0]), y: leftCoords.map((row) => row[1]), marker: { size: 6, color: "#0F6CBD", opacity: 0.55 } }, { type: "scattergl", mode: "markers", name: t("Right"), x: rightCoords.map((row) => row[0]), y: rightCoords.map((row) => row[1]), marker: { size: 6, color: "#D13438", opacity: 0.55 } }]} layout={layout({ xaxis: { title: { text: "PC1" } }, yaxis: { title: { text: "PC2" } }, legend: { orientation: "h" } })} />
     </div>
   </>;
 }
@@ -271,8 +271,8 @@ function MantelView({ preview, arrays }: { preview: AnalysisPreview; arrays: Ana
   return <>
     <Metrics values={[{ k: t("Mantel r"), v: statistic }, { k: t("p-value"), v: preview.p_value }, { k: t("Statistic"), v: preview.method }, { k: t("Permutations"), v: preview.permutations }, { k: t("Pairs"), v: preview.pair_count }, { k: t("Significant (α=.05)"), v: preview.significant_at_05 ? t("yes") : t("no") }]} />
     <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Mantel paired descriptor distances")} data={[{ type: "scattergl", mode: "markers", x: leftPairs.slice(0, count), y: rightPairs.slice(0, count), marker: { size: 5, color: "#0F6CBD", opacity: 0.45 }, hovertemplate: `${t("left")}=%{x:.5g}<br>${t("right")}=%{y:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: t("Left pair distance") }, yaxis: { title: t("Right pair distance") } })} />
-      <PlotFrame compact ariaLabel={t("Mantel permutation null distribution")} data={[{ type: "histogram", x: nullDistribution, marker: { color: "#8764B8" } }]} layout={layout({ xaxis: { title: `${preview.method ?? "Pearson"} ${t("null statistic")}` }, yaxis: { title: t("Permutations") }, shapes: [{ type: "line", x0: statistic, x1: statistic, y0: 0, y1: 1, yref: "paper", line: { color: "#D13438", width: 2, dash: "dash" } }] })} />
+      <PlotFrame compact ariaLabel={t("Mantel paired descriptor distances")} data={[{ type: "scattergl", mode: "markers", x: leftPairs.slice(0, count), y: rightPairs.slice(0, count), marker: { size: 5, color: "#0F6CBD", opacity: 0.45 }, hovertemplate: `${t("left")}=%{x:.5g}<br>${t("right")}=%{y:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Left pair distance") } }, yaxis: { title: { text: t("Right pair distance") } } })} />
+      <PlotFrame compact ariaLabel={t("Mantel permutation null distribution")} data={[{ type: "histogram", x: nullDistribution, marker: { color: "#8764B8" } }]} layout={layout({ xaxis: { title: { text: `${preview.method ?? "Pearson"} ${t("null statistic")}` } }, yaxis: { title: { text: t("Permutations") } }, shapes: [{ type: "line", x0: statistic, x1: statistic, y0: 0, y1: 1, yref: "paper", line: { color: "#D13438", width: 2, dash: "dash" } }] })} />
     </div>
     <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("Two-sided permutation p-value with +1 correction; the red line marks the observed statistic.")}</Typography.Paragraph>
   </>;
@@ -352,7 +352,7 @@ function FeatureCorrelationView({ preview, arrays }: { preview: AnalysisPreview;
       { k: t("High-correlation feature ratio"), v: formatPercent(preview.involved_feature_ratio ?? preview.redundancy_ratio) },
     ]} />
     {heatmapLimited && <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>{t("The heatmap and pair summary use the {n} highest-variance valid features.", { n: formatCount(preview.heatmap_feature_count) })}</Typography.Paragraph>}
-    {values.length ? <PlotFrame ariaLabel={t("Descriptor feature correlation heatmap")} data={[{ type: "heatmap", z: orderedValues, customdata: orderedSignedValues, x: order, y: order, zmin: displayMode === "absolute" ? 0 : -1, zmax: 1, colorscale: colorScale, colorbar: { title: { text: metricLabel } }, hovertemplate: displayMode === "absolute" ? `F%{y} ↔ F%{x}<br>${absoluteMetricLabel}=%{z:.4f}<br>${signedMetricLabel}=%{customdata:.4f}<extra></extra>` : `F%{y} ↔ F%{x}<br>${signedMetricLabel}=%{z:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: `${t("Feature")} · ${featureOrder === "clustered" && hasClusteredOrder ? t("Clustered order") : t("Original order")}` }, yaxis: { title: t("Feature"), autorange: "reversed" } })} /> : <NoData message={t("Correlation matrix is unavailable.")} />}
+    {values.length ? <PlotFrame ariaLabel={t("Descriptor feature correlation heatmap")} data={[{ type: "heatmap", z: orderedValues, customdata: orderedSignedValues, x: order, y: order, zmin: displayMode === "absolute" ? 0 : -1, zmax: 1, colorscale: colorScale, colorbar: { title: { text: metricLabel } }, hovertemplate: displayMode === "absolute" ? `F%{y} ↔ F%{x}<br>${absoluteMetricLabel}=%{z:.4f}<br>${signedMetricLabel}=%{customdata:.4f}<extra></extra>` : `F%{y} ↔ F%{x}<br>${signedMetricLabel}=%{z:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: `${t("Feature")} · ${featureOrder === "clustered" && hasClusteredOrder ? t("Clustered order") : t("Original order")}` } }, yaxis: { title: { text: t("Feature") }, autorange: "reversed" } })} /> : <NoData message={t("Correlation matrix is unavailable.")} />}
     {pairRows.length ? <Table<CorrelationPairRow>
       className="analysis-data-table feature-correlation-table"
       size="small"
@@ -456,7 +456,7 @@ function PropertyView({ preview, arrays, onSelect }: { preview: AnalysisPreview;
       <div className="analysis-chart-grid">
         <div className="property-chart-panel">
           <Typography.Text strong>{t("OOF Prediction vs. Ground Truth")}</Typography.Text>
-          <PlotFrame compact ariaLabel={t("OOF Prediction vs. Ground Truth")} data={predictionData} layout={layout({ xaxis: { title: `${t("Ground truth")}${unitSuffix}` }, yaxis: { title: `${t("OOF prediction")}${unitSuffix}` }, shapes: [{ type: "line", x0: identityMin, y0: identityMin, x1: identityMax, y1: identityMax, line: { color: "#616161", dash: "dash" } }], annotations: [{ x: identityMax, y: identityMax, text: "y = x", showarrow: false, xanchor: "right", yanchor: "bottom", font: { color: "#616161" } }] })} />
+          <PlotFrame compact ariaLabel={t("OOF Prediction vs. Ground Truth")} data={predictionData} layout={layout({ xaxis: { title: { text: `${t("Ground truth")}${unitSuffix}` } }, yaxis: { title: { text: `${t("OOF prediction")}${unitSuffix}` } }, shapes: [{ type: "line", x0: identityMin, y0: identityMin, x1: identityMax, y1: identityMax, line: { color: "#616161", dash: "dash" } }], annotations: [{ x: identityMax, y: identityMax, text: "y = x", showarrow: false, xanchor: "right", yanchor: "bottom", font: { color: "#616161" } }] })} />
         </div>
         <div className="property-chart-panel">
           <Typography.Text strong>{t("OOF Residual Distribution")}</Typography.Text>
@@ -466,7 +466,7 @@ function PropertyView({ preview, arrays, onSelect }: { preview: AnalysisPreview;
             <span>P95(|error|) {formatWithUnit(preview.p95_absolute_error, unit)}</span>
             <span>{t("Std")} {formatWithUnit(preview.residual_std, unit)}</span>
           </div>
-          <PlotFrame compact ariaLabel={t("OOF Residual Distribution")} data={[{ type: "histogram", x: visibleResiduals, marker: { color: "#F7630C" }, hovertemplate: `${t("Residual")}=%{x:.5g}<br>${t("Samples")}=%{y}<extra></extra>` }]} layout={layout({ xaxis: { title: `${t("Residual (prediction − truth)")}${unitSuffix}` }, yaxis: { title: t("Samples") }, shapes: [{ type: "line", x0: 0, x1: 0, y0: 0, y1: 1, yref: "paper", line: { color: "#616161", dash: "dash" } }] })} />
+          <PlotFrame compact ariaLabel={t("OOF Residual Distribution")} data={[{ type: "histogram", x: visibleResiduals, marker: { color: "#F7630C" }, hovertemplate: `${t("Residual")}=%{x:.5g}<br>${t("Samples")}=%{y}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: `${t("Residual (prediction − truth)")}${unitSuffix}` } }, yaxis: { title: { text: t("Samples") } }, shapes: [{ type: "line", x0: 0, x1: 0, y0: 0, y1: 1, yref: "paper", line: { color: "#616161", dash: "dash" } }] })} />
         </div>
       </div>
       <Typography.Text type="secondary" className="property-baseline-note">{t("Mean baseline: R² {r2}, RMSE {rmse}, MAE {mae}", { r2: formatFixed(preview.baseline_r2, 4), rmse: formatWithUnit(preview.baseline_rmse, unit), mae: formatWithUnit(preview.baseline_mae, unit) })}</Typography.Text>
@@ -513,7 +513,7 @@ function PropertyView({ preview, arrays, onSelect }: { preview: AnalysisPreview;
           { type: "scatter", mode: "lines+markers", name: t("Binned median"), x: binCenters, y: binMedian, line: { color: "#0F6CBD", width: 3 }, marker: { size: 7 } },
           { type: "scatter", mode: "lines", name: "P90 |error|", x: binCenters, y: binP90, line: { color: "#F7630C", width: 2, dash: "dash" } },
           { type: "scatter", mode: "lines", name: "P95 |error|", x: binCenters, y: binP95, line: { color: "#D13438", width: 2, dash: "dot" } },
-        ]} layout={layout({ xaxis: { title: t("Mean OOF training-fold kNN distance") }, yaxis: { title: `|${t("OOF prediction error")}|${unitSuffix}` }, legend: { orientation: "h", y: 1.12 }, shapes: [
+        ]} layout={layout({ xaxis: { title: { text: t("Mean OOF training-fold kNN distance") } }, yaxis: { title: { text: `|${t("OOF prediction error")}|${unitSuffix}` } }, legend: { orientation: "h", y: 1.12 }, shapes: [
           { type: "line", x0: num(preview.sparse_threshold) ?? 0, x1: num(preview.sparse_threshold) ?? 0, y0: 0, y1: 1, yref: "paper", line: { color: "#F7630C", dash: "dash" } },
           { type: "line", x0: num(preview.ood_threshold) ?? 0, x1: num(preview.ood_threshold) ?? 0, y0: 0, y1: 1, yref: "paper", line: { color: "#D13438", dash: "dot" } },
           { type: "line", x0: 0, x1: 1, xref: "paper", y0: num(preview.high_error_threshold) ?? 0, y1: num(preview.high_error_threshold) ?? 0, line: { color: "#616161", dash: "dash" } },
@@ -545,10 +545,10 @@ function LocalView({ preview, arrays, points, selectedIndices, onSelect }: Pick<
     <Metrics values={[{ k: t("Local environments"), v: preview?.sample_count }, { k: t("Elements"), v: rows.length }, { k: t("Outliers"), v: rows.reduce((sum, row) => sum + (num(row.outliers) ?? 0), 0) }, { k: t("Cutoff (Å)"), v: preview?.cutoff }, { k: t("Mean coordination"), v: preview?.mean_coordination }, { k: t("Max coordination"), v: preview?.max_coordination }]} />
     <div className="analysis-chart-grid">
       <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color="element" ariaLabel={t("Atom-level local environment map")} />
-      <PlotFrame compact ariaLabel={t("Local environment categories by element")} data={["distorted", "outliers"].map((key, index) => ({ type: "bar", name: t(key), x: rows.map((row) => `Z=${row.element}`), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index + 1] } })) as Data[]} layout={layout({ barmode: "group", xaxis: { title: t("Element") }, yaxis: { title: t("Environments") }, legend: { orientation: "h" } })} />
-      <PlotFrame compact ariaLabel={t("Coordination number distribution")} data={[{ type: "histogram", x: coordination, marker: { color: "#107C10" } }]} layout={layout({ xaxis: { title: t("Coordination number"), dtick: 1 }, yaxis: { title: t("Atoms") } })} />
+      <PlotFrame compact ariaLabel={t("Local environment categories by element")} data={["distorted", "outliers"].map((key, index) => ({ type: "bar", name: t(key), x: rows.map((row) => `Z=${row.element}`), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index + 1] } })) as Data[]} layout={layout({ barmode: "group", xaxis: { title: { text: t("Element") } }, yaxis: { title: { text: t("Environments") } }, legend: { orientation: "h" } })} />
+      <PlotFrame compact ariaLabel={t("Coordination number distribution")} data={[{ type: "histogram", x: coordination, marker: { color: "#107C10" } }]} layout={layout({ xaxis: { title: { text: t("Coordination number") }, dtick: 1 }, yaxis: { title: { text: t("Atoms") } } })} />
     </div>
-    {neighborDistances.length > 0 && <PlotFrame compact ariaLabel={t("Local neighbor distance distribution")} data={[{ type: "histogram", x: neighborDistances, marker: { color: "#F7630C" } }]} layout={layout({ xaxis: { title: t("Neighbor distance (Å)") }, yaxis: { title: t("Neighbor pairs") } })} />}
+    {neighborDistances.length > 0 && <PlotFrame compact ariaLabel={t("Local neighbor distance distribution")} data={[{ type: "histogram", x: neighborDistances, marker: { color: "#F7630C" } }]} layout={layout({ xaxis: { title: { text: t("Neighbor distance (Å)") } }, yaxis: { title: { text: t("Neighbor pairs") } } })} />}
     <DataTable rows={rows} />
   </>;
 }
@@ -561,8 +561,8 @@ function SensitivityView({ preview }: { preview: AnalysisPreview }) {
   return <>
     <Metrics values={[{ k: t("Runs"), v: rows.length }, { k: t("Baseline"), v: preview.baseline_run_id }]} />
     <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Parameter sensitivity geometry metrics")} data={metrics.map((key, index) => ({ type: "bar", name: tr(SENSITIVITY_METRIC_LABELS[key] ?? { en: key, zh: key }), x: rows.map((row, runIndex) => runLabel(row, runIndex, t)), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index] } })) as Data[]} layout={layout({ barmode: "group", yaxis: { title: t("Agreement (higher is better)"), range: [-0.05, 1.05] }, xaxis: { automargin: true }, legend: { orientation: "h" } })} />
-      <PlotFrame compact ariaLabel={t("Descriptor compute peak memory")} data={[{ type: "bar", x: rows.map((row, index) => runLabel(row, index, t)), y: rows.map((row) => { const bytes = num(row.memory_peak_bytes); return bytes == null ? null : bytes / 1024 / 1024; }), marker: { color: "#D13438" }, hovertemplate: "%{x}<br>peak RSS=%{y:.2f} MB<extra></extra>" }]} layout={layout({ xaxis: { automargin: true }, yaxis: { title: t("Peak RSS (MB)") } })} />
+      <PlotFrame compact ariaLabel={t("Parameter sensitivity geometry metrics")} data={metrics.map((key, index) => ({ type: "bar", name: tr(SENSITIVITY_METRIC_LABELS[key] ?? { en: key, zh: key }), x: rows.map((row, runIndex) => runLabel(row, runIndex, t)), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index] } })) as Data[]} layout={layout({ barmode: "group", yaxis: { title: { text: t("Agreement (higher is better)") }, range: [-0.05, 1.05] }, xaxis: { automargin: true }, legend: { orientation: "h" } })} />
+      <PlotFrame compact ariaLabel={t("Descriptor compute peak memory")} data={[{ type: "bar", x: rows.map((row, index) => runLabel(row, index, t)), y: rows.map((row) => { const bytes = num(row.memory_peak_bytes); return bytes == null ? null : bytes / 1024 / 1024; }), marker: { color: "#D13438" }, hovertemplate: "%{x}<br>peak RSS=%{y:.2f} MB<extra></extra>" }]} layout={layout({ xaxis: { automargin: true }, yaxis: { title: { text: t("Peak RSS (MB)") } } })} />
     </div>
     <DataTable rows={rows} />
   </>;
@@ -586,8 +586,8 @@ function PerturbationView({ preview, arrays }: { preview: AnalysisPreview; array
     <Metrics values={[{ k: t("Perturbation"), v: preview.perturbation }, { k: t("Metric"), v: preview.metric }, { k: t("Structures"), text: sampled === null ? "—" : subsampled ? `${formatCount(sampled)} / ${formatCount(available)}` : formatCount(sampled) }, { k: t("Steps"), v: preview.curve_count }, { k: t("Response"), v: preview.response_unit }]} />
     {subsampled && <div className="property-method-strip"><Typography.Text type="warning">{t("Sampled {sampled} of {available} structures, evenly spaced across the run; increase Max structures for wider coverage.", { sampled: formatCount(sampled), available: formatCount(available) })}</Typography.Text></div>}
     <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Descriptor response versus structural perturbation")} data={[{ type: "scatter", mode: "lines+markers", name: t("Mean"), x: amplitudes, y: mean, line: { color: "#0F6CBD", width: 2 } }, { type: "scatter", mode: "lines", name: t("Median"), x: amplitudes.slice(0, median.length), y: median, line: { color: "#107C10", dash: "dash" } }, { type: "scatter", mode: "lines", name: t("P95"), x: amplitudes.slice(0, p95.length), y: p95, line: { color: "#D13438", dash: "dot" } }, { type: "scatter", mode: "lines", name: t("Max"), x: amplitudes.slice(0, max.length), y: max, line: { color: "#F7630C", dash: "dashdot" } }]} layout={layout({ xaxis: { title: preview.perturbation === "strain" ? t("Isotropic strain") : t("Jitter amplitude (Å)") }, yaxis: { title: String(preview.response_unit ?? t("Descriptor response")) }, legend: { orientation: "h" } })} />
-      <PlotFrame compact ariaLabel={t("Per-structure perturbation response heatmap")} data={[{ type: "heatmap", z: responseMatrix, x: amplitudes, colorscale: "Viridis", colorbar: { title: { text: t("Response") } }, hovertemplate: `${t("amplitude")}=%{x:.4g}<br>${t("structure")}=%{y}<br>${t("response")}=%{z:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: preview.perturbation === "strain" ? t("Isotropic strain") : t("Jitter amplitude (Å)") }, yaxis: { title: t("Structure index"), autorange: "reversed" } })} />
+      <PlotFrame compact ariaLabel={t("Descriptor response versus structural perturbation")} data={[{ type: "scatter", mode: "lines+markers", name: t("Mean"), x: amplitudes, y: mean, line: { color: "#0F6CBD", width: 2 } }, { type: "scatter", mode: "lines", name: t("Median"), x: amplitudes.slice(0, median.length), y: median, line: { color: "#107C10", dash: "dash" } }, { type: "scatter", mode: "lines", name: t("P95"), x: amplitudes.slice(0, p95.length), y: p95, line: { color: "#D13438", dash: "dot" } }, { type: "scatter", mode: "lines", name: t("Max"), x: amplitudes.slice(0, max.length), y: max, line: { color: "#F7630C", dash: "dashdot" } }]} layout={layout({ xaxis: { title: { text: preview.perturbation === "strain" ? t("Isotropic strain") : t("Jitter amplitude (Å)") } }, yaxis: { title: { text: String(preview.response_unit ?? t("Descriptor response")) } }, legend: { orientation: "h" } })} />
+      <PlotFrame compact ariaLabel={t("Per-structure perturbation response heatmap")} data={[{ type: "heatmap", z: responseMatrix, x: amplitudes, colorscale: "Viridis", colorbar: { title: { text: t("Response") } }, hovertemplate: `${t("amplitude")}=%{x:.4g}<br>${t("structure")}=%{y}<br>${t("response")}=%{z:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: preview.perturbation === "strain" ? t("Isotropic strain") : t("Jitter amplitude (Å)") } }, yaxis: { title: { text: t("Structure index") }, autorange: "reversed" } })} />
     </div>
     <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("The curve is generated by recomputing the selected descriptor on the selected structures after a seeded perturbation sweep.")}</Typography.Paragraph>
   </>;
@@ -600,8 +600,8 @@ function KernelView({ preview, arrays }: { preview: AnalysisPreview; arrays: Ana
   return <>
     <Metrics values={[{ k: t("Kernel"), v: preview.kernel }, { k: t("Samples"), v: preview.sample_count }, { k: t("Effective rank"), v: preview.effective_rank }, { k: t("Top eigenvalue fraction"), v: preview.top_eigenvalue_fraction }]} />
     <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Kernel heatmap")} data={[{ type: "heatmap", z: kernelMatrix, colorscale: "Viridis", colorbar: { title: { text: t("Kernel") } }, hovertemplate: `${t("row")}=%{y}<br>${t("column")}=%{x}<br>${t("value")}=%{z:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: t("Sample") }, yaxis: { title: t("Sample"), autorange: "reversed" } })} />
-      <PlotFrame compact ariaLabel={t("Kernel eigenspectrum")} data={[{ type: "bar", x: eigenvalues.slice(0, 100).map((_, index) => index + 1), y: eigenvalues.slice(0, 100), marker: { color: "#8764B8" } }]} layout={layout({ xaxis: { title: t("Component") }, yaxis: { title: t("Centered eigenvalue") } })} />
+      <PlotFrame compact ariaLabel={t("Kernel heatmap")} data={[{ type: "heatmap", z: kernelMatrix, colorscale: "Viridis", colorbar: { title: { text: t("Kernel") } }, hovertemplate: `${t("row")}=%{y}<br>${t("column")}=%{x}<br>${t("value")}=%{z:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Sample") } }, yaxis: { title: { text: t("Sample") }, autorange: "reversed" } })} />
+      <PlotFrame compact ariaLabel={t("Kernel eigenspectrum")} data={[{ type: "bar", x: eigenvalues.slice(0, 100).map((_, index) => index + 1), y: eigenvalues.slice(0, 100), marker: { color: "#8764B8" } }]} layout={layout({ xaxis: { title: { text: t("Component") } }, yaxis: { title: { text: t("Centered eigenvalue") } } })} />
     </div>
   </>;
 }
@@ -620,7 +620,7 @@ function PointPlot({ points, selectedIndices, onSelect, color, ariaLabel }: { po
   if (!points.length) return <NoData message={t("No projected samples are available.")} />;
   const selected = new Set(selectedIndices);
   const colorValues = points.map((point) => color === "label" ? point.label ?? -1 : color === "score" ? point.score ?? 0 : color === "distance" ? point.distance ?? 0 : color === "uncertainty" ? point.uncertainty ?? 0 : color === "element" ? point.element ?? 0 : selected.has(point.i) ? 1 : 0);
-  return <PlotFrame compact ariaLabel={ariaLabel} onClick={(index) => points[index] && onSelect(points[index])} data={[{ type: "scattergl", mode: "markers", x: points.map((point) => point.x), y: points.map((point) => point.y), text: points.map((point) => `${point.sample_id ?? t("sample {index}", { index: point.i })}${point.row == null ? "" : t(" · atom {row}", { row: point.row })}`), marker: { size: color === "selected" ? points.map((point) => selected.has(point.i) ? 10 : 5) : 7, color: colorValues, colorscale: color === "selected" ? [[0, "#C8CDD4"], [1, "#D13438"]] : HIGH_CONTRAST_COLORSCALE, showscale: color !== "selected", colorbar: { title: { text: tr(POINT_COLOR_LABELS[color]) } }, opacity: 0.8 }, hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: "PC1" }, yaxis: { title: "PC2" }, showlegend: false })} />;
+  return <PlotFrame compact ariaLabel={ariaLabel} onClick={(index) => points[index] && onSelect(points[index])} data={[{ type: "scattergl", mode: "markers", x: points.map((point) => point.x), y: points.map((point) => point.y), text: points.map((point) => `${point.sample_id ?? t("sample {index}", { index: point.i })}${point.row == null ? "" : t(" · atom {row}", { row: point.row })}`), marker: { size: color === "selected" ? points.map((point) => selected.has(point.i) ? 10 : 5) : 7, color: colorValues, colorscale: color === "selected" ? [[0, "#C8CDD4"], [1, "#D13438"]] : HIGH_CONTRAST_COLORSCALE, showscale: color !== "selected", colorbar: { title: { text: tr(POINT_COLOR_LABELS[color]) } }, opacity: 0.8 }, hovertemplate: "%{text}<br>x=%{x:.5g}<br>y=%{y:.5g}<extra></extra>" }]} layout={layout({ xaxis: { title: { text: "PC1" } }, yaxis: { title: { text: "PC2" } }, showlegend: false })} />;
 }
 
 function AssociationBars({ rows, method }: { rows: { feature: number; value: number }[]; method: "pearson" | "spearman" | "mutual_information" }) {
@@ -629,6 +629,7 @@ function AssociationBars({ rows, method }: { rows: { feature: number; value: num
   const signed = method !== "mutual_information";
   const axisTitle = method === "spearman" ? "Spearman ρ" : method === "mutual_information" ? t("Mutual Information") : "Pearson r";
   const maxValue = Math.max(...shown.map((row) => Math.abs(row.value)), 0.01);
+  const axisRange: [number, number] = signed ? [-1, 1] : [0, maxValue * 1.18];
   return <PlotFrame ariaLabel={t("Feature–Property Association")} data={[{
     type: "bar",
     orientation: "h",
@@ -639,7 +640,7 @@ function AssociationBars({ rows, method }: { rows: { feature: number; value: num
     cliponaxis: false,
     marker: { color: shown.map((row) => !signed ? "#8764B8" : row.value >= 0 ? "#0F6CBD" : "#D13438") },
     hovertemplate: `%{y}<br>${axisTitle}=%{x:.5g}<extra></extra>`,
-  }]} layout={layout({ margin: { l: 62, r: 64, t: 20, b: 52 }, xaxis: { title: axisTitle, range: signed ? [-1, 1] : [0, maxValue * 1.18], zeroline: true, zerolinecolor: "#616161" }, yaxis: { automargin: true } })} />;
+  }]} layout={layout({ margin: { l: 62, r: 64, t: 20, b: 52 }, xaxis: { title: { text: axisTitle }, range: axisRange, zeroline: true, zerolinecolor: "#616161" }, yaxis: { automargin: true } })} />;
 }
 
 function DataTable({ rows }: { rows: Record<string, unknown>[] }) {

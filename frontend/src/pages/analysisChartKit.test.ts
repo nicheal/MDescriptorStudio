@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Data } from "plotly.js";
 
-vi.mock("react-plotly.js", () => ({ default: () => null }));
+vi.mock("../plotlyBundle", () => ({ default: () => null }));
 vi.mock("antd", () => ({ Empty: () => null, Typography: { Text: () => null } }));
 
 async function importFresh() {

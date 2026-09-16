@@ -181,12 +181,13 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
       name: t("Transitions"),
       x: visibleEvents.map((event) => event.time),
       y: visibleEvents.map((event) => event.step),
-      marker: { color: "#D13438", size: 9, symbol: "diamond", line: { color: "#FFFFFF", width: 1 } },
+      marker: { color: "#D13438", size: 9, symbol: "diamond" as const, line: { color: "#FFFFFF", width: 1 } },
       customdata: visibleEvents.map((event) => event.frame),
       hovertemplate: `${t("Frame")} %{customdata}<br>${t("Step distance")}=%{y:.5g}<extra></extra>`,
     },
   ];
-  const xBounds = visibleIndices.length ? [time[visibleIndices[0]], time[visibleIndices[visibleIndices.length - 1]]] : [0, 1];
+  const xBounds: [number, number] = visibleIndices.length ? [time[visibleIndices[0]], time[visibleIndices[visibleIndices.length - 1]]] : [0, 1];
+  const timelineRange: [number, number] | undefined = selectedEvent ? [selectedEvent.time - windowHalf, selectedEvent.time + windowHalf] : undefined;
   const timelineShapes = [
     { type: "line" as const, x0: xBounds[0], x1: xBounds[1], y0: threshold, y1: threshold, line: { color: "#D13438", width: 1.5, dash: "dash" as const } },
     ...(selectedEvent ? [
@@ -195,9 +196,9 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
     ] : []),
   ];
   const timelineLayout = layout({
-    xaxis: { title: timeUnit, range: selectedEvent ? [selectedEvent.time - windowHalf, selectedEvent.time + windowHalf] : undefined },
-    yaxis: { title: t("Step distance") },
-    ...(showReference || showCumulative ? { yaxis2: { title: t("Distance from reference"), overlaying: "y", side: "right", showgrid: false } } : {}),
+    xaxis: { title: { text: timeUnit }, range: timelineRange },
+    yaxis: { title: { text: t("Step distance") } },
+    ...(showReference || showCumulative ? { yaxis2: { title: { text: t("Distance from reference") }, overlaying: "y", side: "right", showgrid: false, tickmode: "auto" } } : {}),
     shapes: timelineShapes,
     annotations: [
       { x: xBounds[0], y: threshold, text: t("Threshold {value}", { value: metric(threshold) }), showarrow: false, xanchor: "left", yanchor: "bottom", font: { color: "#D13438" } },
@@ -253,7 +254,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
       x: visibleEvents.map((event) => event.pc1 ?? 0),
       y: visibleEvents.map((event) => event.pc2 ?? 0),
       customdata: visibleEvents.map((event) => event.frame),
-      marker: { color: "#D13438", size: 10, symbol: "diamond", line: { color: "#FFFFFF", width: 1 } },
+      marker: { color: "#D13438", size: 10, symbol: "diamond" as const, line: { color: "#FFFFFF", width: 1 } },
       hovertemplate: `${t("Frame")} %{customdata}<br>${t("Transition")}<extra></extra>`,
     }]),
     ...(selectedIndex >= 0 ? [{
@@ -262,7 +263,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
       name: t("Selected sample"),
       x: [coords[selectedIndex][0]],
       y: [coords[selectedIndex][1]],
-      marker: { color: "#0F6CBD", size: 14, symbol: "circle-open", line: { color: "#0F6CBD", width: 2 } },
+      marker: { color: "#0F6CBD", size: 14, symbol: "circle-open" as const, line: { color: "#0F6CBD", width: 2 } },
       hovertemplate: `${t("Frame")} ${frames[selectedIndex]}<extra></extra>`,
     }] : []),
     ...(selectedEvent && selectedEvent.pc1 !== null && selectedEvent.pc2 !== null ? [
@@ -275,7 +276,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
         text: [t("before"), t("after")],
         textposition: "top center" as const,
         textfont: { size: 10, color: "#A4262C" },
-        marker: { color: ["#8764B8", "#D13438"], size: [9, 12], symbol: ["circle", "diamond"], line: { color: "#FFFFFF", width: 1 } },
+        marker: { color: ["#8764B8", "#D13438"], size: [9, 12], symbol: ["circle", "diamond"] as ("circle" | "diamond")[], line: { color: "#FFFFFF", width: 1 } },
         hovertemplate: `${t("Frame")} ${selectedEvent.frame}<extra></extra>`,
       },
       {
@@ -290,7 +291,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
       },
     ] : []),
   ];
-  const box = focusMain && visibleIndices.length
+  const box: { x: [number, number]; y: [number, number] } | null = focusMain && visibleIndices.length
     ? {
       x: [quantile(visibleIndices.map((index) => coords[index][0]), 0.025) ?? 0, quantile(visibleIndices.map((index) => coords[index][0]), 0.975) ?? 0],
       y: [quantile(visibleIndices.map((index) => coords[index][1]), 0.025) ?? 0, quantile(visibleIndices.map((index) => coords[index][1]), 0.975) ?? 0],
@@ -300,8 +301,8 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
     ? visibleIndices.filter((index) => coords[index][0] < box.x[0] || coords[index][0] > box.x[1] || coords[index][1] < box.y[0] || coords[index][1] > box.y[1]).length
     : 0;
   const pcLayout = layout({
-    xaxis: { title: axisTitle("PC1", pc1Variance), range: box?.x },
-    yaxis: { title: axisTitle("PC2", pc2Variance), range: box?.y },
+    xaxis: { title: { text: axisTitle("PC1", pc1Variance) }, range: box?.x },
+    yaxis: { title: { text: axisTitle("PC2", pc2Variance) }, range: box?.y },
     legend: { orientation: "h", y: 1.14 },
   });
 

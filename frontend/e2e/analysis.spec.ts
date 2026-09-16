@@ -115,6 +115,23 @@ test("browser preview reloads cached PCA and changes coordinates with preprocess
   const plot = page.locator(".analysis-plot-frame .js-plotly-plot");
   await expect(plot).toBeVisible({ timeout: 30_000 });
 
+  const plotConfig = await plot.evaluate((node) => {
+    const graph = node as HTMLDivElement & {
+      layout?: { xaxis?: { title?: { text?: string } }; yaxis?: { title?: { text?: string } } };
+      _context?: { showSendToCloud?: boolean };
+    };
+    return {
+      xaxisTitle: graph.layout?.xaxis?.title?.text,
+      yaxisTitle: graph.layout?.yaxis?.title?.text,
+      showSendToCloud: graph._context?.showSendToCloud,
+      modebarTitles: Array.from(node.querySelectorAll(".modebar-btn"), (button) => button.getAttribute("data-title") ?? ""),
+    };
+  });
+  expect(plotConfig.xaxisTitle).toBe("PC1");
+  expect(plotConfig.yaxisTitle).toBe("PC2");
+  expect(plotConfig.showSendToCloud).toBe(false);
+  expect(plotConfig.modebarTitles.some((title) => /share|cloud|chart studio/i.test(title))).toBe(false);
+
   const before = await plot.evaluate((node) => JSON.stringify((node as unknown as { data?: { x?: number[] }[] }).data?.[0]?.x?.slice(0, 6)));
   const preprocess = page.locator(".analysis-controls .ant-select").nth(2);
   await preprocess.click();
@@ -124,6 +141,49 @@ test("browser preview reloads cached PCA and changes coordinates with preprocess
     if (await current.count() === 0) return null;
     return current.evaluate((node) => JSON.stringify((node as unknown as { data?: { x?: number[] }[] }).data?.[0]?.x?.slice(0, 6)));
   }, { timeout: 30_000 }).not.toBe(before);
+});
+
+test("browser preview preserves trajectory overlay axes", async ({ page }) => {
+  await page.goto("/preview.html");
+  await page.getByRole("button", { name: "Analysis", exact: true }).click();
+  await page.locator(".analysis-overview-module-select").click();
+  await page.getByText("Trajectory", { exact: true }).last().click();
+  await page.getByRole("button", { name: "Run trajectory", exact: true }).click();
+  await expect(page.getByText("DESCRIPTOR TRAJECTORY", { exact: true })).toBeVisible({ timeout: 30_000 });
+  const timeline = page.locator(".trajectory-chart-grid .js-plotly-plot").first();
+  await expect(timeline).toBeVisible({ timeout: 30_000 });
+  await page.getByRole("checkbox", { name: "Distance to reference", exact: true }).check();
+
+  await expect.poll(() => timeline.evaluate((node) => {
+    const graph = node as HTMLDivElement & {
+      _fullLayout?: { yaxis2?: { tickmode?: string } };
+    };
+    return graph._fullLayout?.yaxis2?.tickmode;
+  }), { timeout: 30_000 }).toBe("auto");
+  const state = await timeline.evaluate((node) => {
+    const graph = node as HTMLDivElement & {
+      data?: Array<{ type?: string; name?: string; yaxis?: string }>;
+      layout?: {
+        xaxis?: { title?: { text?: string } };
+        yaxis?: { title?: { text?: string } };
+        yaxis2?: { title?: { text?: string }; tickmode?: string };
+      };
+    };
+    return {
+      xaxisTitle: graph.layout?.xaxis?.title?.text,
+      yaxisTitle: graph.layout?.yaxis?.title?.text,
+      yaxis2Title: graph.layout?.yaxis2?.title?.text,
+      tickmode: graph.layout?.yaxis2?.tickmode,
+      referenceTrace: graph.data?.some((trace) => trace.type === "scatter" && trace.name === "Distance to reference" && trace.yaxis === "y2"),
+    };
+  });
+  expect(state).toEqual({
+    xaxisTitle: "frame",
+    yaxisTitle: "Step distance",
+    yaxis2Title: "Distance from reference",
+    tickmode: "auto",
+    referenceTrace: true,
+  });
 });
 
 test("browser preview renders an Overview chart after a module run", async ({ page }) => {
