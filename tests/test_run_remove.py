@@ -3,6 +3,7 @@ jobs, remove the on-disk result/analysis dirs, and refuse non-terminal runs
 (a live runner would keep writing into them — cancel the job first).
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,14 @@ def _insert_run(db: Database, tmp_path: Path, run_id: str, status: str) -> Path:
     return run_dir
 
 
-def _insert_analysis(db: Database, tmp_path: Path, run_id: str, ana_id: str, status: str) -> Path:
+def _insert_analysis(
+    db: Database,
+    tmp_path: Path,
+    run_id: str,
+    ana_id: str,
+    status: str,
+    input_run_ids: list[str] | None = None,
+) -> Path:
     ana_dir = tmp_path / "analysis" / ana_id
     ana_dir.mkdir(parents=True)
     (ana_dir / "pca.json").write_text("{}", encoding="utf-8")
@@ -47,6 +55,11 @@ def _insert_analysis(db: Database, tmp_path: Path, run_id: str, ana_id: str, sta
         " VALUES (?, ?, 'pca', ?, '2026-01-01T00:00:00+00:00', ?)",
         (ana_id, run_id, status, str(ana_dir)),
     )
+    if input_run_ids is not None:
+        db.execute(
+            "UPDATE analysis_runs SET input_run_ids_json = ? WHERE id = ?",
+            (json.dumps(input_run_ids), ana_id),
+        )
     return ana_dir
 
 
@@ -109,3 +122,19 @@ def test_remove_run_without_results_or_analyses(tmp_path: Path) -> None:
 
     assert results.remove({"run_id": "run_f"}) == {"ok": True}
     assert db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_f'") is None
+
+
+def test_remove_secondary_input_run_cascades_analysis(tmp_path: Path) -> None:
+    db, results = _env(tmp_path)
+    _insert_run(db, tmp_path, "run_1", "COMPLETED")
+    secondary_dir = _insert_run(db, tmp_path, "run_2", "COMPLETED")
+    analysis_dir = _insert_analysis(
+        db, tmp_path, "run_1", "ana_pair", "COMPLETED", ["run_1", "run_2"]
+    )
+
+    assert results.remove({"run_id": "run_2"}) == {"ok": True}
+    assert db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_1'") is not None
+    assert db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_2'") is None
+    assert db.query_one("SELECT * FROM analysis_runs WHERE id = 'ana_pair'") is None
+    assert not secondary_dir.exists()
+    assert not analysis_dir.exists()

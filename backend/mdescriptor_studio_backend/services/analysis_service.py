@@ -30,6 +30,7 @@ from ..errors import (
     EXPORT_FAILED,
     AppError,
     INVALID_PARAMS,
+    JOB_CANCELLED,
     RESULT_INCOMPATIBLE,
 )
 from .result_service import ResultService
@@ -306,9 +307,10 @@ class AnalysisService:
                 }
                 with open_text_for_write(out_dir / "pca.json") as fh:
                     json.dump(payload, fh, ensure_ascii=False)
-                self.db.execute(
-                    "UPDATE analysis_runs SET status = 'COMPLETED', result_path = ?, finished_at = ? WHERE id = ?",
-                    (str(out_dir), _NOW(), analysis_id),
+                self._complete_analysis_run(
+                    analysis_id,
+                    {"result_path": str(out_dir), "finished_at": _NOW()},
+                    out_dir,
                 )
                 ctx.progress(1, 1, "done")
                 return {"analysis_id": analysis_id, "n_points": payload["n_points"]}
@@ -829,18 +831,18 @@ class AnalysisService:
                     preview,
                     ctx,
                 )
-                self.db.execute(
-                    "UPDATE analysis_runs SET status = 'COMPLETED', result_path = ?, finished_at = ?, warnings_json = ?, artifact_manifest_json = ?, preview_json = ?, preprocessing_json = ?, updated_at = ? WHERE id = ?",
-                    (
-                        str(out_dir),
-                        _NOW(),
-                        json.dumps(result.get("warnings", []), ensure_ascii=False),
-                        json.dumps(manifest, ensure_ascii=False),
-                        json.dumps(preview, ensure_ascii=False),
-                        json.dumps({"preprocess": params.get("preprocess")}, ensure_ascii=False),
-                        _NOW(),
-                        analysis_id,
-                    ),
+                self._complete_analysis_run(
+                    analysis_id,
+                    {
+                        "result_path": str(out_dir),
+                        "finished_at": _NOW(),
+                        "warnings_json": json.dumps(result.get("warnings", []), ensure_ascii=False),
+                        "artifact_manifest_json": json.dumps(manifest, ensure_ascii=False),
+                        "preview_json": json.dumps(preview, ensure_ascii=False),
+                        "preprocessing_json": json.dumps({"preprocess": params.get("preprocess")}, ensure_ascii=False),
+                        "updated_at": _NOW(),
+                    },
+                    out_dir,
                 )
                 ctx.progress(1, 1, "analysis complete")
                 n_points = preview_samples.n_samples if cross_dataset else samples[0].n_samples
@@ -936,9 +938,16 @@ class AnalysisService:
                     {"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)},
                     ctx,
                 )
-                self.db.execute(
-                    "UPDATE analysis_runs SET status = 'COMPLETED', result_path = ?, finished_at = ?, artifact_manifest_json = ?, preview_json = ?, updated_at = ? WHERE id = ?",
-                    (str(out_dir), _NOW(), json.dumps(manifest), json.dumps({"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)}), _NOW(), analysis_id),
+                self._complete_analysis_run(
+                    analysis_id,
+                    {
+                        "result_path": str(out_dir),
+                        "finished_at": _NOW(),
+                        "artifact_manifest_json": json.dumps(manifest),
+                        "preview_json": json.dumps({"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)}),
+                        "updated_at": _NOW(),
+                    },
+                    out_dir,
                 )
                 ctx.progress(1, 1, "export complete")
                 return {"analysis_id": analysis_id, "output_path": str(path), "selected_count": len(selected)}
@@ -960,6 +969,34 @@ class AnalysisService:
             "UPDATE analysis_runs SET status = 'RUNNING', updated_at = ? WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
             (_NOW(), analysis_id),
         )
+
+    def _complete_analysis_run(self, analysis_id: str, values: dict[str, object], artifact_path: Path) -> None:
+        """Settle an analysis artifact with a cancellation-safe status CAS."""
+        allowed = {
+            "result_path",
+            "finished_at",
+            "warnings_json",
+            "artifact_manifest_json",
+            "preview_json",
+            "preprocessing_json",
+            "updated_at",
+        }
+        if not set(values) <= allowed:
+            raise ValueError("unsupported analysis completion field")
+        assignments = ["status = 'COMPLETED'"]
+        params: list[object] = []
+        for column, value in values.items():
+            assignments.append(f"{column} = ?")
+            params.append(value)
+        params.append(analysis_id)
+        changed = self.db.execute(
+            f"UPDATE analysis_runs SET {', '.join(assignments)} WHERE id = ? AND status = 'RUNNING'",
+            tuple(params),
+        )
+        if changed == 1:
+            return
+        self._rmtree_quiet(artifact_path)
+        raise AppError(JOB_CANCELLED, f"analysis run {analysis_id} was cancelled")
 
     def _apply_thread_limit(self) -> None:
         """Apply the user's `compute.default_threads` setting to the numeric

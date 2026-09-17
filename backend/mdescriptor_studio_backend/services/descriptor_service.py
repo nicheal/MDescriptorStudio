@@ -21,11 +21,18 @@ from ..errors import (
     DATASET_NOT_FOUND,
     DESCRIPTOR_CONFIGURATION_ERROR,
     INVALID_PARAMS,
+    JOB_CANCELLED,
     OUT_OF_MEMORY,
     UNSUPPORTED_PERIODICITY,
 )
 from ..mdescriptor_adapter import engine_exception_to_app_error
-from ..security import UnsafePathError, ensure_no_reparse_points, open_text_for_write, validate_local_path
+from ..security import (
+    UnsafePathError,
+    ensure_no_reparse_points,
+    open_text_for_write,
+    remove_managed_tree,
+    validate_local_path,
+)
 from ..storage.database import Database
 from .dataset_service import DatasetService
 from .job_service import JobService
@@ -595,10 +602,7 @@ class DescriptorService:
         }
         with open_text_for_write(run_dir / "metadata.json") as fh:
             fh.write(json.dumps(metadata, ensure_ascii=False, indent=2))
-        self.db.execute(
-            "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ?, memory_peak_bytes = ? WHERE id = ?",
-            (_NOW(), str(run_dir), memory_peak_bytes, run_id),
-        )
+        self._complete_run(run_id, run_dir, memory_peak_bytes)
         ctx.progress(None, None, "done", fraction=1.0)
         return {
             "run_id": run_id,
@@ -607,6 +611,21 @@ class DescriptorService:
             "level": metadata["level"],
             "feature_count": metadata["feature_count"],
         }
+
+    def _complete_run(self, run_id: str, run_dir: Path, memory_peak_bytes: int | None) -> None:
+        """Commit a descriptor artifact only while its run is still RUNNING."""
+        changed = self.db.execute(
+            "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ?, memory_peak_bytes = ?"
+            " WHERE id = ? AND status = 'RUNNING'",
+            (_NOW(), str(run_dir), memory_peak_bytes, run_id),
+        )
+        if changed == 1:
+            return
+        try:
+            remove_managed_tree(run_dir)
+        except (OSError, UnsafePathError):
+            log.warning("could not discard cancelled descriptor artifact", exc_info=True)
+        raise AppError(JOB_CANCELLED, f"descriptor run {run_id} was cancelled")
 
     @staticmethod
     def _report_engine_progress(ctx, control, stop: threading.Event) -> None:

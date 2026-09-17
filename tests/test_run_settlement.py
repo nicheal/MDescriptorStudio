@@ -16,7 +16,7 @@ from mdescriptor_studio_backend.services.descriptor_service import DescriptorSer
 from mdescriptor_studio_backend.services.job_service import JobService
 from mdescriptor_studio_backend.services.result_service import ResultService
 from mdescriptor_studio_backend.storage.database import Database
-from mdescriptor_studio_backend.errors import RESULT_INCOMPATIBLE, AppError
+from mdescriptor_studio_backend.errors import JOB_CANCELLED, RESULT_INCOMPATIBLE, AppError
 
 _TERMINAL = ("COMPLETED", "FAILED", "CANCELLED")
 
@@ -163,4 +163,49 @@ def test_restart_settles_zombie_runs(tmp_path: Path) -> None:
     assert run["status"] == "CANCELLED", run
     ana = db.query_one("SELECT status FROM analysis_runs WHERE id = 'ana_z'")
     assert ana["status"] == "CANCELLED", ana
+    jobs.shutdown()
+
+
+def test_cancelled_descriptor_cannot_complete(tmp_path: Path) -> None:
+    db, jobs, svc = _env(tmp_path)
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version,"
+        " parameters_json, scope, status, created_at)"
+        " VALUES ('run_cancelled', 'ds_1', 'ACE', 'test', '{}', 'dataset', 'CANCELLED', '2026-01-01T00:00:00+00:00')"
+    )
+    artifact = tmp_path / "results" / "run_cancelled"
+    artifact.mkdir(parents=True)
+    (artifact / "values.npy").write_bytes(b"stale")
+
+    with pytest.raises(AppError) as exc:
+        svc._complete_run("run_cancelled", artifact, None)
+
+    assert exc.value.code == JOB_CANCELLED
+    assert db.query_one("SELECT status FROM descriptor_runs WHERE id = 'run_cancelled'")["status"] == "CANCELLED"
+    assert not artifact.exists()
+    jobs.shutdown()
+
+
+def test_cancelled_analysis_cannot_complete(tmp_path: Path) -> None:
+    db, jobs, _svc = _env(tmp_path)
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version,"
+        " parameters_json, scope, status, created_at)"
+        " VALUES ('run_analysis', 'ds_1', 'ACE', 'test', '{}', 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00')"
+    )
+    artifact = tmp_path / "analysis" / "ana_cancelled"
+    artifact.mkdir(parents=True)
+    db.execute(
+        "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, status, created_at, result_path)"
+        " VALUES ('ana_cancelled', 'run_analysis', 'pca', 'CANCELLED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(artifact),),
+    )
+    analysis = AnalysisService(db, jobs, ResultService(db), datasets=None, data_dir=tmp_path)
+
+    with pytest.raises(AppError) as exc:
+        analysis._complete_analysis_run("ana_cancelled", {"result_path": str(artifact)}, artifact)
+
+    assert exc.value.code == JOB_CANCELLED
+    assert db.query_one("SELECT status FROM analysis_runs WHERE id = 'ana_cancelled'")["status"] == "CANCELLED"
+    assert not artifact.exists()
     jobs.shutdown()

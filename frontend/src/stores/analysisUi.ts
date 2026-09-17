@@ -2,8 +2,8 @@
 // restart (ADR-17 persistence rule). The computed charts themselves live on
 // the backend (analysis_runs table + artifacts, re-served by analysis.preview
 // / result.get_pca); only the light "what was on screen" pointers live here:
-// the UI parameters, and one slot per (tab, run, parameter combination) so
-// every computed result can be re-displayed without recomputing.
+// the UI parameters, and one slot per (module, input, parameter combination)
+// so every computed result can be re-displayed without recomputing.
 import { create } from "zustand";
 import { ipc } from "../ipc/client";
 import type { Pair } from "../i18n";
@@ -279,20 +279,20 @@ export const DEFAULT_ANALYSIS_VIEW: AnalysisView = {
   featureCorrelationThreshold: 0.95,
 };
 
-/** One remembered computed result: which tab + parameters produced it. */
+/** One remembered computed result: which module + inputs + parameters produced it. */
 export interface AnalysisSlot {
-  runId: string;
   analysisId: string;
-  tab: TabKey;
+  moduleKey: AnalysisModuleKey;
+  inputKey: string;
   /** Stable key of the parameters the result was computed with. */
-  paramsKey: string;
+  parameterKey: string;
   updatedAt: number;
   /** Monotonic write counter; breaks updatedAt ties deterministically. */
   seq: number;
 }
 
-export const slotKey = (slot: Pick<AnalysisSlot, "tab" | "runId" | "paramsKey">): string =>
-  `${slot.tab}|${slot.runId}|${slot.paramsKey}`;
+export const slotKey = (slot: Pick<AnalysisSlot, "moduleKey" | "inputKey" | "parameterKey">): string =>
+  `${slot.moduleKey}|${slot.inputKey}|${slot.parameterKey}`;
 
 /** Every UI parameter that changes what the current analysis tab computes. */
 export interface AnalysisParams {
@@ -418,44 +418,41 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
   }
 }
 
+/** Stable identity of every descriptor run/view consumed by a calculation. */
+export function buildAnalysisInputKey(
+  tab: TabKey,
+  p: Pick<AnalysisParams, "overviewAnalysis" | "samplingAlgorithm" | "samplingExistingRunId" | "referenceRunId" | "queryRunId" | "referenceViewId" | "queryViewId" | "viewId">,
+  selectedRun: string | null,
+  secondRun: string | null,
+): string {
+  const crossDataset = tab === "coverage"
+    || (tab === "sampling" && (p.samplingAlgorithm === "novelty_fps" || p.samplingAlgorithm === "uncertainty_diversity"))
+    || (tab === "overview" && p.overviewAnalysis === "drift");
+  if (crossDataset) {
+    return [p.referenceRunId ?? "none", p.referenceViewId ?? "full", p.queryRunId ?? "none", p.queryViewId ?? "full"].join("|");
+  }
+  if (tab === "sampling" && p.samplingAlgorithm === "fps" && p.samplingExistingRunId) {
+    return [selectedRun ?? "none", p.viewId ?? "full", p.samplingExistingRunId, "full"].join("|");
+  }
+  if (tab === "compare" || (tab === "overview" && p.overviewAnalysis === "sensitivity")) {
+    return [selectedRun ?? "none", secondRun ?? "none"].join("|");
+  }
+  return [selectedRun ?? "none", p.viewId ?? "full"].join("|");
+}
+
 /** Slot for an exact parameter combination, if one was computed. */
 export function slotForParams(
   slots: Record<string, AnalysisSlot>,
-  tab: TabKey,
-  runId: string | null,
-  paramsKey: string,
+  moduleKey: AnalysisModuleKey | null,
+  inputKey: string,
+  parameterKey: string,
 ): AnalysisSlot | null {
-  if (!runId) return null;
-  return slots[slotKey({ tab, runId, paramsKey })] ?? null;
-}
-
-/** Most recent slot recorded for a tab + run, across parameter combinations. */
-export function latestSlotForTab(
-  slots: Record<string, AnalysisSlot>,
-  tab: TabKey,
-  runId: string | null,
-): AnalysisSlot | null {
-  if (!runId) return null;
-  let best: AnalysisSlot | null = null;
-  for (const slot of Object.values(slots)) {
-    if (slot.tab === tab && slot.runId === runId && (!best || slot.updatedAt > best.updatedAt)) {
-      best = slot;
-    }
-  }
-  return best;
+  if (!moduleKey || !inputKey) return null;
+  return slots[slotKey({ moduleKey, inputKey, parameterKey })] ?? null;
 }
 
 function slotBelongsToModule(slot: AnalysisSlot, module: AnalysisNavModule): boolean {
-  if (slot.tab !== module.target.tab) return false;
-  if (module.target.tab === "overview") {
-    return typeof module.target.overviewAnalysis === "string"
-      && slot.paramsKey.startsWith(`${module.target.overviewAnalysis}|`);
-  }
-  if (module.target.tab === "coverage") {
-    return typeof module.target.coverageMode === "string"
-      && slot.paramsKey.startsWith(`${module.target.coverageMode}|`);
-  }
-  return true;
+  return slot.moduleKey === module.key;
 }
 
 /** Whether a legacy slot key can be attributed to one concrete module. */
@@ -471,14 +468,14 @@ export function analysisSlotMatchesModule(
 export function latestSlotForModule(
   slots: Record<string, AnalysisSlot>,
   moduleKey: AnalysisModuleKey | string | null,
-  runId: string | null,
+  inputKey: string | null,
 ): AnalysisSlot | null {
-  if (!runId || !moduleKey) return null;
+  if (!inputKey || !moduleKey) return null;
   const module = analysisNavModuleForKey(moduleKey);
   if (!module) return null;
   let best: AnalysisSlot | null = null;
   for (const slot of Object.values(slots)) {
-    if (slot.runId !== runId || !slotBelongsToModule(slot, module)) continue;
+    if (slot.inputKey !== inputKey || !slotBelongsToModule(slot, module)) continue;
     if (!best || slot.updatedAt > best.updatedAt || (slot.updatedAt === best.updatedAt && slot.seq > best.seq)) {
       best = slot;
     }
@@ -546,20 +543,66 @@ export function parseAnalysisSlots(raw: unknown): Record<string, AnalysisSlot> |
   }
   if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
   const slots: Record<string, AnalysisSlot> = {};
-  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
+  for (const [, value] of Object.entries(data as Record<string, unknown>)) {
     if (typeof value !== "object" || value === null) continue;
     const rec = value as Record<string, unknown>;
     if (
-      typeof rec.runId !== "string" || !rec.runId
-      || typeof rec.analysisId !== "string" || !rec.analysisId
-      || !TAB_KEYS.includes(rec.tab as TabKey)
-      || typeof rec.paramsKey !== "string"
+      typeof rec.analysisId !== "string" || !rec.analysisId
       || typeof rec.updatedAt !== "number" || !Number.isFinite(rec.updatedAt)
     ) continue;
-    slots[key] = { runId: rec.runId, analysisId: rec.analysisId, tab: rec.tab as TabKey, paramsKey: rec.paramsKey, updatedAt: rec.updatedAt, seq: typeof rec.seq === "number" && Number.isFinite(rec.seq) ? rec.seq : 0 };
+    const moduleKey = typeof rec.moduleKey === "string"
+      ? analysisNavModuleForKey(rec.moduleKey)?.key
+      : legacyModuleKey(rec.tab, rec.paramsKey);
+    if (!moduleKey) continue;
+    const inputKey = typeof rec.inputKey === "string" && rec.inputKey
+      ? rec.inputKey
+      : typeof rec.runId === "string" && rec.runId ? `legacy:${rec.runId}` : null;
+    const parameterKey = typeof rec.parameterKey === "string"
+      ? rec.parameterKey
+      : typeof rec.paramsKey === "string" ? rec.paramsKey : null;
+    if (!inputKey || parameterKey === null) continue;
+    const slot: AnalysisSlot = {
+      analysisId: rec.analysisId,
+      moduleKey,
+      inputKey,
+      parameterKey,
+      updatedAt: rec.updatedAt,
+      seq: typeof rec.seq === "number" && Number.isFinite(rec.seq) ? rec.seq : 0,
+    };
+    slots[slotKey(slot)] = slot;
   }
   const capped = pruneSlots(slots);
   return Object.keys(capped).length ? capped : null;
+}
+
+function legacyModuleKey(tab: unknown, paramsKey: unknown): AnalysisModuleKey | null {
+  if (typeof tab !== "string" || typeof paramsKey !== "string") return null;
+  const first = paramsKey.split("|", 1)[0];
+  const byTab: Partial<Record<TabKey, AnalysisModuleKey>> = {
+    projection: "descriptor_space",
+    similarity: "similarity",
+    clusters: "structural_clusters",
+    outliers: "outlier_environments",
+    sampling: "representative_sampling",
+    compare: "descriptor_comparison",
+    local: "local_environment",
+    kernel: "kernel_analysis",
+  };
+  if (tab === "coverage") return first === "overlap" ? "train_test_overlap" : "data_coverage";
+  if (tab === "overview") {
+    const overview: Partial<Record<OverviewAnalysis, AnalysisModuleKey>> = {
+      feature_variance: "feature_variance",
+      feature_correlation: "feature_correlation",
+      effective_dimension: "effective_dimension",
+      property_correlation: "property_information",
+      trajectory: "descriptor_trajectory",
+      perturbation_sensitivity: "structural_perturbation_response",
+      drift: "dataset_drift",
+      sensitivity: "parameter_sensitivity",
+    };
+    return overview[first as OverviewAnalysis] ?? null;
+  }
+  return byTab[tab as TabKey] ?? null;
 }
 
 function pruneSlots(slots: Record<string, AnalysisSlot>): Record<string, AnalysisSlot> {
@@ -589,10 +632,10 @@ function applyView(partial: Partial<AnalysisView>): void {
 }
 
 export interface AnalysisSlotInput {
-  runId: string;
   analysisId: string;
-  tab: TabKey;
-  paramsKey: string;
+  moduleKey: AnalysisModuleKey;
+  inputKey: string;
+  parameterKey: string;
 }
 
 interface AnalysisUiState {

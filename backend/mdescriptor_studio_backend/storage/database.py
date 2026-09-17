@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -192,6 +193,18 @@ class Database:
             cur = self._conn.execute(sql, params)
             self._conn.commit()
             return cur.rowcount
+
+    @contextmanager
+    def transaction(self):
+        """Run a small group of writes atomically under the database lock."""
+        with self._write_lock:
+            try:
+                self._conn.execute("BEGIN")
+                yield self._conn
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
 
     def executemany(self, sql: str, seq) -> None:
         with self._write_lock:

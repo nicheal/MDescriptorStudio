@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import re
 from collections import Counter
 import logging
 import threading
@@ -24,13 +25,21 @@ from ..datasets import (
 from ..datasets.statistics import STATS_VERSION, _frame_geometry
 from ..errors import (
     AppError,
+    DATASET_BUSY,
     DATASET_CHANGED,
     DATASET_NOT_FOUND,
     INVALID_DATASET,
     INVALID_PARAMS,
 )
 from ..mdescriptor_adapter import EngineAdapter
-from ..security import UnsafePathError, escape_like, same_lexical_path, validate_local_path
+from ..security import (
+    UnsafePathError,
+    escape_like,
+    remove_managed_tree,
+    same_lexical_path,
+    validate_local_path,
+    validate_managed_path,
+)
 from ..storage.database import Database
 from .job_service import JobService
 
@@ -43,6 +52,7 @@ MAX_BOND_CUTOFF = 10.0
 # max per-frame summary rows one dataset.findings call returns (the drawer
 # pages through longer lists)
 FINDINGS_ROW_LIMIT = 1000
+_ARTIFACT_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
 
 
 def _frame_indices(value: object, number_of_frames: int) -> list[int]:
@@ -116,10 +126,11 @@ def _bond_cutoff(value: object) -> float:
 
 
 class DatasetService:
-    def __init__(self, db: Database, adapter: EngineAdapter, jobs: JobService):
+    def __init__(self, db: Database, adapter: EngineAdapter, jobs: JobService, data_dir: Path | None = None):
         self.db = db
         self.adapter = adapter
         self.jobs = jobs
+        self.data_dir = Path(data_dir or db.path.parent).resolve(strict=False)
         self._adapters: dict[str, object] = {}
         # one in-flight scan per dataset: Overview + health rail both call
         # dataset.statistics on stale caches and must share a single job
@@ -600,17 +611,87 @@ class DatasetService:
     def remove(self, params: dict) -> dict:
         ds_id = params.get("id")
         self._row(ds_id)
-        # explicit cleanup: FK covers statistics; runs/jobs have no FK rows
-        self.db.execute(
-            "DELETE FROM analysis_runs WHERE descriptor_run_id IN"
-            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?)",
-            (ds_id,),
+        runs = self.db.query(
+            "SELECT id, result_path FROM descriptor_runs WHERE dataset_id = ?", (ds_id,)
         )
-        self.db.execute("DELETE FROM descriptor_runs WHERE dataset_id = ?", (ds_id,))
-        self.db.execute("DELETE FROM jobs WHERE dataset_id = ?", (ds_id,))
-        self.db.execute("DELETE FROM datasets WHERE id = ?", (ds_id,))
+        run_ids = {str(run["id"]) for run in runs}
+        analyses = []
+        for analysis in self.db.query(
+            "SELECT id, descriptor_run_id, input_run_ids_json, dataset_ids_json, result_path FROM analysis_runs"
+        ):
+            input_ids = self._json_list(analysis.get("input_run_ids_json"))
+            dataset_ids = self._json_list(analysis.get("dataset_ids_json"))
+            if (
+                analysis.get("descriptor_run_id") in run_ids
+                or run_ids.intersection(input_ids)
+                or ds_id in dataset_ids
+            ):
+                analyses.append(analysis)
+        analysis_ids = {str(analysis["id"]) for analysis in analyses}
+
+        for job in self.db.query(
+            "SELECT dataset_id, descriptor_run_id, analysis_run_id FROM jobs"
+            " WHERE status IN ('QUEUED', 'RUNNING')"
+        ):
+            if (
+                job.get("dataset_id") == ds_id
+                or job.get("descriptor_run_id") in run_ids
+                or job.get("analysis_run_id") in analysis_ids
+            ):
+                raise AppError(DATASET_BUSY, f"dataset {ds_id} has active jobs")
+
+        try:
+            artifact_paths = [
+                self._managed_artifact_path("results", str(run["id"]), run["result_path"])
+                for run in runs
+                if run.get("result_path")
+            ] + [
+                self._managed_artifact_path("analysis", str(analysis["id"]), analysis["result_path"])
+                for analysis in analyses
+                if analysis.get("result_path")
+            ]
+        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
+            raise AppError(INVALID_DATASET, "stored dataset artifact paths are invalid") from exc
+
+        run_placeholders = ", ".join("?" for _ in run_ids)
+        analysis_placeholders = ", ".join("?" for _ in analysis_ids)
+        with self.db.transaction() as conn:
+            job_conditions = ["dataset_id = ?"]
+            job_args: list[object] = [ds_id]
+            if run_ids:
+                job_conditions.append(f"descriptor_run_id IN ({run_placeholders})")
+                job_args.extend(sorted(run_ids))
+            if analysis_ids:
+                job_conditions.append(f"analysis_run_id IN ({analysis_placeholders})")
+                job_args.extend(sorted(analysis_ids))
+            conn.execute(f"DELETE FROM jobs WHERE {' OR '.join(job_conditions)}", tuple(job_args))
+            if analysis_ids:
+                conn.execute(
+                    f"DELETE FROM analysis_runs WHERE id IN ({analysis_placeholders})",
+                    tuple(sorted(analysis_ids)),
+                )
+            conn.execute("DELETE FROM descriptor_runs WHERE dataset_id = ?", (ds_id,))
+            conn.execute("DELETE FROM datasets WHERE id = ?", (ds_id,))
         self._adapters.pop(ds_id, None)
+        for path in artifact_paths:
+            try:
+                remove_managed_tree(path)
+            except (OSError, UnsafePathError):
+                log.warning("could not remove managed dataset artifact", exc_info=True)
         return {"ok": True}
+
+    @staticmethod
+    def _json_list(raw: object) -> set[str]:
+        try:
+            value = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
+            return set()
+        return {str(item) for item in value} if isinstance(value, list) else set()
+
+    def _managed_artifact_path(self, kind: str, artifact_id: str, stored: object) -> Path:
+        if not _ARTIFACT_ID_RE.fullmatch(artifact_id) or not artifact_id.startswith(("run_", "ana_")):
+            raise UnsafePathError("invalid artifact id")
+        return validate_managed_path(self.data_dir / kind, stored, artifact_id)
 
     def get(self, params: dict) -> dict:
         row = self._row(params.get("id"))

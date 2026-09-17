@@ -16,10 +16,10 @@ import {
   ANALYSIS_NAV_GROUPS,
   analysisNavModuleForAnalysisType,
   analysisNavModuleForView,
+  buildAnalysisInputKey,
   buildParamsKey,
   hydrateAnalysisUi,
   latestSlotForModule,
-  latestSlotForTab,
   parseAnalysisSlots,
   parseAnalysisView,
   slotForParams,
@@ -44,9 +44,9 @@ const persistedView = {
   featureCorrelationThreshold: 0.9,
 };
 
-const slotA: AnalysisSlot = { runId: "run-1", analysisId: "ana-a", tab: "similarity", paramsKey: "query|structure|10|0|full", updatedAt: 100, seq: 1 };
-const slotB: AnalysisSlot = { runId: "run-1", analysisId: "ana-b", tab: "projection", paramsKey: "pca|structure|raw|full", updatedAt: 200, seq: 2 };
-const slotC: AnalysisSlot = { runId: "run-1", analysisId: "ana-c", tab: "projection", paramsKey: "umap|atom|raw|full", updatedAt: 300, seq: 3 };
+const slotA: AnalysisSlot = { analysisId: "ana-a", moduleKey: "similarity", inputKey: "run-1|full", parameterKey: "query|structure|10|0|full", updatedAt: 100, seq: 1 };
+const slotB: AnalysisSlot = { analysisId: "ana-b", moduleKey: "descriptor_space", inputKey: "run-1|full", parameterKey: "pca|structure|raw|full", updatedAt: 200, seq: 2 };
+const slotC: AnalysisSlot = { analysisId: "ana-c", moduleKey: "descriptor_space", inputKey: "run-1|full", parameterKey: "umap|atom|raw|full", updatedAt: 300, seq: 3 };
 
 const baseParams: AnalysisParams = {
   projection: "pca", mode: "structure", preprocess: "raw", effectiveDimensionPreprocess: "standardized", tsnePerplexity: 30,
@@ -114,6 +114,15 @@ describe("buildParamsKey", () => {
     expect(buildParamsKey("projection", probed)).toBe("umap|structure|raw||full");
     expect(buildParamsKey("projection", { ...probed, preprocess: "standardized" })).toBe("umap|structure|standardized||full");
   });
+
+  it("keeps every descriptor input in the cache identity", () => {
+    expect(buildAnalysisInputKey("compare", baseParams, "run-a", "run-b"))
+      .not.toBe(buildAnalysisInputKey("compare", baseParams, "run-a", "run-c"));
+    expect(buildAnalysisInputKey("overview", { ...baseParams, overviewAnalysis: "sensitivity" }, "run-a", "run-b"))
+      .not.toBe(buildAnalysisInputKey("overview", { ...baseParams, overviewAnalysis: "sensitivity" }, "run-a", "run-c"));
+    expect(buildAnalysisInputKey("sampling", { ...baseParams, samplingExistingRunId: "run-b" }, "run-a", null))
+      .not.toBe(buildAnalysisInputKey("sampling", { ...baseParams, samplingExistingRunId: "run-c" }, "run-a", null));
+  });
 });
 
 describe("parseAnalysisView", () => {
@@ -159,17 +168,17 @@ describe("parseAnalysisSlots", () => {
     const slots = parseAnalysisSlots(JSON.stringify({
       "similarity|run-1|x": slotA,
       "projection|run-1|y": slotB,
-      bad: { runId: "run-1" },
-      "projection|run-1|z": { ...slotC, tab: "nope" },
+      bad: { analysisId: "ana-bad" },
+      "projection|run-1|z": { ...slotC, moduleKey: "nope" },
     }));
-    expect(Object.keys(slots ?? {}).sort()).toEqual(["projection|run-1|y", "similarity|run-1|x"]);
+    expect(Object.keys(slots ?? {}).sort()).toEqual([slotKey(slotA), slotKey(slotB)].sort());
   });
 
   it("returns null for junk input and enforces the cap", () => {
     expect(parseAnalysisSlots("junk")).toBeNull();
     expect(parseAnalysisSlots([])).toBeNull();
     const many = Object.fromEntries(
-      Array.from({ length: MAX_SLOTS + 5 }, (_, i) => [`${i}`, { ...slotA, updatedAt: i }]),
+      Array.from({ length: MAX_SLOTS + 5 }, (_, i) => [`${i}`, { ...slotA, inputKey: `run-${i}`, parameterKey: `k${i}`, updatedAt: i }]),
     );
     expect(Object.keys(parseAnalysisSlots(JSON.stringify(many)) ?? {}).length).toBe(MAX_SLOTS);
   });
@@ -182,24 +191,19 @@ describe("slot lookups", () => {
     [slotKey(slotC)]: slotC,
   };
 
-  it("slotForParams matches tab + run + parameters exactly", () => {
-    expect(slotForParams(slots, "similarity", "run-1", "query|structure|10|0|full")).toEqual(slotA);
-    expect(slotForParams(slots, "similarity", "run-1", "other")).toBeNull();
-    expect(slotForParams(slots, "similarity", "run-2", "query|structure|10|0|full")).toBeNull();
-    expect(slotForParams(slots, "similarity", null, "query|structure|10|0|full")).toBeNull();
-  });
-
-  it("latestSlotForTab picks the newest slot of a tab regardless of parameters", () => {
-    expect(latestSlotForTab(slots, "projection", "run-1")).toEqual(slotC);
-    expect(latestSlotForTab(slots, "clusters", "run-1")).toBeNull();
+  it("slotForParams matches module + input + parameters exactly", () => {
+    expect(slotForParams(slots, "similarity", "run-1|full", "query|structure|10|0|full")).toEqual(slotA);
+    expect(slotForParams(slots, "similarity", "run-1|full", "other")).toBeNull();
+    expect(slotForParams(slots, "similarity", "run-2|full", "query|structure|10|0|full")).toBeNull();
+    expect(slotForParams(slots, null, "run-1|full", "query|structure|10|0|full")).toBeNull();
   });
 
   it("latestSlotForModule keeps shared overview slots isolated", () => {
-    const trajectory: AnalysisSlot = { runId: "run-1", analysisId: "ana-t", tab: "overview", paramsKey: "trajectory||full", updatedAt: 400, seq: 4 };
-    const variance: AnalysisSlot = { runId: "run-1", analysisId: "ana-v", tab: "overview", paramsKey: "feature_variance|0.0001|0.01|full", updatedAt: 500, seq: 5 };
+    const trajectory: AnalysisSlot = { analysisId: "ana-t", moduleKey: "descriptor_trajectory", inputKey: "run-1|full", parameterKey: "trajectory||full", updatedAt: 400, seq: 4 };
+    const variance: AnalysisSlot = { analysisId: "ana-v", moduleKey: "feature_variance", inputKey: "run-1|full", parameterKey: "feature_variance|0.0001|0.01|full", updatedAt: 500, seq: 5 };
     const overviewSlots = { [slotKey(trajectory)]: trajectory, [slotKey(variance)]: variance };
-    expect(latestSlotForModule(overviewSlots, "descriptor_trajectory", "run-1")).toEqual(trajectory);
-    expect(latestSlotForModule(overviewSlots, "feature_variance", "run-1")).toEqual(variance);
+    expect(latestSlotForModule(overviewSlots, "descriptor_trajectory", "run-1|full")).toEqual(trajectory);
+    expect(latestSlotForModule(overviewSlots, "feature_variance", "run-1|full")).toEqual(variance);
   });
 
   it("maps legacy history names to the existing module options", () => {
@@ -249,16 +253,16 @@ describe("useAnalysisUi", () => {
     expect(useAnalysisUi.getState().view).toMatchObject({ nearZeroThreshold: 0.4, lowVariationThreshold: 0.4 });
   });
 
-  it("rememberResult keys by tab + run + parameters and prunes to the cap", () => {
-    const entry = { runId: "run-1", analysisId: "ana-a", tab: "similarity" as const, paramsKey: "k" };
+  it("rememberResult keys by module + input + parameters and prunes to the cap", () => {
+    const entry = { analysisId: "ana-a", moduleKey: "similarity" as const, inputKey: "run-1|full", parameterKey: "k" };
     useAnalysisUi.getState().rememberResult(entry);
-    expect(useAnalysisUi.getState().slots["similarity|run-1|k"]).toMatchObject({ ...entry, updatedAt: expect.any(Number) });
+    expect(useAnalysisUi.getState().slots["similarity|run-1|full|k"]).toMatchObject({ ...entry, updatedAt: expect.any(Number) });
     for (let i = 0; i < MAX_SLOTS + 2; i += 1) {
-      useAnalysisUi.getState().rememberResult({ ...entry, analysisId: `ana-${i}`, paramsKey: `k${i}` });
+      useAnalysisUi.getState().rememberResult({ ...entry, analysisId: `ana-${i}`, parameterKey: `k${i}` });
     }
     const slots = useAnalysisUi.getState().slots;
     expect(Object.keys(slots).length).toBe(MAX_SLOTS);
-    expect(slots["similarity|run-1|k"]).toBeUndefined();
+    expect(slots["similarity|run-1|full|k"]).toBeUndefined();
     expect(requestMock).toHaveBeenLastCalledWith("settings.set", {
       key: "workspace.analysisSlots",
       value: expect.any(String),
@@ -267,7 +271,7 @@ describe("useAnalysisUi", () => {
 
   it("clearResult forgets every slot of a deleted analysis", () => {
     useAnalysisUi.getState().rememberResult({ ...slotA });
-    useAnalysisUi.getState().rememberResult({ ...slotB, analysisId: "ana-a", tab: "projection" as const });
+    useAnalysisUi.getState().rememberResult({ ...slotB, analysisId: "ana-a" });
     useAnalysisUi.getState().rememberResult({ ...slotC });
     useAnalysisUi.getState().clearResult("ana-a");
     const slots = useAnalysisUi.getState().slots;
@@ -292,11 +296,11 @@ describe("useAnalysisUi", () => {
     requestMock.mockImplementation(async (_method, params) => ({
       value: (params as { key: string }).key === "workspace.analysisUi"
         ? JSON.stringify(persistedView)
-        : JSON.stringify({ "projection|run-1|y": slotB }),
+        : JSON.stringify({ [slotKey(slotB)]: slotB }),
     }));
     await hydrateAnalysisUi();
     expect(useAnalysisUi.getState().view).toEqual(persistedView);
-    expect(useAnalysisUi.getState().slots["projection|run-1|y"]).toEqual(slotB);
+    expect(useAnalysisUi.getState().slots[slotKey(slotB)]).toEqual(slotB);
   });
 
   it("keeps the current state when hydration fails or is empty", async () => {

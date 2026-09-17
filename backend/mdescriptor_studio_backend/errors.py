@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 DATASET_NOT_FOUND = "DATASET_NOT_FOUND"
+DATASET_BUSY = "DATASET_BUSY"
 DATASET_CHANGED = "DATASET_CHANGED"
 INVALID_DATASET = "INVALID_DATASET"
 UNSUPPORTED_FORMAT = "UNSUPPORTED_FORMAT"
@@ -59,6 +60,7 @@ class AppError(Exception):
 _PUBLIC_MESSAGES = {
     INVALID_PARAMS: "Invalid request.",
     DATASET_NOT_FOUND: "Dataset not found.",
+    DATASET_BUSY: "The dataset has active jobs; cancel them before deleting it.",
     DATASET_CHANGED: "Dataset changed on disk; rescan it before continuing.",
     INVALID_DATASET: "Dataset is invalid or unavailable.",
     UNSUPPORTED_FORMAT: "This dataset format is not supported.",

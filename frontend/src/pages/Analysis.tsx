@@ -39,6 +39,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { activeDataset, useWorkspace, type PcaMode } from "../stores/workspace";
 import { jobStatusLabel, trackJob, watchJob } from "../stores/jobs";
 import {
+  buildAnalysisInputKey,
   buildParamsKey,
   analysisSlotMatchesModule,
   latestSlotForModule,
@@ -97,24 +98,6 @@ type ProjectionOverrides = {
   mode?: PcaMode;
   preprocess?: string;
 };
-
-function analysisSourceContextKey(
-  tab: TabKey,
-  params: Pick<AnalysisParams, "overviewAnalysis" | "samplingAlgorithm" | "referenceRunId" | "queryRunId" | "referenceViewId" | "queryViewId" | "viewId">,
-  selectedRun: string | null,
-  secondRun: string | null,
-): string {
-  const crossDataset = tab === "coverage"
-    || (tab === "sampling" && (params.samplingAlgorithm === "novelty_fps" || params.samplingAlgorithm === "uncertainty_diversity"))
-    || (tab === "overview" && params.overviewAnalysis === "drift");
-  if (crossDataset) {
-    return [params.referenceRunId, params.referenceViewId ?? "full", params.queryRunId, params.queryViewId ?? "full"].join("|");
-  }
-  if (tab === "compare" || (tab === "overview" && params.overviewAnalysis === "sensitivity")) {
-    return [selectedRun, secondRun].join("|");
-  }
-  return [selectedRun, params.viewId ?? "full"].join("|");
-}
 
 type Metric = {
   label: ReactNode;
@@ -416,18 +399,18 @@ export default function Analysis() {
     referenceRunId, queryRunId, referenceViewId, queryViewId, viewId,
   };
   const paramsKey = buildParamsKey(tab, analysisParams);
-  const sourceContextKey = analysisSourceContextKey(tab, analysisParams, selectedRun, secondRun);
-  // {tab, moduleKey, paramsKey, params} as of the latest render. Runs capture this when
+  const inputKey = buildAnalysisInputKey(tab, analysisParams, selectedRun, secondRun);
+  // {tab, moduleKey, paramsKey, inputKey, params} as of the latest render. Runs capture this when
   // they start so their slots always record the context the run belongs to,
   // never whatever the user has navigated to by completion time.
-  const runContextRef = useRef<{ tab: TabKey; moduleKey: AnalysisModuleKey | null; paramsKey: string; params: AnalysisParams; sourceContextKey: string }>({
+  const runContextRef = useRef<{ tab: TabKey; moduleKey: AnalysisModuleKey | null; paramsKey: string; inputKey: string; params: AnalysisParams }>({
     tab,
     moduleKey: activeNavModule?.key ?? null,
     paramsKey,
+    inputKey,
     params: analysisParams,
-    sourceContextKey,
   });
-  runContextRef.current = { tab, moduleKey: activeNavModule?.key ?? null, paramsKey, params: analysisParams, sourceContextKey };
+  runContextRef.current = { tab, moduleKey: activeNavModule?.key ?? null, paramsKey, inputKey, params: analysisParams };
 
   const clearDisplayedAnalysis = useCallback(() => {
     setAnalysisId(null);
@@ -486,11 +469,11 @@ export default function Analysis() {
     return [...new Set(selectedIndices.map((index) => frameOf.get(index) ?? index))].sort((a, b) => a - b);
   }, [preview, selectedIndices, tab]);
 
-  // Whether the (tab, run, parameter combination) result is already computed
+  // Whether the (module, input, parameter combination) result is already computed
   // and can be re-displayed without rerunning. One parameter can be probed
   // with a candidate value; the others stay at their current value.
   const isCached = (param: string, value: string | number | string[] | null) =>
-    !!analysisContextRunId && slotForParams(slots, tab, analysisContextRunId, buildParamsKey(tab, { ...analysisParams, [param]: value } as AnalysisParams)) !== null;
+    !!activeNavModule && slotForParams(slots, activeNavModule.key, inputKey, buildParamsKey(tab, { ...analysisParams, [param]: value } as AnalysisParams)) !== null;
   // Cache dot helpers: select options marked per value, numeric labels per current value.
   const markOptions = (param: string, options: CacheOption[]) => withCacheMarks((value) => isCached(param, value), options);
   const cachedParam = (param: keyof AnalysisParams) => isCached(param, analysisParams[param]);
@@ -764,7 +747,7 @@ export default function Analysis() {
     }
     const requestRunId = contextRunId;
     const requestDatasetId = dataset?.id;
-    // The (tab, parameters) context the run was started under: the result and
+  // The (module, input, parameters) context the run was started under: the result and
     // its cache slot belong there even if the user navigates while the job is
     // in flight.
     const requestContext = { ...runContextRef.current };
@@ -778,7 +761,7 @@ export default function Analysis() {
         useAnalysisUi.getState().view.coverageMode,
       )?.key === requestContext.moduleKey
       && runContextRef.current.paramsKey === requestContext.paramsKey
-      && runContextRef.current.sourceContextKey === requestContext.sourceContextKey;
+      && runContextRef.current.inputKey === requestContext.inputKey;
     setLoadingAnalysisId(null);
     setBusy(true);
     setRunningInfo({ label, tab: requestContext.tab, moduleKey: requestContext.moduleKey, method });
@@ -802,7 +785,8 @@ export default function Analysis() {
       // Record the slot under the request context before the display checks:
       // the computed artifacts stay restorable even when the user has moved to
       // another tab and the result will not land on screen.
-      useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: id, tab: requestContext.tab, paramsKey: requestContext.paramsKey });
+      if (!requestContext.moduleKey) throw new Error(`${method} has no analysis module`);
+      useAnalysisUi.getState().rememberResult({ analysisId: id, moduleKey: requestContext.moduleKey, inputKey: requestContext.inputKey, parameterKey: requestContext.paramsKey });
       if (!isCurrent()) return null;
       const frontendCached = response.job_id ? undefined : analysisCache.get(id);
       if (frontendCached) {
@@ -845,7 +829,7 @@ export default function Analysis() {
         tab: "projection" as TabKey,
         moduleKey: "descriptor_space" as AnalysisModuleKey,
         paramsKey: buildParamsKey("projection", { ...runContextRef.current.params, projection: "pca", mode: activeMode, preprocess: activePreprocess }),
-        sourceContextKey: sourceContextKey,
+        inputKey,
       };
       const isCurrent = () => operationRef.current === operation
         && useWorkspace.getState().activeDescriptorRunId === requestRunId
@@ -858,7 +842,7 @@ export default function Analysis() {
         && useAnalysisUi.getState().view.projection === "pca"
         && useAnalysisUi.getState().view.mode === activeMode
         && useAnalysisUi.getState().view.preprocess === activePreprocess
-        && runContextRef.current.sourceContextKey === requestContext.sourceContextKey;
+        && runContextRef.current.inputKey === requestContext.inputKey;
       setBusy(true);
       setRunningInfo({ label: "PCA", tab: "projection", moduleKey: requestContext.moduleKey, method: "analysis.pca" });
       setLastJobProgress(0);
@@ -877,7 +861,8 @@ export default function Analysis() {
           if (watched.failed) return;
           if (watched.analysisId !== null) id = watched.analysisId;
         }
-        useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: id, tab: requestContext.tab, paramsKey: requestContext.paramsKey });
+        if (!requestContext.moduleKey) throw new Error("PCA has no analysis module");
+        useAnalysisUi.getState().rememberResult({ analysisId: id, moduleKey: requestContext.moduleKey, inputKey: requestContext.inputKey, parameterKey: requestContext.paramsKey });
         if (!isCurrent()) return;
         const frontendCached = response.job_id ? undefined : analysisCache.get(id);
         if (frontendCached) {
@@ -906,7 +891,7 @@ export default function Analysis() {
       ? { mode: activeMode, preprocess: activePreprocess, n_neighbors: 15, min_dist: 0.1, ...(viewId ? { view_id: viewId } : {}) }
       : { mode: activeMode, preprocess: activePreprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000, ...(viewId ? { view_id: viewId } : {}) };
     await runRequest(`analysis.${projection}`, projectionParams, projection.toUpperCase());
-  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, message, mode, preprocess, projection, runRequest, selectedRun, sourceContextKey, tsnePerplexity, t, viewId, watchAnalysisJob]);
+  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, inputKey, message, mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity, t, viewId, watchAnalysisJob]);
 
   const handlePreprocessChange = useCallback((value: string) => {
     setPreprocess(value);
@@ -1215,17 +1200,20 @@ export default function Analysis() {
       loadedParams.mode = nextMode;
     }
 
-    const loadedContext = { tab: analysisTab, paramsKey: buildParamsKey(analysisTab, loadedParams) };
-    const loadedSourceContextKey = analysisSourceContextKey(analysisTab, loadedParams, requestRunId, loadedSecondRun);
+    const loadedContext = {
+      moduleKey: analysisModule.key,
+      parameterKey: buildParamsKey(analysisTab, loadedParams),
+      inputKey: buildAnalysisInputKey(analysisTab, loadedParams, requestRunId, loadedSecondRun),
+    };
     // Make the synchronous cached path observe the row-derived source while
     // React schedules the control updates above. The next render replaces it
     // with the live context as usual.
     runContextRef.current = {
       tab: analysisTab,
       moduleKey: analysisModule.key,
-      paramsKey: loadedContext.paramsKey,
+      paramsKey: loadedContext.parameterKey,
+      inputKey: loadedContext.inputKey,
       params: loadedParams,
-      sourceContextKey: loadedSourceContextKey,
     };
     const operation = ++operationRef.current;
     const requestDatasetId = dataset.id;
@@ -1237,8 +1225,8 @@ export default function Analysis() {
         useAnalysisUi.getState().view.overviewAnalysis,
         useAnalysisUi.getState().view.coverageMode,
       )?.key === analysisModule.key
-      && runContextRef.current.paramsKey === loadedContext.paramsKey
-      && runContextRef.current.sourceContextKey === loadedSourceContextKey;
+      && runContextRef.current.paramsKey === loadedContext.parameterKey
+      && runContextRef.current.inputKey === loadedContext.inputKey;
 
     setLoadingAnalysisId(row.id);
     setBusy(true);
@@ -1258,7 +1246,7 @@ export default function Analysis() {
       if (cached) {
         if (!isCurrent()) return;
         commitAnalysis(row.id, cached);
-        useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: row.id, ...loadedContext });
+        useAnalysisUi.getState().rememberResult({ analysisId: row.id, ...loadedContext });
         setLastJobProgress(1);
         if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
         return;
@@ -1267,7 +1255,7 @@ export default function Analysis() {
       const fetched = await fetchAnalysisPoints(row.id, analysisType === "pca" ? "pca" : "preview");
       if (!isCurrent()) return;
       commitAnalysis(row.id, fetched);
-      useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: row.id, ...loadedContext });
+      useAnalysisUi.getState().rememberResult({ analysisId: row.id, ...loadedContext });
       setLastJobProgress(1);
       if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
     } catch (error) {
@@ -1292,11 +1280,11 @@ export default function Analysis() {
     if (busy || loadingAnalysisId) return;
     const slotMap = useAnalysisUi.getState().slots;
     const moduleKey = activeNavModule?.key ?? null;
-    const exact = slotForParams(slotMap, tab, analysisContextRunId, paramsKey);
+    const exact = slotForParams(slotMap, moduleKey, inputKey, paramsKey);
     const exactForModule = exact && analysisSlotMatchesModule(exact, moduleKey) ? exact : null;
     const moduleChanged = lastLookedModuleRef.current !== moduleKey;
     lastLookedModuleRef.current = moduleKey;
-    const slot = exactForModule ?? (moduleChanged ? latestSlotForModule(slotMap, moduleKey, analysisContextRunId) : null);
+    const slot = exactForModule ?? (moduleChanged ? latestSlotForModule(slotMap, moduleKey, inputKey) : null);
     const wantedId = slot?.analysisId ?? null;
     if (analysisId === wantedId) return;
     if (!wantedId) {
@@ -1338,7 +1326,7 @@ export default function Analysis() {
       return;
     }
     void loadAnalysis(row, { silent: true });
-  }, [activeNavModule?.key, analyses, analysisContextRunId, analysisId, busy, clearDisplayedAnalysis, loadAnalysis, loadingAnalysisId, paramsKey, tab]);
+  }, [activeNavModule?.key, analyses, analysisContextRunId, analysisId, busy, clearDisplayedAnalysis, inputKey, loadAnalysis, loadingAnalysisId, paramsKey, tab]);
 
   const runTabAnalysis = useCallback(async () => {
     if (tab === "projection") return runProjection();

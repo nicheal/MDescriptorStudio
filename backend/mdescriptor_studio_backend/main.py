@@ -178,7 +178,7 @@ def main() -> int:
     server = Server(methods={})
     server.warmup_finished = threading.Event()
     jobs = JobService(db, server.emit)
-    datasets = DatasetService(db, adapter, jobs)
+    datasets = DatasetService(db, adapter, jobs, root)
     results = ResultService(db, root)
     descriptors = DescriptorService(
         db, adapter, jobs, datasets, root, info.get("version", "unknown")

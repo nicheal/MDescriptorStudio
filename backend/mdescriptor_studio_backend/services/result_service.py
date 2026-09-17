@@ -11,6 +11,7 @@ from pathlib import Path
 from ..errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
 from ..security import (
     UnsafePathError,
+    escape_like,
     ensure_no_reparse_points,
     remove_managed_tree,
     validate_managed_path,
@@ -173,8 +174,19 @@ class ResultService:
             )
 
         analyses = self.db.query(
-            "SELECT id, result_path FROM analysis_runs WHERE descriptor_run_id = ?", (run_id,)
+            "SELECT id, result_path FROM analysis_runs"
+            " WHERE descriptor_run_id = ? OR input_run_ids_json LIKE ? ESCAPE '!'",
+            (run_id, f'%"{escape_like(str(run_id))}"%'),
         )
+        analysis_ids = {str(analysis["id"]) for analysis in analyses}
+        active_jobs = self.db.query(
+            "SELECT descriptor_run_id, analysis_run_id FROM jobs WHERE status IN ('QUEUED', 'RUNNING')"
+        )
+        if any(
+            job.get("descriptor_run_id") == run_id or job.get("analysis_run_id") in analysis_ids
+            for job in active_jobs
+        ):
+            raise AppError(RESULT_INCOMPATIBLE, f"run {run_id} has active jobs — cancel them first")
         try:
             result_path = self._managed_result_path(str(run_id), row["result_path"]) if row["result_path"] else None
             analysis_paths = [
@@ -188,13 +200,21 @@ class ResultService:
             # directory deletion.
             raise AppError(RESULT_INCOMPATIBLE, "stored result paths are invalid") from exc
         # linked jobs first: they reference runs/analyses being deleted below
-        self.db.execute(
-            "DELETE FROM jobs WHERE descriptor_run_id = ? OR analysis_run_id IN"
-            " (SELECT id FROM analysis_runs WHERE descriptor_run_id = ?)",
-            (run_id, run_id),
-        )
-        self.db.execute("DELETE FROM analysis_runs WHERE descriptor_run_id = ?", (run_id,))
-        self.db.execute("DELETE FROM descriptor_runs WHERE id = ?", (run_id,))
+        job_conditions = ["descriptor_run_id = ?"]
+        job_args: list[object] = [run_id]
+        if analysis_ids:
+            placeholders = ", ".join("?" for _ in analysis_ids)
+            job_conditions.append(f"analysis_run_id IN ({placeholders})")
+            job_args.extend(sorted(analysis_ids))
+        with self.db.transaction() as conn:
+            conn.execute(f"DELETE FROM jobs WHERE {' OR '.join(job_conditions)}", tuple(job_args))
+            if analysis_ids:
+                placeholders = ", ".join("?" for _ in analysis_ids)
+                conn.execute(
+                    f"DELETE FROM analysis_runs WHERE id IN ({placeholders})",
+                    tuple(sorted(analysis_ids)),
+                )
+            conn.execute("DELETE FROM descriptor_runs WHERE id = ?", (run_id,))
 
         # disk cleanup is best-effort: the DB rows are the source of truth, and
         # dataset.remove already tolerates orphaned dirs on disk
