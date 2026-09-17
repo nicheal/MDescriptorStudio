@@ -6,6 +6,7 @@
 // every computed result can be re-displayed without recomputing.
 import { create } from "zustand";
 import { ipc } from "../ipc/client";
+import type { Pair } from "../i18n";
 import type { PcaMode } from "./workspace";
 
 export type TabKey =
@@ -32,6 +33,53 @@ export type OverviewAnalysis =
 export type ColorBy = "none" | "energy" | "force_max" | "volume";
 export type FeatureCorrelationMethod = "pearson" | "spearman";
 export type EffectiveDimensionPreprocess = "center" | "standardized";
+export type CoverageMode = "coverage" | "overlap";
+
+export type AnalysisGroupKey =
+  | "structure_environments"
+  | "property_information"
+  | "evolution_response"
+  | "coverage_novelty"
+  | "representation_quality"
+  | "dataset_sampling";
+
+export type AnalysisModuleKey =
+  | "descriptor_space"
+  | "similarity"
+  | "structural_clusters"
+  | "local_environment"
+  | "property_information"
+  | "descriptor_trajectory"
+  | "structural_perturbation_response"
+  | "data_coverage"
+  | "train_test_overlap"
+  | "dataset_drift"
+  | "outlier_environments"
+  | "feature_variance"
+  | "feature_correlation"
+  | "effective_dimension"
+  | "kernel_analysis"
+  | "parameter_sensitivity"
+  | "descriptor_comparison"
+  | "representative_sampling";
+
+export interface AnalysisNavTarget {
+  tab: TabKey;
+  overviewAnalysis?: OverviewAnalysis;
+  coverageMode?: CoverageMode;
+}
+
+export interface AnalysisNavModule {
+  key: AnalysisModuleKey;
+  label: Pair;
+  target: AnalysisNavTarget;
+}
+
+export interface AnalysisNavGroup {
+  key: AnalysisGroupKey;
+  label: Pair;
+  modules: readonly AnalysisNavModule[];
+}
 
 const VIEW_SETTINGS_KEY = "workspace.analysisUi";
 const SLOTS_SETTINGS_KEY = "workspace.analysisSlots";
@@ -63,10 +111,149 @@ const OVERVIEW_ANALYSES: OverviewAnalysis[] = [
 ];
 const COLOR_BY: ColorBy[] = ["none", "energy", "force_max", "volume"];
 
+/**
+ * The user-facing Analysis hierarchy. Each module points at the existing
+ * calculation tab and, where needed, its existing sub-mode. Keep these
+ * targets stable: analysis slots still use the legacy TabKey cache identity.
+ */
+export const ANALYSIS_NAV_GROUPS: readonly AnalysisNavGroup[] = [
+  {
+    key: "structure_environments",
+    label: { en: "Structure & Environments", zh: "结构与环境" },
+    modules: [
+      { key: "descriptor_space", label: { en: "Descriptor Space", zh: "描述符空间" }, target: { tab: "projection" } },
+      { key: "similarity", label: { en: "Similarity", zh: "相似性" }, target: { tab: "similarity" } },
+      { key: "structural_clusters", label: { en: "Structural Clusters", zh: "结构族群" }, target: { tab: "clusters" } },
+      { key: "local_environment", label: { en: "Local Environment", zh: "局部环境" }, target: { tab: "local" } },
+    ],
+  },
+  {
+    key: "property_information",
+    label: { en: "Property Information", zh: "属性信息" },
+    modules: [
+      { key: "property_information", label: { en: "Property Information Analysis", zh: "属性信息分析" }, target: { tab: "overview", overviewAnalysis: "property_correlation" } },
+    ],
+  },
+  {
+    key: "evolution_response",
+    label: { en: "Evolution & Response", zh: "演化与响应" },
+    modules: [
+      { key: "descriptor_trajectory", label: { en: "Descriptor Trajectory", zh: "描述符轨迹" }, target: { tab: "overview", overviewAnalysis: "trajectory" } },
+      { key: "structural_perturbation_response", label: { en: "Structural Perturbation Response", zh: "结构扰动响应" }, target: { tab: "overview", overviewAnalysis: "perturbation_sensitivity" } },
+    ],
+  },
+  {
+    key: "coverage_novelty",
+    label: { en: "Coverage & Novelty", zh: "覆盖与新颖性" },
+    modules: [
+      { key: "data_coverage", label: { en: "Data Coverage", zh: "数据覆盖度" }, target: { tab: "coverage", coverageMode: "coverage" } },
+      { key: "train_test_overlap", label: { en: "Train / Test Overlap", zh: "训练/测试重叠" }, target: { tab: "coverage", coverageMode: "overlap" } },
+      { key: "dataset_drift", label: { en: "Dataset Drift", zh: "数据集漂移" }, target: { tab: "overview", overviewAnalysis: "drift" } },
+      { key: "outlier_environments", label: { en: "Outlier Environments", zh: "离群环境" }, target: { tab: "outliers" } },
+    ],
+  },
+  {
+    key: "representation_quality",
+    label: { en: "Representation Quality", zh: "表示质量" },
+    modules: [
+      { key: "feature_variance", label: { en: "Feature Variance", zh: "特征方差" }, target: { tab: "overview", overviewAnalysis: "feature_variance" } },
+      { key: "feature_correlation", label: { en: "Feature Correlation", zh: "特征相关性" }, target: { tab: "overview", overviewAnalysis: "feature_correlation" } },
+      { key: "effective_dimension", label: { en: "Effective Dimension", zh: "有效维度" }, target: { tab: "overview", overviewAnalysis: "effective_dimension" } },
+      { key: "kernel_analysis", label: { en: "Kernel Analysis", zh: "核分析" }, target: { tab: "kernel" } },
+      { key: "parameter_sensitivity", label: { en: "Parameter Sensitivity", zh: "参数敏感性" }, target: { tab: "overview", overviewAnalysis: "sensitivity" } },
+      { key: "descriptor_comparison", label: { en: "Descriptor Comparison", zh: "描述符对比" }, target: { tab: "compare" } },
+    ],
+  },
+  {
+    key: "dataset_sampling",
+    label: { en: "Dataset Sampling", zh: "数据采样" },
+    modules: [
+      { key: "representative_sampling", label: { en: "Representative Sampling", zh: "代表性采样" }, target: { tab: "sampling" } },
+    ],
+  },
+];
+
+const ANALYSIS_NAV_MODULES = ANALYSIS_NAV_GROUPS.flatMap((group) => group.modules);
+
+export function analysisNavModuleForKey(moduleKey: string): AnalysisNavModule | null {
+  return ANALYSIS_NAV_MODULES.find((module) => module.key === moduleKey) ?? null;
+}
+
+/** Find the module whose target matches the current legacy UI state. */
+export function analysisNavModuleForView(
+  tab: TabKey,
+  overviewAnalysis: OverviewAnalysis,
+  coverageMode: CoverageMode,
+): AnalysisNavModule | null {
+  return ANALYSIS_NAV_MODULES.find(({ target }) =>
+    target.tab === tab
+      && (target.overviewAnalysis == null || target.overviewAnalysis === overviewAnalysis)
+      && (target.coverageMode == null || target.coverageMode === coverageMode),
+  ) ?? null;
+}
+
+/** Map persisted/backend analysis names to their sole user-facing module. */
+export function analysisNavModuleForAnalysisType(analysisType: string): AnalysisNavModule | null {
+  const normalized = analysisType.toLowerCase();
+  const aliases: Record<string, AnalysisModuleKey> = {
+    projection: "descriptor_space",
+    pca: "descriptor_space",
+    umap: "descriptor_space",
+    tsne: "descriptor_space",
+    similarity: "similarity",
+    neighbors: "similarity",
+    pairwise: "similarity",
+    pairwise_similarity: "similarity",
+    cluster: "structural_clusters",
+    clusters: "structural_clusters",
+    kmeans: "structural_clusters",
+    dbscan: "structural_clusters",
+    hdbscan: "structural_clusters",
+    agglomerative: "structural_clusters",
+    hierarchical: "structural_clusters",
+    local_diversity: "local_environment",
+    property_correlation: "property_information",
+    trajectory: "descriptor_trajectory",
+    perturbation_sensitivity: "structural_perturbation_response",
+    coverage: "data_coverage",
+    overlap: "train_test_overlap",
+    drift: "dataset_drift",
+    outlier: "outlier_environments",
+    outliers: "outlier_environments",
+    lof: "outlier_environments",
+    knn: "outlier_environments",
+    isolation_forest: "outlier_environments",
+    "isolation-forest": "outlier_environments",
+    iforest: "outlier_environments",
+    mahalanobis: "outlier_environments",
+    mahalanobis_distance: "outlier_environments",
+    feature_variance: "feature_variance",
+    feature_correlation: "feature_correlation",
+    effective_dimension: "effective_dimension",
+    kernel: "kernel_analysis",
+    sensitivity: "parameter_sensitivity",
+    compare: "descriptor_comparison",
+    mantel: "descriptor_comparison",
+    fps: "representative_sampling",
+    novelty_fps: "representative_sampling",
+    uncertainty_diversity: "representative_sampling",
+    random: "representative_sampling",
+    stratified: "representative_sampling",
+    cluster_representative: "representative_sampling",
+    per_element: "representative_sampling",
+    acquisition: "representative_sampling",
+    sampling: "representative_sampling",
+    element: "representative_sampling",
+  };
+  const key = aliases[normalized];
+  return key ? ANALYSIS_NAV_MODULES.find((module) => module.key === key) ?? null : null;
+}
+
 export interface AnalysisView {
   tab: TabKey;
   projection: ProjectionName;
   overviewAnalysis: OverviewAnalysis;
+  coverageMode: CoverageMode;
   mode: PcaMode;
   preprocess: string;
   effectiveDimensionPreprocess: EffectiveDimensionPreprocess;
@@ -78,9 +265,10 @@ export interface AnalysisView {
 }
 
 export const DEFAULT_ANALYSIS_VIEW: AnalysisView = {
-  tab: "overview",
+  tab: "projection",
   projection: "pca",
   overviewAnalysis: "feature_variance",
+  coverageMode: "coverage",
   mode: "structure",
   preprocess: "raw",
   effectiveDimensionPreprocess: "standardized",
@@ -131,7 +319,7 @@ export interface AnalysisParams {
   samplingBlocks: string[];
   samplingBudgetMode: string;
   samplingCoverage: number;
-  coverageMode: string;
+  coverageMode: CoverageMode;
   compareMode: string;
   mantelMethod: string;
   mantelPermutations: number;
@@ -257,6 +445,47 @@ export function latestSlotForTab(
   return best;
 }
 
+function slotBelongsToModule(slot: AnalysisSlot, module: AnalysisNavModule): boolean {
+  if (slot.tab !== module.target.tab) return false;
+  if (module.target.tab === "overview") {
+    return typeof module.target.overviewAnalysis === "string"
+      && slot.paramsKey.startsWith(`${module.target.overviewAnalysis}|`);
+  }
+  if (module.target.tab === "coverage") {
+    return typeof module.target.coverageMode === "string"
+      && slot.paramsKey.startsWith(`${module.target.coverageMode}|`);
+  }
+  return true;
+}
+
+/** Whether a legacy slot key can be attributed to one concrete module. */
+export function analysisSlotMatchesModule(
+  slot: AnalysisSlot,
+  moduleKey: AnalysisModuleKey | string | null,
+): boolean {
+  const module = moduleKey ? analysisNavModuleForKey(moduleKey) : null;
+  return module ? slotBelongsToModule(slot, module) : false;
+}
+
+/** Most recent slot for one concrete navigation module + source run. */
+export function latestSlotForModule(
+  slots: Record<string, AnalysisSlot>,
+  moduleKey: AnalysisModuleKey | string | null,
+  runId: string | null,
+): AnalysisSlot | null {
+  if (!runId || !moduleKey) return null;
+  const module = analysisNavModuleForKey(moduleKey);
+  if (!module) return null;
+  let best: AnalysisSlot | null = null;
+  for (const slot of Object.values(slots)) {
+    if (slot.runId !== runId || !slotBelongsToModule(slot, module)) continue;
+    if (!best || slot.updatedAt > best.updatedAt || (slot.updatedAt === best.updatedAt && slot.seq > best.seq)) {
+      best = slot;
+    }
+  }
+  return best;
+}
+
 /** Parse a persisted settings value; returns null when it is unusable. */
 export function parseAnalysisView(raw: unknown): AnalysisView | null {
   if (typeof raw !== "string" || !raw) return null;
@@ -284,6 +513,7 @@ export function parseAnalysisView(raw: unknown): AnalysisView | null {
     overviewAnalysis: OVERVIEW_ANALYSES.includes(rec.overviewAnalysis as OverviewAnalysis)
       ? (rec.overviewAnalysis as OverviewAnalysis)
       : DEFAULT_ANALYSIS_VIEW.overviewAnalysis,
+    coverageMode: rec.coverageMode === "overlap" ? "overlap" : "coverage",
     mode: rec.mode === "atom" ? "atom" : "structure",
     preprocess: typeof rec.preprocess === "string" && rec.preprocess ? rec.preprocess : DEFAULT_ANALYSIS_VIEW.preprocess,
     effectiveDimensionPreprocess,
@@ -368,9 +598,13 @@ export interface AnalysisSlotInput {
 interface AnalysisUiState {
   view: AnalysisView;
   slots: Record<string, AnalysisSlot>;
+  /** Session-only group memory; the compact view remains the only persisted navigation state. */
+  recentModulesByGroup: Partial<Record<AnalysisGroupKey, AnalysisModuleKey>>;
   setTab: (tab: TabKey) => void;
+  setNavigationTarget: (target: AnalysisNavTarget) => void;
   setProjection: (projection: ProjectionName) => void;
   setOverviewAnalysis: (overviewAnalysis: OverviewAnalysis) => void;
+  setCoverageMode: (coverageMode: CoverageMode) => void;
   setMode: (mode: PcaMode) => void;
   setPreprocess: (preprocess: string) => void;
   setEffectiveDimensionPreprocess: (preprocess: EffectiveDimensionPreprocess) => void;
@@ -379,6 +613,7 @@ interface AnalysisUiState {
   setLowVariationThreshold: (value: number) => void;
   setFeatureCorrelationMethod: (method: FeatureCorrelationMethod) => void;
   setFeatureCorrelationThreshold: (value: number) => void;
+  rememberNavigationModule: (group: AnalysisGroupKey, module: AnalysisModuleKey) => void;
   /** Records the analysis currently displayed for its tab + parameter combination. */
   rememberResult: (entry: AnalysisSlotInput) => void;
   /** Forgets one slot, e.g. one recorded under an inconsistent context. */
@@ -390,9 +625,16 @@ interface AnalysisUiState {
 export const useAnalysisUi = create<AnalysisUiState>()(() => ({
   view: DEFAULT_ANALYSIS_VIEW,
   slots: {},
+  recentModulesByGroup: {},
   setTab: (tab) => applyView({ tab }),
+  setNavigationTarget: (target) => applyView({
+    tab: target.tab,
+    ...(target.overviewAnalysis ? { overviewAnalysis: target.overviewAnalysis } : {}),
+    ...(target.coverageMode ? { coverageMode: target.coverageMode } : {}),
+  }),
   setProjection: (projection) => applyView({ projection }),
   setOverviewAnalysis: (overviewAnalysis) => applyView({ overviewAnalysis }),
+  setCoverageMode: (coverageMode) => applyView({ coverageMode }),
   setMode: (mode) => applyView({ mode }),
   setPreprocess: (preprocess) => applyView({ preprocess }),
   setEffectiveDimensionPreprocess: (effectiveDimensionPreprocess) => applyView({ effectiveDimensionPreprocess }),
@@ -409,6 +651,12 @@ export const useAnalysisUi = create<AnalysisUiState>()(() => ({
   },
   setFeatureCorrelationMethod: (featureCorrelationMethod) => applyView({ featureCorrelationMethod }),
   setFeatureCorrelationThreshold: (value) => applyView({ featureCorrelationThreshold: normalizeThreshold(value) }),
+  rememberNavigationModule: (group, module) => {
+    if (useAnalysisUi.getState().recentModulesByGroup[group] === module) return;
+    useAnalysisUi.setState({
+      recentModulesByGroup: { ...useAnalysisUi.getState().recentModulesByGroup, [group]: module },
+    });
+  },
   rememberResult: (entry) => {
     const slots = pruneSlots({
       ...useAnalysisUi.getState().slots,

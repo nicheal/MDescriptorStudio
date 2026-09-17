@@ -13,8 +13,12 @@ vi.mock("../ipc/client", () => ({
 import {
   DEFAULT_ANALYSIS_VIEW,
   MAX_SLOTS,
+  ANALYSIS_NAV_GROUPS,
+  analysisNavModuleForAnalysisType,
+  analysisNavModuleForView,
   buildParamsKey,
   hydrateAnalysisUi,
+  latestSlotForModule,
   latestSlotForTab,
   parseAnalysisSlots,
   parseAnalysisView,
@@ -29,6 +33,7 @@ const persistedView = {
   tab: "projection",
   projection: "pca",
   overviewAnalysis: "feature_correlation",
+  coverageMode: "coverage",
   mode: "atom",
   preprocess: "standardized",
   effectiveDimensionPreprocess: "center",
@@ -75,6 +80,7 @@ describe("buildParamsKey", () => {
     expect(buildParamsKey("similarity", baseParams)).toBe("query|structure|10|0|full");
     expect(buildParamsKey("similarity", { ...baseParams, similarityMode: "all_neighbors" })).toBe("all_neighbors|structure|10||full");
     expect(buildParamsKey("overview", baseParams)).toBe("feature_variance|0.0001|0.01|full");
+    expect(buildParamsKey("overview", { ...baseParams, nearZeroThreshold: 0.2, lowVariationThreshold: 0.4 })).toBe("feature_variance|0.2|0.4|full");
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "feature_correlation", featureCorrelationMethod: "spearman", featureCorrelationThreshold: 0.9 })).toBe("feature_correlation|spearman|0.9|full");
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "effective_dimension", effectiveDimensionPreprocess: "standardized" })).toBe("effective_dimension|standardized|full");
     expect(buildParamsKey("coverage", baseParams)).toBe("coverage|structure|run-ref|full|run-query|view-query");
@@ -131,6 +137,15 @@ describe("parseAnalysisView", () => {
     });
   });
 
+  it("defaults a missing coverage mode without migrating the old tab or overview", () => {
+    expect(parseAnalysisView(JSON.stringify({ tab: "overview", overviewAnalysis: "drift" }))).toMatchObject({
+      tab: "overview",
+      overviewAnalysis: "drift",
+      coverageMode: "coverage",
+    });
+    expect(DEFAULT_ANALYSIS_VIEW).toMatchObject({ tab: "projection", projection: "pca" });
+  });
+
   it("rejects non-string or unparseable values", () => {
     expect(parseAnalysisView(null)).toBeNull();
     expect(parseAnalysisView(42)).toBeNull();
@@ -178,12 +193,26 @@ describe("slot lookups", () => {
     expect(latestSlotForTab(slots, "projection", "run-1")).toEqual(slotC);
     expect(latestSlotForTab(slots, "clusters", "run-1")).toBeNull();
   });
+
+  it("latestSlotForModule keeps shared overview slots isolated", () => {
+    const trajectory: AnalysisSlot = { runId: "run-1", analysisId: "ana-t", tab: "overview", paramsKey: "trajectory||full", updatedAt: 400, seq: 4 };
+    const variance: AnalysisSlot = { runId: "run-1", analysisId: "ana-v", tab: "overview", paramsKey: "feature_variance|0.0001|0.01|full", updatedAt: 500, seq: 5 };
+    const overviewSlots = { [slotKey(trajectory)]: trajectory, [slotKey(variance)]: variance };
+    expect(latestSlotForModule(overviewSlots, "descriptor_trajectory", "run-1")).toEqual(trajectory);
+    expect(latestSlotForModule(overviewSlots, "feature_variance", "run-1")).toEqual(variance);
+  });
+
+  it("maps legacy history names to the existing module options", () => {
+    expect(analysisNavModuleForAnalysisType("hierarchical")?.key).toBe("structural_clusters");
+    expect(analysisNavModuleForAnalysisType("iforest")?.key).toBe("outlier_environments");
+    expect(analysisNavModuleForAnalysisType("acquisition")?.key).toBe("representative_sampling");
+  });
 });
 
 describe("useAnalysisUi", () => {
   beforeEach(() => {
     requestMock.mockClear();
-    useAnalysisUi.setState({ view: DEFAULT_ANALYSIS_VIEW, slots: {} });
+    useAnalysisUi.setState({ view: DEFAULT_ANALYSIS_VIEW, slots: {}, recentModulesByGroup: {} });
   });
 
   it("updates the view and persists it on parameter changes", () => {
@@ -193,6 +222,24 @@ describe("useAnalysisUi", () => {
       key: "workspace.analysisUi",
       value: JSON.stringify({ ...DEFAULT_ANALYSIS_VIEW, colorBy: "energy" }),
     });
+  });
+
+  it("updates navigation target atomically and persists once", () => {
+    useAnalysisUi.getState().setNavigationTarget({ tab: "coverage", coverageMode: "overlap" });
+    expect(useAnalysisUi.getState().view).toMatchObject({ tab: "coverage", coverageMode: "overlap" });
+    expect(requestMock).toHaveBeenCalledTimes(1);
+    expect(requestMock).toHaveBeenCalledWith("settings.set", {
+      key: "workspace.analysisUi",
+      value: JSON.stringify({ ...DEFAULT_ANALYSIS_VIEW, tab: "coverage", coverageMode: "overlap" }),
+    });
+  });
+
+  it("remembers the latest module per group in memory only", () => {
+    useAnalysisUi.getState().rememberNavigationModule("evolution_response", "descriptor_trajectory");
+    expect(useAnalysisUi.getState().recentModulesByGroup).toEqual({ evolution_response: "descriptor_trajectory" });
+    expect(requestMock).not.toHaveBeenCalled();
+    expect(analysisNavModuleForView("overview", "trajectory", "coverage")?.key).toBe("descriptor_trajectory");
+    expect(ANALYSIS_NAV_GROUPS).toHaveLength(6);
   });
 
   it("keeps threshold setters ordered and bounded", () => {

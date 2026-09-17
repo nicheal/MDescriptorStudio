@@ -316,6 +316,31 @@ body {
   min-width: 0;
 }
 
+.analysis-navigation {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.analysis-navigation .ant-tabs {
+  min-width: 0;
+  margin: 0;
+}
+
+.analysis-navigation .ant-tabs-nav {
+  margin: 0;
+}
+
+.analysis-group-tabs .ant-tabs-tab {
+  font-weight: 600;
+}
+
+.analysis-module-tabs .ant-tabs-tab {
+  padding-block: 6px;
+}
+
 .analysis-toolbar {
   display: flex;
   align-items: center;
@@ -359,10 +384,6 @@ body {
 /* Keep analysis selectors at a stable default width; especially dense modules
    can opt into a narrower wide-screen layout below. */
 .analysis-controls .ant-select:not(.ant-select-sm) {
-  width: 220px;
-}
-
-.analysis-overview-module-select {
   width: 220px;
 }
 
@@ -552,14 +573,9 @@ body {
     flex-wrap: nowrap;
   }
 
-  .analysis-controls-property .analysis-overview-module-control,
   .analysis-controls-property .analysis-property-controls,
   .analysis-controls-property .analysis-controls-actions {
     flex: 0 0 auto;
-  }
-
-  .analysis-controls-property .analysis-overview-module-select {
-    width: 180px;
   }
 
   .analysis-controls-property .analysis-property-controls .ant-select {

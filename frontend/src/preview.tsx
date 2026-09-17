@@ -376,11 +376,19 @@ let mockFeatureCorrelationSettings = {
   correlation_threshold: 0.95,
 };
 
-function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kind = "projection", rowType: string | null = kind) {
+function mockAnalysisSubmit(
+  jobId: string,
+  analysisId = "ana-mock-analysis",
+  kind = "projection",
+  rowType: string | null = kind,
+  parameters: Record<string, unknown> = {},
+  inputRunIds = ["run-dpa2"],
+  datasetIds = ["ds-gaas"],
+) {
   mockLatestAnalysisId = analysisId;
   mockLatestAnalysisKind = kind;
   mockAnalysisArrays = {};
-  if (rowType) mockRecordAnalysisRow(analysisId, rowType);
+  if (rowType) mockRecordAnalysisRow(analysisId, rowType, parameters, inputRunIds, datasetIds);
   window.setTimeout(() => {
     mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { analysis_id: analysisId }, error: null });
   }, 800);
@@ -390,19 +398,20 @@ function mockAnalysisSubmit(jobId: string, analysisId = "ana-mock-analysis", kin
 // Completed analysis rows the mock analysis.list serves; every submit
 // registers one so computed results stay restorable and visible in history.
 const mockAnalysisRows = new Map<string, Record<string, unknown>>();
-function mockRecordAnalysisRow(id: string, type: string, parameters: Record<string, unknown> = {}) {
+function mockRecordAnalysisRow(id: string, type: string, parameters: Record<string, unknown> = {}, inputRunIds = ["run-dpa2"], datasetIds = ["ds-gaas"]) {
   mockAnalysisRows.set(id, {
     id,
     descriptor_run_id: "run-dpa2",
     analysis_type: type,
     status: "COMPLETED",
     parameters,
-    dataset_ids: ["ds-gaas"],
-    input_run_ids: ["run-dpa2"],
+    dataset_ids: datasetIds,
+    input_run_ids: inputRunIds,
     created_at: new Date().toISOString(),
   });
 }
 mockRecordAnalysisRow("ana-mock-pca", "pca", { mode: mockLatestPcaMode, preprocess: mockLatestPcaPreprocess });
+mockRecordAnalysisRow("ana-history-clusters", "clusters", { algorithm: "hierarchical", n_clusters: 5, mode: "structure" });
 
 function mockAnalysisPoints(kind: string, count = 180) {
   return Array.from({ length: count }, (_, i) => {
@@ -1161,7 +1170,14 @@ const METHODS: Record<string, Handler> = {
     return { job_id: "job-pca-live", analysis_id: "ana-mock-pca" };
   },
   "analysis.list": () => Array.from(mockAnalysisRows.values()),
-  "analysis.preview": () => mockOverviewPreview(),
+  "analysis.preview": (p) => {
+    const row = mockAnalysisRows.get(String(p.analysis_id ?? ""));
+    if (row) {
+      mockLatestAnalysisId = String(p.analysis_id);
+      mockLatestAnalysisKind = String(row.analysis_type);
+    }
+    return mockOverviewPreview();
+  },
   "analysis.chunk": (p) => {
     const array = String(p.array ?? "");
     const values = mockAnalysisArrays[array] ?? [];
@@ -1174,23 +1190,23 @@ const METHODS: Record<string, Handler> = {
   "analysis.umap": (p) => {
     mockLatestPcaMode = String(p.mode ?? mockLatestPcaMode);
     mockLatestPcaPreprocess = String(p.preprocess ?? mockLatestPcaPreprocess);
-    return mockAnalysisSubmit("job-umap-live", "ana-mock-umap", "projection", "umap");
+    return mockAnalysisSubmit("job-umap-live", "ana-mock-umap", "projection", "umap", { mode: p.mode, preprocess: p.preprocess });
   },
-  "analysis.tsne": (_p) => mockAnalysisSubmit("job-tsne-live", "ana-mock-tsne", "projection", "tsne"),
-  "analysis.neighbors": (_p) => mockAnalysisSubmit("job-neighbors-live"),
-  "analysis.similarity": (_p) => mockAnalysisSubmit("job-similarity-live", "ana-mock-similarity", "similarity"),
-  "analysis.pairwise": (_p) => mockAnalysisSubmit("job-pairwise-live", "ana-mock-pairwise", "pairwise_similarity"),
-  "analysis.cluster": (_p) => mockAnalysisSubmit("job-cluster-live", "ana-mock-clusters", "clusters"),
-  "analysis.outlier": (_p) => mockAnalysisSubmit("job-outlier-live", "ana-mock-outliers", "outliers"),
-  "analysis.sampling": (_p) => mockAnalysisSubmit("job-sampling-live", "ana-mock-sampling", "sampling"),
-  "analysis.coverage": (_p) => mockAnalysisSubmit("job-coverage-live", "ana-mock-coverage", "coverage"),
-  "analysis.overlap": (_p) => mockAnalysisSubmit("job-overlap-live", "ana-mock-overlap", "overlap"),
+  "analysis.tsne": (p) => mockAnalysisSubmit("job-tsne-live", "ana-mock-tsne", "projection", "tsne", { mode: p.mode, preprocess: p.preprocess, perplexity: p.perplexity }),
+  "analysis.neighbors": (p) => mockAnalysisSubmit("job-neighbors-live", "ana-mock-neighbors", "similarity", "neighbors", { similarity_mode: "all_neighbors", mode: p.mode }),
+  "analysis.similarity": (p) => mockAnalysisSubmit("job-similarity-live", "ana-mock-similarity", "similarity", "similarity", { similarity_mode: "query", k: p.k, query_index: p.query_index, mode: p.mode }),
+  "analysis.pairwise": (p) => mockAnalysisSubmit("job-pairwise-live", "ana-mock-pairwise", "pairwise_similarity", "pairwise_similarity", { similarity_mode: "pairwise", mode: p.mode }),
+  "analysis.cluster": (p) => mockAnalysisSubmit("job-cluster-live", "ana-mock-clusters", "clusters", "clusters", { algorithm: p.algorithm, n_clusters: p.n_clusters, mode: p.mode }),
+  "analysis.outlier": (p) => mockAnalysisSubmit("job-outlier-live", "ana-mock-outliers", "outliers", "outliers", { algorithm: p.algorithm, k: p.k, contamination: p.contamination, mode: p.mode }),
+  "analysis.sampling": (p) => mockAnalysisSubmit("job-sampling-live", "ana-mock-sampling", "sampling", "sampling", { algorithm: p.algorithm, n_samples: p.n_samples, mode: p.mode, strategy: p.strategy, scaling: p.scaling, min_distance: p.min_distance, blocks: p.blocks, target_coverage: p.target_coverage }),
+  "analysis.coverage": (p) => mockAnalysisSubmit("job-coverage-live", "ana-mock-coverage", "coverage", "coverage", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, ["run-dpa2", "run-dpa2-si"], ["ds-gaas", "ds-si"]),
+  "analysis.overlap": (p) => mockAnalysisSubmit("job-overlap-live", "ana-mock-overlap", "overlap", "overlap", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, ["run-dpa2", "run-dpa2-si"], ["ds-gaas", "ds-si"]),
   "analysis.acquisition": (p) => {
     mockLatestAcquisitionMethod = String(p.acquisition_method ?? "novelty_fps");
-    return mockAnalysisSubmit("job-acquisition-live", "ana-mock-acquisition", "acquisition");
+    return mockAnalysisSubmit("job-acquisition-live", "ana-mock-acquisition", "acquisition", "acquisition", { acquisition_method: p.acquisition_method, n_samples: p.n_samples, mode: p.mode, uncertainty_k: p.uncertainty_k }, ["run-dpa2", "run-dpa2-si"], ["ds-gaas", "ds-si"]);
   },
-  "analysis.compare": (_p) => mockAnalysisSubmit("job-compare-live", "ana-mock-compare", "compare"),
-  "analysis.mantel": (_p) => mockAnalysisSubmit("job-mantel-live", "ana-mock-mantel", "mantel"),
+  "analysis.compare": (p) => mockAnalysisSubmit("job-compare-live", "ana-mock-compare", "compare", "compare", { compare_mode: "geometry", mode: p.mode }),
+  "analysis.mantel": (p) => mockAnalysisSubmit("job-mantel-live", "ana-mock-mantel", "mantel", "mantel", { compare_mode: "mantel", method: p.method, permutations: p.permutations, mode: p.mode }),
   "analysis.feature_variance": (p) => {
     const near = Number(p.near_zero_relative_threshold);
     const low = Number(p.low_variance_relative_threshold);
@@ -1221,11 +1237,11 @@ const METHODS: Record<string, Handler> = {
   },
   "analysis.property_correlation": (_p) => mockAnalysisSubmit("job-property-live", "ana-mock-property", "property_correlation"),
   "analysis.local_diversity": (_p) => mockAnalysisSubmit("job-local-live", "ana-mock-local", "local_diversity"),
-  "analysis.kernel": (_p) => mockAnalysisSubmit("job-kernel-live", "ana-mock-kernel", "kernel"),
-  "analysis.trajectory": (_p) => mockAnalysisSubmit("job-trajectory-live", "ana-mock-trajectory", "trajectory"),
-  "analysis.drift": (_p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift"),
-  "analysis.sensitivity": (_p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity"),
-  "analysis.perturbation_sensitivity": (_p) => mockAnalysisSubmit("job-perturbation-live", "ana-mock-perturbation", "perturbation_sensitivity"),
+  "analysis.kernel": (p) => mockAnalysisSubmit("job-kernel-live", "ana-mock-kernel", "kernel", "kernel", { kernel: p.kernel, mode: p.mode }),
+  "analysis.trajectory": (p) => mockAnalysisSubmit("job-trajectory-live", "ana-mock-trajectory", "trajectory", "trajectory", { mode: p.mode }),
+  "analysis.drift": (p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift", "drift", { mode: p.mode }),
+  "analysis.sensitivity": (p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity", "sensitivity", { mode: p.mode }),
+  "analysis.perturbation_sensitivity": (p) => mockAnalysisSubmit("job-perturbation-live", "ana-mock-perturbation", "perturbation_sensitivity", "perturbation_sensitivity", { perturbation: p.perturbation, n_amplitudes: p.n_amplitudes, max_amplitude: p.max_amplitude, max_structures: p.max_structures, metric: p.metric }),
   "analysis.export": (_p) => mockAnalysisSubmit("job-export-live", "ana-mock-export", "projection", null),
   "result.get_pca": (p) => {
     const scale = mockLatestPcaPreprocess === "standardized" ? 1.35 : mockLatestPcaPreprocess === "center" ? 1 : 0.78;
@@ -1433,6 +1449,9 @@ function showPreviewError(text: string) {
         method: args?.method as string,
         params: (args?.params as Record<string, unknown>) ?? {},
       };
+      const previewDelay = frame.method === "analysis.preview"
+        ? Math.max(25, Number((window as unknown as { __PREVIEW_ANALYSIS_PREVIEW_DELAY__?: number }).__PREVIEW_ANALYSIS_PREVIEW_DELAY__ ?? 25))
+        : 25;
       window.setTimeout(() => {
         const handler = METHODS[frame.method ?? ""];
         const payload = JSON.stringify(
@@ -1444,10 +1463,12 @@ function showPreviewError(text: string) {
         for (const l of [...eventListeners]) {
           if (l.event === "backend-message") l.fn({ event: "backend-message", payload });
         }
-      }, 25);
+      }, previewDelay);
       return frame.id;
     }
-    // backend_restart, plugin:dialog|*, anything else → no-op
+    if (cmd === "plugin:dialog|save") return "C:\\preview\\analysis_subset.csv";
+    if (cmd === "plugin:dialog|open") return null;
+    // backend_restart, anything else → no-op
     return null;
   },
 };

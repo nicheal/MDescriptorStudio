@@ -1,15 +1,19 @@
 import { expect, test } from "@playwright/test";
 
+async function selectAnalysisModule(page: import("@playwright/test").Page, group: string, module: string) {
+  await page.getByRole("tab", { name: group, exact: true }).click();
+  await page.getByRole("tab", { name: module, exact: true }).click();
+}
+
 test("feature correlation runs with Spearman and enables clustered ordering", async ({ page }) => {
   await page.goto("/preview.html");
   await page.getByRole("button", { name: "Analysis" }).click();
 
-  await page.locator(".analysis-controls .ant-select").first().click();
-  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").getByText("Feature correlation", { exact: true }).click();
+  await selectAnalysisModule(page, "Representation Quality", "Feature Correlation");
 
   await page.getByRole("combobox", { name: "Correlation method" }).locator("xpath=../../..").click();
   await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").getByText("Spearman", { exact: true }).click();
-  await page.getByRole("button", { name: "Run feature correlation" }).click();
+  await page.getByRole("button", { name: /Run Feature Correlation/i }).click();
 
   await expect(page.getByText("FEATURE CORRELATION", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("columnheader", { name: "Spearman ρ" })).toBeVisible();

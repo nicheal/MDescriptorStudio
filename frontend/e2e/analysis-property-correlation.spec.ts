@@ -1,20 +1,23 @@
 import { expect, test } from "@playwright/test";
 
+async function selectAnalysisModule(page: import("@playwright/test").Page, group: string, module: string) {
+  await page.getByRole("tab", { name: group, exact: true }).click();
+  await page.getByRole("tab", { name: module, exact: true }).click();
+}
+
 test("property analysis is organized around encoding, localization, and reliability", async ({ page }) => {
   await page.setViewportSize({ width: 2880, height: 1080 });
   await page.goto("/preview.html");
   await page.getByRole("button", { name: "Analysis" }).click();
 
-  await page.locator(".analysis-controls .ant-select").first().click();
-  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").getByText("Property correlation", { exact: true }).click();
+  await selectAnalysisModule(page, "Property Information", "Property Information Analysis");
   await expect(page.getByRole("spinbutton", { name: "CV folds" })).toHaveValue("5");
   await expect(page.getByRole("combobox", { name: "Distance metric" })).toBeVisible();
 
   const rowCenters = await Promise.all([
-    page.locator(".analysis-overview-module-select").boundingBox(),
     page.getByRole("spinbutton", { name: "CV folds" }).boundingBox(),
     page.getByRole("spinbutton", { name: "OOD-like threshold" }).boundingBox(),
-    page.getByRole("button", { name: "Run property correlation" }).boundingBox(),
+    page.getByRole("button", { name: /Run Property Information Analysis/i }).boundingBox(),
     page.getByRole("button", { name: "Open method guide" }).boundingBox(),
   ]).then((boxes) => boxes.map((box) => box ? box.y + box.height / 2 : Number.NaN));
   expect(rowCenters.every(Number.isFinite)).toBe(true);
@@ -25,7 +28,7 @@ test("property analysis is organized around encoding, localization, and reliabil
   }));
   expect(controlWidths.scroll).toBeLessThanOrEqual(controlWidths.client + 1);
 
-  await page.getByRole("button", { name: "Run property correlation" }).click();
+  await page.getByRole("button", { name: /Run Property Information Analysis/i }).click();
 
   await expect(page.getByText("PROPERTY INFORMATION", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("Property Encoding", { exact: true })).toBeVisible();

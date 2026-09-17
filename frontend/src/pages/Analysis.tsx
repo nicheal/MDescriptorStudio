@@ -40,13 +40,18 @@ import { activeDataset, useWorkspace, type PcaMode } from "../stores/workspace";
 import { jobStatusLabel, trackJob, watchJob } from "../stores/jobs";
 import {
   buildParamsKey,
-  latestSlotForTab,
+  analysisSlotMatchesModule,
+  latestSlotForModule,
+  ANALYSIS_NAV_GROUPS,
+  analysisNavModuleForAnalysisType,
+  analysisNavModuleForKey,
+  analysisNavModuleForView,
   slotForParams,
   slotKey,
   useAnalysisUi,
+  type AnalysisModuleKey,
   type AnalysisParams,
   type EffectiveDimensionPreprocess,
-  type OverviewAnalysis,
   type ProjectionName,
   type TabKey,
 } from "../stores/analysisUi";
@@ -92,6 +97,24 @@ type ProjectionOverrides = {
   mode?: PcaMode;
   preprocess?: string;
 };
+
+function analysisSourceContextKey(
+  tab: TabKey,
+  params: Pick<AnalysisParams, "overviewAnalysis" | "samplingAlgorithm" | "referenceRunId" | "queryRunId" | "referenceViewId" | "queryViewId" | "viewId">,
+  selectedRun: string | null,
+  secondRun: string | null,
+): string {
+  const crossDataset = tab === "coverage"
+    || (tab === "sampling" && (params.samplingAlgorithm === "novelty_fps" || params.samplingAlgorithm === "uncertainty_diversity"))
+    || (tab === "overview" && params.overviewAnalysis === "drift");
+  if (crossDataset) {
+    return [params.referenceRunId, params.referenceViewId ?? "full", params.queryRunId, params.queryViewId ?? "full"].join("|");
+  }
+  if (tab === "compare" || (tab === "overview" && params.overviewAnalysis === "sensitivity")) {
+    return [selectedRun, secondRun].join("|");
+  }
+  return [selectedRun, params.viewId ?? "full"].join("|");
+}
 
 type Metric = {
   label: ReactNode;
@@ -203,19 +226,6 @@ function withCacheMarks(isCached: (value: string) => boolean, options: CacheOpti
   return options.map((option) => (isCached(option.value) ? { ...option, label: <><CacheDot />{option.label}</> } : option));
 }
 
-const TAB_LABELS: Record<TabKey, Pair> = {
-  overview: { en: "Overview", zh: "总览" },
-  projection: { en: "Projection", zh: "投影" },
-  similarity: { en: "Similarity", zh: "相似度" },
-  clusters: { en: "Clusters", zh: "聚类" },
-  outliers: { en: "Outliers", zh: "离群点" },
-  sampling: { en: "Sampling", zh: "采样" },
-  coverage: { en: "Coverage", zh: "覆盖度" },
-  compare: { en: "Compare", zh: "对比" },
-  local: { en: "Local", zh: "局部" },
-  kernel: { en: "Kernel", zh: "核函数" },
-};
-
 const OVERVIEW_KIND_LABELS: Record<string, Pair> = {
   feature_variance: { en: "FEATURE VARIANCE", zh: "特征方差" },
   feature_correlation: { en: "FEATURE CORRELATION", zh: "特征相关性" },
@@ -224,18 +234,6 @@ const OVERVIEW_KIND_LABELS: Record<string, Pair> = {
   drift: { en: "DATASET DRIFT", zh: "数据集漂移" },
   sensitivity: { en: "PARAMETER SENSITIVITY", zh: "参数敏感性" },
   perturbation_sensitivity: { en: "STRUCTURAL PERTURBATION SENSITIVITY", zh: "结构扰动敏感性" },
-};
-
-// Lowercase module names (built today via replaceAll("_", " ")) as explicit pairs.
-const OVERVIEW_MODULE_LABELS: Record<OverviewAnalysis, Pair> = {
-  feature_variance: { en: "feature variance", zh: "特征方差" },
-  feature_correlation: { en: "feature correlation", zh: "特征相关性" },
-  effective_dimension: { en: "effective dimension", zh: "有效维度" },
-  property_correlation: { en: "property correlation", zh: "属性相关性" },
-  trajectory: { en: "trajectory", zh: "轨迹" },
-  drift: { en: "drift", zh: "漂移" },
-  sensitivity: { en: "sensitivity", zh: "敏感性" },
-  perturbation_sensitivity: { en: "perturbation sensitivity", zh: "扰动敏感性" },
 };
 
 // Sampling method option labels (lowercase, generated the same way as before).
@@ -285,24 +283,12 @@ function selectedIndicesFromPreview(result: AnalysisPreview): number[] {
     .filter((index) => Number.isInteger(index) && index >= 0);
 }
 
-function tabForAnalysisType(analysisType: string): TabKey {
-  if (["pca", "umap", "tsne"].includes(analysisType)) return "projection";
-  if (["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"].includes(analysisType)) return "overview";
-  if (["similarity", "neighbors", "pairwise", "pairwise_similarity"].includes(analysisType)) return "similarity";
-  if (["kmeans", "dbscan", "hdbscan", "agglomerative", "hierarchical"].includes(analysisType)) return "clusters";
-  if (["lof", "knn", "isolation_forest", "isolation-forest", "iforest", "mahalanobis", "mahalanobis_distance"].includes(analysisType)) return "outliers";
-  if (["fps", "random", "stratified", "cluster_representative", "per_element", "acquisition", "novelty_fps"].includes(analysisType)) return "sampling";
-  if (["coverage", "overlap"].includes(analysisType)) return "coverage";
-  if (["compare", "mantel"].includes(analysisType)) return "compare";
-  if (analysisType === "local_diversity") return "local";
-  if (analysisType === "kernel") return "kernel";
-  return "overview";
-}
-
 export default function Analysis() {
   const { message } = AntApp.useApp();
   const st = useWorkspace();
   const dataset = activeDataset(st);
+  const selectedRun = st.activeDescriptorRunId;
+  const setSelectedRun = st.setActiveRun;
   const { t, tr, locale } = useT();
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [allRuns, setAllRuns] = useState<RunRow[]>([]);
@@ -313,10 +299,11 @@ export default function Analysis() {
   // the last displayed analysis.
   const view = useAnalysisUi((s) => s.view);
   const slots = useAnalysisUi((s) => s.slots);
-  const { tab, projection, overviewAnalysis, mode, preprocess, effectiveDimensionPreprocess, colorBy, nearZeroThreshold, lowVariationThreshold, featureCorrelationMethod, featureCorrelationThreshold } = view;
-  const setTab = useAnalysisUi((s) => s.setTab);
+  const recentModulesByGroup = useAnalysisUi((s) => s.recentModulesByGroup);
+  const { tab, projection, overviewAnalysis, coverageMode, mode, preprocess, effectiveDimensionPreprocess, colorBy, nearZeroThreshold, lowVariationThreshold, featureCorrelationMethod, featureCorrelationThreshold } = view;
   const setProjection = useAnalysisUi((s) => s.setProjection);
-  const setOverviewAnalysis = useAnalysisUi((s) => s.setOverviewAnalysis);
+  const setNavigationTarget = useAnalysisUi((s) => s.setNavigationTarget);
+  const rememberNavigationModule = useAnalysisUi((s) => s.rememberNavigationModule);
   const setMode = useAnalysisUi((s) => s.setMode);
   const setPreprocess = useAnalysisUi((s) => s.setPreprocess);
   const setEffectiveDimensionPreprocess = useAnalysisUi((s) => s.setEffectiveDimensionPreprocess);
@@ -333,7 +320,7 @@ export default function Analysis() {
   // toolbar names it explicitly and Run buttons only spin for their own
   // module — a background t-SNE must not read as "PCA is running" after the
   // user switches methods or tabs mid-job.
-  const [runningInfo, setRunningInfo] = useState<{ label: string; tab: TabKey; method: string | null } | null>(null);
+  const [runningInfo, setRunningInfo] = useState<{ label: string; tab: TabKey; moduleKey: AnalysisModuleKey | null; method: string | null } | null>(null);
   const [lastJobProgress, setLastJobProgress] = useState<number | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [saveViewOpen, setSaveViewOpen] = useState(false);
@@ -356,7 +343,6 @@ export default function Analysis() {
   const [compareMode, setCompareMode] = useState<CompareMode>("geometry");
   const [mantelMethod, setMantelMethod] = useState<"pearson" | "spearman">("pearson");
   const [mantelPermutations, setMantelPermutations] = useState(999);
-  const [coverageMode, setCoverageMode] = useState<"coverage" | "overlap">("coverage");
   const [propertyName, setPropertyName] = useState("energy_per_atom");
   const [propertyFolds, setPropertyFolds] = useState(5);
   const [propertyReliabilityK, setPropertyReliabilityK] = useState(5);
@@ -391,15 +377,32 @@ export default function Analysis() {
   const [overviewArrays, setOverviewArrays] = useState<NumericArrays>({});
   const [overviewArraysBusy, setOverviewArraysBusy] = useState(false);
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
+  const activeNavModule = useMemo(() => analysisNavModuleForView(tab, overviewAnalysis, coverageMode), [coverageMode, overviewAnalysis, tab]);
+  const activeNavGroup = useMemo(
+    () => ANALYSIS_NAV_GROUPS.find((group) => group.modules.some((module) => module.key === activeNavModule?.key)) ?? ANALYSIS_NAV_GROUPS[0],
+    [activeNavModule?.key],
+  );
+  const selectAnalysisModule = useCallback((moduleKey: AnalysisModuleKey) => {
+    const module = analysisNavModuleForKey(moduleKey);
+    if (!module) return;
+    const group = ANALYSIS_NAV_GROUPS.find((candidate) => candidate.modules.some((item) => item.key === module.key));
+    if (group) rememberNavigationModule(group.key, module.key);
+    setNavigationTarget(module.target);
+  }, [rememberNavigationModule, setNavigationTarget]);
+  useEffect(() => {
+    if (!activeNavModule || !activeNavGroup) return;
+    rememberNavigationModule(activeNavGroup.key, activeNavModule.key);
+  }, [activeNavGroup, activeNavModule, rememberNavigationModule]);
   const operationRef = useRef(0);
   // Analysis ids already auto-restored in this mount/run window, so a
   // persistent fetch error cannot loop the restore effect.
   const restoreAttemptedRef = useRef<string | null>(null);
-  // Tab the restore effect last processed, so a tab switch can fall back to
-  // the tab's most recent result while a same-tab parameter change cannot.
-  const lastLookedTabRef = useRef<TabKey | null>(null);
+  // Concrete module the restore effect last processed, so a module switch can
+  // fall back to its own recent result while a same-module parameter change
+  // remains exact-only.
+  const lastLookedModuleRef = useRef<AnalysisModuleKey | null>(null);
 
-  // Stable key of every parameter that changes what the current tab computes.
+  // Stable key of every parameter that changes what the current module computes.
   const analysisParams: AnalysisParams = {
     projection, mode, preprocess, effectiveDimensionPreprocess, tsnePerplexity, similarityMode, k, queryIndex,
     clusterAlgorithm, nClusters, outlierAlgorithm, contamination, samplingAlgorithm,
@@ -413,11 +416,18 @@ export default function Analysis() {
     referenceRunId, queryRunId, referenceViewId, queryViewId, viewId,
   };
   const paramsKey = buildParamsKey(tab, analysisParams);
-  // {tab, paramsKey, params} as of the latest render. Runs capture this when
+  const sourceContextKey = analysisSourceContextKey(tab, analysisParams, selectedRun, secondRun);
+  // {tab, moduleKey, paramsKey, params} as of the latest render. Runs capture this when
   // they start so their slots always record the context the run belongs to,
   // never whatever the user has navigated to by completion time.
-  const runContextRef = useRef<{ tab: TabKey; paramsKey: string; params: AnalysisParams }>({ tab, paramsKey, params: analysisParams });
-  runContextRef.current = { tab, paramsKey, params: analysisParams };
+  const runContextRef = useRef<{ tab: TabKey; moduleKey: AnalysisModuleKey | null; paramsKey: string; params: AnalysisParams; sourceContextKey: string }>({
+    tab,
+    moduleKey: activeNavModule?.key ?? null,
+    paramsKey,
+    params: analysisParams,
+    sourceContextKey,
+  });
+  runContextRef.current = { tab, moduleKey: activeNavModule?.key ?? null, paramsKey, params: analysisParams, sourceContextKey };
 
   const clearDisplayedAnalysis = useCallback(() => {
     setAnalysisId(null);
@@ -428,8 +438,6 @@ export default function Analysis() {
     setOverviewArrays({});
   }, []);
 
-  const selectedRun = st.activeDescriptorRunId;
-  const setSelectedRun = st.setActiveRun;
   const crossDatasetModule = tab === "coverage"
     || (tab === "sampling" && (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity"))
     || (tab === "overview" && overviewAnalysis === "drift");
@@ -764,10 +772,16 @@ export default function Analysis() {
     const isCurrent = () => operationRef.current === operation
       && (options?.followActiveRun === false || useWorkspace.getState().activeDescriptorRunId === requestRunId)
       && useWorkspace.getState().activeDatasetId === requestDatasetId
-      && useAnalysisUi.getState().view.tab === requestContext.tab;
+      && analysisNavModuleForView(
+        useAnalysisUi.getState().view.tab,
+        useAnalysisUi.getState().view.overviewAnalysis,
+        useAnalysisUi.getState().view.coverageMode,
+      )?.key === requestContext.moduleKey
+      && runContextRef.current.paramsKey === requestContext.paramsKey
+      && runContextRef.current.sourceContextKey === requestContext.sourceContextKey;
     setLoadingAnalysisId(null);
     setBusy(true);
-    setRunningInfo({ label, tab: requestContext.tab, method });
+    setRunningInfo({ label, tab: requestContext.tab, moduleKey: requestContext.moduleKey, method });
     setLastJobProgress(0);
     setPoints([]);
     setPreview(null);
@@ -829,14 +843,24 @@ export default function Analysis() {
       // mode/preprocess instead of the captured render state.
       const requestContext = {
         tab: "projection" as TabKey,
+        moduleKey: "descriptor_space" as AnalysisModuleKey,
         paramsKey: buildParamsKey("projection", { ...runContextRef.current.params, projection: "pca", mode: activeMode, preprocess: activePreprocess }),
+        sourceContextKey: sourceContextKey,
       };
       const isCurrent = () => operationRef.current === operation
         && useWorkspace.getState().activeDescriptorRunId === requestRunId
         && useWorkspace.getState().activeDatasetId === requestDatasetId
-        && useAnalysisUi.getState().view.tab === requestContext.tab;
+        && analysisNavModuleForView(
+          useAnalysisUi.getState().view.tab,
+          useAnalysisUi.getState().view.overviewAnalysis,
+          useAnalysisUi.getState().view.coverageMode,
+        )?.key === requestContext.moduleKey
+        && useAnalysisUi.getState().view.projection === "pca"
+        && useAnalysisUi.getState().view.mode === activeMode
+        && useAnalysisUi.getState().view.preprocess === activePreprocess
+        && runContextRef.current.sourceContextKey === requestContext.sourceContextKey;
       setBusy(true);
-      setRunningInfo({ label: "PCA", tab: "projection", method: "analysis.pca" });
+      setRunningInfo({ label: "PCA", tab: "projection", moduleKey: requestContext.moduleKey, method: "analysis.pca" });
       setLastJobProgress(0);
       setPoints([]);
       setPreview(null);
@@ -853,8 +877,8 @@ export default function Analysis() {
           if (watched.failed) return;
           if (watched.analysisId !== null) id = watched.analysisId;
         }
-        if (!isCurrent()) return;
         useAnalysisUi.getState().rememberResult({ runId: requestRunId, analysisId: id, tab: requestContext.tab, paramsKey: requestContext.paramsKey });
+        if (!isCurrent()) return;
         const frontendCached = response.job_id ? undefined : analysisCache.get(id);
         if (frontendCached) {
           commitAnalysis(id, frontendCached);
@@ -882,7 +906,7 @@ export default function Analysis() {
       ? { mode: activeMode, preprocess: activePreprocess, n_neighbors: 15, min_dist: 0.1, ...(viewId ? { view_id: viewId } : {}) }
       : { mode: activeMode, preprocess: activePreprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000, ...(viewId ? { view_id: viewId } : {}) };
     await runRequest(`analysis.${projection}`, projectionParams, projection.toUpperCase());
-  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, message, mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity, t, viewId, watchAnalysisJob]);
+  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, message, mode, preprocess, projection, runRequest, selectedRun, sourceContextKey, tsnePerplexity, t, viewId, watchAnalysisJob]);
 
   const handlePreprocessChange = useCallback((value: string) => {
     setPreprocess(value);
@@ -894,7 +918,14 @@ export default function Analysis() {
   const loadAnalysis = useCallback(async (row: AnalysisRow, opts?: { silent?: boolean }) => {
     if (!dataset || row.status !== "COMPLETED") return;
     const analysisType = row.analysis_type.toLowerCase();
-    const analysisTab = tabForAnalysisType(analysisType);
+    const analysisModule = analysisNavModuleForAnalysisType(analysisType);
+    if (!analysisModule) {
+      message.warning(t("The selected analysis module is no longer available"));
+      return;
+    }
+    const analysisTarget = analysisModule.target;
+    const analysisTab = analysisTarget.tab;
+    const parameters = row.parameters ?? {};
     const inputRunIds = row.input_run_ids?.length ? row.input_run_ids : [row.descriptor_run_id];
     const crossDatasetAnalysis = ["coverage", "overlap", "acquisition", "drift"].includes(analysisType);
     if (!crossDatasetAnalysis && (!selectedRun || !inputRunIds.includes(selectedRun))) {
@@ -903,6 +934,9 @@ export default function Analysis() {
     }
     const requestRunId = crossDatasetAnalysis ? inputRunIds[0] : selectedRun;
     if (!requestRunId) return;
+
+    const referenceView = typeof parameters.reference_view_id === "string" ? parameters.reference_view_id : null;
+    const queryView = typeof parameters.query_view_id === "string" ? parameters.query_view_id : null;
     if (crossDatasetAnalysis) {
       const reference = allRuns.find((run) => run.id === inputRunIds[0]);
       const query = allRuns.find((run) => run.id === inputRunIds[1]);
@@ -912,42 +946,43 @@ export default function Analysis() {
       }
       setReferenceDatasetId(reference.dataset_id);
       setReferenceRunId(reference.id);
-      setReferenceViewId(typeof row.parameters?.reference_view_id === "string" ? row.parameters.reference_view_id : null);
+      setReferenceViewId(referenceView);
       setQueryDatasetId(query.dataset_id);
       setQueryRunId(query.id);
-      setQueryViewId(typeof row.parameters?.query_view_id === "string" ? row.parameters.query_view_id : null);
+      setQueryViewId(queryView);
     } else {
-      setViewId(typeof row.parameters?.view_id === "string" ? row.parameters.view_id : null);
+      setViewId(typeof parameters.view_id === "string" ? parameters.view_id : null);
     }
 
-    const operation = ++operationRef.current;
-    const requestDatasetId = dataset.id;
-    // `tab` guards against a tab switch while a slow restore fetch is in
-    // flight — the stale result must not land on (or yank back) another tab.
-    const isCurrent = () => operationRef.current === operation
-      && (crossDatasetAnalysis || useWorkspace.getState().activeDescriptorRunId === requestRunId)
-      && useWorkspace.getState().activeDatasetId === requestDatasetId
-      && useAnalysisUi.getState().view.tab === analysisTab;
-    // Slot context for the loaded analysis, derived from the row itself. The
-    // cached path below records before React re-renders, so the live
-    // runContextRef would still describe the tab the user is leaving and
-    // would file this analysis under another tab's parameters.
     const loadedParams: AnalysisParams = { ...runContextRef.current.params };
+    loadedParams.overviewAnalysis = analysisTarget.overviewAnalysis ?? loadedParams.overviewAnalysis;
+    loadedParams.coverageMode = analysisTarget.coverageMode ?? loadedParams.coverageMode;
     if (crossDatasetAnalysis) {
       loadedParams.referenceRunId = inputRunIds[0] ?? null;
       loadedParams.queryRunId = inputRunIds[1] ?? null;
-      loadedParams.referenceViewId = typeof row.parameters?.reference_view_id === "string" ? row.parameters.reference_view_id : null;
-      loadedParams.queryViewId = typeof row.parameters?.query_view_id === "string" ? row.parameters.query_view_id : null;
+      loadedParams.referenceViewId = referenceView;
+      loadedParams.queryViewId = queryView;
     } else {
-      loadedParams.viewId = typeof row.parameters?.view_id === "string" ? row.parameters.view_id : null;
+      loadedParams.viewId = typeof parameters.view_id === "string" ? parameters.view_id : null;
     }
-    setTab(analysisTab);
-    if (analysisTab === "overview" && ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"].includes(analysisType)) {
-      setOverviewAnalysis(analysisType as OverviewAnalysis);
-      loadedParams.overviewAnalysis = analysisType as OverviewAnalysis;
+
+    let loadedSecondRun = secondRun;
+    if (analysisType === "compare" || analysisType === "mantel" || analysisType === "sensitivity") {
+      loadedSecondRun = inputRunIds.find((runId) => runId !== requestRunId) ?? inputRunIds[1] ?? null;
+      setSecondRun(loadedSecondRun);
+    }
+
+    // Navigation is one store update and one persisted settings write. All
+    // module controls below are restored from the row before the slot key is
+    // built, so the loaded result cannot be filed under a partial context.
+    setNavigationTarget(analysisTarget);
+    const navGroup = ANALYSIS_NAV_GROUPS.find((group) => group.modules.some((module) => module.key === analysisModule.key));
+    if (navGroup) rememberNavigationModule(navGroup.key, analysisModule.key);
+
+    if (analysisTab === "overview") {
       if (analysisType === "feature_variance") {
-        const savedNear = finiteNumber(row.parameters?.near_zero_relative_threshold);
-        const savedLow = finiteNumber(row.parameters?.low_variance_relative_threshold);
+        const savedNear = finiteNumber(parameters.near_zero_relative_threshold);
+        const savedLow = finiteNumber(parameters.low_variance_relative_threshold);
         const nextNear = savedNear == null ? nearZeroThreshold : Math.min(1, Math.max(0, savedNear));
         const nextLow = savedLow == null
           ? Math.max(nextNear, lowVariationThreshold)
@@ -957,8 +992,8 @@ export default function Analysis() {
         loadedParams.nearZeroThreshold = nextNear;
         loadedParams.lowVariationThreshold = nextLow;
       } else if (analysisType === "feature_correlation") {
-        const nextMethod = row.parameters?.method === "spearman" ? "spearman" : "pearson";
-        const savedThreshold = finiteNumber(row.parameters?.correlation_threshold ?? row.parameters?.redundancy_threshold);
+        const nextMethod = parameters.method === "spearman" ? "spearman" : "pearson";
+        const savedThreshold = finiteNumber(parameters.correlation_threshold ?? parameters.redundancy_threshold);
         const nextThreshold = savedThreshold == null ? featureCorrelationThreshold : Math.min(1, Math.max(0, savedThreshold));
         setFeatureCorrelationMethod(nextMethod);
         setFeatureCorrelationThreshold(nextThreshold);
@@ -967,55 +1002,152 @@ export default function Analysis() {
       } else if (analysisType === "effective_dimension") {
         // Analyses created before the preprocessing setting was exposed used
         // centered data; keep their cache key and control faithful on restore.
-        const nextPreprocess: EffectiveDimensionPreprocess = row.parameters?.preprocess === "standardized" ? "standardized" : "center";
+        const nextPreprocess: EffectiveDimensionPreprocess = parameters.preprocess === "standardized" ? "standardized" : "center";
         setEffectiveDimensionPreprocess(nextPreprocess);
         loadedParams.effectiveDimensionPreprocess = nextPreprocess;
       } else if (analysisType === "property_correlation") {
-        const savedMode: PcaMode = row.parameters?.mode === "atom" ? "atom" : "structure";
-        const nextFolds = Math.max(2, Math.round(finiteNumber(row.parameters?.folds) ?? 5));
-        const nextK = Math.max(1, Math.round(finiteNumber(row.parameters?.reliability_k) ?? 5));
-        const nextMetric = row.parameters?.distance_metric === "cosine" ? "cosine" : "euclidean";
-        const nextSparse = Math.round((finiteNumber(row.parameters?.sparse_quantile) ?? 0.90) * 100);
-        const nextOod = Math.round((finiteNumber(row.parameters?.ood_quantile) ?? 0.99) * 100);
+        const savedMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+        const nextFolds = Math.max(2, Math.round(finiteNumber(parameters.folds) ?? 5));
+        const nextK = Math.max(1, Math.round(finiteNumber(parameters.reliability_k) ?? 5));
+        const nextMetric = parameters.distance_metric === "cosine" ? "cosine" : "euclidean";
+        const nextSparse = Math.round((finiteNumber(parameters.sparse_quantile) ?? 0.90) * 100);
+        const nextOod = Math.round((finiteNumber(parameters.ood_quantile) ?? 0.99) * 100);
         setMode(savedMode);
-        setPropertyName(String(row.parameters?.property ?? "energy_per_atom"));
+        setPropertyName(String(parameters.property ?? "energy_per_atom"));
         setPropertyFolds(nextFolds);
         setPropertyReliabilityK(nextK);
         setPropertyDistanceMetric(nextMetric);
         setPropertySparsePercentile(nextSparse);
         setPropertyOodPercentile(nextOod);
-        loadedParams.propertyName = String(row.parameters?.property ?? "energy_per_atom");
+        loadedParams.propertyName = String(parameters.property ?? "energy_per_atom");
         loadedParams.propertyFolds = nextFolds;
         loadedParams.propertyReliabilityK = nextK;
         loadedParams.propertyDistanceMetric = nextMetric;
         loadedParams.propertySparsePercentile = nextSparse;
         loadedParams.propertyOodPercentile = nextOod;
         loadedParams.mode = savedMode;
+      } else if (analysisType === "perturbation_sensitivity") {
+        const nextType = parameters.perturbation === "strain" ? "strain" : "jitter";
+        const nextCount = Math.max(2, Math.round(finiteNumber(parameters.n_amplitudes) ?? 8));
+        const nextMaximum = Math.max(0.001, finiteNumber(parameters.max_amplitude) ?? 0.2);
+        const nextStructures = Math.max(1, Math.round(finiteNumber(parameters.max_structures) ?? 64));
+        const nextMetric = typeof parameters.metric === "string" && parameters.metric ? parameters.metric : "euclidean";
+        setPerturbationType(nextType);
+        setPerturbationCount(nextCount);
+        setPerturbationMaximum(nextMaximum);
+        setPerturbationStructures(nextStructures);
+        setPerturbationMetric(nextMetric);
+        loadedParams.perturbationType = nextType;
+        loadedParams.perturbationCount = nextCount;
+        loadedParams.perturbationMaximum = nextMaximum;
+        loadedParams.perturbationStructures = nextStructures;
+        loadedParams.perturbationMetric = nextMetric;
+      } else if (analysisType === "sensitivity") {
+        loadedParams.overviewAnalysis = "sensitivity";
       }
     }
+
     if (analysisTab === "projection") {
-      setProjection(analysisType as ProjectionName);
-      loadedParams.projection = analysisType as ProjectionName;
-      if (analysisType === "pca") {
-        const savedMode: PcaMode = row.parameters?.mode === "atom" ? "atom" : "structure";
-        const savedPreprocess = row.parameters?.preprocess;
-        const savedPreprocessValue = savedPreprocess === "raw" || savedPreprocess === "standardized" ? savedPreprocess : "center";
-        setMode(savedMode);
-        setPreprocess(savedPreprocessValue);
-        loadedParams.mode = savedMode;
-        loadedParams.preprocess = savedPreprocessValue;
-      }
+      const nextProjection: ProjectionName = analysisType === "umap" || analysisType === "tsne" ? analysisType : "pca";
+      const savedMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+      const savedPreprocess = parameters.preprocess;
+      const savedPreprocessValue = savedPreprocess === "raw" || savedPreprocess === "center" || savedPreprocess === "standardized" ? savedPreprocess : "center";
+      setProjection(nextProjection);
+      setMode(savedMode);
+      setPreprocess(savedPreprocessValue);
+      loadedParams.projection = nextProjection;
+      loadedParams.mode = savedMode;
+      loadedParams.preprocess = savedPreprocessValue;
+      loadedParams.tsnePerplexity = Math.max(2, Math.round(finiteNumber(parameters.perplexity) ?? tsnePerplexity));
+      if (nextProjection === "tsne") setTsnePerplexity(loadedParams.tsnePerplexity);
     }
-    if (analysisTab === "sampling" && ["fps", "random", "stratified", "cluster_representative", "per_element"].includes(analysisType)) {
-      setSamplingAlgorithm(analysisType);
-      loadedParams.samplingAlgorithm = analysisType;
-      if (analysisType === "fps") {
-        const savedStrategy = row.parameters?.strategy === "grouped" ? "grouped" : "global";
-        const savedScaling = row.parameters?.scaling === "raw" || row.parameters?.scaling === "standardized" ? row.parameters.scaling : "robust";
-        const savedMinDistance = Math.max(0, finiteNumber(row.parameters?.min_distance) ?? 0);
-        const savedExisting = typeof row.parameters?.existing_run_id === "string" && row.parameters.existing_run_id ? row.parameters.existing_run_id : null;
-        const savedBlocks = Array.isArray(row.parameters?.blocks) ? row.parameters.blocks.map(String) : [];
-        const savedCoverage = finiteNumber(row.parameters?.target_coverage);
+
+    if (analysisTab === "similarity") {
+      const requestedMode = typeof parameters.similarity_mode === "string" ? parameters.similarity_mode : "";
+      const nextSimilarityMode: "query" | "all_neighbors" | "pairwise" = analysisType === "neighbors" || requestedMode === "all_neighbors"
+        ? "all_neighbors"
+        : analysisType === "pairwise" || analysisType === "pairwise_similarity" || requestedMode === "pairwise"
+          ? "pairwise"
+          : "query";
+      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+      const nextK = Math.max(1, Math.round(finiteNumber(parameters.k ?? parameters.n_neighbors) ?? k));
+      const nextQueryIndex = Math.max(0, Math.round(finiteNumber(parameters.query_index) ?? queryIndex));
+      setSimilarityMode(nextSimilarityMode);
+      setMode(nextMode);
+      setK(nextK);
+      setQueryIndex(nextQueryIndex);
+      loadedParams.similarityMode = nextSimilarityMode;
+      loadedParams.mode = nextMode;
+      loadedParams.k = nextK;
+      loadedParams.queryIndex = nextQueryIndex;
+    }
+
+    if (analysisTab === "clusters") {
+      const requestedAlgorithm = String(parameters.algorithm ?? analysisType).toLowerCase();
+      const nextAlgorithm = requestedAlgorithm === "hierarchical"
+        ? "agglomerative"
+        : ["kmeans", "dbscan", "hdbscan", "agglomerative"].includes(requestedAlgorithm)
+          ? requestedAlgorithm
+        : clusterAlgorithm;
+      const nextClusters = Math.max(2, Math.round(finiteNumber(parameters.n_clusters ?? parameters.nClusters) ?? nClusters));
+      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+      setClusterAlgorithm(nextAlgorithm);
+      setNClusters(nextClusters);
+      setMode(nextMode);
+      loadedParams.clusterAlgorithm = nextAlgorithm;
+      loadedParams.nClusters = nextClusters;
+      loadedParams.mode = nextMode;
+    }
+
+    if (analysisTab === "outliers") {
+      const requestedAlgorithm = String(parameters.algorithm ?? analysisType).toLowerCase();
+      const nextAlgorithm = requestedAlgorithm === "isolation-forest" || requestedAlgorithm === "iforest"
+        ? "isolation_forest"
+        : requestedAlgorithm === "mahalanobis_distance"
+          ? "mahalanobis"
+          : ["lof", "knn", "isolation_forest", "mahalanobis"].includes(requestedAlgorithm)
+            ? requestedAlgorithm
+        : outlierAlgorithm;
+      const nextK = Math.max(1, Math.round(finiteNumber(parameters.k) ?? k));
+      const nextContamination = Math.min(0.5, Math.max(0.001, finiteNumber(parameters.contamination) ?? contamination));
+      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+      setOutlierAlgorithm(nextAlgorithm);
+      setK(nextK);
+      setContamination(nextContamination);
+      setMode(nextMode);
+      loadedParams.outlierAlgorithm = nextAlgorithm;
+      loadedParams.k = nextK;
+      loadedParams.contamination = nextContamination;
+      loadedParams.mode = nextMode;
+    }
+
+    if (analysisTab === "sampling") {
+      const requestedAlgorithm = String(parameters.algorithm ?? analysisType).toLowerCase();
+      const nextAlgorithm = analysisType === "acquisition"
+        ? (parameters.acquisition_method === "uncertainty_diversity" ? "uncertainty_diversity" : "novelty_fps")
+        : requestedAlgorithm === "cluster" ? "cluster_representative"
+          : requestedAlgorithm === "element" ? "per_element"
+            : ["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].includes(requestedAlgorithm)
+              ? requestedAlgorithm
+              : samplingAlgorithm;
+      const nextSamples = Math.max(1, Math.round(finiteNumber(parameters.n_samples) ?? nSamples));
+      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+      setSamplingAlgorithm(nextAlgorithm);
+      setNSamples(nextSamples);
+      setMode(nextMode);
+      loadedParams.samplingAlgorithm = nextAlgorithm;
+      loadedParams.nSamples = nextSamples;
+      loadedParams.mode = nextMode;
+      const nextUncertaintyK = Math.max(2, Math.round(finiteNumber(parameters.uncertainty_k) ?? uncertaintyK));
+      setUncertaintyK(nextUncertaintyK);
+      loadedParams.uncertaintyK = nextUncertaintyK;
+      if (nextAlgorithm === "fps") {
+        const savedStrategy = parameters.strategy === "grouped" ? "grouped" : "global";
+        const savedScaling = parameters.scaling === "raw" || parameters.scaling === "standardized" ? parameters.scaling : "robust";
+        const savedMinDistance = Math.max(0, finiteNumber(parameters.min_distance) ?? 0);
+        const savedExisting = typeof parameters.existing_run_id === "string" && parameters.existing_run_id ? parameters.existing_run_id : null;
+        const savedBlocks = Array.isArray(parameters.blocks) ? parameters.blocks.map(String) : [];
+        const savedCoverage = finiteNumber(parameters.target_coverage);
         const savedBudgetMode = savedCoverage != null && savedCoverage > 0 ? "coverage" : "count";
         const savedCoveragePercent = savedCoverage != null && savedCoverage > 0 ? Math.round(savedCoverage * 100) : 95;
         setSamplingStrategy(savedStrategy);
@@ -1034,15 +1166,83 @@ export default function Analysis() {
         loadedParams.samplingCoverage = savedCoveragePercent;
       }
     }
+
+    if (analysisTab === "coverage") {
+      // The module target is authoritative, so loading coverage always resets
+      // an old overlap selection and vice versa.
+      loadedParams.coverageMode = analysisTarget.coverageMode ?? "coverage";
+      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+      setMode(nextMode);
+      loadedParams.mode = nextMode;
+    }
+
+    if (analysisTab === "compare") {
+      const nextCompareMode: CompareMode = analysisType === "mantel" || parameters.compare_mode === "mantel" ? "mantel" : "geometry";
+      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+      const nextMantelMethod = parameters.method === "spearman" || parameters.mantel_method === "spearman" ? "spearman" : "pearson";
+      const nextPermutations = Math.max(1, Math.round(finiteNumber(parameters.permutations ?? parameters.mantel_permutations) ?? mantelPermutations));
+      setCompareMode(nextCompareMode);
+      setMode(nextMode);
+      setMantelMethod(nextMantelMethod);
+      setMantelPermutations(nextPermutations);
+      loadedParams.compareMode = nextCompareMode;
+      loadedParams.mode = nextMode;
+      loadedParams.mantelMethod = nextMantelMethod;
+      loadedParams.mantelPermutations = nextPermutations;
+    }
+
+    if (analysisTab === "local") {
+      const nextK = Math.max(1, Math.round(finiteNumber(parameters.k) ?? k));
+      const nextClusters = Math.max(2, Math.round(finiteNumber(parameters.n_clusters) ?? nClusters));
+      const nextCutoff = Math.max(0.1, Math.min(10, finiteNumber(parameters.cutoff) ?? localCutoff));
+      setMode("atom");
+      setK(nextK);
+      setNClusters(nextClusters);
+      setLocalCutoff(nextCutoff);
+      loadedParams.mode = "atom";
+      loadedParams.k = nextK;
+      loadedParams.nClusters = nextClusters;
+      loadedParams.localCutoff = nextCutoff;
+    }
+
+    if (analysisTab === "kernel") {
+      const requestedKernel = String(parameters.kernel ?? parameters.kernel_name ?? kernelName).toLowerCase();
+      const nextKernel = ["rbf", "linear", "cosine", "polynomial"].includes(requestedKernel) ? requestedKernel : kernelName;
+      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
+      setKernelName(nextKernel);
+      setMode(nextMode);
+      loadedParams.kernelName = nextKernel;
+      loadedParams.mode = nextMode;
+    }
+
     const loadedContext = { tab: analysisTab, paramsKey: buildParamsKey(analysisTab, loadedParams) };
-    if (analysisType === "pairwise" || analysisType === "pairwise_similarity") setSimilarityMode("pairwise");
-    if (analysisType === "overlap") setCoverageMode("overlap");
-    if (analysisType === "acquisition") setSamplingAlgorithm(row.parameters?.acquisition_method === "uncertainty_diversity" ? "uncertainty_diversity" : "novelty_fps");
-    if (analysisType === "mantel") setCompareMode("mantel");
+    const loadedSourceContextKey = analysisSourceContextKey(analysisTab, loadedParams, requestRunId, loadedSecondRun);
+    // Make the synchronous cached path observe the row-derived source while
+    // React schedules the control updates above. The next render replaces it
+    // with the live context as usual.
+    runContextRef.current = {
+      tab: analysisTab,
+      moduleKey: analysisModule.key,
+      paramsKey: loadedContext.paramsKey,
+      params: loadedParams,
+      sourceContextKey: loadedSourceContextKey,
+    };
+    const operation = ++operationRef.current;
+    const requestDatasetId = dataset.id;
+    const isCurrent = () => operationRef.current === operation
+      && (crossDatasetAnalysis || useWorkspace.getState().activeDescriptorRunId === requestRunId)
+      && useWorkspace.getState().activeDatasetId === requestDatasetId
+      && analysisNavModuleForView(
+        useAnalysisUi.getState().view.tab,
+        useAnalysisUi.getState().view.overviewAnalysis,
+        useAnalysisUi.getState().view.coverageMode,
+      )?.key === analysisModule.key
+      && runContextRef.current.paramsKey === loadedContext.paramsKey
+      && runContextRef.current.sourceContextKey === loadedSourceContextKey;
 
     setLoadingAnalysisId(row.id);
     setBusy(true);
-    setRunningInfo({ label: analysisType.toUpperCase(), tab: analysisTab, method: null });
+    setRunningInfo({ label: analysisType.toUpperCase(), tab: analysisTab, moduleKey: analysisModule.key, method: null });
     setLastJobProgress(null);
     setPoints([]);
     setPreview(null);
@@ -1080,21 +1280,23 @@ export default function Analysis() {
         setLoadingAnalysisId(null);
       }
     }
-  }, [allRuns, commitAnalysis, dataset, featureCorrelationThreshold, fetchAnalysisPoints, lowVariationThreshold, message, nearZeroThreshold, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setMode, setNearZeroThreshold, setOverviewAnalysis, setPreprocess, setProjection, setTab, t]);
+  }, [allRuns, clusterAlgorithm, commitAnalysis, contamination, dataset, featureCorrelationThreshold, fetchAnalysisPoints, k, kernelName, localCutoff, lowVariationThreshold, mantelPermutations, message, nClusters, nSamples, nearZeroThreshold, outlierAlgorithm, queryIndex, rememberNavigationModule, secondRun, selectedRun, samplingAlgorithm, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setMode, setNearZeroThreshold, setNavigationTarget, setPreprocess, setProjection, t, tsnePerplexity, uncertaintyK]);
 
-  // Keep the displayed result in step with the current tab + parameters: an
-  // exact slot match (same tab, run, parameters) is re-displayed from the
-  // backend artifacts instead of recomputing; switching tabs falls back to
-  // that tab's most recent result; anything else clears the stale display.
+  // Keep the displayed result in step with the current module + parameters:
+  // an exact slot match is re-displayed from the backend artifacts instead of
+  // recomputing; switching modules falls back only to that module's recent
+  // result; a same-module parameter change remains exact-only.
   // One load attempt per analysis id (reset when the dataset/run changes) so
   // a persistent fetch error cannot loop.
   useEffect(() => {
     if (busy || loadingAnalysisId) return;
     const slotMap = useAnalysisUi.getState().slots;
+    const moduleKey = activeNavModule?.key ?? null;
     const exact = slotForParams(slotMap, tab, analysisContextRunId, paramsKey);
-    const tabChanged = lastLookedTabRef.current !== tab;
-    lastLookedTabRef.current = tab;
-    const slot = exact ?? (tabChanged ? latestSlotForTab(slotMap, tab, analysisContextRunId) : null);
+    const exactForModule = exact && analysisSlotMatchesModule(exact, moduleKey) ? exact : null;
+    const moduleChanged = lastLookedModuleRef.current !== moduleKey;
+    lastLookedModuleRef.current = moduleKey;
+    const slot = exactForModule ?? (moduleChanged ? latestSlotForModule(slotMap, moduleKey, analysisContextRunId) : null);
     const wantedId = slot?.analysisId ?? null;
     if (analysisId === wantedId) return;
     if (!wantedId) {
@@ -1126,17 +1328,17 @@ export default function Analysis() {
       clearDisplayedAnalysis();
       return;
     }
-    // A slot whose row belongs to another tab was recorded under the wrong
-    // context; restoring it would navigate the page. Forget the bad slot and
-    // stay put instead.
-    if (tabForAnalysisType(row.analysis_type.toLowerCase()) !== tab) {
+    // A slot whose row belongs to another concrete module was recorded under
+    // the wrong context; restoring it would cross modules. Forget the bad
+    // slot and stay put instead.
+    if (analysisNavModuleForAnalysisType(row.analysis_type.toLowerCase())?.key !== moduleKey) {
       if (slot) useAnalysisUi.getState().forgetSlot(slotKey(slot));
       restoreAttemptedRef.current = null;
       clearDisplayedAnalysis();
       return;
     }
     void loadAnalysis(row, { silent: true });
-  }, [analyses, analysisContextRunId, analysisId, busy, clearDisplayedAnalysis, loadAnalysis, loadingAnalysisId, paramsKey, tab]);
+  }, [activeNavModule?.key, analyses, analysisContextRunId, analysisId, busy, clearDisplayedAnalysis, loadAnalysis, loadingAnalysisId, paramsKey, tab]);
 
   const runTabAnalysis = useCallback(async () => {
     if (tab === "projection") return runProjection();
@@ -1226,9 +1428,9 @@ export default function Analysis() {
                   ? { top_k: 20, near_zero_relative_threshold: nearZeroThreshold, low_variance_relative_threshold: lowVariationThreshold }
                   : { top_k: 20 };
       if (viewId && overviewAnalysis !== "drift" && overviewAnalysis !== "sensitivity") overviewParams.view_id = viewId;
-      await runRequest(`analysis.${overviewAnalysis}`, overviewParams, tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]), overviewAnalysis === "drift" ? { contextRunId: referenceRunId, followActiveRun: false } : undefined);
+      await runRequest(`analysis.${overviewAnalysis}`, overviewParams, activeNavModule ? tr(activeNavModule.label) : t("Analysis"), overviewAnalysis === "drift" ? { contextRunId: referenceRunId, followActiveRun: false } : undefined);
     }
-  }, [clusterAlgorithm, contamination, coverageMode, crossInputsReady, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, outlierAlgorithm, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationStructures, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, queryRunId, queryViewId, referenceRunId, referenceViewId, runProjection, runRequest, runs, samplingAlgorithm, samplingBlocks, samplingBudgetMode, samplingCoverage, samplingExistingRunId, samplingMinDistance, samplingScaling, samplingStrategy, secondRun, selectedRun, similarityMode, tab, t, tr, uncertaintyK, viewId, message, compareMode]);
+  }, [activeNavModule, clusterAlgorithm, contamination, coverageMode, crossInputsReady, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, outlierAlgorithm, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationStructures, perturbationType, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, queryRunId, queryViewId, referenceRunId, referenceViewId, runProjection, runRequest, runs, samplingAlgorithm, samplingBlocks, samplingBudgetMode, samplingCoverage, samplingExistingRunId, samplingMinDistance, samplingScaling, samplingStrategy, secondRun, selectedRun, similarityMode, tab, t, tr, uncertaintyK, viewId, message, compareMode]);
 
   const inspectPoint = useCallback((point: Point) => {
     setInspectedPoint(point);
@@ -1430,12 +1632,34 @@ export default function Analysis() {
                     ? `kernel.${kernelName}`
                     : `overview.${overviewAnalysis}`;
   const methodGuide = getAnalysisMethodGuide(methodGuideKey);
-  const overviewModuleControl = <Space className="analysis-overview-module-control" wrap><Typography.Text>{t("Module")}</Typography.Text><Select className="analysis-overview-module-select" value={overviewAnalysis} onChange={setOverviewAnalysis} options={markOptions("overviewAnalysis", [{ value: "feature_variance", label: t("Feature variance") }, { value: "feature_correlation", label: t("Feature correlation") }, { value: "effective_dimension", label: t("Effective dimension") }, { value: "property_correlation", label: t("Property correlation") }, { value: "trajectory", label: t("Trajectory") }, { value: "drift", label: t("Dataset drift") }, { value: "sensitivity", label: t("Parameter sensitivity") }, { value: "perturbation_sensitivity", label: t("Structural perturbation") }])} /></Space>;
   const overviewModuleHint = tab === "overview" && overviewAnalysis === "sensitivity" && <Typography.Text type="secondary">{t("Compare parameter variants of the same descriptor; use Compare for different descriptors.")}</Typography.Text>;
+  const activeModuleLabel = activeNavModule ? tr(activeNavModule.label) : t("Analysis");
   const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension");
 
   return (
     <div className="analysis-page">
+      <div className="analysis-navigation" aria-label={t("Analysis navigation")}>
+        <Tabs
+          className="analysis-group-tabs"
+          aria-label={t("Analysis categories")}
+          activeKey={activeNavGroup?.key}
+          onChange={(key) => {
+            const group = ANALYSIS_NAV_GROUPS.find((item) => item.key === key);
+            if (!group) return;
+            const remembered = recentModulesByGroup[group.key];
+            selectAnalysisModule(remembered && group.modules.some((module) => module.key === remembered) ? remembered : group.modules[0].key);
+          }}
+          items={ANALYSIS_NAV_GROUPS.map((group) => ({ key: group.key, label: tr(group.label) }))}
+        />
+        <Tabs
+          className="analysis-module-tabs"
+          aria-label={t("Analysis modules")}
+          size="small"
+          activeKey={activeNavModule?.key}
+          onChange={(key) => selectAnalysisModule(key as AnalysisModuleKey)}
+          items={(activeNavGroup?.modules ?? []).map((module) => ({ key: module.key, label: tr(module.label) }))}
+        />
+      </div>
       <section className="analysis-toolbar">
         <Space wrap>
           {crossDatasetModule ? <>
@@ -1481,12 +1705,6 @@ export default function Analysis() {
         )}
       </section>
 
-      <Tabs
-        activeKey={tab}
-        onChange={(value) => setTab(value as TabKey)}
-        items={(Object.keys(TAB_LABELS) as TabKey[]).map((key) => ({ key, label: tr(TAB_LABELS[key]) }))}
-      />
-
       <div className="analysis-workspace">
         <main className="analysis-main">
           <section className={`analysis-card analysis-controls${tab === "overview" && overviewAnalysis === "property_correlation" ? " analysis-controls-property" : ""}`}>
@@ -1514,10 +1732,9 @@ export default function Analysis() {
                 ) : !samplingQuotaBusy ? <Typography.Text type="secondary" style={{ marginLeft: 8 }}>{t("Element metadata is unavailable for this run")}</Typography.Text> : null}
               </div>
             )}</>}
-            {tab === "coverage" && <Space wrap><Typography.Text>{t("Analysis")}</Typography.Text><Select value={coverageMode} onChange={setCoverageMode} options={markOptions("coverageMode", [{ value: "coverage", label: t("Coverage") }, { value: "overlap", label: t("Train / test overlap") }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
+            {tab === "coverage" && <Space wrap><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
             {tab === "local" && <Space wrap><ParamLabel label={t("Clusters / element")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><ParamLabel label={t("Descriptor kNN")} cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><ParamLabel label={t("Neighbor cutoff")} cached={cachedParam("localCutoff")} /><InputNumber min={0.1} max={10} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value == null ? 3 : Math.max(0.1, Math.min(10, value)))} addonAfter="Å" /><Typography.Text type="secondary">{t("Coordinates and periodic images determine coordination.")}</Typography.Text></Space>}
             {tab === "kernel" && <Space wrap><Typography.Text>{t("Kernel")}</Typography.Text><Select value={kernelName} onChange={setKernelName} options={markOptions("kernelName", ["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() })))} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
-            {tab === "overview" && overviewModuleControl}
             {crossDatasetModule && <CrossDatasetPicker
               datasets={st.datasets}
               referenceDatasetId={referenceDatasetId}
@@ -1593,7 +1810,7 @@ export default function Analysis() {
             </Space>}
             <div className="analysis-controls-actions">
               <Space wrap>
-                <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.tab === tab && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={crossDatasetModule ? !crossInputsReady : !selectedRun} onClick={() => void runTabAnalysis()}>{tab === "projection" ? t("Run {name}", { name: projection.toUpperCase() }) : tab === "overview" ? t("Run {name}", { name: tr(OVERVIEW_MODULE_LABELS[overviewAnalysis]) }) : t("Run {name}", { name: tr(TAB_LABELS[tab]) })}</Button>
+                <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.moduleKey === activeNavModule?.key && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={crossDatasetModule ? !crossInputsReady : !selectedRun} onClick={() => void runTabAnalysis()}>{t("Run {name}", { name: tab === "projection" ? projection.toUpperCase() : activeModuleLabel })}</Button>
                 {/* Only the Projection canvas recolors by property; every
                     other module owns its coloring inside the result view. */}
                 {tab === "projection" && points.length > 0 && <Select size="small" style={{ width: 132 }} aria-label={t("Color by")} value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy / atom") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
@@ -1621,7 +1838,7 @@ export default function Analysis() {
               datasetId={pointDataset.id}
               frames={selectedFrames}
               totalFrames={pointDataset.number_of_frames}
-              defaultName={`${tr(TAB_LABELS[tab])} ${selectedFrames.length}`}
+              defaultName={`${activeModuleLabel} ${selectedFrames.length}`}
               source={{ source: "analysis", analysis_type: String(preview?.kind ?? "") }}
               onSaved={(view) => setDatasetViews((prev) => [...prev, view])}
             />

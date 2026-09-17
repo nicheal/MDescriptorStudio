@@ -1,5 +1,15 @@
 import { expect, test } from "@playwright/test";
 
+async function openAnalysis(page: import("@playwright/test").Page) {
+  await page.getByRole("button", { name: "Analysis", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "Analysis descriptor run" })).toBeVisible();
+}
+
+async function selectAnalysisModule(page: import("@playwright/test").Page, group: string, module: string) {
+  await page.getByRole("tab", { name: group, exact: true }).click();
+  await page.getByRole("tab", { name: module, exact: true }).click();
+}
+
 test("browser preview keeps descriptor results in a separate Results page", async ({ page }) => {
   await page.goto("/preview.html");
   await page.getByRole("button", { name: "Results", exact: true }).click();
@@ -17,16 +27,17 @@ test("browser preview keeps descriptor results in a separate Results page", asyn
 test("browser preview exposes the Analysis workflow and run selector", async ({ page }) => {
   await page.goto("/preview.html");
   await expect(page.getByRole("button", { name: "Analysis" })).toBeVisible({ timeout: 30_000 });
-  await page.getByRole("button", { name: "Analysis" }).click();
-  await expect(page.getByRole("combobox", { name: "Analysis descriptor run" })).toBeVisible();
+  await openAnalysis(page);
+  await expect(page.getByRole("tab", { name: "Structure & Environments", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Descriptor Space", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText(/analysis history/i)).toBeVisible();
 });
 
 test("cross-dataset analysis selects compatible runs and a saved dataset view", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis", exact: true }).click();
-  await page.getByRole("tab", { name: "Coverage", exact: true }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Coverage & Novelty", "Data Coverage");
 
   await expect(page.getByText("Cross-dataset analysis", { exact: true })).toBeVisible();
   const rows = page.locator(".analysis-cross-input-row");
@@ -39,7 +50,7 @@ test("cross-dataset analysis selects compatible runs and a saved dataset view", 
   await rows.nth(0).locator(".ant-select").nth(1).click();
   await page.getByText("Training split · 9,984", { exact: true }).last().click();
   await expect(rows.nth(0)).toContainText("Training split · 9,984");
-  await page.getByRole("button", { name: "Run Coverage", exact: true }).click();
+  await page.getByRole("button", { name: /Run Data Coverage/i }).click();
   await expect(page.getByText("DATASET COVERAGE", { exact: true })).toBeVisible({ timeout: 30_000 });
 });
 
@@ -59,10 +70,11 @@ test("dataset split entry exposes deterministic ratios and seed", async ({ page 
 test("browser preview opens the selected analysis method guide", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 720 });
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Feature Variance");
   const controls = page.locator(".analysis-controls");
   const parameterSpace = controls.locator(":scope > .ant-space").first();
-  const runButton = page.getByRole("button", { name: "Run feature variance" });
+  const runButton = page.getByRole("button", { name: /Run Feature Variance/i });
   const guideButton = page.getByRole("button", { name: "Open method guide" });
   const parameterBox = await parameterSpace.boundingBox();
   const runBox = await runButton.boundingBox();
@@ -110,7 +122,7 @@ test("browser preview aligns descriptor names left and array shapes right in the
 
 test("browser preview reloads cached PCA and changes coordinates with preprocessing", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
+  await openAnalysis(page);
   await page.getByRole("button", { name: "Load pca analysis" }).click();
   const plot = page.locator(".analysis-plot-frame .js-plotly-plot");
   await expect(plot).toBeVisible({ timeout: 30_000 });
@@ -145,10 +157,9 @@ test("browser preview reloads cached PCA and changes coordinates with preprocess
 
 test("browser preview preserves trajectory overlay axes", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis", exact: true }).click();
-  await page.locator(".analysis-overview-module-select").click();
-  await page.getByText("Trajectory", { exact: true }).last().click();
-  await page.getByRole("button", { name: "Run trajectory", exact: true }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Evolution & Response", "Descriptor Trajectory");
+  await page.getByRole("button", { name: /Run Descriptor Trajectory/i }).click();
   await expect(page.getByText("DESCRIPTOR TRAJECTORY", { exact: true })).toBeVisible({ timeout: 30_000 });
   const timeline = page.locator(".trajectory-chart-grid .js-plotly-plot").first();
   await expect(timeline).toBeVisible({ timeout: 30_000 });
@@ -188,22 +199,21 @@ test("browser preview preserves trajectory overlay axes", async ({ page }) => {
 
 test("browser preview renders an Overview chart after a module run", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
-  await expect(page.getByRole("button", { name: "Run feature variance" })).toBeVisible();
-  await page.getByRole("button", { name: "Run feature variance" }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Feature Variance");
+  await expect(page.getByRole("button", { name: /Run Feature Variance/i })).toBeVisible();
+  await page.getByRole("button", { name: /Run Feature Variance/i }).click();
   await expect(page.locator(".analysis-overview-chart-frame")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("FEATURE VARIANCE", { exact: true })).toBeVisible();
 });
 
 test("browser preview explains effective dimension metrics and spectrum ranges", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
-  const controls = page.locator(".analysis-controls");
-  await controls.locator(":scope > .ant-space").first().locator(".ant-select").click();
-  await page.getByText("Effective dimension", { exact: true }).last().click();
-  await expect(page.getByRole("button", { name: "Run effective dimension" })).toBeVisible();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Effective Dimension");
+  await expect(page.getByRole("button", { name: /Run Effective Dimension/i })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "PCA preprocessing" })).toBeVisible();
-  await page.getByRole("button", { name: "Run effective dimension" }).click();
+  await page.getByRole("button", { name: /Run Effective Dimension/i }).click();
 
   await expect(page.getByText("EFFECTIVE DIMENSION", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("PR effective dimension", { exact: true })).toBeVisible();
@@ -240,8 +250,9 @@ test("browser preview explains effective dimension metrics and spectrum ranges",
 
 test("browser preview exposes feature variance filters and distribution detail", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
-  await page.getByRole("button", { name: "Run feature variance" }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Feature Variance");
+  await page.getByRole("button", { name: /Run Feature Variance/i }).click();
   await expect(page.locator(".feature-variance-layout")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByRole("combobox", { name: "Variance metric" })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Feature display filter" })).toBeVisible();
@@ -294,22 +305,18 @@ test("browser preview exposes feature variance filters and distribution detail",
 
 test("browser preview places the sensitivity run pair after Module", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Parameter Sensitivity");
 
-  const controls = page.locator(".analysis-controls");
-  await controls.locator(":scope > .ant-space").first().locator(".ant-select").click();
-  await page.getByText("Parameter sensitivity", { exact: true }).last().click();
-
-  const spaces = controls.locator(":scope > .ant-space");
-  await expect(spaces.nth(0)).toContainText("Module");
-  await expect(spaces.nth(1)).toContainText("Reference");
-  await expect(spaces.nth(1)).toContainText("Query");
+  await expect(page.getByRole("tab", { name: "Parameter Sensitivity", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("Reference", { exact: true })).toBeVisible();
+  await expect(page.getByText("Query", { exact: true })).toBeVisible();
 });
 
 test("browser preview renders the dedicated pairwise similarity heatmap", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
-  await page.getByRole("tab", { name: "Similarity" }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Structure & Environments", "Similarity");
   const controls = page.locator(".analysis-controls");
   await controls.getByText("Query neighbors", { exact: true }).click();
   await page.getByText("Pairwise matrix", { exact: true }).last().click();
@@ -320,9 +327,9 @@ test("browser preview renders the dedicated pairwise similarity heatmap", async 
 
 test("atom-level local selection stays highlighted when opened in Explore", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
-  await page.getByRole("tab", { name: "Local" }).click();
-  await page.getByRole("button", { name: "Run Local" }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Structure & Environments", "Local Environment");
+  await page.getByRole("button", { name: /Run Local Environment/i }).click();
   await expect(page.getByText("LOCAL ENVIRONMENT DIVERSITY", { exact: true })).toBeVisible({ timeout: 30_000 });
   await page.locator(".analysis-main .ant-table-tbody").nth(1).locator("tr").first().click();
   await expect(page.locator(".analysis-inspector").getByText("Row", { exact: true })).toBeVisible();
@@ -332,28 +339,207 @@ test("atom-level local selection stays highlighted when opened in Explore", asyn
 
 test("browser preview renders structural perturbation response curves", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
-  const controls = page.locator(".analysis-controls");
-  await controls.locator(":scope > .ant-space").first().locator(".ant-select").click();
-  await page.getByText("Structural perturbation", { exact: true }).last().click();
-  await page.getByRole("button", { name: "Run perturbation sensitivity" }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Evolution & Response", "Structural Perturbation Response");
+  await page.getByRole("button", { name: /Run Structural Perturbation Response/i }).click();
   await expect(page.getByText("STRUCTURAL PERTURBATION SENSITIVITY", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Per-structure perturbation response heatmap")).toBeVisible({ timeout: 30_000 });
 });
 
 test("browser preview exposes the Mantel permutation visualization", async ({ page }) => {
   await page.goto("/preview.html");
-  await page.getByRole("button", { name: "Analysis" }).click();
-  await page.getByRole("tab", { name: "Compare" }).click();
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Descriptor Comparison");
   const controls = page.locator(".analysis-controls");
   const selects = controls.locator(".ant-select");
   await selects.nth(1).click();
   await page.getByText("ACE · run-ace", { exact: true }).last().click();
   await selects.nth(2).click();
   await page.getByText("Mantel permutation test", { exact: true }).last().click();
-  await page.getByRole("button", { name: "Run Compare" }).click();
+  await page.getByRole("button", { name: /Run Descriptor Comparison/i }).click();
   await expect(page.getByText("MANTEL PERMUTATION TEST", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByLabel("Mantel permutation null distribution")).toBeVisible({ timeout: 30_000 });
+});
+
+test("Analysis navigation exposes six groups and all 18 modules in order", async ({ page }) => {
+  await page.setViewportSize({ width: 2880, height: 900 });
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+
+  const groups = [
+    { label: "Structure & Environments", modules: ["Descriptor Space", "Similarity", "Structural Clusters", "Local Environment"] },
+    { label: "Property Information", modules: ["Property Information Analysis"] },
+    { label: "Evolution & Response", modules: ["Descriptor Trajectory", "Structural Perturbation Response"] },
+    { label: "Coverage & Novelty", modules: ["Data Coverage", "Train / Test Overlap", "Dataset Drift", "Outlier Environments"] },
+    { label: "Representation Quality", modules: ["Feature Variance", "Feature Correlation", "Effective Dimension", "Kernel Analysis", "Parameter Sensitivity", "Descriptor Comparison"] },
+    { label: "Dataset Sampling", modules: ["Representative Sampling"] },
+  ];
+
+  const groupTabs = page.locator(".analysis-group-tabs .ant-tabs-tab");
+  await expect(groupTabs).toHaveCount(groups.length);
+  await expect(groupTabs).toHaveText(groups.map((group) => group.label));
+
+  let moduleCount = 0;
+  for (const group of groups) {
+    await page.getByRole("tab", { name: group.label, exact: true }).click();
+    const moduleTabs = page.locator(".analysis-module-tabs .ant-tabs-tab");
+    await expect(moduleTabs).toHaveCount(group.modules.length);
+    await expect(moduleTabs).toHaveText(group.modules);
+    moduleCount += group.modules.length;
+  }
+  expect(moduleCount).toBe(18);
+});
+
+test("narrow Analysis navigation keeps overflow groups keyboard accessible", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+
+  const overflow = page.locator(".analysis-group-tabs .ant-tabs-nav-more");
+  await expect(overflow).toBeVisible();
+  await overflow.focus();
+  await overflow.press("Enter");
+  const menu = page.locator(".ant-tabs-dropdown");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText("Dataset Sampling", { exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+});
+
+test("returning to a group restores its most recently selected module", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+
+  await selectAnalysisModule(page, "Structure & Environments", "Similarity");
+  await selectAnalysisModule(page, "Representation Quality", "Descriptor Comparison");
+  await page.getByRole("tab", { name: "Structure & Environments", exact: true }).click();
+
+  await expect(page.getByRole("tab", { name: "Similarity", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Descriptor Space", exact: true })).not.toHaveAttribute("aria-selected", "true");
+});
+
+test("shared overview modules keep their own group and result identity", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+
+  await selectAnalysisModule(page, "Representation Quality", "Feature Correlation");
+  await selectAnalysisModule(page, "Evolution & Response", "Descriptor Trajectory");
+  await selectAnalysisModule(page, "Representation Quality", "Feature Correlation");
+
+  await expect(page.getByRole("tab", { name: "Representation Quality", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Feature Correlation", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: /Run Feature Correlation/i })).toBeVisible();
+});
+
+test("coverage and overlap history restore their separate modules", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+
+  await selectAnalysisModule(page, "Coverage & Novelty", "Data Coverage");
+  await page.getByRole("button", { name: /Run Data Coverage/i }).click();
+  await expect(page.getByText("DATASET COVERAGE", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  await selectAnalysisModule(page, "Coverage & Novelty", "Train / Test Overlap");
+  await page.getByRole("button", { name: /Run Train \/ Test Overlap/i }).click();
+  await expect(page.getByText("TRAIN / TEST OVERLAP", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  await page.getByRole("button", { name: "Load coverage analysis" }).click();
+  await expect(page.getByRole("tab", { name: "Data Coverage", exact: true })).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
+  await expect(page.getByRole("button", { name: /Run Data Coverage/i })).toBeVisible();
+
+  await page.getByRole("button", { name: "Load overlap analysis" }).click();
+  await expect(page.getByRole("tab", { name: "Train / Test Overlap", exact: true })).toHaveAttribute("aria-selected", "true", { timeout: 10_000 });
+  await expect(page.getByRole("button", { name: /Run Train \/ Test Overlap/i })).toBeVisible();
+});
+
+test("history restores a non-default feature variance threshold", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Feature Variance");
+
+  const thresholdInputs = page.locator(".analysis-controls .ant-input-number-input");
+  await thresholdInputs.nth(0).fill("0.02");
+  await thresholdInputs.nth(1).fill("0.08");
+  await page.getByRole("button", { name: /Run Feature Variance/i }).click();
+  await expect(page.locator(".feature-variance-layout")).toBeVisible({ timeout: 30_000 });
+
+  await thresholdInputs.nth(1).fill("0.01");
+  await page.getByRole("button", { name: "Load feature_variance analysis" }).click();
+  await expect.poll(async () => thresholdInputs.nth(1).inputValue(), { timeout: 10_000 }).toBe("0.080000");
+});
+
+test("history restores the canonical cluster algorithm", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Structure & Environments", "Structural Clusters");
+
+  const algorithm = page.locator(".analysis-controls .ant-select").first();
+  await algorithm.click();
+  await page.getByText("DBSCAN", { exact: true }).last().click();
+  await page.getByRole("button", { name: /Run Structural Clusters/i }).click();
+  await expect(page.getByText("CLUSTER STRUCTURE", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  await algorithm.click();
+  await page.getByText("KMEANS", { exact: true }).last().click();
+  await page.getByRole("button", { name: "Load clusters analysis" }).last().click();
+  await expect.poll(async () => algorithm.locator(".ant-select-selection-item").innerText(), { timeout: 10_000 }).toBe("DBSCAN");
+});
+
+test("background PCA completion records its source module without stealing navigation", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Structure & Environments", "Descriptor Space");
+  await page.getByRole("button", { name: "Run PCA" }).click();
+  await selectAnalysisModule(page, "Representation Quality", "Feature Correlation");
+
+  await expect(page.getByText("PCA running")).toBeVisible();
+  await expect(page.getByText("PCA running")).toBeHidden({ timeout: 15_000 });
+  await expect(page.getByRole("tab", { name: "Representation Quality", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Feature Correlation", exact: true })).toHaveAttribute("aria-selected", "true");
+
+  await selectAnalysisModule(page, "Structure & Environments", "Descriptor Space");
+  await expect(page.locator(".analysis-plot-frame .js-plotly-plot")).toBeVisible({ timeout: 30_000 });
+});
+
+test("slow history loads are discarded when a same-module parameter changes", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __PREVIEW_ANALYSIS_PREVIEW_DELAY__?: number }).__PREVIEW_ANALYSIS_PREVIEW_DELAY__ = 1200;
+  });
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Structure & Environments", "Structural Clusters");
+
+  const algorithm = page.locator(".analysis-controls .ant-select").first();
+  await expect(page.getByRole("button", { name: "Load clusters analysis" })).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Load clusters analysis" }).click();
+  await expect(algorithm.locator(".ant-select-selection-item")).toHaveText("AGGLOMERATIVE");
+
+  await algorithm.click();
+  await page.getByText("KMEANS", { exact: true }).last().click();
+  await expect(algorithm.locator(".ant-select-selection-item")).toHaveText("KMEANS");
+  await expect(page.getByText("CLUSTER STRUCTURE", { exact: true })).toBeHidden({ timeout: 5_000 });
+});
+
+test("sampling keeps save-view and export actions available for selected frames", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Dataset Sampling", "Representative Sampling");
+  await page.getByRole("button", { name: /Run Representative Sampling/i }).click();
+  await expect(page.getByText("REPRESENTATIVE SAMPLING", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  const resultRows = page.locator(".analysis-main .ant-table-tbody tr");
+  await expect(resultRows.first()).toBeVisible({ timeout: 10_000 });
+  await resultRows.first().click();
+  await expect(page.getByText(/1 frames selected/)).toBeVisible();
+  await page.getByRole("button", { name: "Save selection as view", exact: true }).click();
+  const saveDialog = page.getByRole("dialog");
+  await expect(saveDialog).toBeVisible();
+  await saveDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByText("Dataset view saved", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "Choose…", exact: true }).click();
+  await expect(page.getByLabel("Export destination")).toHaveValue(/analysis_subset\.csv/);
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  await expect(page.getByText(/Export written to/)).toBeVisible({ timeout: 15_000 });
 });
 
 test("language switch in Settings applies immediately and persists across reload", async ({ page }) => {

@@ -44,3 +44,7 @@ backend/mdescriptor_studio_backend/datasets/_native/
 .workbuddy/
 .agents/
 /AGENTS.md
+
+# Local analysis report artifact
+/output/pdf/MDescriptor_Studio_描述符分析与物理解释指南.pdf
+/scripts/create_analysis_report_pdf.py
