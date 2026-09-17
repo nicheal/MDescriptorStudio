@@ -12,14 +12,14 @@ import threading
 import time
 
 from . import __version__
-from .analysis import AnalysisEngine, arm_analysis_warmup_gate
+from .analysis import ANALYSIS_REGISTRY, AnalysisEngine, arm_analysis_warmup_gate
 from .config import data_dir
 from .errors import AppError, INVALID_PARAMS, JOB_NOT_FOUND
 from .logging_setup import setup_logging
 from .mdescriptor_adapter import EngineAdapter
 from .protocol import frames
 from .protocol.server import Server
-from .services.analysis_service import ANALYSIS_ALGORITHM_VERSION, ANALYSIS_METHOD_CATALOG, AnalysisService
+from .services.analysis_service import ANALYSIS_ALGORITHM_VERSION, AnalysisService
 from .services.dataset_service import DatasetService
 from .services.descriptor_service import DescriptorService
 from .services.job_service import JobService
@@ -108,10 +108,15 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
         "analysis.fps_quota": analysis.fps_quota,
         "analysis.export": analysis.submit_export,
     }
-    analysis_methods.update({
-        f"analysis.{analysis_type}": getattr(analysis, analysis_type)
-        for analysis_type in ANALYSIS_METHOD_CATALOG
-    })
+    for analysis_type in ANALYSIS_REGISTRY.names():
+        # Registry entries own the RPC vocabulary. An algorithm added to the
+        # registry therefore becomes callable without another main/service edit;
+        # explicitly normalized methods (cluster/outlier/sampling, ...) still win.
+        rpc = getattr(analysis, analysis_type, None)
+        if rpc is None:
+            def rpc(params, _analysis_type=analysis_type):
+                return analysis.submit_generic(_analysis_type, params)
+        analysis_methods[f"analysis.{analysis_type}"] = rpc
 
     return {
         "system.info": system_info,

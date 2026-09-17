@@ -32,17 +32,23 @@ class EngineAdapter:
 
     def __init__(self) -> None:
         self._schema_cache: dict[str, dict] = {}
-        # Deferred-warmup gate: while a warmup runs on the background thread,
-        # build() waits until it finishes so the engine's lazy native imports
-        # are still resolved exactly once and never race a user job. The event
-        # starts set, so direct users (tests, scripts) are unaffected.
-        self._warm_gate = threading.Event()
-        self._warm_gate.set()
+        # Deferred-warmup coordination: warmup() and build() must never touch
+        # the engine's lazy native imports concurrently. The condition
+        # serializes create_descriptor calls and lets build() wait for an
+        # armed/background warmup without a check-then-set race on _warming.
+        self._warm_condition = threading.Condition()
         self._warming = False
+        self._warmup_pending = False
+        self._warmup_owner: int | None = None
 
     def arm_deferred_warmup(self) -> None:
-        """Switch build() into wait-for-warmup mode before the warmup thread starts."""
-        self._warm_gate.clear()
+        """Make later build() calls wait for the background warmup.
+
+        Called before the warmup thread starts; a build arriving between this
+        call and warmup() blocks until the warmup has completed.
+        """
+        with self._warm_condition:
+            self._warmup_pending = True
 
     # -- info / registry -------------------------------------------------
     def runtime_info(self) -> dict:
@@ -63,28 +69,31 @@ class EngineAdapter:
 
     # -- construction / compute ------------------------------------------
     def build(self, name: str, parameters: dict, device: str = "cpu", num_threads: int | None = None):
-        # create_descriptor lazily imports the engine's native extensions;
-        # during deferred background warmup this must not race it. The warmup
-        # thread itself bypasses the gate (it is the producer).
-        if not self._warming:
-            self._warm_gate.wait()
-        try:
-            params = dict(parameters)
-            if device != "cpu" or num_threads is not None:
-                # Reserved option key: the engine restores it into
-                # ExecutionOptions (create_descriptor -> _restore_parameters);
-                # schema-declared devices were validated by the caller.
-                params["execution"] = {"device": device}
-                if num_threads is not None:
-                    params["execution"]["num_threads"] = num_threads
-            cfg = md.DescriptorConfiguration(
-                schema_version=md.CONFIGURATION_SCHEMA_VERSION,
-                descriptor=name,
-                parameters=params,
-            )
-            return md.create_descriptor(cfg)
-        except md.MDescriptorError as exc:
-            raise self._convert(exc) from exc
+        # create_descriptor lazily imports the engine's native extensions.
+        # The condition lock is held through the call so a concurrent warmup
+        # either finishes first or waits for this build: native imports stay
+        # strictly serialized and the warmup producer never deadlocks itself.
+        with self._warm_condition:
+            if self._warmup_owner != threading.get_ident():
+                while self._warming or self._warmup_pending:
+                    self._warm_condition.wait()
+            try:
+                params = dict(parameters)
+                if device != "cpu" or num_threads is not None:
+                    # Reserved option key: the engine restores it into
+                    # ExecutionOptions (create_descriptor -> _restore_parameters);
+                    # schema-declared devices were validated by the caller.
+                    params["execution"] = {"device": device}
+                    if num_threads is not None:
+                        params["execution"]["num_threads"] = num_threads
+                cfg = md.DescriptorConfiguration(
+                    schema_version=md.CONFIGURATION_SCHEMA_VERSION,
+                    descriptor=name,
+                    parameters=params,
+                )
+                return md.create_descriptor(cfg)
+            except md.MDescriptorError as exc:
+                raise self._convert(exc) from exc
 
     def make_control(self) -> md.ComputeControl:
         return md.ComputeControl()
@@ -150,12 +159,19 @@ class EngineAdapter:
         now emitted before warmup, this runs on a background thread and
         build() gates on completion so imports stay single-threaded.
         """
-        self._warming = True
+        with self._warm_condition:
+            while self._warming:
+                self._warm_condition.wait()
+            self._warming = True
+            self._warmup_pending = False
+            self._warmup_owner = threading.get_ident()
         try:
             self._warmup_locked()
         finally:
-            self._warming = False
-            self._warm_gate.set()
+            with self._warm_condition:
+                self._warming = False
+                self._warmup_owner = None
+                self._warm_condition.notify_all()
 
     def _warmup_locked(self) -> None:
         preload_native = getattr(md, "preload_native", None)

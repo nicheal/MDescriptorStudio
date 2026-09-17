@@ -1,7 +1,7 @@
 // Shared Plotly/table primitives for the Analysis result views. Kept separate
 // from the individual module views so a module can live in its own file
 // without importing the component that renders it (no import cycle).
-import Plot from "../plotlyBundle";
+import Plot from "../viz/ScientificPlot";
 import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 import { Empty, Typography } from "antd";
 import type { CSSProperties, ReactNode } from "react";

@@ -6,7 +6,7 @@
  * Explore remains 3Dmol.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import Plot from "../plotlyBundle";
+import Plot from "../viz/ScientificPlot";
 import type { Data, PlotDatum, PlotSelectionEvent } from "plotly.js";
 import {
   App as AntApp,

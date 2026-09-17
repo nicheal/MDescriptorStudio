@@ -957,3 +957,20 @@ def test_coverage_target_run_reports_stop_reason(tmp_path: Path) -> None:
     curve = service.chunk({"analysis_id": submitted["analysis_id"], "array": "coverage_r2_curve", "limit": 20})
     assert curve["shape"][0] == preview["selected_count"]
     db.close()
+
+def test_failed_settlement_cleans_committed_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failure after commit must not leave an orphaned partial run."""
+    db, _jobs, service = _service(tmp_path)
+
+    def fail_settlement(*_args, **_kwargs):
+        raise AppError("JOB_CANCELLED", "settlement interrupted for test")
+
+    monkeypatch.setattr(service, "_complete_analysis_run", fail_settlement)
+    with pytest.raises(AppError):
+        service.pca({"run_id": "run_1", "mode": "structure", "preprocess": "center"})
+
+    analysis_root = tmp_path / "analysis"
+    assert analysis_root.is_dir()
+    assert not list(analysis_root.glob("ana_*"))
+    assert not list(analysis_root.glob(".ana_*.tmp-*"))
+    db.close()

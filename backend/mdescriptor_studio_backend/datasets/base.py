@@ -53,6 +53,18 @@ class DatasetAdapter(ABC):
         for i in range(len(self)):
             yield self.get_frame(i)
 
+    # -- reader interface spelling -------------------------------------
+    # The factory/plugin vocabulary uses metadata/iterate_frames/read; the
+    # historical scan/get_frame/iter_frames names remain the implementation.
+    def metadata(self) -> ScanMeta:
+        return self.scan()
+
+    def iterate_frames(self):
+        return self.iter_frames()
+
+    def read(self) -> list[DatasetFrame]:
+        return list(self.iter_frames())
+
 
 def detect_format(path: Path) -> str:
     if path.is_dir():
@@ -71,16 +83,14 @@ def detect_format(path: Path) -> str:
 
 
 def create_adapter(path: Path, fmt: str | None = None) -> DatasetAdapter:
-    from .deepmd import DeepMDAdapter
-    from .extxyz import ExtXYZAdapter
+    """Construct a reader through the format registry.
 
-    path = Path(path)
-    fmt = fmt or detect_format(path)
-    if fmt == "deepmd":
-        return DeepMDAdapter(path)
-    if fmt == "extxyz":
-        return ExtXYZAdapter(path)
-    raise AppError(UNSUPPORTED_FORMAT, f"unknown format {fmt!r}")
+    Imported lazily so ``datasets.readers`` can depend on the frame/base types
+    in this module without a circular import at package import time.
+    """
+    from .readers import create_reader
+
+    return create_reader(path, fmt)
 
 
 def pbc_summary(pbc_tuples: set[tuple[bool, bool, bool]]) -> dict:

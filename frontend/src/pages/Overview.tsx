@@ -4,7 +4,7 @@
 // size. Quick Actions / Recent Jobs live in the persistent right rail (RightRail.tsx).
 import { useEffect, useState } from "react";
 import { Segmented, Typography } from "antd";
-import ReactECharts from "echarts-for-react";
+import UIChart from "../viz/UIChart";
 import Histogram from "../components/Histogram";
 import { createCartesianDataZoom } from "../components/chartInteraction";
 import { ipc } from "../ipc/client";
@@ -370,7 +370,7 @@ function CompositionDonut({ stats, mode }: { stats: Stats | null; mode: DistMode
   };
   return (
     <div style={{ height: "100%", minHeight: 0, display: "flex", alignItems: "center", gap: 8 }}>
-      <ReactECharts option={option} style={{ flex: 1, height: "100%", minWidth: 0 }} notMerge />
+      <UIChart option={option} style={{ flex: 1, height: "100%", minWidth: 0 }} notMerge />
       <div style={{ flex: "0 0 132px", alignSelf: "stretch", overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column" }}>
         <div style={{ margin: "auto 0", display: "flex", flexDirection: "column", gap: 5 }}>
         {mode === "formulas" && others > 0 && (
@@ -480,7 +480,7 @@ function AtomCountRow({ symbol, hist }: { symbol: string; hist: Hist }) {
         <span style={{ color: "#8A8A8A", fontSize: 11 }}>{t("atoms per structure")}</span>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
-        <ReactECharts option={option} style={{ height: "100%", width: "100%", position: "relative" }} notMerge />
+        <UIChart option={option} style={{ height: "100%", width: "100%", position: "relative" }} notMerge />
       </div>
     </div>
   );

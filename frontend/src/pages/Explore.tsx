@@ -18,6 +18,7 @@ import { forceArrowGeometry, frameMaxForce } from "../util/forces";
 import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, virialSummary } from "../util/structure";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import { parseViewerAtoms } from "../util/viewerAtoms";
+import { STRUCTURE_VIEWER_BACKGROUND, load3Dmol } from "../viz/StructureViewer";
 import { createExploreFrameLoader, type ExploreFrameLoader } from "./exploreFrameLoader";
 import type { ClickedAtom, ViewerAtom, ViewerModel } from "../util/viewerAtoms";
 import type { DatasetHealth, DatasetView, FramePayload, HealthFindings } from "../types/protocol";
@@ -400,13 +401,10 @@ export default function Explore() {
     let cancelled = false;
     (async () => {
       try {
-        const mod = await import("3dmol");
-        const $3Dmol = ((mod as { default?: unknown }).default ?? mod) as {
-          createViewer: (el: HTMLElement, opts: object) => never;
-        };
+        const $3Dmol = await load3Dmol();
         if (cancelled || !element) return;
         viewerRef.current = $3Dmol.createViewer(element, {
-          backgroundColor: "white",
+          backgroundColor: STRUCTURE_VIEWER_BACKGROUND,
           // Orthographic projection so crystal structures keep parallel cell
           // edges (no perspective foreshortening) while rotating.
           orthographic: true,

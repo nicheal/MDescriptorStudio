@@ -1,7 +1,7 @@
 // Shared ECharts histogram renderer (plot style per design doc §97–99).
 // Height follows its flex container so Overview can fit the viewport exactly.
 import { useMemo } from "react";
-import ReactECharts from "echarts-for-react";
+import UIChart from "../viz/UIChart";
 import type { Hist } from "../types/protocol";
 import { createCartesianDataZoom } from "./chartInteraction";
 import { useT } from "../i18n";
@@ -91,7 +91,7 @@ export default function Histogram({
       <div style={{ marginLeft: GRID_LEFT, marginRight: GRID_RIGHT, display: "flex", justifyContent: "center", alignItems: "center", fontSize: 12.5, fontWeight: 600, color: "#242424", padding: "0 2px 2px", textAlign: "center" }}>
         {unit ? `${title} (${unit})` : title}
       </div>
-      <ReactECharts
+      <UIChart
         option={option}
         style={{ flex: 1, minHeight: 0, width: "100%" }}
         notMerge

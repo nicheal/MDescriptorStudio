@@ -1,0 +1,122 @@
+"""Shared analysis-service declarations and small numeric helpers.
+
+Keeping these in a leaf module avoids import cycles between the service
+facade, the data loader, preview/export writers and the job runner.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import numpy as np
+
+from ..errors import ANALYSIS_INPUT_INVALID, AppError
+
+_NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
+_ANALYSIS_SCHEMA_VERSION = 1
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-4"
+_MAX_PREVIEW_POINTS = 20_000
+
+COMPOSITE_BLOCKS = (
+    "descriptor",
+    "descriptor_summary",
+    "lattice",
+    "composition",
+    "energy",
+    "force",
+)
+PHYSICAL_BLOCKS = ("lattice", "composition", "energy", "force")
+
+# Per-sample array keys the preview builder maps onto points/rows.
+_PREVIEW_ARRAY_KEYS = (
+    "labels", "scores", "distances", "cluster_labels", "elements",
+    "coordination", "novelty", "uncertainty", "diversity",
+)
+
+def _block_names(params: dict) -> list[str]:
+    """Validated composite block list from the request (empty = plain descriptor)."""
+    raw = params.get("blocks")
+    if raw in (None, "", []):
+        return []
+    if not isinstance(raw, list):
+        raise AppError(ANALYSIS_INPUT_INVALID, "blocks must be a list of block names")
+    names: list[str] = []
+    for value in raw:
+        name = str(value)
+        if name not in COMPOSITE_BLOCKS:
+            raise AppError(ANALYSIS_INPUT_INVALID, f"unknown sampling block {name!r}", {"blocks": list(COMPOSITE_BLOCKS)})
+        if name not in names:
+            names.append(name)
+    return names
+
+def _cell_parameters(cell: np.ndarray) -> np.ndarray:
+    """a, b, c, α, β, γ of a 3×3 lattice matrix (angles in degrees)."""
+    vectors = np.asarray(cell, dtype=np.float64)
+    lengths = np.linalg.norm(vectors, axis=1)
+    angles: list[float] = []
+    for i, j in ((1, 2), (0, 2), (0, 1)):
+        denominator = lengths[i] * lengths[j]
+        cosine = float(vectors[i] @ vectors[j]) / denominator if denominator > 0 else 1.0
+        angles.append(float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))))
+    return np.asarray([*lengths.tolist(), *angles], dtype=np.float64)
+
+def _descriptor_summary(values: np.ndarray) -> np.ndarray:
+    """Per-structure descriptor mean, std, and tail magnitudes.
+
+    A compact companion block: it lets a composite space react to where a
+    structure sits in descriptor-summary space even when its raw vector is
+    dominated by a few large components.
+    """
+    x = np.asarray(values, dtype=np.float64)
+    magnitude = np.linalg.norm(x, axis=1)
+    return np.column_stack([x.mean(axis=1), x.std(axis=1), magnitude])
+
+def _composition_matrix(atom_numbers: list[list[int]], element_list: list[str]) -> np.ndarray:
+    """Element fractions per structure, laid out along a shared element list."""
+    from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
+
+    index = {symbol: position for position, symbol in enumerate(element_list)}
+    fractions = np.zeros((len(atom_numbers), len(element_list)), dtype=np.float64)
+    for row, numbers in enumerate(atom_numbers):
+        total = max(len(numbers), 1)
+        for z in numbers:
+            symbol = _Z_TO_SYMBOL.get(int(z), f"Z{int(z)}")
+            position = index.get(symbol)
+            if position is not None:
+                fractions[row, position] += 1.0
+        fractions[row] /= total
+    return fractions
+
+def _require_finite(values: np.ndarray, name: str, description: str) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    if not bool(np.isfinite(array).all()):
+        missing = int((~np.isfinite(array)).sum())
+        raise AppError(
+            ANALYSIS_INPUT_INVALID,
+            f"the {name} block is incomplete: {missing} sample(s) lack {description}",
+            {"block": name, "missing": missing},
+        )
+    return array
+
+def _pool_rows(values: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+    """Mean-pool atom/pair rows per structure in one vectorized pass.
+
+    Equivalent to the historical per-structure Python loop (which held the GIL
+    for seconds on large atom-level runs), but each pool step also runs with
+    the GIL released. Empty structures pool to zero; np.add.reduceat needs two
+    quirks handled explicitly: a start index equal to len(values) (trailing
+    empty structures) is out of bounds, and repeated indices (empty groups)
+    return a single element instead of zero — both are masked below.
+    """
+    values = np.asarray(values, dtype=np.float64)
+    counts = np.diff(offsets).astype(np.int64)
+    pooled = np.zeros((counts.size, values.shape[1]), dtype=np.float64)
+    starts = offsets[:-1]
+    # offsets are monotonic and end at len(values), so starts >= len(values)
+    # can only be a run of trailing empty structures — trim them.
+    k = int(np.searchsorted(starts, values.shape[0], side="left"))
+    if k > 0:
+        sums = np.add.reduceat(values, starts[:k], axis=0)
+        pooled[:k] = sums / np.maximum(counts[:k], 1)[:, None]
+    pooled[counts == 0] = 0.0
+    return pooled

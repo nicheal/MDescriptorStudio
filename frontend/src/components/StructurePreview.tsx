@@ -3,6 +3,7 @@ import { elementColor } from "../util/elements";
 import { parseViewerAtoms } from "../util/viewerAtoms";
 import type { ClickedAtom, ViewerAtom, ViewerModel } from "../util/viewerAtoms";
 import { useT } from "../i18n";
+import { STRUCTURE_VIEWER_BACKGROUND, load3Dmol } from "../viz/StructureViewer";
 import type { FramePayload } from "../types/protocol";
 
 type Viewer = {
@@ -79,12 +80,9 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
     let cancelled = false;
     void (async () => {
       try {
-        const mod = await import("3dmol");
-        const $3Dmol = ((mod as { default?: unknown }).default ?? mod) as {
-          createViewer: (element: HTMLElement, options: object) => Viewer;
-        };
+        const $3Dmol = await load3Dmol();
         if (cancelled || !element) return;
-        viewerRef.current = $3Dmol.createViewer(element, { backgroundColor: "white" });
+        viewerRef.current = $3Dmol.createViewer(element, { backgroundColor: STRUCTURE_VIEWER_BACKGROUND }) as Viewer;
         setViewerReady(true);
       } catch (error) {
         console.error("structure preview init failed", error);
