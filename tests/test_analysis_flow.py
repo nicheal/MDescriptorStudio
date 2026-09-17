@@ -46,6 +46,13 @@ def test_pca_and_heatmap(tmp_path: Path) -> None:
         assert payload["result"]["explained_variance"][0] > 0
         assert pts[0]["energy_per_atom"] is not None  # color-by data attached
 
+        # New PCA rows use the generic artifact/preview contract. The legacy
+        # reader above is compatibility-only and must not be the compute path.
+        generic_preview = bp.request(21, "analysis.preview", {"analysis_id": analysis_id, "limit": 20})["result"]
+        assert generic_preview["kind"] == "projection"
+        assert len(generic_preview["points"]) == 8
+        assert generic_preview["points"][0]["x"] is not None
+
         # repeated request reuses the persisted PCA artifact instead of
         # creating another analysis job
         cached = bp.request(18, "analysis.pca", {"run_id": run_id})["result"]

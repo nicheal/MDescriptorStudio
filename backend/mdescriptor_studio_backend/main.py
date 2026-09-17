@@ -19,7 +19,7 @@ from .logging_setup import setup_logging
 from .mdescriptor_adapter import EngineAdapter
 from .protocol import frames
 from .protocol.server import Server
-from .services.analysis_service import ANALYSIS_ALGORITHM_VERSION, AnalysisService
+from .services.analysis_service import ANALYSIS_ALGORITHM_VERSION, ANALYSIS_METHOD_CATALOG, AnalysisService
 from .services.dataset_service import DatasetService
 from .services.descriptor_service import DescriptorService
 from .services.job_service import JobService
@@ -99,6 +99,20 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
             raise AppError(JOB_NOT_FOUND, f"job {params.get('id')} does not exist")
         return row
 
+    analysis_methods = {
+        "analysis.list": analysis.list,
+        "analysis.get": analysis.get,
+        "analysis.delete": analysis.delete,
+        "analysis.preview": analysis.preview,
+        "analysis.chunk": analysis.chunk,
+        "analysis.fps_quota": analysis.fps_quota,
+        "analysis.export": analysis.submit_export,
+    }
+    analysis_methods.update({
+        f"analysis.{analysis_type}": getattr(analysis, analysis_type)
+        for analysis_type in ANALYSIS_METHOD_CATALOG
+    })
+
     return {
         "system.info": system_info,
         "settings.get": settings_get,
@@ -129,38 +143,7 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
         "result.remove": results.remove,
         "result.get_pca": results.get_pca,
         "result.heatmap": results.heatmap,
-        "analysis.pca": analysis.pca,
-        "analysis.list": analysis.list,
-        "analysis.get": analysis.get,
-        "analysis.delete": analysis.delete,
-        "analysis.preview": analysis.preview,
-        "analysis.chunk": analysis.chunk,
-        "analysis.umap": analysis.umap,
-        "analysis.tsne": analysis.tsne,
-        "analysis.neighbors": analysis.neighbors,
-        "analysis.similarity": analysis.similarity,
-        "analysis.pairwise": analysis.pairwise,
-        "analysis.cluster": analysis.cluster,
-        "analysis.outlier": analysis.outlier,
-        "analysis.fps": analysis.fps,
-        "analysis.sampling": analysis.sampling,
-        "analysis.fps_quota": analysis.fps_quota,
-        "analysis.coverage": analysis.coverage,
-        "analysis.overlap": analysis.overlap,
-        "analysis.acquisition": analysis.acquisition,
-        "analysis.compare": analysis.compare,
-        "analysis.mantel": analysis.mantel,
-        "analysis.feature_variance": analysis.feature_variance,
-        "analysis.feature_correlation": analysis.feature_correlation,
-        "analysis.property_correlation": analysis.property_correlation,
-        "analysis.local_diversity": analysis.local_diversity,
-        "analysis.kernel": analysis.kernel,
-        "analysis.effective_dimension": analysis.effective_dimension,
-        "analysis.trajectory": analysis.trajectory,
-        "analysis.drift": analysis.drift,
-        "analysis.sensitivity": analysis.sensitivity,
-        "analysis.perturbation_sensitivity": analysis.perturbation_sensitivity,
-        "analysis.export": analysis.submit_export,
+        **analysis_methods,
     }
 
 

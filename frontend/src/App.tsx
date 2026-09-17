@@ -15,7 +15,7 @@ import TitleBar from "./components/layout/TitleBar";
 import HealthFindingsDrawer from "./components/HealthFindingsDrawer";
 import { ipc } from "./ipc/client";
 import { useWorkspace, hydrateActiveRun } from "./stores/workspace";
-import { hydrateAnalysisUi } from "./stores/analysisUi";
+import { hydrateAnalysisUi } from "./features/analysis";
 import { wireJobEvents } from "./stores/jobs";
 import { getT, initLanguage, useT } from "./i18n";
 import type { DatasetMeta } from "./types/protocol";

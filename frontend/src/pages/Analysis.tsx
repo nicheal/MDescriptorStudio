@@ -47,6 +47,9 @@ import {
   analysisNavModuleForAnalysisType,
   analysisNavModuleForKey,
   analysisNavModuleForView,
+  ARTIFACT_ARRAYS,
+  OVERVIEW_KIND_LABELS,
+  SAMPLING_LABELS,
   slotForParams,
   slotKey,
   useAnalysisUi,
@@ -55,8 +58,8 @@ import {
   type EffectiveDimensionPreprocess,
   type ProjectionName,
   type TabKey,
-} from "../stores/analysisUi";
-import { useT, type Pair } from "../i18n";
+} from "../features/analysis";
+import { useT } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import SaveViewModal from "../components/SaveViewModal";
 import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
@@ -64,6 +67,7 @@ import AnalysisResultVisualization, { type AnalysisArrays } from "./analysisVisu
 import { getAnalysisMethodGuide, type AnalysisMethodGuide } from "./analysisMethodGuides";
 import { ChartCaption, HIGH_CONTRAST_COLORSCALE, NoData as OverviewNoData, OverviewPlot, formatCount, num as finiteNumber, nums as numericArray, overviewLayout, plotData } from "./analysisChartKit";
 import { FeatureVarianceChart } from "./featureVariance";
+import { analysisCache, type CachedAnalysis } from "./analysisCache";
 import type {
   AnalysisJobResponse,
   AnalysisChunk,
@@ -72,7 +76,6 @@ import type {
   DatasetMeta,
   DatasetView,
   FramePayload,
-  PcaAnalysisResponse,
   PcaPayload,
   RunRow,
 } from "../types/protocol";
@@ -82,18 +85,9 @@ type CompareMode = "geometry" | "mantel";
 type Point = AnalysisPoint;
 type NumericArrays = AnalysisArrays;
 
-type CachedAnalysis = {
-  preview: AnalysisPreview | null;
-  points: Point[];
-  selectedIndices: number[];
-  arrays: NumericArrays;
-};
-
 // Module-level so computed charts survive leaving the Analysis page. After an
-// app restart the backend re-serves the artifacts (analysis.preview /
-// result.get_pca), so nothing is recomputed either way.
-const analysisCache = new Map<string, CachedAnalysis>();
-
+// app restart the backend re-serves generic artifacts through analysis.preview;
+// result.get_pca is only used while opening legacy PCA rows.
 type ProjectionOverrides = {
   mode?: PcaMode;
   preprocess?: string;
@@ -208,44 +202,6 @@ type CacheOption = { value: string; label: ReactNode };
 function withCacheMarks(isCached: (value: string) => boolean, options: CacheOption[]): CacheOption[] {
   return options.map((option) => (isCached(option.value) ? { ...option, label: <><CacheDot />{option.label}</> } : option));
 }
-
-const OVERVIEW_KIND_LABELS: Record<string, Pair> = {
-  feature_variance: { en: "FEATURE VARIANCE", zh: "特征方差" },
-  feature_correlation: { en: "FEATURE CORRELATION", zh: "特征相关性" },
-  effective_dimension: { en: "EFFECTIVE DIMENSION", zh: "有效维度" },
-  trajectory: { en: "TRAJECTORY", zh: "轨迹" },
-  drift: { en: "DATASET DRIFT", zh: "数据集漂移" },
-  sensitivity: { en: "PARAMETER SENSITIVITY", zh: "参数敏感性" },
-  perturbation_sensitivity: { en: "STRUCTURAL PERTURBATION SENSITIVITY", zh: "结构扰动敏感性" },
-};
-
-// Sampling method option labels (lowercase, generated the same way as before).
-const SAMPLING_LABELS: Record<string, Pair> = {
-  fps: { en: "fps", zh: "FPS 最远点采样" },
-  novelty_fps: { en: "novelty fps", zh: "新颖性 FPS 采样" },
-  uncertainty_diversity: { en: "uncertainty + diversity", zh: "不确定性 + 多样性" },
-  random: { en: "random", zh: "随机采样" },
-  stratified: { en: "stratified", zh: "分层采样" },
-  cluster_representative: { en: "cluster representative", zh: "簇代表采样" },
-  per_element: { en: "per element", zh: "按元素采样" },
-};
-
-const ARTIFACT_ARRAYS: Record<string, string[]> = {
-  pairwise_similarity: ["similarity_matrix", "distance_matrix", "sample_indices"],
-  compare: ["left_coords", "right_coords", "left_pair_distances", "right_pair_distances", "neighbor_overlap", "sample_indices"],
-  mantel: ["left_pair_distances", "right_pair_distances", "null_distribution", "sample_indices"],
-  feature_correlation: ["correlation_matrix", "correlation_feature_indices"],
-  effective_dimension: ["explained_variance"],
-  property_correlation: ["sample_indices", "sample_frames", "sample_rows", "targets", "predictions", "residuals", "absolute_errors", "feature_indices", "pearson_correlations", "spearman_correlations", "mutual_information", "oof_distances", "reliability_bin_center", "reliability_bin_median", "reliability_bin_p90", "reliability_bin_p95"],
-  coverage: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
-  overlap: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
-  drift: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
-  trajectory: ["time", "frames", "sample_indices", "step_distance", "reference_distance", "cumulative_distance", "coords", "pc_explained_variance", "event_indices"],
-  perturbation_sensitivity: ["amplitudes", "mean_response", "median_response", "p95_response", "max_response", "response_matrix", "sample_indices"],
-  local_diversity: ["coords", "sample_indices", "labels", "scores", "cluster_labels", "elements", "coordination", "neighbor_offsets", "neighbor_indices", "neighbor_distances"],
-  kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
-  sampling: ["coverage_radius_curve", "coverage_mean_curve"],
-};
 
 function pcaPayloadPoints(payload: PcaPayload): Point[] {
   return payload.points.map((point) => ({
@@ -854,7 +810,7 @@ export default function Analysis() {
       setInspectedPoint(null);
       useWorkspace.getState().setSelectedSample(null);
       try {
-        const response = await ipc.request<PcaAnalysisResponse>("analysis.pca", { run_id: requestRunId, mode: activeMode, seed: 42, preprocess: activePreprocess, ...(viewId ? { view_id: viewId } : {}) });
+        const response = await ipc.request<AnalysisJobResponse>("analysis.pca", { run_id: requestRunId, mode: activeMode, seed: 42, preprocess: activePreprocess, ...(viewId ? { view_id: viewId } : {}) });
         let id = response.analysis_id;
         if (response.job_id) {
           const watched = await watchAnalysisJob(response.job_id, "analysis.pca", "PCA", isCurrent);
@@ -871,7 +827,7 @@ export default function Analysis() {
           message.success(t("PCA loaded from cache"));
           return;
         }
-        const fetched = await fetchAnalysisPoints(id, "pca");
+        const fetched = await fetchAnalysisPoints(id, "preview");
         if (!isCurrent()) return;
         commitAnalysis(id, fetched);
         setLastJobProgress(1);
@@ -1252,7 +1208,8 @@ export default function Analysis() {
         return;
       }
 
-      const fetched = await fetchAnalysisPoints(row.id, analysisType === "pca" ? "pca" : "preview");
+      const legacyPca = analysisType === "pca" && !row.artifact_manifest?.files;
+      const fetched = await fetchAnalysisPoints(row.id, legacyPca ? "pca" : "preview");
       if (!isCurrent()) return;
       commitAnalysis(row.id, fetched);
       useAnalysisUi.getState().rememberResult({ analysisId: row.id, ...loadedContext });

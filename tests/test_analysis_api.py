@@ -392,7 +392,7 @@ def test_coverage_preview_and_count_follow_query_samples(tmp_path: Path) -> None
     db.close()
 
 
-def test_legacy_pca_cache_includes_preprocessing_mode(tmp_path: Path) -> None:
+def test_generic_pca_cache_includes_preprocessing_mode(tmp_path: Path) -> None:
     db, jobs, service = _service(tmp_path)
     centered = service.pca({"run_id": "run_1", "preprocess": "center"})
     raw = service.pca({"run_id": "run_1", "preprocess": "raw"})
@@ -407,10 +407,12 @@ def test_legacy_pca_cache_includes_preprocessing_mode(tmp_path: Path) -> None:
     db.close()
 
 
-def test_legacy_pca_pads_the_second_coordinate_for_one_feature(tmp_path: Path) -> None:
+def test_generic_pca_pads_the_second_coordinate_for_one_feature(tmp_path: Path) -> None:
     db, _jobs, service = _service(tmp_path)
     values = np.arange(4, dtype=np.float64).reshape(4, 1)
-    coords, explained = service._pca(values, "center")
+    result = AnalysisEngine.pca(SampleMatrix(values, np.arange(4), sample_ids=[f"frame:{i}" for i in range(4)]), {"preprocess": "center"})
+    coords = result["arrays"]["coords"]
+    explained = result["arrays"]["explained_variance"]
     assert coords.shape == (4, 2)
     assert explained.shape == (1,)
     assert np.allclose(coords[:, 1], 0.0)
@@ -464,12 +466,8 @@ def test_frame_scoped_atom_identity_uses_the_actual_frame_index(tmp_path: Path) 
     assert samples.row.tolist() == [0, 1]
     assert samples.sample_ids == ["frame:7:row:0", "frame:7:row:1"]
 
-    _coords, _explained, frames, atoms = service._pca_points(values, row, "atom")
-    assert frames.tolist() == [7, 7]
-    assert atoms.tolist() == [0, 1]
-    _coords, _explained, frames, atoms = service._pca_points(values, row, "structure")
-    assert frames.tolist() == [7]
-    assert atoms is None
+    structure_samples = service._load_samples(row, {"mode": "structure"}, "pca")
+    assert structure_samples.frame.tolist() == [7]
     heatmap = service.results.heatmap({"run_id": "run_frame", "frame_index": 7})
     assert heatmap["values"] == values.tolist()
     db.close()

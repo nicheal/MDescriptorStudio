@@ -12,7 +12,7 @@ vi.mock("../ipc/client", () => ({
 
 import {
   DEFAULT_ANALYSIS_VIEW,
-  MAX_SLOTS,
+  MAX_PERSISTED_SLOT_CHARS,
   ANALYSIS_NAV_GROUPS,
   analysisNavModuleForAnalysisType,
   analysisNavModuleForView,
@@ -22,6 +22,7 @@ import {
   latestSlotForModule,
   parseAnalysisSlots,
   parseAnalysisView,
+  serializeAnalysisSlots,
   slotForParams,
   slotKey,
   useAnalysisUi,
@@ -174,13 +175,17 @@ describe("parseAnalysisSlots", () => {
     expect(Object.keys(slots ?? {}).sort()).toEqual([slotKey(slotA), slotKey(slotB)].sort());
   });
 
-  it("returns null for junk input and enforces the cap", () => {
+  it("returns null for junk input and enforces the byte budget", () => {
     expect(parseAnalysisSlots("junk")).toBeNull();
     expect(parseAnalysisSlots([])).toBeNull();
     const many = Object.fromEntries(
-      Array.from({ length: MAX_SLOTS + 5 }, (_, i) => [`${i}`, { ...slotA, inputKey: `run-${i}`, parameterKey: `k${i}`, updatedAt: i }]),
+      Array.from({ length: 40 }, (_, i) => [`${i}`, { ...slotA, inputKey: `run-${i}-${"x".repeat(40)}`, parameterKey: `k${i}-${"y".repeat(40)}`, updatedAt: i, seq: i }]),
     );
-    expect(Object.keys(parseAnalysisSlots(JSON.stringify(many)) ?? {}).length).toBe(MAX_SLOTS);
+    const serialized = serializeAnalysisSlots(many);
+    expect(serialized.length).toBeLessThanOrEqual(MAX_PERSISTED_SLOT_CHARS);
+    const parsed = parseAnalysisSlots(serialized);
+    expect(parsed && Object.keys(parsed).length).toBeGreaterThan(0);
+    expect(Object.values(parsed ?? {}).some((slot) => slot.inputKey.includes("run-39"))).toBe(true);
   });
 });
 
@@ -253,19 +258,19 @@ describe("useAnalysisUi", () => {
     expect(useAnalysisUi.getState().view).toMatchObject({ nearZeroThreshold: 0.4, lowVariationThreshold: 0.4 });
   });
 
-  it("rememberResult keys by module + input + parameters and prunes to the cap", () => {
+  it("rememberResult keys by module + input + parameters and prunes to the byte budget", () => {
     const entry = { analysisId: "ana-a", moduleKey: "similarity" as const, inputKey: "run-1|full", parameterKey: "k" };
     useAnalysisUi.getState().rememberResult(entry);
     expect(useAnalysisUi.getState().slots["similarity|run-1|full|k"]).toMatchObject({ ...entry, updatedAt: expect.any(Number) });
-    for (let i = 0; i < MAX_SLOTS + 2; i += 1) {
-      useAnalysisUi.getState().rememberResult({ ...entry, analysisId: `ana-${i}`, parameterKey: `k${i}` });
+    for (let i = 0; i < 40; i += 1) {
+      useAnalysisUi.getState().rememberResult({ ...entry, analysisId: `ana-${i}`, inputKey: `run-${i}-${"x".repeat(40)}`, parameterKey: `k${i}-${"y".repeat(40)}` });
     }
     const slots = useAnalysisUi.getState().slots;
-    expect(Object.keys(slots).length).toBe(MAX_SLOTS);
+    expect(Object.keys(slots).length).toBeLessThan(40);
     expect(slots["similarity|run-1|full|k"]).toBeUndefined();
     expect(requestMock).toHaveBeenLastCalledWith("settings.set", {
       key: "workspace.analysisSlots",
-      value: expect.any(String),
+      value: expect.stringMatching(new RegExp(`^.{0,${MAX_PERSISTED_SLOT_CHARS}}$`)),
     });
   });
 

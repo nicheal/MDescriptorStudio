@@ -1,8 +1,7 @@
-"""AnalysisService: PCA on stored descriptor results (design doc §31).
+"""AnalysisService: generic analysis jobs on stored descriptor results.
 
-PCA via numpy SVD (no sklearn dependency); atom/pair-level results are mean
-pooled per structure so every point maps to exactly one frame for the
-PCA -> Explore reverse jump.
+Atom/pair-level results are mean-pooled per structure so every point maps to
+exactly one frame for the analysis -> Explore reverse jump.
 """
 
 from __future__ import annotations
@@ -52,30 +51,65 @@ _ANALYSIS_SCHEMA_VERSION = 1
 ANALYSIS_ALGORITHM_VERSION = "studio-analysis-4"
 _MAX_PREVIEW_POINTS = 20_000
 
-# Analysis types dispatched straight to the same-named AnalysisEngine method
-# as AnalysisEngine.<analysis_type>(*samples, params, progress); the pair types
-# take the cross-dataset reference/query matrix as a second sample.  Legacy PCA
-# keeps its dedicated runner (pca()); the grouped cluster/outlier/sampling
-# funnels and the bespoke sensitivity runners keep explicit dispatch in
-# _run_engine.
-_ENGINE_TYPES = frozenset({
-    "umap", "tsne", "neighbors", "similarity", "pairwise", "feature_variance",
-    "feature_correlation", "property_correlation", "local_diversity", "kernel",
-    "effective_dimension", "trajectory",
+# One execution catalogue feeds generic RPC registration and the runner
+# dispatch below.  Adding a new method therefore changes one table, while
+# the category still makes the numerical call shape explicit.
+ANALYSIS_METHOD_CATALOG = {
+    "pca": "engine",
+    "umap": "engine",
+    "tsne": "engine",
+    "neighbors": "engine",
+    "similarity": "engine",
+    "pairwise": "engine",
+    "feature_variance": "engine",
+    "feature_correlation": "engine",
+    "property_correlation": "engine",
+    "local_diversity": "engine",
+    "kernel": "engine",
+    "effective_dimension": "engine",
+    "trajectory": "engine",
+    "coverage": "pair",
+    "overlap": "pair",
+    "acquisition": "pair",
+    "compare": "pair",
+    "mantel": "pair",
+    "drift": "pair",
+    "kmeans": "cluster",
+    "dbscan": "cluster",
+    "hdbscan": "cluster",
+    "agglomerative": "cluster",
+    "hierarchical": "cluster",
+    "knn": "outlier",
+    "lof": "outlier",
+    "isolation_forest": "outlier",
+    "isolation-forest": "outlier",
+    "iforest": "outlier",
+    "mahalanobis": "outlier",
+    "mahalanobis_distance": "outlier",
+    "fps": "sampling",
+    "random": "sampling",
+    "stratified": "sampling",
+    "cluster_representative": "sampling",
+    "per_element": "sampling",
+    "cluster": "wrapper",
+    "outlier": "wrapper",
+    "sampling": "wrapper",
+    "element": "sampling",
+    "sensitivity": "sensitivity",
+    "perturbation_sensitivity": "perturbation",
+}
+_ENGINE_TYPES = frozenset(name for name, category in ANALYSIS_METHOD_CATALOG.items() if category == "engine")
+_ENGINE_PAIR_TYPES = frozenset(name for name, category in ANALYSIS_METHOD_CATALOG.items() if category == "pair")
+# These methods deliberately normalize parameters before submission. They stay
+# explicit and must not be replaced by the generated pass-through methods.
+_EXPLICIT_RPC_METHODS = frozenset({
+    "cluster", "outlier", "sampling",
+    "feature_variance", "feature_correlation", "property_correlation", "local_diversity",
 })
-_ENGINE_PAIR_TYPES = frozenset({"coverage", "overlap", "acquisition", "compare", "mantel", "drift"})
-
-# Service methods that are exactly ``submit_generic(<analysis_type>, params)``;
-# they are generated from this set at the end of this module.  Everything else
-# normalizes parameters first (cluster, outlier, sampling, feature_variance,
-# feature_correlation, property_correlation, local_diversity) or funnels to a
-# dedicated runner (export) and keeps an explicit method.
-_GENERIC_TYPES = frozenset({
-    "umap", "tsne", "neighbors", "similarity", "pairwise", "fps",
-    "coverage", "overlap", "acquisition", "compare", "kernel",
-    "effective_dimension", "trajectory", "drift", "sensitivity", "mantel",
-    "perturbation_sensitivity",
-})
+_GENERIC_TYPES = frozenset(
+    name for name in ANALYSIS_METHOD_CATALOG
+    if name not in _EXPLICIT_RPC_METHODS
+)
 
 # Per-sample array keys the preview builder maps onto points/rows.
 _PREVIEW_ARRAY_KEYS = (
@@ -191,199 +225,12 @@ class AnalysisService:
             schema_version=_ANALYSIS_SCHEMA_VERSION,
         )
         # RPC requests are handled concurrently. Serialize only the
-        # cache-lookup/create section so two identical requests cannot enqueue
-        # duplicate PCA jobs; the actual calculation still runs in JobService.
-        self._pca_submit_lock = threading.Lock()
+        # cache-lookup/create section so identical requests cannot enqueue
+        # duplicate analysis jobs; calculations still run in JobService.
+        self._submit_lock = threading.Lock()
         # Element-set labels of completed runs are immutable; a tiny LRU keeps
         # the grouped-FPS quota preview cheap across parameter twiddling.
         self._group_labels_cache: dict[tuple[str, str, str | None], np.ndarray] = {}
-
-    def pca(self, params: dict) -> dict:
-        params = dict(params or {})
-        run_id = params.get("run_id")
-        if not run_id:
-            raise AppError(INVALID_PARAMS, "'run_id' is required")
-        mode = params.get("mode") or "structure"
-        if mode not in ("structure", "atom"):
-            raise AppError(INVALID_PARAMS, f"mode must be 'structure' or 'atom', got {mode!r}")
-        row = self._usable_run(run_id)
-        preprocess = str(params.get("preprocess") or "center")
-        if preprocess not in ("raw", "center", "standardized"):
-            raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
-        # Keep the compatibility PCA entry point deterministic with the same
-        # explicit defaults as the generic Analysis API. Older rows with only
-        # ``mode`` (or an empty object) remain reusable through the matcher.
-        analysis_params = {"mode": mode, "seed": 42, "preprocess": preprocess}
-        params_json = json.dumps(
-            analysis_params, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
-        cache_key = self._analysis_cache_key("pca", [run_id], analysis_params)
-
-        with self._pca_submit_lock:
-            cached = self._find_cached_pca(run_id, mode, preprocess)
-            if cached is not None:
-                return {
-                    "job_id": None,
-                    "analysis_id": cached["id"],
-                    "cache": {"existing_analysis_id": cached["id"]},
-                }
-
-            active = self._find_active_pca(run_id, mode, preprocess)
-            if active is not None and active["job_id"]:
-                return {
-                    "job_id": active["job_id"],
-                    "analysis_id": active["id"],
-                    "cache": {
-                        "existing_analysis_id": active["id"],
-                        "status": active["status"],
-                    },
-                }
-
-            # Reuse an abandoned queued/running analysis row if it has no
-            # linked job (legacy databases may contain such rows); otherwise
-            # create the persistent cache entry now.
-            analysis_id = active["id"] if active is not None else f"ana_{uuid.uuid4().hex[:12]}"
-            if active is None:
-                self.db.execute(
-                    "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at,"
-                    " input_run_ids_json, dataset_ids_json, cache_key, schema_version, algorithm_version,"
-                    " preprocessing_json, warnings_json, artifact_manifest_json, preview_json, updated_at)"
-                    " VALUES (?, ?, 'pca', ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        analysis_id,
-                        run_id,
-                        params_json,
-                        _NOW(),
-                        json.dumps([run_id], ensure_ascii=False),
-                        json.dumps([row["dataset_id"]], ensure_ascii=False),
-                        cache_key,
-                        _ANALYSIS_SCHEMA_VERSION,
-                        ANALYSIS_ALGORITHM_VERSION,
-                        json.dumps({"preprocess": preprocess}, ensure_ascii=False),
-                        json.dumps([], ensure_ascii=False),
-                        json.dumps({}, ensure_ascii=False),
-                        json.dumps({}, ensure_ascii=False),
-                        _NOW(),
-                    ),
-                )
-
-            def runner(ctx):
-                self._mark_run_running(analysis_id)
-                ctx.progress(0, 1, "loading values")
-                self._apply_thread_limit()
-                values, run_row = self.results.load_values(run_id)
-                ctx.check_cancelled()
-                coords, explained, frames, atoms = self._pca_points(values, run_row, mode, preprocess)
-                ctx.check_cancelled()
-                n_points = coords.shape[0]
-                ctx.progress(0.7, 1, "assembling points")
-                frame_props = self._frame_properties(
-                    run_row, int(frames.max()) + 1 if frames.size else 1
-                )
-                out_dir = self.data_dir / "analysis" / analysis_id
-                out_dir.mkdir(parents=True, exist_ok=True)
-                ensure_no_reparse_points(out_dir)
-                np.save(out_dir / "coords.npy", coords, allow_pickle=False)
-                payload = {
-                    "analysis_id": analysis_id,
-                    "run_id": run_id,
-                    "mode": mode,
-                    "preprocess": preprocess,
-                    "n_points": int(n_points),
-                    "points": [
-                        {
-                            "i": i,
-                            "frame": int(frames[i]),
-                            **({"atom": int(atoms[i])} if atoms is not None else {}),
-                            "pc1": round(float(coords[i, 0]), 4),
-                            "pc2": round(float(coords[i, 1]), 4),
-                            **frame_props[int(frames[i])],
-                        }
-                        for i in range(n_points)
-                    ],
-                    "explained_variance": [round(float(v), 6) for v in explained[:2]],
-                    "x_label": f"PC1 ({explained[0] * 100:.1f}%)" if explained.size else "PC1",
-                    "y_label": f"PC2 ({explained[1] * 100:.1f}%)" if explained.size > 1 else "PC2",
-                }
-                with open_text_for_write(out_dir / "pca.json") as fh:
-                    json.dump(payload, fh, ensure_ascii=False)
-                self._complete_analysis_run(
-                    analysis_id,
-                    {"result_path": str(out_dir), "finished_at": _NOW()},
-                    out_dir,
-                )
-                ctx.progress(1, 1, "done")
-                return {"analysis_id": analysis_id, "n_points": payload["n_points"]}
-
-            try:
-                job_id = self.jobs.submit(
-                    "analysis.pca", runner, dataset_id=row["dataset_id"], analysis_run_id=analysis_id
-                )
-            except Exception:
-                if active is None:
-                    self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
-                raise
-            return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
-
-    def _find_cached_pca(self, run_id: str, mode: str, preprocess: str = "center") -> dict | None:
-        """Find the newest usable completed PCA for this run and mode.
-
-        Parameters are normalized in Python so cache entries written by older
-        builds (with JSON whitespace, or with ``{}`` for the old default
-        structure mode) remain reusable.
-        """
-        rows = self.db.query(
-            "SELECT id, params_json, result_path FROM analysis_runs"
-            " WHERE descriptor_run_id = ? AND analysis_type = 'pca' AND status = 'COMPLETED'"
-            " ORDER BY created_at DESC, id DESC",
-            (run_id,),
-        )
-        for row in rows:
-            if self._pca_params_match(row["params_json"], mode, preprocess) and self._pca_artifact_exists(row):
-                return row
-        return None
-
-    def _find_active_pca(self, run_id: str, mode: str, preprocess: str = "center") -> dict | None:
-        rows = self.db.query(
-            "SELECT id, params_json, status FROM analysis_runs"
-            " WHERE descriptor_run_id = ? AND analysis_type = 'pca'"
-            " AND status IN ('QUEUED', 'RUNNING')"
-            " ORDER BY created_at DESC, id DESC",
-            (run_id,),
-        )
-        for row in rows:
-            if not self._pca_params_match(row["params_json"], mode, preprocess):
-                continue
-            job = self.db.query_one(
-                "SELECT id FROM jobs WHERE analysis_run_id = ?"
-                " AND status IN ('QUEUED', 'RUNNING') ORDER BY created_at DESC, id DESC LIMIT 1",
-                (row["id"],),
-            )
-            return {**row, "job_id": job["id"] if job else None}
-        return None
-
-    @staticmethod
-    def _pca_params_match(raw: str | None, mode: str, preprocess: str = "center") -> bool:
-        try:
-            saved = json.loads(raw or "{}")
-        except (TypeError, json.JSONDecodeError):
-            return False
-        try:
-            saved_mode = str(saved.get("mode") or "structure")
-            saved_seed = int(saved.get("seed", 42))
-        except (AttributeError, TypeError, ValueError):
-            return False
-        return saved_mode == mode and saved_seed == 42 and str(saved.get("preprocess") or "center") == preprocess
-
-    def _pca_artifact_exists(self, row: dict) -> bool:
-        if not row.get("result_path"):
-            return False
-        try:
-            root = self._managed_artifact_path(str(row.get("id") or ""), row["result_path"])
-            target = self._artifact_file(root, "pca.json")
-            return bool(target and target.is_file())
-        except (TypeError, ValueError, UnsafePathError):
-            return False
 
     def _result_root(self, row: dict) -> Path:
         try:
@@ -402,73 +249,11 @@ class AnalysisService:
         ensure_no_reparse_points(offsets_file)
         return np.asarray(np.load(offsets_file, allow_pickle=False), dtype=np.int64) if offsets_file.is_file() else None
 
-    def _pca_points(self, values: np.ndarray, run_row: dict, mode: str, preprocess: str = "center"):
-        """Return (coords, explained, frames, atoms|None).
-
-        Structure mode: one point per frame (atom/pair rows mean-pooled).
-        Atom mode: one point per atom/pair row, keeping the owning frame and the
-        in-frame row index for tooltips/reverse-jump. Very large runs are evenly
-        subsampled so the IPC payload and chart stay responsive (design doc §25).
-        """
-        offsets = self._row_offsets(run_row)
-        atom_level = values.ndim == 2 and self._valid_offsets(offsets, values.shape[0])
-        if mode == "atom" and not atom_level:
-            raise AppError(ANALYSIS_INPUT_INVALID, "atom/local-environment PCA requires verified row_offsets")
-        if mode == "structure" or not atom_level:
-            pooled = _pool_rows(values, offsets) if atom_level else values.reshape(values.shape[0], -1)
-            frames = self._run_frame_values(run_row, pooled.shape[0])
-            atoms = None
-        else:
-            counts = np.diff(offsets).astype(int)
-            local_frames = np.repeat(np.arange(counts.size, dtype=np.int64), counts)
-            frame_values = self._run_frame_values(run_row, counts.size)
-            frames = frame_values[local_frames]
-            atoms = np.arange(values.shape[0], dtype=np.int64) - offsets[local_frames]
-            pooled = values
-            max_points = _MAX_PREVIEW_POINTS
-            if pooled.shape[0] > max_points:
-                keep = np.unique(np.linspace(0, pooled.shape[0] - 1, max_points).astype(int))
-                pooled, frames, atoms = pooled[keep], frames[keep], atoms[keep]
-        coords, explained = self._pca(pooled, preprocess)
-        return coords, explained, frames, atoms
-
     @staticmethod
     def _run_frame_values(run_row: dict, count: int) -> np.ndarray:
         if run_row.get("scope") == "frame":
             return np.full(count, int(run_row.get("frame_index") or 0), dtype=np.int64)
         return np.arange(count, dtype=np.int64)
-
-    @staticmethod
-    def _pca(x: np.ndarray, preprocess: str = "center"):
-        x = np.asarray(x, dtype=np.float64)
-        if x.ndim != 2 or x.shape[0] == 0 or x.shape[1] == 0 or not np.isfinite(x).all():
-            raise AppError(ANALYSIS_INPUT_INVALID, "analysis input must be a finite, non-empty 2D matrix")
-        if preprocess not in ("raw", "center", "standardized"):
-            raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
-        if preprocess == "raw":
-            prepared = x
-        else:
-            centered = x - x.mean(axis=0)
-            if preprocess == "center":
-                prepared = centered
-            else:
-                scale = centered.std(axis=0)
-                keep = scale > np.finfo(np.float64).eps
-                if not bool(keep.any()):
-                    keep = np.ones(centered.shape[1], dtype=bool)
-                    scale = np.ones(centered.shape[1], dtype=np.float64)
-                prepared = centered[:, keep] / np.where(scale[keep] > 0, scale[keep], 1.0)
-        xc = prepared
-        # SVD on up to ~12k x few-hundred matrix is fast and stable
-        _u, s, vt = np.linalg.svd(xc, full_matrices=False)
-        var = (s**2) / max(x.shape[0] - 1, 1)
-        total = float(var.sum()) or 1.0
-        explained = var / total
-        components = min(2, vt.shape[0])
-        coords = xc @ vt[:components].T
-        if components < 2:
-            coords = np.pad(coords, ((0, 0), (0, 2 - components)))
-        return coords, explained
 
     def _frame_properties(self, run_row: dict, n_points: int) -> list[dict]:
         """Energy/force/volume per frame for color-by (aligned to frame index)."""
@@ -501,9 +286,9 @@ class AnalysisService:
         return props
 
     # -- generic Analysis API -------------------------------------------------
-    # The legacy PCA path above is intentionally kept intact: old databases
-    # contain pca.json artifacts and old clients still call result.get_pca.
-    # New modules use the common artifact/cache contract below.
+    # Every new analysis uses the common artifact/cache contract below. The
+    # generic PCA writer also emits pca.json so old clients can continue to use
+    # result.get_pca as a compatibility reader.
 
     def list(self, params: dict) -> list[dict]:
         """List analysis metadata without loading any large array."""
@@ -686,6 +471,16 @@ class AnalysisService:
         version, so changing implementation cannot reuse an old artifact.
         """
         params = dict(params or {})
+        if analysis_type == "pca":
+            mode = str(params.get("mode") or "structure")
+            if mode not in ("structure", "atom"):
+                raise AppError(INVALID_PARAMS, f"mode must be 'structure' or 'atom', got {mode!r}")
+            preprocess = str(params.get("preprocess") or "center")
+            if preprocess not in ("raw", "center", "standardized"):
+                raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
+            # PCA is deterministic; keep old callers and the generic request
+            # path on one cache identity regardless of an irrelevant seed.
+            params.update({"mode": mode, "preprocess": preprocess, "seed": 42})
         if analysis_type == "effective_dimension" and ("preprocess" not in params or params["preprocess"] is None or params["preprocess"] == ""):
             # Keep the backend default identical to the UI default so omitted
             # and explicit standardized requests share one cache identity.
@@ -749,7 +544,7 @@ class AnalysisService:
             _block_names(params)
         canonical_params = self._canonical_params(params)
         cache_key = self._analysis_cache_key(analysis_type, input_ids, canonical_params)
-        with self._pca_submit_lock:
+        with self._submit_lock:
             cached = self.db.query_one(
                 "SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED' ORDER BY created_at DESC LIMIT 1",
                 (cache_key,),
@@ -822,6 +617,15 @@ class AnalysisService:
                     analysis_type,
                     reference_samples=samples[0] if cross_dataset else None,
                 )
+                if analysis_type == "pca" and isinstance(preview.get("points"), list):
+                    frame_count = int(preview_samples.frame.max()) + 1 if preview_samples.frame.size else 1
+                    properties = self._frame_properties(run_rows[0], frame_count)
+                    preview["points"] = [
+                        {**point, **properties[int(point["frame"])]}
+                        if isinstance(point, dict) and 0 <= int(point.get("frame", -1)) < len(properties)
+                        else point
+                        for point in preview["points"]
+                    ]
                 out_dir, manifest = self._commit_artifact(
                     analysis_id,
                     analysis_type,
@@ -831,6 +635,10 @@ class AnalysisService:
                     preview,
                     ctx,
                 )
+                if analysis_type == "pca":
+                    # Keep result.get_pca usable for databases created by the
+                    # legacy frontend. New code reads the generic preview.
+                    self._write_legacy_pca_compatibility(out_dir, analysis_id, input_ids[0], params, preview)
                 self._complete_analysis_run(
                     analysis_id,
                     {
@@ -903,7 +711,7 @@ class AnalysisService:
         })
         cache_key = self._analysis_cache_key("export", input_ids, canonical)
 
-        with self._pca_submit_lock:
+        with self._submit_lock:
             cached = self.db.query_one("SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED'", (cache_key,))
             if cached and self._artifact_is_complete(cached):
                 return {"job_id": None, "analysis_id": cached["id"], "cache": {"existing_analysis_id": cached["id"], "cache_key": cache_key}}
@@ -1833,6 +1641,35 @@ class AnalysisService:
             ctx,
             self._json_safe,
         )
+
+    def _write_legacy_pca_compatibility(self, out_dir: Path, analysis_id: str, run_id: str, params: dict, preview: dict) -> None:
+        points = []
+        for point in preview.get("points", []):
+            if not isinstance(point, dict):
+                continue
+            points.append({
+                "i": int(point.get("i", len(points))),
+                "frame": int(point.get("frame", 0)),
+                **({"atom": int(point["row"])} if point.get("row") is not None else {}),
+                "pc1": float(point.get("x", 0.0)),
+                "pc2": float(point.get("y", 0.0)),
+                "energy_per_atom": point.get("energy_per_atom"),
+                "force_max": point.get("force_max"),
+                "volume": point.get("volume"),
+            })
+        payload = {
+            "analysis_id": analysis_id,
+            "run_id": run_id,
+            "mode": params.get("mode", "structure"),
+            "preprocess": params.get("preprocess", "center"),
+            "n_points": int(preview.get("total_points", len(points))),
+            "points": points,
+            "explained_variance": list(preview.get("explained_variance", [])),
+            "x_label": preview.get("x_label", "PC1"),
+            "y_label": preview.get("y_label", "PC2"),
+        }
+        with open_text_for_write(out_dir / "pca.json") as fh:
+            json.dump(payload, fh, ensure_ascii=False)
 
     def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None) -> Path:
         # Sample-index and provenance exports need neither the dataset service
