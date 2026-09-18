@@ -67,10 +67,13 @@ function Update-TextFile {
 }
 
 function Get-ExactGitTag {
+    # git tag --points-at rather than git describe: describing an untagged commit
+    # exits non-zero, and a stale $LASTEXITCODE makes a GitHub Actions pwsh step
+    # fail even after the version check itself has passed.
     try {
-        $tag = (& git -C $root describe --tags --exact-match --match "v[0-9]*" 2>$null | Select-Object -First 1)
-        if (-not [string]::IsNullOrWhiteSpace([string]$tag)) {
-            return ([string]$tag).Trim()
+        $tags = @(git -C $root tag --points-at HEAD --list "v[0-9]*" 2>$null | Where-Object { $_ })
+        if ($tags.Count -gt 0) {
+            return ([string]$tags[0]).Trim()
         }
     } catch {
         return $null
