@@ -150,14 +150,14 @@ class EngineAdapter:
     def warmup(self) -> None:
         """Build every registered descriptor once on the warmup thread.
 
-        create_descriptor lazily imports native extension modules; on 0.2.3/win
-        resolving those imports while worker threads (or a stdin reader thread)
-        were live deadlocked the import machinery (fixed in 0.2.5 and retained
-        through 0.2.8, re-verified in scripts/verify_known_issues.py). The
-        warmup stays as defense in depth and to pay each descriptor's
-        first-build cost once, ahead of any user job. Since backend.ready is
-        now emitted before warmup, this runs on a background thread and
-        build() gates on completion so imports stay single-threaded.
+        create_descriptor lazily imports native extension modules, and resolving
+        those imports while worker threads (or the stdin reader) were live
+        deadlocked the import machinery on Windows. The engine fixed this
+        upstream (re-verified by scripts/verify_known_issues.py), but the
+        warmup stays: it keeps native imports on one thread and pays each
+        descriptor's first-build cost once, ahead of any user job. Since
+        backend.ready is emitted before warmup, this runs on a background
+        thread and build() gates on its completion.
         """
         with self._warm_condition:
             while self._warming:

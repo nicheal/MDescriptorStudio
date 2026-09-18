@@ -8,6 +8,9 @@ Outputs:
     tests/data/extxyz_small.xyz   ~10 frames extxyz
     tests/data/perf_deepmd/       N frames DeepMD raw (default 12480, 64 atoms/frame)
     tests/data/perf_extxyz.xyz    N frames extxyz
+
+ADR-9 keeps the generator in git and the performance fixtures reproducible on
+demand, so the perf_* outputs stay local instead of costing 87 MB per checkout.
 """
 
 from __future__ import annotations
