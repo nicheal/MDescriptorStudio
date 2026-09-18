@@ -91,10 +91,7 @@ def outlier(samples: DescriptorMatrix, params: dict, algorithm: str, progress: C
 
 class Cluster:
     name = "cluster"
-    category = "cluster" if name == "cluster" else "outlier"
-
-    def validate(self, params: dict) -> None:
-        return None
+    category = "cluster"
 
     def run(self, data, params: dict, algorithm: str, progress=None) -> dict:
         return cluster(data, params, algorithm, progress)
@@ -102,10 +99,7 @@ class Cluster:
 
 class Outlier:
     name = "outlier"
-    category = "cluster" if name == "cluster" else "outlier"
-
-    def validate(self, params: dict) -> None:
-        return None
+    category = "outlier"
 
     def run(self, data, params: dict, algorithm: str, progress=None) -> dict:
         return outlier(data, params, algorithm, progress)

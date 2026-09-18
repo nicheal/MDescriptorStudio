@@ -1,9 +1,14 @@
-"""Writers for materialized dataset-view selections.
+"""Writers for the built-in dataset formats.
 
 Both writers consume selected adapter frames and never touch the source files.
-The extxyz writer mirrors the reader's
-comment-line conventions (Lattice / Properties / energy / virial / pbc); the
-DeepMD writer reproduces the raw npy layout the loader expects.
+They are the only export implementation: dataset-view materialization and the
+``analysis.export`` job both call them, so a written system is guaranteed to
+reload through :mod:`datasets.extxyz` / :mod:`datasets.deepmd`.
+
+The extxyz writer mirrors the reader's comment-line conventions (Lattice /
+Properties / energy / virial / pbc). The DeepMD writer reproduces dpdata's raw
+npy layout, which names the frame-property files ``energy.npy``,
+``force.npy`` and ``virial.npy`` (singular).
 """
 
 from __future__ import annotations
@@ -14,7 +19,12 @@ from pathlib import Path
 import numpy as np
 
 from ..errors import AppError, INVALID_DATASET
+from ..security import ensure_no_reparse_points, open_text_for_write
 from .deepmd_symbols import _Z_TO_SYMBOL
+
+
+def _symbols(frame) -> list[str]:
+    return [_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in np.asarray(frame.numbers, dtype=np.int64)]
 
 
 def write_extxyz(path: Path, frames: Iterable) -> int:
@@ -22,12 +32,12 @@ def write_extxyz(path: Path, frames: Iterable) -> int:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     written = 0
-    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+    with open_text_for_write(path, newline="\n") as fh:
         for frame in frames:
-            symbols = [_Z_TO_SYMBOL.get(int(z), f"Z{z}") for z in frame.numbers]
+            symbols = _symbols(frame)
             n = len(symbols)
             lattice = " ".join(f"{v:.6f}" for v in np.asarray(frame.cell, dtype=np.float64).reshape(-1))
-            pbc = " ".join("T" if bool(v) else "F" for v in frame.pbc)
+            pbc = " ".join("T" if bool(v) else "F" for v in np.asarray(frame.pbc).reshape(3))
             props = "Properties=species:S:1:pos:R:3"
             if frame.forces is not None:
                 props += ":forces:R:3"
@@ -47,14 +57,10 @@ def write_extxyz(path: Path, frames: Iterable) -> int:
                 else None
             )
             for i, (sym, pos) in enumerate(zip(symbols, positions)):
+                line = f"{sym} {pos[0]:.8f} {pos[1]:.8f} {pos[2]:.8f}"
                 if forces is not None:
-                    fx, fy, fz = forces[i]
-                    fh.write(
-                        f"{sym} {pos[0]:.8f} {pos[1]:.8f} {pos[2]:.8f}"
-                        f" {fx:.8f} {fy:.8f} {fz:.8f}\n"
-                    )
-                else:
-                    fh.write(f"{sym} {pos[0]:.8f} {pos[1]:.8f} {pos[2]:.8f}\n")
+                    line += f" {forces[i][0]:.8f} {forces[i][1]:.8f} {forces[i][2]:.8f}"
+                fh.write(line + "\n")
             written += 1
     return written
 
@@ -62,62 +68,54 @@ def write_extxyz(path: Path, frames: Iterable) -> int:
 def write_deepmd(path: Path, frames: Iterable) -> int:
     """Write frames as a DeepMD raw directory (type.raw + set.000/*.npy).
 
-    DeepMD systems require one atom count per set; frames with differing
-    atom counts (possible for extxyz-style sources) are rejected up front.
-    Frames without energies are tolerated by omitting energy.npy, matching
-    how the loader treats a missing file.
+    DeepMD systems require one atom count per set, so frames with differing
+    atom counts are rejected up front. A frame property is written only when
+    every frame carries it: dpdata reads these arrays positionally, so a
+    partially labelled set would silently misalign frames.
     """
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.mkdir(parents=True, exist_ok=True)
+    ensure_no_reparse_points(path)
     frame_list = list(frames)
     if not frame_list:
         raise AppError(INVALID_DATASET, "nothing to write: the view contains no frames")
-    natoms = int(frame_list[0].numbers.size)
-    if any(int(f.numbers.size) != natoms for f in frame_list):
+    natoms = int(np.asarray(frame_list[0].numbers).size)
+    if any(int(np.asarray(f.numbers).size) != natoms for f in frame_list):
         raise AppError(
             INVALID_DATASET,
             "DeepMD export requires a constant atom count; use an extxyz (.xyz) destination instead",
         )
-    z_symbols = sorted({_Z_TO_SYMBOL.get(int(z), f"Z{z}") for f in frame_list for z in f.numbers})
-    symbol_to_type = {s: i for i, s in enumerate(z_symbols)}
-    coords, boxes, energies, forces, virials = [], [], [], [], []
-    has_energy = has_force = has_virial = False
-    for frame in frame_list:
-        coords.append(np.asarray(frame.positions, dtype=np.float64).reshape(natoms, 3))
-        cell = np.asarray(frame.cell, dtype=np.float64).reshape(3, 3)
-        boxes.append(cell if bool(np.asarray(frame.pbc).any()) else np.zeros((3, 3)))
-        if frame.energy is not None:
-            energies.append(float(frame.energy))
-            has_energy = True
-        if frame.forces is not None:
-            forces.append(np.asarray(frame.forces, dtype=np.float64).reshape(natoms, 3))
-            has_force = True
-        if frame.virial is not None:
-            virials.append(np.asarray(frame.virial, dtype=np.float64).reshape(-1))
-            has_virial = True
-    type_map = " ".join(z_symbols)
-    types = " ".join(
-        str(symbol_to_type[_Z_TO_SYMBOL.get(int(z), f"Z{z}")])
-        for z in frame_list[0].numbers
+    names = sorted({symbol for frame in frame_list for symbol in _symbols(frame)})
+    type_of = {name: index for index, name in enumerate(names)}
+    (path / "type_map.raw").write_text(" ".join(names) + "\n", encoding="utf-8")
+    (path / "type.raw").write_text(
+        " ".join(str(type_of[symbol]) for symbol in _symbols(frame_list[0])) + "\n",
+        encoding="utf-8",
     )
-    (path / "type_map.raw").write_text(type_map + "\n", encoding="utf-8")
-    (path / "type.raw").write_text(types + "\n", encoding="utf-8")
-    if all(not bool(np.asarray(f.pbc).any()) for f in frame_list):
-        # dpdata's nopbc convention is per-system (all frames isolated)
+    if all(not bool(np.asarray(frame.pbc).any()) for frame in frame_list):
+        # dpdata's nopbc convention is per-system (all frames isolated).
         (path / "nopbc").write_text("", encoding="utf-8")
+    coords = [np.asarray(f.positions, dtype=np.float64).reshape(natoms, 3) for f in frame_list]
+    # Zero boxes for isolated frames keep box.npy present: dpdata only skips
+    # loading it when the root nopbc marker exists.
+    cells = [
+        np.asarray(f.cell, dtype=np.float64).reshape(3, 3) if bool(np.asarray(f.pbc).any()) else np.zeros((3, 3))
+        for f in frame_list
+    ]
     set_dir = path / "set.000"
     set_dir.mkdir(parents=True, exist_ok=True)
-    np.save(set_dir / "coord.npy", np.asarray(coords, dtype=np.float64), allow_pickle=False)
-    np.save(set_dir / "box.npy", np.asarray(boxes, dtype=np.float64), allow_pickle=False)
-    if has_energy:
-        np.save(set_dir / "energy.npy", np.asarray(energies, dtype=np.float64), allow_pickle=False)
-    if has_force:
-        np.save(set_dir / "force.npy", np.asarray(forces, dtype=np.float64), allow_pickle=False)
-    if has_virial:
-        # frames without a virial contribute NaN, the loader's missing marker
-        data = np.full((len(frame_list), 9), np.nan, dtype=np.float64)
-        for i, v in enumerate(virials):
-            data[i] = v
-        np.save(set_dir / "virials.npy", data, allow_pickle=False)
+    ensure_no_reparse_points(set_dir)
+    np.save(set_dir / "coord.npy", np.asarray(coords), allow_pickle=False)
+    np.save(set_dir / "box.npy", np.asarray(cells), allow_pickle=False)
+    for name, values, shape in (
+        ("energy.npy", [f.energy for f in frame_list], (len(frame_list),)),
+        ("force.npy", [f.forces for f in frame_list], (len(frame_list), natoms, 3)),
+        ("virial.npy", [f.virial for f in frame_list], (len(frame_list), 3, 3)),
+    ):
+        if any(value is None for value in values):
+            continue
+        np.save(set_dir / name, np.asarray(values, dtype=np.float64).reshape(shape), allow_pickle=False)
     return len(frame_list)
+
+
+__all__ = ["write_deepmd", "write_extxyz"]

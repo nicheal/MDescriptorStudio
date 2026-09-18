@@ -4,7 +4,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
-.pytest-tmp/
+.pytest-tmp*/
+.hypothesis/
 build/
 dist/
 backend/dist/
@@ -45,6 +46,7 @@ backend/mdescriptor_studio_backend/datasets/_native/
 .agents/
 /AGENTS.md
 
-# Local analysis report artifact
-/output/pdf/MDescriptor_Studio_描述符分析与物理解释指南.pdf
+# Local scratch and generated artifacts
+tmp/
+/output/
 /scripts/create_analysis_report_pdf.py

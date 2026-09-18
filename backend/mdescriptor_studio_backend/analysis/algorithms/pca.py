@@ -41,8 +41,5 @@ class PCA:
     name = "pca"
     category = "engine"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, data, params: dict, progress=None) -> dict:
         return pca(data, params, progress)

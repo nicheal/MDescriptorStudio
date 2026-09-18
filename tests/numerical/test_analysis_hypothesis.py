@@ -15,7 +15,8 @@ hypothesis = pytest.importorskip("hypothesis")
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from mdescriptor_studio_backend.analysis import AnalysisEngine, StructureDescriptorMatrix
+from mdescriptor_studio_backend.analysis import StructureDescriptorMatrix
+from mdescriptor_studio_backend.analysis.algorithms.pca import pca
 from mdescriptor_studio_backend.errors import AppError
 
 
@@ -30,7 +31,7 @@ def test_random_descriptor_matrices_never_crash(n_samples: int, n_features: int,
     values = rng.normal(size=(n_samples, n_features)) * rng.uniform(0.01, 1000.0)
     samples = StructureDescriptorMatrix(values, np.arange(n_samples, dtype=np.int64))
     try:
-        result = AnalysisEngine.pca(samples, {"preprocess": "standardized"})
+        result = pca(samples, {"preprocess": "standardized"})
     except AppError as exc:
         assert exc.code
         return

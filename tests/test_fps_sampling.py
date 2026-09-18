@@ -13,7 +13,7 @@ import hashlib
 import numpy as np
 import pytest
 
-from mdescriptor_studio_backend.analysis import AnalysisEngine, SampleMatrix
+from mdescriptor_studio_backend.analysis import StructureDescriptorMatrix
 from mdescriptor_studio_backend.analysis.sampling import (
     FPSResult,
     FeatureBlock,
@@ -26,6 +26,7 @@ from mdescriptor_studio_backend.analysis.sampling import (
     grouped_farthest_point_sampling,
     sqrt_quota,
 )
+from mdescriptor_studio_backend.analysis.sampling.engine import sampling
 from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, AppError
 
 
@@ -220,8 +221,8 @@ def test_coverage_statistics_quantiles() -> None:
 
 def test_engine_fps_reports_center_init_and_min_distance() -> None:
     x = np.arange(5, dtype=np.float64).reshape(-1, 1)
-    samples = SampleMatrix(x, np.arange(5))
-    result = AnalysisEngine.sampling(samples, {"n_samples": 5, "scaling": "raw"}, "fps")
+    samples = StructureDescriptorMatrix(x, np.arange(5))
+    result = sampling(samples, {"n_samples": 5, "scaling": "raw"}, "fps")
     preview = result["preview"]
     assert preview["algorithm"] == "fps"
     assert preview["initialization"] == "center"
@@ -229,19 +230,19 @@ def test_engine_fps_reports_center_init_and_min_distance() -> None:
     assert result["arrays"]["selection_distances"].tolist() == pytest.approx([0.0, 2.0, 2.0, 1.0, 1.0])
     assert result["arrays"]["coverage_radius_curve"].tolist() == pytest.approx([2.0, 2.0, 1.0, 1.0, 0.0])
 
-    stopped = AnalysisEngine.sampling(samples, {"n_samples": 5, "min_distance": 1.5, "scaling": "raw"}, "fps")
+    stopped = sampling(samples, {"n_samples": 5, "min_distance": 1.5, "scaling": "raw"}, "fps")
     assert stopped["preview"]["selected_count"] == 3
     assert stopped["preview"]["stop_reason"] == "min_distance"
 
     with pytest.raises(AppError) as exc:
-        AnalysisEngine.sampling(samples, {"scaling": "bogus"}, "fps")
+        sampling(samples, {"scaling": "bogus"}, "fps")
     assert exc.value.code == ANALYSIS_INPUT_INVALID
 
 
 def test_engine_fps_warm_start_passes_existing_set() -> None:
-    candidates = SampleMatrix(np.array([[0.0], [1.0], [2.0], [9.0]]), np.arange(4))
-    existing = SampleMatrix(np.array([[0.0], [2.0]]), np.array([0, 2]))
-    result = AnalysisEngine.sampling(
+    candidates = StructureDescriptorMatrix(np.array([[0.0], [1.0], [2.0], [9.0]]), np.arange(4))
+    existing = StructureDescriptorMatrix(np.array([[0.0], [2.0]]), np.array([0, 2]))
+    result = sampling(
         candidates,
         {"n_samples": 2, "scaling": "raw", "initialization": "center"},
         "fps",
@@ -328,14 +329,14 @@ def test_grouped_fps_rejects_integer_initial_and_misaligned_labels() -> None:
 
 def test_engine_grouped_fps_reports_allocation_and_requires_group_labels() -> None:
     x = np.arange(12, dtype=np.float64).reshape(6, 2)
-    samples = SampleMatrix(x, np.arange(6))
+    samples = StructureDescriptorMatrix(x, np.arange(6))
     labels = np.array(["C", "C", "C", "C-Si", "C-Si", "O"], dtype=object)
 
     with pytest.raises(AppError) as exc:
-        AnalysisEngine.sampling(samples, {"n_samples": 3, "strategy": "grouped", "scaling": "raw"}, "fps")
+        sampling(samples, {"n_samples": 3, "strategy": "grouped", "scaling": "raw"}, "fps")
     assert exc.value.code == ANALYSIS_INPUT_INVALID
 
-    result = AnalysisEngine.sampling(
+    result = sampling(
         samples, {"n_samples": 6, "strategy": "grouped", "scaling": "raw"}, "fps", group_labels=labels
     )
     preview = result["preview"]
@@ -344,15 +345,15 @@ def test_engine_grouped_fps_reports_allocation_and_requires_group_labels() -> No
     assert sum(row["quota"] for row in preview["allocation"]) == 6
     assert preview["selected_count"] == 6
     # A global run of the same data reports no allocation.
-    global_preview = AnalysisEngine.sampling(samples, {"n_samples": 3, "scaling": "raw"}, "fps")["preview"]
+    global_preview = sampling(samples, {"n_samples": 3, "scaling": "raw"}, "fps")["preview"]
     assert "allocation" not in global_preview
     assert global_preview["strategy"] == "global"
 
 
 def test_engine_rejects_unknown_strategy() -> None:
-    samples = SampleMatrix(np.ones((4, 2)), np.arange(4))
+    samples = StructureDescriptorMatrix(np.ones((4, 2)), np.arange(4))
     with pytest.raises(AppError) as exc:
-        AnalysisEngine.sampling(samples, {"strategy": "clustered"}, "fps")
+        sampling(samples, {"strategy": "clustered"}, "fps")
     assert exc.value.code == ANALYSIS_INPUT_INVALID
 
 
@@ -464,10 +465,10 @@ def test_constant_space_is_fully_covered_immediately() -> None:
 
 def test_engine_composite_space_reports_block_layout() -> None:
     x = np.arange(40, dtype=np.float64).reshape(10, 4)
-    samples = SampleMatrix(x, np.arange(10))
+    samples = StructureDescriptorMatrix(x, np.arange(10))
     lattice = np.linspace(3.0, 9.0, 10).reshape(-1, 1)
     blocks = [FeatureBlock("descriptor", x), FeatureBlock("lattice", lattice, weight=2.0)]
-    result = AnalysisEngine.sampling(samples, {"n_samples": 5, "scaling": "robust"}, "fps", blocks=blocks)
+    result = sampling(samples, {"n_samples": 5, "scaling": "robust"}, "fps", blocks=blocks)
     preview = result["preview"]
     assert preview["sampling_space"] == "composite"
     assert preview["sampling_dimension"] == 5
@@ -475,18 +476,18 @@ def test_engine_composite_space_reports_block_layout() -> None:
     assert preview["blocks"][1]["weight"] == pytest.approx(2.0)
     assert result["arrays"]["coverage_r2_curve"].size == 5
     # Without blocks the same run reports the plain descriptor space.
-    plain = AnalysisEngine.sampling(samples, {"n_samples": 5, "scaling": "robust"}, "fps")["preview"]
+    plain = sampling(samples, {"n_samples": 5, "scaling": "robust"}, "fps")["preview"]
     assert plain["sampling_space"] == "descriptor"
     assert "blocks" not in plain
 
 
 def test_engine_target_coverage_and_invalid_target() -> None:
     x = np.linspace(0.0, 1.0, 101).reshape(-1, 1)
-    samples = SampleMatrix(x, np.arange(101))
-    result = AnalysisEngine.sampling(samples, {"n_samples": 100, "scaling": "raw", "target_coverage": 0.95}, "fps")
+    samples = StructureDescriptorMatrix(x, np.arange(101))
+    result = sampling(samples, {"n_samples": 100, "scaling": "raw", "target_coverage": 0.95}, "fps")
     assert result["preview"]["stop_reason"] == "coverage"
     assert result["preview"]["selected_count"] < 100
     assert result["preview"]["target_coverage"] == pytest.approx(0.95)
     with pytest.raises(AppError) as exc:
-        AnalysisEngine.sampling(samples, {"scaling": "raw", "target_coverage": 1.0}, "fps")
+        sampling(samples, {"scaling": "raw", "target_coverage": 1.0}, "fps")
     assert exc.value.code == ANALYSIS_INPUT_INVALID

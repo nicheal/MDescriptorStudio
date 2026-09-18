@@ -9,7 +9,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from mdescriptor_studio_backend.analysis import AnalysisEngine, SampleMatrix
+from mdescriptor_studio_backend.analysis import AtomDescriptorMatrix, StructureDescriptorMatrix
+from mdescriptor_studio_backend.analysis.algorithms.pca import pca
+from mdescriptor_studio_backend.analysis.metrics import neighbors, similarity
 from mdescriptor_studio_backend.datasets.base import DatasetFrame
 from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, ANALYSIS_STALE, AppError
 from mdescriptor_studio_backend.services.analysis_service import AnalysisService
@@ -253,13 +255,12 @@ def test_single_run_view_id_rejected_for_two_run_analyses(tmp_path: Path) -> Non
 
 
 def test_dataset_view_slice_preserves_original_frame_identity() -> None:
-    samples = SampleMatrix(
+    samples = AtomDescriptorMatrix(
         values=np.arange(20, dtype=np.float64).reshape(5, 4),
         frame=np.asarray([0, 1, 1, 2, 4]),
         row=np.asarray([0, 0, 1, 0, 0]),
         sample_ids=["f0:r0", "f1:r0", "f1:r1", "f2:r0", "f4:r0"],
         elements=np.asarray([1, 6, 8, 14, 32]),
-        mode="atom",
         properties={"energy": np.asarray([0.0, 1.0, 1.1, 2.0, 4.0])},
         positions=np.arange(15, dtype=np.float64).reshape(5, 3),
         cells=np.repeat(np.eye(3)[None, :, :], 5, axis=0),
@@ -410,7 +411,7 @@ def test_generic_pca_cache_includes_preprocessing_mode(tmp_path: Path) -> None:
 def test_generic_pca_pads_the_second_coordinate_for_one_feature(tmp_path: Path) -> None:
     db, _jobs, service = _service(tmp_path)
     values = np.arange(4, dtype=np.float64).reshape(4, 1)
-    result = AnalysisEngine.pca(SampleMatrix(values, np.arange(4), sample_ids=[f"frame:{i}" for i in range(4)]), {"preprocess": "center"})
+    result = pca(StructureDescriptorMatrix(values, np.arange(4), sample_ids=[f"frame:{i}" for i in range(4)]), {"preprocess": "center"})
     coords = result["arrays"]["coords"]
     explained = result["arrays"]["explained_variance"]
     assert coords.shape == (4, 2)
@@ -422,8 +423,8 @@ def test_generic_pca_pads_the_second_coordinate_for_one_feature(tmp_path: Path) 
 def test_similarity_preview_resolves_neighbor_indices_to_neighbor_identity(tmp_path: Path) -> None:
     db, _jobs, service = _service(tmp_path)
     values = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 2.0], [10.0, 0.0]])
-    samples = SampleMatrix(values, np.array([10, 11, 12, 13]), sample_ids=[f"frame:{i}" for i in [10, 11, 12, 13]])
-    result = AnalysisEngine.similarity(samples, {"query_index": 0, "k": 2, "metric": "euclidean"})
+    samples = StructureDescriptorMatrix(values, np.array([10, 11, 12, 13]), sample_ids=[f"frame:{i}" for i in [10, 11, 12, 13]])
+    result = similarity(samples, {"query_index": 0, "k": 2, "metric": "euclidean"})
     preview = service._build_preview(result, samples, "similarity")
     assert [row["i"] for row in preview["rows"]] == [1, 2]
     assert [row["frame"] for row in preview["rows"]] == [11, 12]
@@ -434,8 +435,8 @@ def test_similarity_preview_resolves_neighbor_indices_to_neighbor_identity(tmp_p
 def test_neighbors_preview_keeps_source_and_neighbor_identity(tmp_path: Path) -> None:
     db, _jobs, service = _service(tmp_path)
     values = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 2.0]])
-    samples = SampleMatrix(values, np.array([20, 21, 22]), sample_ids=["frame:20", "frame:21", "frame:22"])
-    result = AnalysisEngine.neighbors(samples, {"k": 1, "metric": "euclidean"})
+    samples = StructureDescriptorMatrix(values, np.array([20, 21, 22]), sample_ids=["frame:20", "frame:21", "frame:22"])
+    result = neighbors(samples, {"k": 1, "metric": "euclidean"})
     preview = service._build_preview(result, samples, "neighbors")
     assert preview["total_rows"] == 3
     assert {row["source_i"] for row in preview["rows"]} == {0, 1, 2}
@@ -786,11 +787,10 @@ def test_grouped_fps_run_persists_allocation_and_rejects_missing_metadata(tmp_pa
 
 def test_element_group_labels_use_central_atom_in_atom_mode(tmp_path: Path) -> None:
     db, _jobs, service = _service(tmp_path)
-    samples = SampleMatrix(
+    samples = AtomDescriptorMatrix(
         np.arange(7 * 4, dtype=np.float64).reshape(7, 4),
         np.zeros(7, dtype=np.int64),
         elements=np.array([6, 6, 14, 14, 6, 8, 14], dtype=np.int64),
-        mode="atom",
     )
     # Atom rows group by their central element, not by the frame composition.
     labels = service._element_group_labels({"id": "run_atoms", "dataset_id": "ds_1"}, samples, ("", 7))

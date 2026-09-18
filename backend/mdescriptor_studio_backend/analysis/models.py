@@ -1,9 +1,7 @@
 """Typed containers passed between dataset loading and analysis algorithms.
 
-The public ``SampleMatrix`` name remains as a compatibility shim for older
-callers. New service code uses the concrete structure/atom classes so the
-granularity is represented by the type instead of a string branch scattered
-through every algorithm.
+The concrete structure/atom classes carry granularity in the type instead of a
+string branch scattered through every algorithm.
 """
 
 from __future__ import annotations
@@ -170,11 +168,6 @@ class DescriptorMatrix:
     def granularity(self) -> str:
         return "structure"
 
-    @property
-    def descriptors(self) -> np.ndarray:
-        """Typed-model spelling for the descriptor matrix."""
-        return self.values
-
     def subset(self, indices: Any) -> "DescriptorMatrix":
         selected = np.asarray(indices, dtype=np.int64).reshape(-1)
         kwargs = {
@@ -189,18 +182,12 @@ class DescriptorMatrix:
             "cells": self.cells[selected] if self.cells is not None else None,
             "pbc": self.pbc[selected] if self.pbc is not None else None,
         }
-        if isinstance(self, SampleMatrix):
-            kwargs["mode"] = self.mode
         return type(self)(**kwargs)
 
 
 @dataclass
 class StructureDescriptorMatrix(DescriptorMatrix):
     """One descriptor row per structure/frame."""
-
-    @property
-    def granularity(self) -> str:
-        return "structure"
 
 
 @dataclass
@@ -212,43 +199,9 @@ class AtomDescriptorMatrix(DescriptorMatrix):
         return "atom"
 
 
-@dataclass
-class TrajectoryDescriptorMatrix(StructureDescriptorMatrix):
-    """Structure descriptors whose frame axis is an ordered trajectory."""
-
-
-@dataclass
-class PropertyMatrix(DescriptorMatrix):
-    """Descriptor rows with one or more aligned physical target arrays."""
-
-
-@dataclass
-class SampleMatrix(DescriptorMatrix):
-    """Backward-compatible constructor for pre-typed analysis callers.
-
-    New code should construct ``StructureDescriptorMatrix`` or
-    ``AtomDescriptorMatrix``. Keeping this shim avoids breaking stored-client
-    integrations while the external analysis API still accepts ``mode``.
-    """
-
-    mode: str = "structure"
-
-    def __post_init__(self) -> None:
-        if self.mode not in ("structure", "atom"):
-            raise AppError(ANALYSIS_INPUT_INVALID, "mode must be structure or atom")
-        super().__post_init__()
-
-    @property
-    def granularity(self) -> str:
-        return self.mode
-
-
 __all__ = [
     "AtomDescriptorMatrix",
     "DescriptorMatrix",
-    "PropertyMatrix",
-    "SampleMatrix",
     "StructureDescriptorMatrix",
-    "TrajectoryDescriptorMatrix",
     "validate_matrix_consistency",
 ]

@@ -260,7 +260,6 @@ def property_correlation(samples: DescriptorMatrix, params: dict, progress: Call
             "predictions": predictions,
             "residuals": residuals.astype(np.float64),
             "absolute_errors": absolute_errors.astype(np.float64),
-            "feature_correlations": correlations.astype(np.float64),
             "pearson_correlations": correlations.astype(np.float64),
             "spearman_correlations": spearman_correlations.astype(np.float64),
             "mutual_information": mutual_information.astype(np.float64),
@@ -338,9 +337,6 @@ class FeatureCorrelation:
     name = "feature_correlation"
     category = "engine"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, data, params: dict, progress=None) -> dict:
         return feature_correlation(data, params, progress)
 
@@ -348,9 +344,6 @@ class FeatureCorrelation:
 class PropertyCorrelation:
     name = "property_correlation"
     category = "engine"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, data, params: dict, progress=None) -> dict:
         return property_correlation(data, params, progress)

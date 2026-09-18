@@ -1,5 +1,9 @@
-"""Built-in analysis algorithm implementations and the compatibility facade."""
+"""Built-in analysis algorithm implementations.
 
-from .facade import AnalysisEngine, arm_analysis_warmup_gate
+Each module owns one numerical method and is registered through
+:mod:`..registry`; the warmup gate lives in :mod:`._common`.
+"""
 
-__all__ = ["AnalysisEngine", "arm_analysis_warmup_gate"]
+from ._common import arm_analysis_warmup_gate, warmup
+
+__all__ = ["arm_analysis_warmup_gate", "warmup"]

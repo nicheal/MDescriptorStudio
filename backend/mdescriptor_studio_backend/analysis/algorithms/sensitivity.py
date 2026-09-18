@@ -224,9 +224,6 @@ class Sensitivity:
     name = "sensitivity"
     category = "sensitivity"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, runs, params: dict, progress=None) -> dict:
         return sensitivity(runs, params, progress)
 
@@ -234,9 +231,6 @@ class Sensitivity:
 class PerturbationSensitivity:
     name = "perturbation_sensitivity"
     category = "perturbation"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, baseline, perturbations, params: dict, progress=None) -> dict:
         return perturbation_sensitivity(baseline, perturbations, params, progress)

@@ -44,8 +44,5 @@ class UMAP:
     name = "umap"
     category = "engine"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, data, params: dict, progress=None) -> dict:
         return umap(data, params, progress)

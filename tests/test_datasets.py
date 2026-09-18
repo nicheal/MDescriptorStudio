@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from make_fixtures import write_deepmd, write_extxyz
 
@@ -11,6 +12,7 @@ from mdescriptor_studio_backend.datasets import (
     compute_statistics,
     create_adapter,
     detect_format,
+    exporters,
 )
 from mdescriptor_studio_backend.datasets.statistics import _int_hist
 from mdescriptor_studio_backend.errors import AppError
@@ -171,3 +173,41 @@ def test_unsupported_format(tmp_path: Path) -> None:
         raise AssertionError("should have raised")
     except AppError as e:
         assert e.code == "UNSUPPORTED_FORMAT"
+
+
+def _assert_same_frame(expected, actual) -> None:
+    assert np.array_equal(np.asarray(expected.numbers), np.asarray(actual.numbers))
+    assert float(expected.energy) == pytest.approx(float(actual.energy), rel=1e-7)
+    for name in ("positions", "cell", "forces", "virial"):
+        left, right = getattr(expected, name), getattr(actual, name)
+        if left is None or right is None:
+            assert left is None and right is None, name
+        else:
+            np.testing.assert_allclose(np.ravel(left), np.ravel(right), rtol=1e-6, atol=1e-6)
+
+
+def test_exporters_round_trip_through_the_readers(tmp_path: Path) -> None:
+    """A written system must reload through our own readers with every label.
+
+    The DeepMD frame-property files are named by dpdata (``virial.npy``,
+    singular); an unrecognized name is silently skipped on load, so compare
+    values instead of checking that files exist.
+    """
+    source = tmp_path / "source"
+    write_deepmd(source, 3, 8, seed=5)
+    adapter = create_adapter(source)
+    frames = [adapter.get_frame(index) for index in range(len(adapter))]
+
+    deepmd_copy = tmp_path / "deepmd_copy"
+    assert exporters.write_deepmd(deepmd_copy, frames) == 3
+    exported = create_adapter(deepmd_copy)
+    assert len(exported) == 3
+    for index in range(3):
+        _assert_same_frame(frames[index], exported.get_frame(index))
+
+    xyz_copy = tmp_path / "copy.xyz"
+    assert exporters.write_extxyz(xyz_copy, frames) == 3
+    exported = create_adapter(xyz_copy)
+    assert len(exported) == 3
+    for index in range(3):
+        _assert_same_frame(frames[index], exported.get_frame(index))

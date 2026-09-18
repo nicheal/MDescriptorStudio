@@ -411,9 +411,7 @@ function PropertyView({ preview, arrays, onSelect }: { preview: AnalysisPreview;
     ? nums(arrays.spearman_correlations)
     : associationMethod === "mutual_information"
       ? nums(arrays.mutual_information)
-      : nums(arrays.pearson_correlations).length
-        ? nums(arrays.pearson_correlations)
-        : nums(arrays.feature_correlations);
+      : nums(arrays.pearson_correlations);
   const featureIndices = nums(arrays.feature_indices);
   const associationRows = associationValues.length && featureIndices.length === associationValues.length
     ? associationValues.map((value, index) => ({ feature: featureIndices[index], value }))

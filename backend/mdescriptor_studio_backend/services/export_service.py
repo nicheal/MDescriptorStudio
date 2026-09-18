@@ -9,61 +9,28 @@ details.
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
-import logging
-import threading
 import uuid
-from dataclasses import replace
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
-from ..analysis import (
-    ANALYSIS_REGISTRY,
-    AnalysisEngine,
-    AtomDescriptorMatrix,
-    DescriptorMatrix,
-    StructureDescriptorMatrix,
-)
-from ..analysis.sampling import FeatureBlock, group_sizes, sqrt_quota
-from ..errors import (
-    ANALYSIS_INPUT_INVALID,
-    ANALYSIS_INSUFFICIENT_SAMPLES,
-    ANALYSIS_NOT_FOUND,
-    ANALYSIS_STALE,
-    ARTIFACT_INVALID,
-    EXPORT_FAILED,
-    AppError,
-    INVALID_PARAMS,
-    JOB_CANCELLED,
-    RESULT_INCOMPATIBLE,
-)
+from ..datasets.exporters import write_deepmd, write_extxyz
+from ..errors import ANALYSIS_INPUT_INVALID, EXPORT_FAILED, AppError
 from ..security import (
     UnsafePathError,
     ensure_no_reparse_points,
-    escape_like,
     open_text_for_write,
     validate_local_path,
 )
-from .analysis_artifact_store import AnalysisArtifactStore
-from .analysis_helpers import (
-    ANALYSIS_ALGORITHM_VERSION,
-    COMPOSITE_BLOCKS,
-    PHYSICAL_BLOCKS,
-    _ANALYSIS_SCHEMA_VERSION,
-    _MAX_PREVIEW_POINTS,
-    _NOW,
-    _PREVIEW_ARRAY_KEYS,
-    _block_names,
-    _cell_parameters,
-    _composition_matrix,
-    _descriptor_summary,
-    _pool_rows,
-    _require_finite,
-)
+from .analysis_helpers import ANALYSIS_ALGORITHM_VERSION, _ANALYSIS_SCHEMA_VERSION, _NOW
+
+
+def _cancellable_frames(adapter, frames: list[int], ctx):
+    """Resolve dataset frames lazily so a cancelled export stops mid-write."""
+    for frame_index in frames:
+        ctx.check_cancelled()
+        yield adapter.get_frame(frame_index)
 
 
 class AnalysisExportMixin:
@@ -232,16 +199,13 @@ class AnalysisExportMixin:
                     writer.writerow({"sample_index": i, "frame": frame, "sample_id": f"frame:{frame}"})
             return target
         if export_format == "extxyz":
-            target.parent.mkdir(parents=True, exist_ok=True)
-            self._write_extxyz(adapter, frames, target, ctx)
+            write_extxyz(target, _cancellable_frames(adapter, frames, ctx))
             return target
         if dataset["format"] != "deepmd":
             raise AppError(EXPORT_FAILED, "DeepMD export requires a DeepMD source dataset")
         if target.exists() and not target.is_dir():
             raise AppError(EXPORT_FAILED, "DeepMD export requires a directory destination")
-        target.mkdir(parents=True, exist_ok=True)
-        ensure_no_reparse_points(target)
-        self._write_deepmd(adapter, frames, target, ctx)
+        write_deepmd(target, _cancellable_frames(adapter, frames, ctx))
         return target
 
     def _write_sampling_report(self, run: dict, analysis_row: dict, selected: list[int], target: Path) -> None:
@@ -311,78 +275,5 @@ class AnalysisExportMixin:
         }
         with open_text_for_write(target) as fh:
             json.dump(report, fh, ensure_ascii=False, indent=2)
-
-    @staticmethod
-    def _write_extxyz(adapter, frames: list[int], target: Path, ctx) -> None:
-        from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
-
-        with open_text_for_write(target) as fh:
-            for pos, frame_index in enumerate(frames):
-                ctx.check_cancelled()
-                frame = adapter.get_frame(frame_index)
-                symbols = [_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in frame.numbers]
-                fields = ["species:S:1", "pos:R:3"]
-                if frame.forces is not None:
-                    fields.append("forces:R:3")
-                lattice = " ".join(f"{float(v):.12g}" for v in np.asarray(frame.cell).reshape(-1))
-                comment = f'Properties={":".join(fields)}'
-                if np.abs(frame.cell).sum() > 1e-12:
-                    comment += f' Lattice="{lattice}" pbc="T T T"'
-                if frame.energy is not None:
-                    comment += f" energy={float(frame.energy):.12g}"
-                fh.write(f"{len(symbols)}\n{comment}\n")
-                for i, (symbol, xyz) in enumerate(zip(symbols, frame.positions)):
-                    line = f"{symbol} {' '.join(f'{float(v):.12g}' for v in xyz)}"
-                    if frame.forces is not None:
-                        line += " " + " ".join(f"{float(v):.12g}" for v in frame.forces[i])
-                    fh.write(line + "\n")
-
-    @staticmethod
-    def _write_deepmd(adapter, frames: list[int], target: Path, ctx) -> None:
-        from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
-
-        first = adapter.get_frame(frames[0])
-        numbers = np.asarray(first.numbers, dtype=np.int64)
-        unique = sorted({int(z) for z in numbers.tolist()})
-        type_map = {z: i for i, z in enumerate(unique)}
-        with open_text_for_write(target / "type.raw") as fh:
-            fh.write(" ".join(str(type_map[int(z)]) for z in numbers) + "\n")
-        with open_text_for_write(target / "type_map.raw") as fh:
-            fh.write(" ".join(_Z_TO_SYMBOL.get(z, f"Z{z}") for z in unique) + "\n")
-        set_dir = target / "set.000"
-        set_dir.mkdir(parents=True, exist_ok=True)
-        ensure_no_reparse_points(set_dir)
-        coords, cells, energies, forces, virials = [], [], [], [], []
-        has_energy = has_forces = has_virial = True
-        for frame_index in frames:
-            ctx.check_cancelled()
-            frame = adapter.get_frame(frame_index)
-            coords.append(np.asarray(frame.positions, dtype=np.float64))
-            cells.append(np.asarray(frame.cell, dtype=np.float64))
-            if frame.energy is None:
-                has_energy = False
-            else:
-                energies.append(float(frame.energy))
-            if frame.forces is None:
-                has_forces = False
-            else:
-                forces.append(np.asarray(frame.forces, dtype=np.float64))
-            if frame.virial is None:
-                has_virial = False
-            else:
-                virials.append(np.asarray(frame.virial, dtype=np.float64))
-        np.save(set_dir / "coord.npy", np.stack(coords), allow_pickle=False)
-        if any(np.abs(cell).sum() > 1e-12 for cell in cells):
-            np.save(set_dir / "box.npy", np.stack(cells), allow_pickle=False)
-        else:
-            with open_text_for_write(set_dir / "nopbc") as fh:
-                fh.write("")
-        if has_energy:
-            np.save(set_dir / "energy.npy", np.asarray(energies, dtype=np.float64), allow_pickle=False)
-        if has_forces:
-            np.save(set_dir / "force.npy", np.stack(forces), allow_pickle=False)
-        if has_virial:
-            np.save(set_dir / "virial.npy", np.stack(virials), allow_pickle=False)
-
 
 __all__ = ["AnalysisExportMixin"]

@@ -336,9 +336,6 @@ class Coverage:
     name = "coverage"
     category = "pair"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, left, right, params: dict, progress=None) -> dict:
         return coverage(left, right, params, progress)
 
@@ -346,9 +343,6 @@ class Coverage:
 class Overlap:
     name = "overlap"
     category = "pair"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, left, right, params: dict, progress=None) -> dict:
         return overlap(left, right, params, progress)
@@ -358,9 +352,6 @@ class Acquisition:
     name = "acquisition"
     category = "pair"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, left, right, params: dict, progress=None) -> dict:
         return acquisition(left, right, params, progress)
 
@@ -368,9 +359,6 @@ class Acquisition:
 class Mantel:
     name = "mantel"
     category = "pair"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, left, right, params: dict, progress=None) -> dict:
         return mantel(left, right, params, progress)
@@ -380,9 +368,6 @@ class Compare:
     name = "compare"
     category = "pair"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, left, right, params: dict, progress=None) -> dict:
         return compare(left, right, params, progress)
 
@@ -390,9 +375,6 @@ class Compare:
 class Drift:
     name = "drift"
     category = "pair"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, left, right, params: dict, progress=None) -> dict:
         return drift(left, right, params, progress)

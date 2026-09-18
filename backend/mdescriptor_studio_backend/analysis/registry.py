@@ -1,13 +1,13 @@
 """Analysis algorithm registry.
 
 The registry is the only place that knows the public algorithm vocabulary and
-the numerical call shape. Services can dispatch by metadata without growing a
-second central catalogue or a chain of ``if analysis_type`` branches.
+the numerical call shape: services dispatch through it instead of keeping a
+second central catalogue of algorithm names.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Protocol, Sequence
 
 
@@ -18,8 +18,6 @@ class AnalysisAlgorithm(Protocol):
     name: str
     category: str
 
-    def validate(self, params: dict) -> None: ...
-
     def run(self, data, params: dict) -> dict: ...
 
 
@@ -28,59 +26,34 @@ class AlgorithmSpec:
     name: str
     category: str
     handler: Handler | None = None
-    schema: dict[str, Any] = field(default_factory=dict)
-    input_count: int = 1
     variant: str | None = None
-    aliases: tuple[str, ...] = ()
 
 
 class AnalysisRegistry:
     def __init__(self, specs: Sequence[AlgorithmSpec] = ()) -> None:
         self._specs: dict[str, AlgorithmSpec] = {}
-        self._aliases: dict[str, str] = {}
         for spec in specs:
             self.register(spec)
 
-    def register(self, algorithm: AlgorithmSpec | AnalysisAlgorithm, **metadata: Any) -> AlgorithmSpec:
-        """Register a spec or a small plugin object with ``run``.
-
-        ``metadata`` is intentionally optional so a future descriptor/plugin
-        can register itself with only ``name``, ``category`` and ``run``.
-        """
+    def register(self, algorithm: AlgorithmSpec | AnalysisAlgorithm) -> AlgorithmSpec:
+        """Register a spec, or a plugin object exposing name/category/run."""
         if isinstance(algorithm, AlgorithmSpec):
             spec = algorithm
         else:
-            name = str(getattr(algorithm, "name"))
             spec = AlgorithmSpec(
-                name=name,
-                category=str(metadata.get("category", getattr(algorithm, "category", "engine"))),
-                handler=getattr(algorithm, "run"),
-                schema=dict(metadata.get("schema", getattr(algorithm, "schema", {}) or {})),
-                input_count=int(metadata.get("input_count", getattr(algorithm, "input_count", 1))),
-                variant=metadata.get("variant"),
-                aliases=tuple(metadata.get("aliases", getattr(algorithm, "aliases", ()) or ())),
+                name=str(algorithm.name),
+                category=str(algorithm.category),
+                handler=algorithm.run,
             )
         name = spec.name.strip().lower()
         if not name or name in self._specs:
             raise ValueError(f"analysis algorithm {spec.name!r} is already registered")
-        normalized = AlgorithmSpec(
-            name=name,
-            category=spec.category,
-            handler=spec.handler,
-            schema=dict(spec.schema),
-            input_count=spec.input_count,
-            variant=spec.variant,
-            aliases=tuple(alias.strip().lower() for alias in spec.aliases),
-        )
+        normalized = AlgorithmSpec(name=name, category=spec.category, handler=spec.handler, variant=spec.variant)
         self._specs[name] = normalized
-        for alias in normalized.aliases:
-            if alias and alias not in self._specs and alias not in self._aliases:
-                self._aliases[alias] = name
         return normalized
 
     def get(self, name: str) -> AlgorithmSpec:
         key = str(name).strip().lower()
-        key = self._aliases.get(key, key)
         try:
             return self._specs[key]
         except KeyError as exc:
@@ -89,27 +62,22 @@ class AnalysisRegistry:
     def names(self) -> tuple[str, ...]:
         return tuple(self._specs)
 
-    def specs(self) -> tuple[AlgorithmSpec, ...]:
-        return tuple(self._specs.values())
-
     def catalog(self) -> dict[str, str]:
         return {spec.name: spec.category for spec in self._specs.values()}
-
-    def names_by_category(self, *categories: str) -> frozenset[str]:
-        wanted = set(categories)
-        return frozenset(spec.name for spec in self._specs.values() if spec.category in wanted)
 
     def run(self, name: str, samples: Sequence[Any], params: dict, progress=None, **context: Any) -> dict:
         """Invoke a registered algorithm using its declared input shape."""
         spec = self.get(name)
         if spec.handler is None:
             raise KeyError(f"analysis algorithm {name!r} is an RPC wrapper")
-        if len(samples) < spec.input_count:
-            raise ValueError(f"{name} requires {spec.input_count} input sample matrix(es)")
+        if not samples:
+            raise ValueError(f"{name} requires an input sample matrix")
         handler = spec.handler
         if spec.category == "engine":
             return handler(samples[0], params, progress)
         if spec.category == "pair":
+            if len(samples) < 2:
+                raise ValueError(f"{name} requires two input sample matrices")
             return handler(samples[0], samples[1], params, progress)
         if spec.category in ("cluster", "outlier"):
             return handler(samples[0], params, spec.variant or spec.name, progress)
@@ -125,7 +93,10 @@ class AnalysisRegistry:
                 existing_blocks=context.get("existing_blocks"),
             )
         if spec.category == "sensitivity":
-            return handler(context.get("runs", list(zip([], samples))), params, progress)
+            runs = context.get("runs")
+            if not runs:
+                raise ValueError(f"{name} algorithm requires a runs context")
+            return handler(runs, params, progress)
         if spec.category == "perturbation":
             runner = context.get("runner")
             if runner is None:
@@ -134,13 +105,8 @@ class AnalysisRegistry:
         raise ValueError(f"unsupported analysis algorithm category: {spec.category}")
 
 
-def build_default_registry(engine=None) -> AnalysisRegistry:
-    """Build the built-in registry.
-
-    ``engine`` is accepted for backwards compatibility with older call sites
-    (the stable ``AnalysisEngine`` facade). Plugin implementations are the
-    source of truth now, so it is deliberately ignored.
-    """
+def build_default_registry() -> AnalysisRegistry:
+    """Build the built-in registry from the plugin implementations."""
     from .algorithms.correlation import FeatureCorrelation, PropertyCorrelation
     from .algorithms.kernel import Kernel
     from .algorithms.pairs import Acquisition, Compare, Coverage, Drift, Mantel, Overlap

@@ -11,7 +11,12 @@ from pathlib import Path
 
 import numpy as np
 
-from mdescriptor_studio_backend.analysis import AnalysisEngine, StructureDescriptorMatrix
+from mdescriptor_studio_backend.analysis import StructureDescriptorMatrix
+from mdescriptor_studio_backend.analysis.algorithms.kernel import kernel
+from mdescriptor_studio_backend.analysis.algorithms.pairs import coverage
+from mdescriptor_studio_backend.analysis.algorithms.pca import pca
+from mdescriptor_studio_backend.analysis.metrics import effective_dimension, feature_variance
+from mdescriptor_studio_backend.analysis.sampling.engine import sampling
 from mdescriptor_studio_backend.datasets import create_adapter
 
 FIXTURES = Path(__file__).resolve().parent
@@ -40,31 +45,31 @@ def test_analysis_numerical_regression() -> None:
     expected = np.load(FIXTURES / "expected.npz")
     samples = _samples()
 
-    pca = AnalysisEngine.pca(samples, {"preprocess": "standardized"})
-    np.testing.assert_allclose(pca["arrays"]["coords"], expected["pca_coords"], rtol=1e-12, atol=1e-12)
-    np.testing.assert_allclose(pca["arrays"]["explained_variance"], expected["pca_explained"], rtol=1e-12, atol=1e-12)
+    pca_result = pca(samples, {"preprocess": "standardized"})
+    np.testing.assert_allclose(pca_result["arrays"]["coords"], expected["pca_coords"], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(pca_result["arrays"]["explained_variance"], expected["pca_explained"], rtol=1e-12, atol=1e-12)
 
-    variance = AnalysisEngine.feature_variance(samples, {"histogram_bins": 8, "distribution_sample_size": 10})
+    variance = feature_variance(samples, {"histogram_bins": 8, "distribution_sample_size": 10})
     for name, value in variance["arrays"].items():
         key = f"variance_{name}"
         if key not in expected:
             continue
         np.testing.assert_allclose(value, expected[key], rtol=1e-12, atol=1e-12)
 
-    dimension = AnalysisEngine.effective_dimension(samples, {"preprocess": "standardized"})
+    dimension = effective_dimension(samples, {"preprocess": "standardized"})
     for name, value in dimension["arrays"].items():
         key = f"dimension_{name}"
         if key not in expected:
             continue
         np.testing.assert_allclose(value, expected[key], rtol=1e-12, atol=1e-12)
 
-    kernel = AnalysisEngine.kernel(samples, {"kernel": "rbf", "max_samples": 16})
-    np.testing.assert_allclose(kernel["arrays"]["kernel_matrix"], expected["kernel_matrix"], rtol=1e-12, atol=1e-12)
+    kernel_result = kernel(samples, {"kernel": "rbf", "max_samples": 16})
+    np.testing.assert_allclose(kernel_result["arrays"]["kernel_matrix"], expected["kernel_matrix"], rtol=1e-12, atol=1e-12)
 
-    random = AnalysisEngine.sampling(samples, {"n_samples": 6, "seed": 17}, "random")
+    random = sampling(samples, {"n_samples": 6, "seed": 17}, "random")
     np.testing.assert_array_equal(random["arrays"]["selected_indices"], expected["random_indices"])
-    fps = AnalysisEngine.sampling(samples, {"n_samples": 6, "seed": 17}, "fps")
+    fps = sampling(samples, {"n_samples": 6, "seed": 17}, "fps")
     np.testing.assert_array_equal(fps["arrays"]["selected_indices"], expected["fps_indices"])
 
-    coverage = AnalysisEngine.coverage(samples, samples, {"max_samples": 16, "metric": "euclidean"})
-    np.testing.assert_allclose(coverage["arrays"]["distances"], expected["coverage_distances"], rtol=1e-12, atol=1e-12)
+    coverage_result = coverage(samples, samples, {"max_samples": 16, "metric": "euclidean"})
+    np.testing.assert_allclose(coverage_result["arrays"]["distances"], expected["coverage_distances"], rtol=1e-12, atol=1e-12)

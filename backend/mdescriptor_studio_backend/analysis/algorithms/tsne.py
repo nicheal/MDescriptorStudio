@@ -41,8 +41,5 @@ class TSNE:
     name = "tsne"
     category = "engine"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, data, params: dict, progress=None) -> dict:
         return tsne(data, params, progress)

@@ -12,7 +12,7 @@ import threading
 import time
 
 from . import __version__
-from .analysis import ANALYSIS_REGISTRY, AnalysisEngine, arm_analysis_warmup_gate
+from .analysis import ANALYSIS_REGISTRY, arm_analysis_warmup_gate, warmup as warmup_analysis
 from .config import data_dir
 from .errors import AppError, INVALID_PARAMS, JOB_NOT_FOUND
 from .logging_setup import setup_logging
@@ -109,14 +109,12 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
         "analysis.export": analysis.submit_export,
     }
     for analysis_type in ANALYSIS_REGISTRY.names():
-        # Registry entries own the RPC vocabulary. An algorithm added to the
-        # registry therefore becomes callable without another main/service edit;
-        # explicitly normalized methods (cluster/outlier/sampling, ...) still win.
-        rpc = getattr(analysis, analysis_type, None)
-        if rpc is None:
-            def rpc(params, _analysis_type=analysis_type):
-                return analysis.submit_generic(_analysis_type, params)
-        analysis_methods[f"analysis.{analysis_type}"] = rpc
+        # Registry entries own the RPC vocabulary: an algorithm added to the
+        # registry becomes callable without another main/service edit. Explicit
+        # normalizing methods (cluster/outlier/sampling, ...) win because the
+        # generated pass-throughs skip them, so a registry name that resolves
+        # to no attribute is a wiring bug and must fail here, not silently.
+        analysis_methods[f"analysis.{analysis_type}"] = getattr(analysis, analysis_type)
 
     return {
         "system.info": system_info,
@@ -217,11 +215,23 @@ def main() -> int:
         # polls instead of blocking in ReadFile (see Server.serve_forever —
         # a blocking stdin read concurrent with these imports deadlocks the
         # Windows DLL loader).
-        adapter.warmup()
-        log.info("engine warmup complete")
-        analysis_dependencies = AnalysisEngine.warmup()
-        log.info("analysis dependencies: %s", analysis_dependencies)
-        server.warmup_finished.set()
+        # Each step is guarded on its own: the analysis warmup releases
+        # the analysis gate in its finally, so letting an engine failure skip
+        # it would hang every later analysis request on _safe_import's
+        # untimed wait, and warmup_finished keeps the polled stdin loop from
+        # spinning at 1 ms for the life of the process.
+        try:
+            adapter.warmup()
+            log.info("engine warmup complete")
+        except Exception:  # noqa: BLE001 - a failed warmup must not strand requests
+            log.exception("engine warmup failed")
+        try:
+            analysis_dependencies = warmup_analysis()
+            log.info("analysis dependencies: %s", analysis_dependencies)
+        except Exception:  # noqa: BLE001
+            log.exception("analysis warmup failed")
+        finally:
+            server.warmup_finished.set()
 
     threading.Thread(target=_warmup, name="warmup", daemon=True).start()
     log.info("backend ready; warmup continues in background")

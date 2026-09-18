@@ -580,9 +580,6 @@ class Neighbors:
     name = "neighbors"
     category = "engine"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, data, params: dict, progress=None) -> dict:
         return neighbors(data, params, progress)
 
@@ -590,9 +587,6 @@ class Neighbors:
 class Similarity:
     name = "similarity"
     category = "engine"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, data, params: dict, progress=None) -> dict:
         return similarity(data, params, progress)
@@ -602,9 +596,6 @@ class Pairwise:
     name = "pairwise"
     category = "engine"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, data, params: dict, progress=None) -> dict:
         return pairwise(data, params, progress)
 
@@ -612,9 +603,6 @@ class Pairwise:
 class FeatureVariance:
     name = "feature_variance"
     category = "engine"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, data, params: dict, progress=None) -> dict:
         return feature_variance(data, params, progress)
@@ -624,9 +612,6 @@ class LocalDiversity:
     name = "local_diversity"
     category = "engine"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, data, params: dict, progress=None) -> dict:
         return local_diversity(data, params, progress)
 
@@ -635,9 +620,6 @@ class EffectiveDimension:
     name = "effective_dimension"
     category = "engine"
 
-    def validate(self, params: dict) -> None:
-        return None
-
     def run(self, data, params: dict, progress=None) -> dict:
         return effective_dimension(data, params, progress)
 
@@ -645,9 +627,6 @@ class EffectiveDimension:
 class Trajectory:
     name = "trajectory"
     category = "engine"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, data, params: dict, progress=None) -> dict:
         return trajectory(data, params, progress)

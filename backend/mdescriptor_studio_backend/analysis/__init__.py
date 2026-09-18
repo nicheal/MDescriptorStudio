@@ -6,34 +6,28 @@ service; this keeps the analysis layer replaceable and makes it possible to
 test every algorithm with synthetic runs.
 """
 
-from .engine import AnalysisEngine, arm_analysis_warmup_gate
+from .algorithms import arm_analysis_warmup_gate, warmup
 from .models import (
     AtomDescriptorMatrix,
     DescriptorMatrix,
-    PropertyMatrix,
-    SampleMatrix,
     StructureDescriptorMatrix,
-    TrajectoryDescriptorMatrix,
     validate_matrix_consistency,
 )
 from .registry import AnalysisRegistry, AlgorithmSpec, build_default_registry
 from .sampling import FPSResult, coverage_statistics, farthest_point_sampling
 
 __all__ = [
-    "AnalysisEngine",
     "AnalysisRegistry",
     "AlgorithmSpec",
     "AtomDescriptorMatrix",
     "DescriptorMatrix",
     "FPSResult",
-    "PropertyMatrix",
-    "SampleMatrix",
     "StructureDescriptorMatrix",
-    "TrajectoryDescriptorMatrix",
     "arm_analysis_warmup_gate",
     "coverage_statistics",
     "farthest_point_sampling",
     "validate_matrix_consistency",
+    "warmup",
 ]
 
-ANALYSIS_REGISTRY = build_default_registry(AnalysisEngine)
+ANALYSIS_REGISTRY = build_default_registry()

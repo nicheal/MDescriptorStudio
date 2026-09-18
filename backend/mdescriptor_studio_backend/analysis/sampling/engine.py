@@ -130,7 +130,6 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
             "stop_reason": result.stopped_by,
             "coverage_radius": result.coverage_radius,
             "coverage_r2": result.coverage_r2,
-            "coverage_r2_final": result.coverage_r2,
             "total_spread": result.total_spread,
             "mean_residual": residuals["mean"],
             "p50_residual": residuals["p50"],
@@ -204,9 +203,6 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
 class Sampling:
     name = "sampling"
     category = "sampling"
-
-    def validate(self, params: dict) -> None:
-        return None
 
     def run(self, data, params: dict, algorithm: str, progress=None, existing=None, group_labels=None, blocks=None, existing_blocks=None) -> dict:
         return sampling(data, params, algorithm, progress, existing=existing, group_labels=group_labels, blocks=blocks, existing_blocks=existing_blocks)
