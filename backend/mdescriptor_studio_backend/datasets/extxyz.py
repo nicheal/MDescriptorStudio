@@ -40,15 +40,27 @@ class ExtXYZAdapter(DatasetAdapter):
                     line = _readline_bounded(f)
                     if not line:
                         break
+                    stripped = line.strip()
+                    if not stripped:
+                        continue  # blank lines between frames carry no information
                     try:
-                        natoms = int(line.strip())
-                    except ValueError:
-                        break  # trailing garbage
+                        natoms = int(stripped)
+                    except ValueError as exc:
+                        # A non-numeric line here means the frame boundary already
+                        # desynchronized (an extra atom row read as a header), not
+                        # trailing whitespace. Truncating quietly would persist a
+                        # frame count and fingerprint that no longer describe the
+                        # file, so fail instead.
+                        raise AppError(
+                            INVALID_DATASET,
+                            "extXYZ frame count is malformed; frame boundaries do not line up",
+                            {"frame": len(self._offsets) + 1},
+                        ) from exc
                     if natoms < 0 or natoms > MAX_ATOMS:
                         raise AppError(INVALID_DATASET, "extXYZ atom count is outside the supported limit")
                     comment = _readline_bounded(f)
                     if not comment:
-                        break
+                        raise AppError(INVALID_DATASET, "extXYZ frame is truncated: header line is missing")
                     try:
                         meta = _parse_comment(comment)
                     except (AppError, IndexError, TypeError, ValueError) as exc:

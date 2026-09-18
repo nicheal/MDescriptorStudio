@@ -111,6 +111,10 @@ class JobService:
             for name, size in _POOL_SIZES.items()
         }
         self._contexts: dict[str, JobContext] = {}
+        # job ids whose _run is on a worker thread right now. cancel() detaches
+        # and pops the context immediately, so shutdown cannot use _contexts to
+        # tell "no work left" from "runner still inside a long native call".
+        self._active: set[str] = set()
         self._lock = threading.Lock()
         self._queue_slots = threading.BoundedSemaphore(64)
         # jobs left non-terminal by a previous session can never finish: close them.
@@ -168,6 +172,8 @@ class JobService:
         )
 
     def _run(self, job_id: str, job_type: str, runner) -> None:
+        with self._lock:
+            self._active.add(job_id)
         try:
             with self._lock:
                 ctx = self._contexts.get(job_id)
@@ -194,6 +200,8 @@ class JobService:
             log.exception("job %s crashed", job_id)
             self._finish(job_id, "FAILED", error={"code": "INTERNAL_ERROR", "message": "The backend failed to complete the job."})
         finally:
+            with self._lock:
+                self._active.discard(job_id)
             self._queue_slots.release()
 
     def _finish(self, job_id: str, status: str, error, result=None) -> None:
@@ -360,9 +368,10 @@ class JobService:
         deadline = time.monotonic() + wait_seconds
         while time.monotonic() < deadline:
             with self._lock:
-                if not self._contexts:
+                if not self._active:
                     break
             time.sleep(0.05)
-        # anything still non-terminal can no longer reach the about-to-close db:
-        # close it out here so the table never keeps zombie RUNNING rows
+        # anything still non-terminal belongs to a runner that outlived the
+        # wait or a future cancel_futures dropped: main.py exits hard right
+        # after, so settle the rows here instead of leaving them RUNNING.
         self._sweep_zombie_runs("backend_shutdown")

@@ -486,8 +486,13 @@ class DescriptorService:
             raise AppError(OUT_OF_MEMORY, "descriptor input exceeds the supported memory budget")
 
     def _run_compute(self, ctx, run_id, row, name, parameters, scope, frame_index, output_dtype, device="cpu", num_threads=None):
+        # The status guard mirrors job_runner._mark_run_running: cancel() has
+        # already settled this row to CANCELLED, and an unguarded write here
+        # would resurrect it to RUNNING so that _complete_run's CAS matches and
+        # a cancelled compute commits as COMPLETED.
         self.db.execute(
-            "UPDATE descriptor_runs SET status = 'RUNNING', started_at = ? WHERE id = ?",
+            "UPDATE descriptor_runs SET status = 'RUNNING', started_at = ?"
+            " WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
             (_NOW(), run_id),
         )
         ctx.check_cancelled()
