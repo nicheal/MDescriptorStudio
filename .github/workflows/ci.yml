@@ -1,0 +1,84 @@
+name: CI
+
+# The release workflow only fires on tags, so without this the test suite runs
+# just on the author's machine. Windows because that is the platform the code
+# targets: the sidecar's polled-stdin warmup, the extXYZ/DeepMD path handling
+# and the NSIS bundle are all Windows-specific.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            tests/requirements-test.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt -r tests/requirements-test.txt
+
+      # The shipped app loads the native geometry kernel; without it
+      # tests/test_native_stats.py skips and CI never covers the accelerated path.
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build native geometry kernel
+        shell: pwsh
+        run: .\scripts\build_native.ps1
+
+      - name: Check version fields agree
+        shell: pwsh
+        run: .\scripts\sync_version.ps1 -Check
+
+      - name: Run backend tests
+        run: python -m pytest tests -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Node dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc -b
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Unit tests
+        working-directory: frontend
+        run: npm run test

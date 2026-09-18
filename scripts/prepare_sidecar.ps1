@@ -1,6 +1,7 @@
 # Prepare the verified Python backend bundle used by both local and GitHub release builds.
 # Produces:
 #   src-tauri\resources\backend\                        PyInstaller onedir bundle
+#   src-tauri\resources\backend\backend-dependencies.txt  exact installed package versions
 #   src-tauri\resources\backend\backend-manifest.json   per-file size + SHA-256
 #   src-tauri\binaries\backend-bundle.sha256            SHA-256 of the manifest (embedded at compile time)
 
@@ -24,6 +25,12 @@ if (Test-Path -LiteralPath $bundleDir) {
 }
 New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
 Copy-Item "$root\backend\dist\backend\*" $bundleDir -Recurse -Force
+
+# ADR-2 installs the latest PyPI engine at release time, so the versions that were
+# actually frozen into this bundle are recorded next to the manifest they ship with.
+$freezeFile = Join-Path $bundleDir "backend-dependencies.txt"
+& "$root\.venv\Scripts\python.exe" -m pip freeze | Set-Content -LiteralPath $freezeFile -Encoding ascii
+if ($LASTEXITCODE -ne 0) { throw "could not record bundled Python package versions" }
 
 # Manifest of every bundled file (sorted relative paths, forward slashes) so the
 # Rust shell can verify the bundle against the hash compiled into the binary.
