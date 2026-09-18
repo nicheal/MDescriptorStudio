@@ -24,6 +24,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # First because it inspects the source tree only: a version mismatch is
+      # known in seconds instead of after the toolchain install.
+      - name: Check version fields agree
+        shell: pwsh
+        run: |
+          try {
+            .\scripts\sync_version.ps1 -Check
+          } catch {
+            # Job logs need a signed-in session; the step summary does not.
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "sync_version -Check failed: $($_.Exception.Message)"
+            exit 1
+          }
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -47,17 +60,6 @@ jobs:
       - name: Build native geometry kernel
         shell: pwsh
         run: .\scripts\build_native.ps1
-
-      - name: Check version fields agree
-        shell: pwsh
-        run: |
-          try {
-            .\scripts\sync_version.ps1 -Check
-          } catch {
-            # Job logs need a signed-in session; the step summary does not.
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "sync_version -Check failed: $($_.Exception.Message)"
-            exit 1
-          }
 
       - name: Run backend tests
         run: python -m pytest tests -q
