@@ -20,7 +20,9 @@ from .mdescriptor_adapter import EngineAdapter
 from .protocol import frames
 from .protocol.server import Server
 from .services.analysis_service import ANALYSIS_ALGORITHM_VERSION, AnalysisService
+from .services.dataset_frame_service import DatasetFrameService
 from .services.dataset_service import DatasetService
+from .services.dataset_view_service import DatasetViewService
 from .services.descriptor_service import DescriptorService
 from .services.job_service import JobService
 from .services.result_service import ResultService
@@ -54,7 +56,7 @@ def _configure_stdio() -> None:
             reconfigure(encoding="utf-8", errors="strict")
 
 
-def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, engine_info, root):
+def build_methods(jobs, datasets, views, frame_service, descriptors, results, analysis, settings_kv, engine_info, root):
     def system_info(_params):
         return {
             "backend_version": __version__,
@@ -127,14 +129,14 @@ def build_methods(jobs, datasets, descriptors, results, analysis, settings_kv, e
         "dataset.get": datasets.get,
         "dataset.statistics": datasets.statistics,
         "dataset.rescan": datasets.rescan,
-        "dataset.frame": datasets.frame,
+        "dataset.frame": frame_service.frame,
         "dataset.findings": datasets.findings,
-        "dataset.view.list": datasets.view_list,
-        "dataset.view.create": datasets.view_create,
-        "dataset.view.rename": datasets.view_rename,
-        "dataset.view.remove": datasets.view_remove,
-        "dataset.view.split": datasets.view_split,
-        "dataset.view.materialize": datasets.view_materialize,
+        "dataset.view.list": views.list,
+        "dataset.view.create": views.create,
+        "dataset.view.rename": views.rename,
+        "dataset.view.remove": views.remove,
+        "dataset.view.split": views.split,
+        "dataset.view.materialize": views.materialize,
         "descriptor.list": descriptors.list,
         "descriptor.describe": descriptors.describe,
         "descriptor.submit": descriptors.submit,
@@ -165,13 +167,15 @@ def main() -> int:
     server.warmup_finished = threading.Event()
     jobs = JobService(db, server.emit)
     datasets = DatasetService(db, adapter, jobs, root)
+    views = DatasetViewService(datasets)
+    frame_service = DatasetFrameService(datasets)
     results = ResultService(db, root)
     descriptors = DescriptorService(
         db, adapter, jobs, datasets, root, info.get("version", "unknown")
     )
     analysis = AnalysisService(db, jobs, results, datasets, root)
     server.methods = build_methods(
-        jobs, datasets, descriptors, results, analysis, db, info, root
+        jobs, datasets, views, frame_service, descriptors, results, analysis, db, info, root
     )
 
     # Arm both warmup gates before the handshake: the heavy warmups below run

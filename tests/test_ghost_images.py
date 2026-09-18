@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from mdescriptor_studio_backend.services.dataset_service import periodic_boundary_ghosts
+from mdescriptor_studio_backend.datasets.ghosts import periodic_boundary_ghosts
 
 
 def _cubic(l: float) -> np.ndarray:

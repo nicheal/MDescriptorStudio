@@ -5,17 +5,15 @@
  * Plotly is deliberately scoped to this page; Overview remains ECharts and
  * Explore remains 3Dmol.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Plot from "../viz/ScientificPlot";
-import type { Data, PlotDatum, PlotSelectionEvent } from "plotly.js";
+import type { PlotDatum, PlotSelectionEvent } from "plotly.js";
 import {
   App as AntApp,
   Button,
-  Collapse,
   Empty,
   Input,
   InputNumber,
-  Modal,
   Progress,
   Select,
   Space,
@@ -48,7 +46,6 @@ import {
   analysisNavModuleForKey,
   analysisNavModuleForView,
   ARTIFACT_ARRAYS,
-  OVERVIEW_KIND_LABELS,
   SAMPLING_LABELS,
   slotForParams,
   slotKey,
@@ -62,165 +59,42 @@ import {
 import { useT } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import SaveViewModal from "../components/SaveViewModal";
-import { normalizePoints, selectedDisplayIndices, type AnalysisPoint } from "./analysisPreview";
-import AnalysisResultVisualization, { type AnalysisArrays } from "./analysisVisualizations";
-import { getAnalysisMethodGuide, type AnalysisMethodGuide } from "./analysisMethodGuides";
-import { ChartCaption, HIGH_CONTRAST_COLORSCALE, NoData as OverviewNoData, OverviewPlot, formatCount, num as finiteNumber, nums as numericArray, overviewLayout, plotData } from "./analysisChartKit";
-import { FeatureVarianceChart } from "./featureVariance";
+import { normalizePoints, selectedDisplayIndices } from "./analysisPreview";
+import AnalysisResultVisualization from "./analysisVisualizations";
+import { getAnalysisMethodGuide } from "./analysisMethodGuides";
+import { HIGH_CONTRAST_COLORSCALE, num as finiteNumber, overviewLayout, plotData } from "./analysisChartKit";
 import { analysisCache, type CachedAnalysis } from "./analysisCache";
 import type {
   AnalysisJobResponse,
   AnalysisChunk,
   AnalysisPreview,
   AnalysisRow,
-  DatasetMeta,
   DatasetView,
   FramePayload,
   PcaPayload,
   RunRow,
 } from "../types/protocol";
 
-type CompareMode = "geometry" | "mantel";
+import {
+  AnalysisMethodGuideModal,
+  AnalysisRunLabel,
+  CrossDatasetPicker,
+  OverviewResultVisualization,
+  ParamLabel,
+  ProjectionControls,
+  ResultPanel,
+  Row,
+  SectionHeading,
+  pcaPayloadPoints,
+  selectedIndicesFromPreview,
+  withCacheMarks,
+  type CacheOption,
+  type CompareMode,
+  type NumericArrays,
+  type Point,
+  type ProjectionOverrides,
+} from "./analysisShared";
 
-type Point = AnalysisPoint;
-type NumericArrays = AnalysisArrays;
-
-// Module-level so computed charts survive leaving the Analysis page. After an
-// app restart the backend re-serves generic artifacts through analysis.preview;
-// result.get_pca is only used while opening legacy PCA rows.
-type ProjectionOverrides = {
-  mode?: PcaMode;
-  preprocess?: string;
-};
-
-type Metric = {
-  label: ReactNode;
-  value: string;
-};
-
-function AnalysisRunLabel({ name, shape }: { name: string; shape: string }) {
-  return (
-    <span className="analysis-run-label">
-      <span className="analysis-run-name">{name}</span>
-      <span className="analysis-run-shape">{shape}</span>
-    </span>
-  );
-}
-
-function CrossDatasetPicker({
-  datasets,
-  referenceDatasetId,
-  queryDatasetId,
-  referenceRunId,
-  queryRunId,
-  referenceViewId,
-  queryViewId,
-  referenceRuns,
-  queryRuns,
-  referenceViews,
-  queryViews,
-  compatible,
-  disabled,
-  onReferenceDataset,
-  onQueryDataset,
-  onReferenceRun,
-  onQueryRun,
-  onReferenceView,
-  onQueryView,
-  onSwap,
-}: {
-  datasets: DatasetMeta[];
-  referenceDatasetId: string | null;
-  queryDatasetId: string | null;
-  referenceRunId: string | null;
-  queryRunId: string | null;
-  referenceViewId: string | null;
-  queryViewId: string | null;
-  referenceRuns: RunRow[];
-  queryRuns: RunRow[];
-  referenceViews: DatasetView[];
-  queryViews: DatasetView[];
-  compatible: boolean;
-  disabled: boolean;
-  onReferenceDataset: (value: string) => void;
-  onQueryDataset: (value: string) => void;
-  onReferenceRun: (value: string) => void;
-  onQueryRun: (value: string) => void;
-  onReferenceView: (value: string | null) => void;
-  onQueryView: (value: string | null) => void;
-  onSwap: () => void;
-}) {
-  const { t } = useT();
-  const datasetOptions = datasets.map((item) => ({ value: item.id, label: item.name }));
-  const scopeOptions = (views: DatasetView[]) => [
-    { value: "__full__", label: t("Full dataset") },
-    ...views.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString()}` })),
-  ];
-  const runOptions = (rows: RunRow[]) => rows.map((run) => ({
-    value: run.id,
-    label: <AnalysisRunLabel name={run.descriptor_name} shape={run.shape ?? t("unknown shape")} />,
-  }));
-  const row = (
-    label: string,
-    datasetId: string | null,
-    runId: string | null,
-    viewId: string | null,
-    runs: RunRow[],
-    views: DatasetView[],
-    onDataset: (value: string) => void,
-    onRun: (value: string) => void,
-    onView: (value: string | null) => void,
-  ) => <div className="analysis-cross-input-row">
-    <Typography.Text strong className="analysis-cross-input-label">{label}</Typography.Text>
-    <Select aria-label={`${label} ${t("Dataset")}`} value={datasetId ?? undefined} disabled={disabled} options={datasetOptions} onChange={onDataset} />
-    <Select aria-label={`${label} ${t("Scope")}`} value={viewId ?? "__full__"} disabled={disabled || !datasetId} options={scopeOptions(views)} onChange={(value) => onView(value === "__full__" ? null : value)} />
-    <Select aria-label={`${label} ${t("Descriptor run")}`} value={runId ?? undefined} disabled={disabled || !datasetId} placeholder={runs.length ? t("Select completed run") : t("No compatible run")} options={runOptions(runs)} onChange={onRun} />
-  </div>;
-  return <div className="analysis-cross-inputs">
-    {row(t("Reference"), referenceDatasetId, referenceRunId, referenceViewId, referenceRuns, referenceViews, onReferenceDataset, onReferenceRun, onReferenceView)}
-    <Button className="analysis-cross-swap" size="small" icon={<ArrowSync16Regular />} disabled={disabled || !referenceDatasetId || !queryDatasetId} onClick={onSwap}>{t("Swap")}</Button>
-    {row(t("Query"), queryDatasetId, queryRunId, queryViewId, queryRuns, queryViews, onQueryDataset, onQueryRun, onQueryView)}
-    <div className="analysis-cross-status">
-      <Tag color={compatible ? "green" : "orange"}>{compatible ? t("Compatible feature space") : t("Select a compatible feature space")}</Tag>
-    </div>
-  </div>;
-}
-
-// Green dot marking a parameter value whose analysis result is already
-// computed (and can be re-displayed without rerunning).
-function CacheDot() {
-  return <span aria-hidden title="cached result available" style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: "#107C10", marginInlineEnd: 6, flex: "none" }} />;
-}
-
-// Parameter label with the cache dot when its current value is computed.
-function ParamLabel({ label, cached }: { label: string; cached: boolean }) {
-  return <Typography.Text>{cached ? <CacheDot /> : null}{label}</Typography.Text>;
-}
-
-// Prepend the cache dot to every select option that has a computed result.
-type CacheOption = { value: string; label: ReactNode };
-function withCacheMarks(isCached: (value: string) => boolean, options: CacheOption[]): CacheOption[] {
-  return options.map((option) => (isCached(option.value) ? { ...option, label: <><CacheDot />{option.label}</> } : option));
-}
-
-function pcaPayloadPoints(payload: PcaPayload): Point[] {
-  return payload.points.map((point) => ({
-    i: point.i,
-    frame: point.frame,
-    row: point.atom,
-    x: point.pc1,
-    y: point.pc2,
-    energy_per_atom: point.energy_per_atom,
-    force_max: point.force_max,
-    volume: point.volume,
-  }));
-}
-
-function selectedIndicesFromPreview(result: AnalysisPreview): number[] {
-  return (Array.isArray(result.selected) ? result.selected : [])
-    .map((row) => Number(row.i ?? row.sample_index))
-    .filter((index) => Number.isInteger(index) && index >= 0);
-}
 
 export default function Analysis() {
   const { message } = AntApp.useApp();
@@ -1820,274 +1694,3 @@ export default function Analysis() {
   );
 }
 
-function OverviewResultVisualization({ preview, arrays, loading, analysisId }: { preview: AnalysisPreview | null; arrays: NumericArrays; loading: boolean; analysisId: string | null }) {
-  const { t, tr } = useT();
-  if (!preview) return null;
-  const kind = String(preview.kind ?? "");
-  const kindLabel = OVERVIEW_KIND_LABELS[kind];
-  const title = kindLabel ? tr(kindLabel) : t("ANALYSIS RESULT");
-  if (loading) {
-    return <section className="analysis-card analysis-visual-card"><SectionHeading title={title} meta={t("Loading chart data")} /><div className="analysis-overview-empty"><Empty description={t("Loading the result arrays…")} /></div></section>;
-  }
-
-  let content: ReactNode;
-  if (kind === "feature_variance") content = <FeatureVarianceChart preview={preview} analysisId={analysisId} />;
-  else if (kind === "effective_dimension") content = <EffectiveDimensionChart preview={preview} arrays={arrays} />;
-  else return null;
-
-  return <section className="analysis-card analysis-visual-card"><SectionHeading title={title} meta={t("Visual summary")} />{content}</section>;
-}
-
-function EffectiveDimensionChart({ preview, arrays }: { preview: AnalysisPreview; arrays: NumericArrays }) {
-  const { t } = useT();
-  const [spectrumRange, setSpectrumRange] = useState<SpectrumRange>("20");
-  useEffect(() => setSpectrumRange("20"), [preview.analysis_id]);
-
-  const explained = numericArray(arrays.explained_variance);
-  if (!explained.length) return <OverviewNoData message={t("The explained-variance array is not available for visualization.")} />;
-  const cumulative: number[] = [];
-  let total = 0;
-  for (const value of explained) {
-    total += value;
-    cumulative.push(total);
-  }
-
-  const declaredComponentCount = integerCount(preview.component_count) ?? explained.length;
-  const availableComponentCount = Math.min(declaredComponentCount, explained.length);
-  const shownComponentCount = spectrumRange === "all"
-    ? availableComponentCount
-    : Math.min(Number(spectrumRange), availableComponentCount);
-  const indices = sampledIndices(shownComponentCount, 320);
-  const pcaFeatureCount = integerCount(preview.pca_feature_count);
-  const featureCount = integerCount(preview.feature_count) ?? pcaFeatureCount;
-  const preprocess = preview.preprocess === "standardized" || preview.preprocess === "raw" ? preview.preprocess : "center";
-  const scalingLabel = preprocess === "standardized" ? t("Standardized") : preprocess === "raw" ? t("Raw scale") : t("Centered");
-  const basisLabel = preprocess === "standardized" ? t("Correlation") : preprocess === "raw" ? t("Uncentered second moment") : t("Covariance");
-  const thresholdRows = [
-    { key: "0.9", target: "90%", color: "#107C10" },
-    { key: "0.95", target: "95%", color: "#8764B8" },
-    { key: "0.99", target: "99%", color: "#D13438" },
-  ]
-    .map((row) => ({ ...row, component: componentThreshold(preview, row.key) }))
-    .filter((row): row is typeof row & { component: number } => row.component != null && row.component >= 1 && row.component <= availableComponentCount)
-    .map((row) => ({ ...row, cumulative: cumulative[row.component - 1] }));
-  const thresholdShapes = thresholdRows.map((row) => ({
-    type: "line" as const,
-    x0: row.component,
-    x1: row.component,
-    y0: 0,
-    y1: 1,
-    yref: "paper" as const,
-    line: { color: row.color, dash: "dash" as const, width: 1.5 },
-  }));
-  const thresholdAnnotations = thresholdRows.map((row) => ({
-    x: row.component,
-    y: 1,
-    xref: "x" as const,
-    yref: "paper" as const,
-    text: `${row.target} · PC${row.component}`,
-    showarrow: false,
-    yshift: 16,
-    font: { size: 10, color: row.color },
-    bgcolor: "#FFFFFF",
-    bordercolor: row.color,
-    borderwidth: 1,
-    borderpad: 2,
-  }));
-  const thresholdTrace: Data | null = thresholdRows.length
-    ? {
-        type: "scatter",
-        mode: "markers",
-        x: thresholdRows.map((row) => row.component),
-        y: thresholdRows.map((row) => row.cumulative * 100),
-        text: thresholdRows.map((row) => `${row.target} · PC${row.component}`),
-        marker: { color: thresholdRows.map((row) => row.color), size: 8, line: { color: "#FFFFFF", width: 1 } },
-        hovertemplate: `%{text}<br>${t("Cumulative explained variance ratio")}=%{y:.2f}%<extra></extra>`,
-        showlegend: false,
-      }
-    : null;
-  const thresholdMetric = (key: string) => {
-    const component = componentThreshold(preview, key);
-    if (component == null) return "—";
-    return pcaFeatureCount == null ? formatCount(component) : `${formatCount(component)} / ${formatCount(pcaFeatureCount)}`;
-  };
-  const participationRatio = finiteNumber(preview.participation_ratio);
-  const prLabel = (
-    <Tooltip title={t("Participation ratio definition")} placement="top">
-      <span className="analysis-metric-label" tabIndex={0}>
-        {t("PR effective dimension")} <Info16Regular aria-hidden="true" />
-      </span>
-    </Tooltip>
-  );
-  const hiddenThresholds = ["0.9", "0.95", "0.99"]
-    .map((key) => componentThreshold(preview, key))
-    .filter((component): component is number => component != null && component >= 1 && component > shownComponentCount);
-  const conclusion = participationRatio != null && featureCount != null && pcaFeatureCount != null
-    && componentThreshold(preview, "0.9") != null && componentThreshold(preview, "0.95") != null && componentThreshold(preview, "0.99") != null
-    ? t("Effective dimension conclusion", {
-        featureCount: formatCount(featureCount),
-        pcaFeatureCount: formatCount(pcaFeatureCount),
-        pc90: formatCount(componentThreshold(preview, "0.9")),
-        pc95: formatCount(componentThreshold(preview, "0.95")),
-        pc99: formatCount(componentThreshold(preview, "0.99")),
-        participationRatio: formatNumber(participationRatio),
-        scaling: scalingLabel,
-      })
-    : null;
-  const metrics: Metric[] = [
-    { label: prLabel, value: formatNumber(participationRatio) },
-    { label: t("90% effective dimension"), value: thresholdMetric("0.9") },
-    { label: t("95% effective dimension"), value: thresholdMetric("0.95") },
-    { label: t("99% effective dimension"), value: thresholdMetric("0.99") },
-  ];
-  return <>
-    <MetricStrip metrics={metrics} />
-    <div className="analysis-method-meta" aria-label={t("PCA method details")}>
-      <span><Typography.Text type="secondary">{t("Scaling")}: </Typography.Text><Typography.Text strong>{scalingLabel}</Typography.Text></span>
-      <span><Typography.Text type="secondary">{t("PCA basis")}: </Typography.Text><Typography.Text strong>{basisLabel}</Typography.Text></span>
-      <span><Typography.Text type="secondary">{t("PCA features")}: </Typography.Text><Typography.Text strong>{pcaFeatureCount == null ? "—" : `${formatCount(pcaFeatureCount)} / ${formatCount(featureCount)}`}</Typography.Text></span>
-      <span><Typography.Text type="secondary">{t("Components")}: </Typography.Text><Typography.Text strong>{formatCount(declaredComponentCount)}</Typography.Text></span>
-    </div>
-    <Typography.Text type="secondary" className="analysis-spectrum-note">{t("Threshold dimension explanation")}</Typography.Text>
-    <div className="analysis-spectrum-toolbar">
-      <Space wrap size={8}>
-        <Typography.Text strong>{t("Spectrum range")}</Typography.Text>
-        <Select
-          aria-label={t("Spectrum range")}
-          value={spectrumRange}
-          onChange={(value) => setSpectrumRange(value as SpectrumRange)}
-          options={[
-            { value: "20", label: t("First 20") },
-            { value: "50", label: t("First 50") },
-            { value: "all", label: t("All components") },
-          ]}
-        />
-        <Typography.Text type="secondary">{t("{shown} of {total} components shown", { shown: formatCount(shownComponentCount), total: formatCount(declaredComponentCount) })}</Typography.Text>
-      </Space>
-    </div>
-    <OverviewPlot
-      ariaLabel={t("Explained and cumulative descriptor variance by component")}
-      data={[
-        {
-          type: "bar",
-          x: indices.map((index) => index + 1),
-          y: indices.map((index) => explained[index] * 100),
-          name: t("Single-component explained variance ratio"),
-          marker: { color: "#0F6CBD" },
-          hovertemplate: `PC %{x}<br>${t("Single-component explained variance ratio")}=%{y:.2f}%<extra></extra>`,
-        },
-        {
-          type: "scatter",
-          mode: "lines",
-          x: indices.map((index) => index + 1),
-          y: indices.map((index) => cumulative[index] * 100),
-          name: t("Cumulative explained variance ratio"),
-          line: { color: "#F7630C", width: 2 },
-          hovertemplate: `PC %{x}<br>${t("Cumulative explained variance ratio")}=%{y:.2f}%<extra></extra>`,
-        },
-        ...(thresholdTrace ? [thresholdTrace] : []),
-      ]}
-      layout={overviewLayout({
-        margin: { l: 68, r: 28, t: 52, b: 52 },
-        xaxis: { title: { text: t("Principal component") }, type: "linear" },
-        yaxis: { title: { text: t("Explained variance ratio (%)") }, range: [0, 100] },
-        shapes: thresholdShapes,
-        annotations: thresholdAnnotations,
-        legend: { orientation: "h", y: 1.18, x: 0 },
-      })}
-    />
-    {conclusion && <Typography.Paragraph className="analysis-effective-conclusion">{conclusion}</Typography.Paragraph>}
-    <ChartCaption>
-      {t("Bars show the single-component explained variance ratio and the orange line shows the cumulative explained variance ratio.")}
-      {shownComponentCount > 320 ? ` ${t("When more than 320 components are selected, the chart samples evenly for rendering while preserving the selected range.")}` : ""}
-      {hiddenThresholds.length ? ` ${t("Some threshold markers are outside the selected range.")}` : ""}
-    </ChartCaption>
-  </>;
-}
-
-type SpectrumRange = "20" | "50" | "all";
-
-function MetricStrip({ metrics }: { metrics: Metric[] }) {
-  return <div className="analysis-metric-strip">{metrics.map((metric, index) => <div className="analysis-metric" key={index}><Typography.Text type="secondary">{metric.label}</Typography.Text><Typography.Text strong>{metric.value}</Typography.Text></div>)}</div>;
-}
-
-function sampledIndices(length: number, maxPoints: number): number[] {
-  if (length <= 0) return [];
-  if (length <= maxPoints) return Array.from({ length }, (_, index) => index);
-  return Array.from({ length: maxPoints }, (_, index) => Math.round(index * (length - 1) / (maxPoints - 1)));
-}
-
-function formatNumber(value: unknown): string {
-  const number = finiteNumber(value);
-  if (number === null) return "—";
-  return Math.abs(number) >= 1000 ? number.toLocaleString(undefined, { maximumFractionDigits: 2 }) : number.toPrecision(5);
-}
-
-function integerCount(value: unknown): number | null {
-  const number = finiteNumber(value);
-  return number !== null && Number.isInteger(number) && number >= 0 ? number : null;
-}
-
-function componentThreshold(preview: AnalysisPreview, key: string): number | null {
-  const thresholds = preview.components_for_threshold;
-  if (typeof thresholds !== "object" || thresholds === null || Array.isArray(thresholds)) return null;
-  return finiteNumber((thresholds as Record<string, unknown>)[key]);
-}
-
-function AnalysisMethodGuideModal({ guide, open, onClose }: { guide: AnalysisMethodGuide; open: boolean; onClose: () => void }) {
-  const { t, tr } = useT();
-  return (
-    <Modal
-      className="analysis-method-guide-modal"
-      title={`${t("Method guide")} · ${tr(guide.title)}`}
-      open={open}
-      onCancel={onClose}
-      footer={null}
-      width={720}
-      destroyOnHidden
-    >
-      <div className="analysis-method-guide-content">
-        <section className="analysis-method-guide-section">
-          <Typography.Title level={5}>{t("Theory")}</Typography.Title>
-          <Typography.Paragraph>{tr(guide.theory)}</Typography.Paragraph>
-        </section>
-        <section className="analysis-method-guide-section">
-          <Typography.Title level={5}>{t("Applications")}</Typography.Title>
-          <Typography.Paragraph>{tr(guide.application)}</Typography.Paragraph>
-        </section>
-      </div>
-    </Modal>
-  );
-}
-
-function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, onPreprocessChange, tsnePerplexity, setTsnePerplexity, markOptions, cachedParam }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; onPreprocessChange: (value: string) => void; tsnePerplexity: number; setTsnePerplexity: (value: number) => void; markOptions: (param: string, options: CacheOption[]) => CacheOption[]; cachedParam: (param: keyof AnalysisParams) => boolean }) {
-  const { t } = useT();
-  return <Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={projection} onChange={setProjection} options={markOptions("projection", [{ value: "pca", label: "PCA" }, { value: "umap", label: "UMAP" }, { value: "tsne", label: "t-SNE" }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /><Typography.Text>{t("Preprocess")}</Typography.Text><Select value={preprocess} onChange={onPreprocessChange} options={markOptions("preprocess", [{ value: "raw", label: t("Raw scale") }, { value: "center", label: t("Centered") }, { value: "standardized", label: t("Standardized") }])} />{projection === "tsne" && <><ParamLabel label={t("Perplexity")} cached={cachedParam("tsnePerplexity")} /><InputNumber min={2} step={1} value={tsnePerplexity} onChange={(value) => setTsnePerplexity(value ?? 30)} /></>}</Space>;
-}
-
-function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPreview | null; points: Point[]; onSelect?: (row: Record<string, unknown>) => void }) {
-  const { t } = useT();
-  if (preview?.kind === "feature_variance" || preview?.kind === "feature_correlation" || preview?.kind === "effective_dimension" || preview?.kind === "property_correlation") return null;
-  if (!preview && !points.length) return <section className="analysis-card"><Empty description={t("Run an analysis module to see its bounded result preview.")} /></section>;
-  const rows = Array.isArray(preview?.rows)
-    ? preview.rows
-    : Array.isArray(preview?.selected)
-      ? preview.selected
-      : Array.isArray(preview?.pairs)
-        ? preview.pairs as Record<string, unknown>[]
-        : Array.isArray(preview?.runs)
-          ? preview.runs as Record<string, unknown>[]
-          : Array.isArray(preview?.top_indices)
-            ? (preview.top_indices as unknown[]).map((index, position) => ({ rank: position + 1, feature: index, variance: (preview.top_values as unknown[] | undefined)?.[position] }))
-            : [];
-  if (rows.length) return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} meta={t("{n} rows", { n: rows.length.toLocaleString() })} /><Table size="small" pagination={{ pageSize: 12 }} rowKey={(row, index) => `${String(row.i ?? row.sample_id ?? row.run_id ?? index)}:${String(row.source_i ?? row.rank ?? index)}`} dataSource={rows} onRow={(row) => ({ onClick: () => onSelect?.(row) })} columns={Object.keys(rows[0]).slice(0, 7).map((key) => ({ title: key, dataIndex: key, key, render: (value: unknown) => typeof value === "number" ? value.toPrecision(6) : String(value ?? "—") }))} /></section>;
-  return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} /><Collapse ghost size="small" items={[{ key: "raw", label: t("Raw result output"), children: <pre className="analysis-json-preview">{JSON.stringify(preview, null, 2)}</pre> }]} /></section>;
-}
-
-function SectionHeading({ title, meta }: { title: string; meta?: string }) {
-  return <div className="analysis-section-heading"><Typography.Text strong>{title}</Typography.Text>{meta && <Typography.Text type="secondary">{meta}</Typography.Text>}</div>;
-}
-
-function Row({ k, v }: { k: string; v: string }) {
-  return <div className="analysis-inspector-row"><span>{k}</span><Typography.Text code>{v}</Typography.Text></div>;
-}
