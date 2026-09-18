@@ -1,0 +1,4 @@
+# Benchmark fixtures are generated locally by scripts/make_fixtures.py and are
+# deliberately not checked in: 87 MB of data that no test reads.
+perf_deepmd/
+perf_extxyz.xyz

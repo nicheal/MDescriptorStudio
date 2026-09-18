@@ -200,13 +200,9 @@ def test_health_ipc_rescan_and_dedupe(tmp_path: Path) -> None:
         assert meta["last_scan_at"]
 
         # two rescans fired back-to-back share one scan job
-        bp.send({"protocol_version": 1, "id": 4, "method": "dataset.rescan", "params": {"id": ds_id}})
-        bp.send({"protocol_version": 1, "id": 5, "method": "dataset.rescan", "params": {"id": ds_id}})
-        replies = {}
-        while len(replies) < 2:
-            frame = bp.read_line()
-            if frame.get("id") in (4, 5):
-                replies[frame["id"]] = frame
+        bp.send_request(4, "dataset.rescan", {"id": ds_id})
+        bp.send_request(5, "dataset.rescan", {"id": ds_id})
+        replies = bp.responses({4, 5})
         job_a = replies[4]["result"]["job_id"]
         job_b = replies[5]["result"]["job_id"]
         assert job_a == job_b, "concurrent rescans must dedupe to one job"
@@ -230,12 +226,17 @@ def test_health_ipc_rescan_and_dedupe(tmp_path: Path) -> None:
             con.commit()
         finally:
             con.close()
-        stale = bp.request(7, "dataset.statistics", {"id": ds_id})
+        # Both callers must be admitted before the recompute finishes, so the
+        # requests go out together: awaiting id 7 first lets a small dataset
+        # finish and the second caller then reads the fresh cache.
+        bp.send_request(7, "dataset.statistics", {"id": ds_id})
+        bp.send_request(8, "dataset.statistics", {"id": ds_id})
+        replies = bp.responses({7, 8})
+        stale, again = replies[7], replies[8]
         assert stale["result"]["recalculating"] is True
         assert stale["result"]["stats"] is None
         assert stale["result"]["job_id"]
         # a second caller during the recompute shares the same job
-        again = bp.request(8, "dataset.statistics", {"id": ds_id})
         assert again["result"]["recalculating"] is True
         assert again["result"]["job_id"] == stale["result"]["job_id"]
         done = wait_job(bp, stale["result"]["job_id"])

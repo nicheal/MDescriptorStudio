@@ -3,10 +3,16 @@
 The fixtures deliberately keep the descriptor matrix as a checked-in artifact
 (descriptor.npy) so a change in an algorithm's numerical output is visible as
 a test failure instead of silently changing every downstream analysis.
+
+expected.npz pins every number those algorithms produce for that matrix.  It is
+regenerated on purpose, never implicitly:
+
+    MDS_REGENERATE_GOLDEN=1 python -m pytest tests/regression -k numerical
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +26,7 @@ from mdescriptor_studio_backend.analysis.sampling.engine import sampling
 from mdescriptor_studio_backend.datasets import create_adapter
 
 FIXTURES = Path(__file__).resolve().parent
+GOLDEN = FIXTURES / "expected.npz"
 
 
 def _samples() -> StructureDescriptorMatrix:
@@ -29,6 +36,33 @@ def _samples() -> StructureDescriptorMatrix:
         np.arange(descriptor.shape[0], dtype=np.int64),
         sample_ids=[f"frame:{i}" for i in range(descriptor.shape[0])],
     )
+
+
+def _pinned(samples: StructureDescriptorMatrix) -> dict[str, np.ndarray]:
+    """Every regression value, keyed the way expected.npz stores it."""
+    values: dict[str, np.ndarray] = {}
+    projection = pca(samples, {"preprocess": "standardized"})
+    values["pca_coords"] = projection["arrays"]["coords"]
+    values["pca_explained"] = projection["arrays"]["explained_variance"]
+    variance = feature_variance(samples, {"histogram_bins": 8, "distribution_sample_size": 10})
+    for name, value in variance["arrays"].items():
+        values[f"variance_{name}"] = value
+    dimension = effective_dimension(samples, {"preprocess": "standardized"})
+    for name, value in dimension["arrays"].items():
+        values[f"dimension_{name}"] = value
+    values["kernel_matrix"] = kernel(samples, {"kernel": "rbf", "max_samples": 16})["arrays"]["kernel_matrix"]
+    values["random_indices"] = sampling(samples, {"n_samples": 6, "seed": 17}, "random")["arrays"]["selected_indices"]
+    values["fps_indices"] = sampling(samples, {"n_samples": 6, "seed": 17}, "fps")["arrays"]["selected_indices"]
+    values["coverage_distances"] = coverage(
+        samples, samples, {"max_samples": 16, "metric": "euclidean"}
+    )["arrays"]["distances"]
+    return values
+
+
+def _sign_canonical(matrix: np.ndarray) -> np.ndarray:
+    """Flip each PCA column so its largest-magnitude entry is positive."""
+    flips = np.sign(matrix[np.abs(matrix).argmax(axis=0), np.arange(matrix.shape[1])])
+    return matrix * np.where(flips == 0.0, 1.0, flips)
 
 
 def test_si_extxyz_fixture_is_readable() -> None:
@@ -42,34 +76,23 @@ def test_si_extxyz_fixture_is_readable() -> None:
 
 
 def test_analysis_numerical_regression() -> None:
-    expected = np.load(FIXTURES / "expected.npz")
     samples = _samples()
+    produced = _pinned(samples)
+    if os.environ.get("MDS_REGENERATE_GOLDEN") == "1":
+        np.savez(GOLDEN, **produced)
+        return
 
-    pca_result = pca(samples, {"preprocess": "standardized"})
-    np.testing.assert_allclose(pca_result["arrays"]["coords"], expected["pca_coords"], rtol=1e-12, atol=1e-12)
-    np.testing.assert_allclose(pca_result["arrays"]["explained_variance"], expected["pca_explained"], rtol=1e-12, atol=1e-12)
+    expected = np.load(GOLDEN)
+    assert set(produced) == set(expected.files), "expected.npz no longer matches the algorithm outputs"
+    for key, value in produced.items():
+        reference = expected[key]
+        if key == "pca_coords":
+            # np.linalg.svd gives no sign convention, so only the unsigned
+            # projection is reproducible across BLAS builds.
+            value = _sign_canonical(value)
+            reference = _sign_canonical(reference)
+        if np.issubdtype(value.dtype, np.integer):
+            np.testing.assert_array_equal(value, reference)
+        else:
+            np.testing.assert_allclose(value, reference, rtol=1e-12, atol=1e-12)
 
-    variance = feature_variance(samples, {"histogram_bins": 8, "distribution_sample_size": 10})
-    for name, value in variance["arrays"].items():
-        key = f"variance_{name}"
-        if key not in expected:
-            continue
-        np.testing.assert_allclose(value, expected[key], rtol=1e-12, atol=1e-12)
-
-    dimension = effective_dimension(samples, {"preprocess": "standardized"})
-    for name, value in dimension["arrays"].items():
-        key = f"dimension_{name}"
-        if key not in expected:
-            continue
-        np.testing.assert_allclose(value, expected[key], rtol=1e-12, atol=1e-12)
-
-    kernel_result = kernel(samples, {"kernel": "rbf", "max_samples": 16})
-    np.testing.assert_allclose(kernel_result["arrays"]["kernel_matrix"], expected["kernel_matrix"], rtol=1e-12, atol=1e-12)
-
-    random = sampling(samples, {"n_samples": 6, "seed": 17}, "random")
-    np.testing.assert_array_equal(random["arrays"]["selected_indices"], expected["random_indices"])
-    fps = sampling(samples, {"n_samples": 6, "seed": 17}, "fps")
-    np.testing.assert_array_equal(fps["arrays"]["selected_indices"], expected["fps_indices"])
-
-    coverage_result = coverage(samples, samples, {"max_samples": 16, "metric": "euclidean"})
-    np.testing.assert_allclose(coverage_result["arrays"]["distances"], expected["coverage_distances"], rtol=1e-12, atol=1e-12)

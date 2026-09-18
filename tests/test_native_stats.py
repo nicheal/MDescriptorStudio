@@ -8,6 +8,7 @@ the fallback path anyway.
 
 from __future__ import annotations
 
+import zlib
 from pathlib import Path
 
 import numpy as np
@@ -102,7 +103,9 @@ CASES = {
 
 @pytest.mark.parametrize("name", list(CASES))
 def test_frame_geometry_matches_reference(name: str) -> None:
-    rng = np.random.default_rng(abs(hash(name)) % (2**32))
+    # crc32, not hash(): PYTHONHASHSEED randomisation would give every run a
+    # different frame, so a failure could not be reproduced with -k.
+    rng = np.random.default_rng(zlib.crc32(name.encode()))
     frame = {
         key: np.asarray(value) for key, value in CASES[name](rng).items()
     }
