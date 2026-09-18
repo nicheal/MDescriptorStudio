@@ -9,6 +9,7 @@ __pycache__/
 build/
 dist/
 backend/dist/
+docs/MDescriptorStudio_*
 
 # Node / frontend
 node_modules/
