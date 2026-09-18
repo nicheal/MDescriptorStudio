@@ -9,6 +9,14 @@ Testing and Benchmark体系用于保证 MDescriptorStudio：
 -   性能可扩展
 -   科学计算可信
 
+现状：
+
+测试体系已建立并分层——`tests/` 下 32 个 `test_*.py` 覆盖数据集、描述符、
+分析、Job、数据库迁移与安全；`tests/numerical/` 做数值验证（含 fuzz/hypothesis）；
+`tests/regression/` 比对参考结果；全部由 `ci.yml` 执行。
+
+因此本文档是"在既有套件上扩展"，未建成的部分是 Benchmark。
+
 目标：
 
 达到：
@@ -42,6 +50,9 @@ Testing and Benchmark体系用于保证 MDescriptorStudio：
 
     --------------------------------
 
+其中 Performance Benchmark 尚无任何实现，是本文档的主要开放项；
+其余各层都已有对应用例，按需补充即可。
+
 ------------------------------------------------------------------------
 
 # 3. Unit Test 单元测试
@@ -50,21 +61,19 @@ Testing and Benchmark体系用于保证 MDescriptorStudio：
 
 验证单个模块逻辑正确。
 
-目录：
+现状目录（已采用扁平布局，未再细分 `unit/`）：
 
     tests/
 
-    unit/
+        test_*.py            # 后端各服务与算法
 
-        core/
+        numerical/           # 数值验证
 
-        descriptor/
+        regression/          # 参考结果比对
 
-        analysis/
+        data/                # 小型参考数据
 
-        dataset/
-
-        workflow/
+    frontend/src/**/*.test.ts(x)   # 组件、页面、store、IPC
 
 ------------------------------------------------------------------------
 
@@ -213,9 +222,23 @@ descriptor shape
 
 ## Reference Dataset
 
-建立：
+已有：
 
     tests/data/
+
+    extxyz_small.xyz
+
+    deepmd_small/
+
+    tests/regression/
+
+    Si.xyz
+
+    descriptor.npy
+
+    expected.npz
+
+扩展：
 
     Si_bulk
 
@@ -229,7 +252,8 @@ descriptor shape
 
 ## Reference结果
 
-保存：
+参考结果与比对流程已存在于 `tests/regression/`（`test_analysis_regression.py`），
+新增体系按同一形式补充基线文件：
 
     reference/
 
@@ -295,17 +319,19 @@ descriptor shape
 
 # 9. Job系统测试
 
+实际状态机已在 `services/job_service.py` 实现，且 `test_job_cancel.py`、
+`test_job_scheduling.py`、`test_run_settlement.py`、`test_run_lifecycle.py`
+已覆盖主干；下列用例按真实状态补全即可，不需要为不存在的中间态设计测试。
+
 测试：
 
 ## 正常任务
-
-    CREATED
 
     QUEUED
 
     RUNNING
 
-    SUCCESS
+    COMPLETED
 
 ------------------------------------------------------------------------
 
@@ -315,11 +341,10 @@ descriptor shape
 
     ↓
 
-    CANCEL_REQUESTED
-
-    ↓
-
     CANCELLED
+
+取消无中间态：需断言 CANCELLED 不会被写回 RUNNING，
+且 `job.finished` 不重复发出。
 
 ------------------------------------------------------------------------
 
@@ -327,13 +352,15 @@ descriptor shape
 
 模拟：
 
--   backend crash
+-   backend crash（重启时 `_sweep_zombie_runs` 关闭遗留行）
 -   timeout
 -   memory error
 
 ------------------------------------------------------------------------
 
 # 10. Benchmark设计
+
+现状：仓库中不存在任何 benchmark 脚本或基线，本节起为真正的空白项。
 
 目标：
 
@@ -534,6 +561,9 @@ weak scaling
 
 # 18. Continuous Integration
 
+`ci.yml` 已在 push/PR 上执行后端 pytest（含 numerical 与 regression）
+和前端 type check、lint、单测；下列 Benchmark 与 Build Package 阶段仍待加入。
+
 CI流程：
 
     Git Push
@@ -580,19 +610,25 @@ CI流程：
 
 # 20. 软件质量指标
 
-目标：
-
-代码：
-
-    Coverage >80%
+已达成：
 
 科学模块：
 
-    Regression Test 100%
+    Regression Test 已入CI
 
 关键算法：
 
-    Numerical Validation
+    Numerical Validation 已由 tests/numerical 承担
+
+待补（是补度量与门槛，不是补"从无到有的测试"）：
+
+代码：
+
+    Coverage：先接入统计读出真实现值，再设 >80% 门槛
+
+性能：
+
+    Benchmark 基线（第10–17节，目前完全缺失）
 
 ------------------------------------------------------------------------
 

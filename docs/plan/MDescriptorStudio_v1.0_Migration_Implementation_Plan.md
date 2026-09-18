@@ -106,6 +106,10 @@ Git策略：
 
 ## 目录整理
 
+现状：后端已作为包组织在 `mdescriptor_studio_backend/` 之下，测试集中于 `tests/`，
+CI 已在运行。真实缺口是仓库根目录缺 `pyproject.toml`、`LICENSE` 等发布要件，
+而非目录混乱。
+
 目标：
 
     src/
@@ -122,22 +126,18 @@ Git策略：
 
 ------------------------------------------------------------------------
 
-## 配置系统统一
+## 配置系统统一 —— 已完成
 
-替换：
-
--   硬编码参数
--   分散配置文件
-
-建立：
-
-    ConfigManager
+`config.py` 已集中管理数据目录布局与 `PROTOCOL_VERSION`，支持 `MDS_DATA_DIR`
+覆盖并对路径做安全校验。无需再引入 `ConfigManager`，原诊断的"硬编码参数、
+分散配置文件"已不成立。
 
 ------------------------------------------------------------------------
 
-## 日志系统
+## 日志系统 —— 已完成
 
-统一：
+`logging_setup.py` 统一配置，各模块使用 `getLogger(__name__)`，
+Debug / Info / Warning / Error 分级与日志落盘已就位。
 
     Logger
 
@@ -199,11 +199,20 @@ Git策略：
 
 ------------------------------------------------------------------------
 
-# 6. Phase 3：Descriptor系统重构
+# 6. Phase 3：Descriptor系统重构 —— 已完成，本阶段取消
 
 ## 当前问题
 
-不同算法接口不统一。
+原诊断"不同算法接口不统一"已不成立。接口统一由引擎契约提供：
+
+-   版本化 JSON schema：28 个描述符 / 170 个参数 + 能力位
+    （`input.mixed_periodicity`、`execution.devices`、`execution.cooperative_cancel`）
+-   `mdescriptor_adapter.py` 按名字动态派发：`list_descriptors()` →
+    `describe_descriptor(name)` → `create_descriptor(cfg)`
+-   新增描述符不需要改动 Studio 代码
+
+下文拟建的 `BaseDescriptor` 与 `calculate() / save() / load() / metadata()`
+已在引擎侧等价存在。本节保留仅作决策记录，勿据此开工。
 
 ------------------------------------------------------------------------
 
@@ -240,6 +249,15 @@ metadata()
 ------------------------------------------------------------------------
 
 # 7. Phase 4：Analysis模块迁移
+
+现状：本阶段的"统一接口"目标已在事实上达成 —— `analysis/algorithms/` 下
+pca / kernel / feature_correlation / property_correlation / tsne / umap
+全部采用同一签名 `(samples: DescriptorMatrix, params: dict, progress) -> dict`，
+并共享 `analysis/models.py` 的 `DescriptorMatrix`。
+
+因此不需要引入 `AnalyzerBase` 类层次；`analysis_runs` 已带
+`algorithm_version`（迁移 3）、`cache_key`、`warnings_json` 等列，
+本阶段仅剩把这些字段聚合为显式 `AnalysisObject`。
 
 统一：
 
@@ -319,11 +337,12 @@ metadata()
 
 ------------------------------------------------------------------------
 
-# 10. Phase 7：API层建设
+# 10. Phase 7：API层建设 —— 已完成
 
 目标：
 
-解耦GUI和核心。
+解耦GUI和核心 —— 已达成：前端与后端为两个进程，仅经版本化 IPC 协议通信
+（`protocol/server.py`，`PROTOCOL_VERSION = 1`），后端不依赖任何 UI 代码。
 
 架构：
 
@@ -352,6 +371,13 @@ metadata()
 ------------------------------------------------------------------------
 
 # 11. Phase 8：测试体系建立
+
+已建立，非空白：32 个 `test_*.py`（255 项通过、1 项跳过）+ `tests/numerical/`
+（hypothesis、fuzz）+ `tests/regression/`（`descriptor.npy` + `expected.npz` 数值基线）
++ `frontend/e2e/` Playwright 端到端用例，CI 已在运行。
+
+本节真实缺口只有两项：Benchmark（见 Testing_and_Benchmark_Design）
+与 unit / integration 的目录分层。
 
 ## Unit Test
 

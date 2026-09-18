@@ -84,10 +84,10 @@ MDescriptorStudio 的长期目标：
 
 完成：
 
--   Backend重构
--   Frontend优化
--   API标准化
--   Plugin系统
+-   API 标准化 —— 已达成（版本化 IPC 协议，`PROTOCOL_VERSION`）
+-   Backend 瘦身 —— 已完成（`dataset_service.py` 1099 行拆至 690 行）
+-   Frontend 瘦身 —— 仅剩拆分 `pages/Analysis.tsx`（2093 行）
+-   描述符侧扩展已由引擎 schema 承担，Studio 插件层降为可选演进项
 
 ## Scientific
 
@@ -102,12 +102,10 @@ MDescriptorStudio 的长期目标：
 
 ## Engineering
 
-建立：
+已建立：Testing（255 项通过，含 numerical 与 regression 两层）、
+CI/CD（`ci.yml`、`release.yml`）、Release 流程（`docs/RELEASING.md`）。
 
--   Testing
--   CI/CD
--   Documentation
--   Release System
+待建立：对外文档（根目录 README、LICENSE、CHANGELOG）与 Benchmark。
 
 ------------------------------------------------------------------------
 

@@ -37,12 +37,18 @@ MDescriptorStudio定位：
 
 ## 1. 可复现性
 
-需要增加：
+已具备：
 
--   完整版本记录
--   descriptor provenance
--   数据血缘
--   参数记录
+-   版本记录：`descriptor_runs.engine_version` 与逐描述符 `descriptor_version`
+-   参数记录：`parameters_json` 全量入库，并计入缓存键
+-   descriptor provenance：`scope`、`frame_index`、`output_dtype`、`device`、
+    `memory_peak_bytes` 一并保存
+-   数据血缘：`analysis_runs.descriptor_run_id` 外键 + `dataset_views` 派生关系
+
+仍需补充：
+
+-   可导出的 provenance 报告：版本、参数与 `algorithm_version`
+    （`studio-analysis-4`）已在库内，但未随结果文件落盘
 
 ------------------------------------------------------------------------
 
@@ -66,15 +72,11 @@ MDescriptorStudio定位：
 
 ## 3. 测试体系
 
-建议：
+已建立并全绿（255 项通过）：unit、integration、numerical regression
+（`tests/regression/`：`descriptor.npy` + `expected.npz` 基线）、
+随机化与模糊测试（`tests/numerical/`：hypothesis + fuzz）。
 
-unit test
-
-integration test
-
-numerical regression test
-
-scientific validation test
+仍缺：scientific validation test —— 与文献或参考实现的数值对照。
 
 ------------------------------------------------------------------------
 
@@ -138,11 +140,16 @@ SOAP/ACE描述符空间分析
 
 # 发表前关键任务
 
-1.  完成v1.0架构重构
-2.  增加Benchmark
-3.  增加完整测试
-4.  提供实际材料体系案例
+1.  增加 Benchmark：1k / 10k / 100k 结构的 runtime、memory、并行效率 ——
+    当前完全缺失，是发表的首要门槛
+2.  提供实际材料体系案例
+3.  补齐开源发布要件：根目录 LICENSE、README、CHANGELOG、pyproject.toml
+4.  拆分超大前端模块：`pages/Analysis.tsx`（2093 行）
 5.  完善开发文档
+
+原清单第 1、3 项已不再需要列入："完成 v1.0 架构重构"与"增加完整测试"——
+后端已有 32 个测试文件（含 numerical 与 regression 两层，255 项通过）、
+CI 已在运行、可复现性字段已入库。
 
 ------------------------------------------------------------------------
 

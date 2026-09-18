@@ -174,21 +174,32 @@ CPU模式：
 
 # 5. Descriptor缓存优化
 
-避免重复计算。
+避免重复计算——此机制已在 `services/descriptor_service.py` 落地：
+sha256 `cache_key` 命中已 COMPLETED 的运行时直接复用现有结果，
+同键 QUEUED/RUNNING 任务被合并，`descriptor_runs.cache_key` 列负责持久化；
+`force` 参数可显式绕过缓存。
 
-Cache Key：
+Cache Key（现状）：
 
     Dataset fingerprint
 
     +
 
-    Descriptor version
+    Descriptor name + engine_version
 
     +
 
-    Parameter hash
+    规范化参数
 
-流程：
+    +
+
+    scope / frame_index / output_dtype
+
+    +
+
+    device / num_threads
+
+流程（现状）：
 
     Request
 
@@ -220,9 +231,15 @@ N=100000
 
 内存巨大。
 
+现状：该风险已被上限拦住——`analysis/algorithms/kernel.py` 以 `max_samples`
+（默认 400、硬上限 2000）经确定性的 `_bounded_indices` 截断样本，
+并在结果里附带采样受限警告，因此不存在矩阵随 N² 失控的代码路径。
+
 ------------------------------------------------------------------------
 
 ## 优化方案
+
+以下手段用于在保持上限语义的前提下提高可用样本量：
 
 ### Block Kernel
 
@@ -248,6 +265,8 @@ N=100000
 避免：
 
 完整矩阵加载。
+
+现状：完整矩阵加载已由样本上限避免；针对全量样本的流式统计仍待实现。
 
 ------------------------------------------------------------------------
 
@@ -331,15 +350,23 @@ SVD成本。
 
 # 9. 内存管理设计
 
-新增：
+已具备：
+
+-   自动采样：各分析算法的 `max_samples` 上限配合确定性 `_bounded_indices`
+-   受限内存的近邻参考搜索（`analysis/algorithms/_common.py`）
+-   峰值内存计量（`descriptor_runs.memory_peak_bytes`）
+-   科学警告层：采样受限、零方差/常量特征等警告（`analysis/algorithms/` 23 处）随每次结果返回
+
+待补：
 
 Memory Manager。
 
 负责：
 
 -   内存预测
--   自动采样
 -   block计算
+
+所有降规模手段必须继续输出上述警告，不得静默采样。
 
 例如：
 
@@ -579,8 +606,9 @@ Benchmark：
 Phase 1：
 
 -   Batch计算
--   Cache
 -   Lazy loading
+
+（Cache 已实现，不在本阶段范围内）
 
 Phase 2：
 

@@ -17,13 +17,17 @@
 
     Professional Scientific Software Package
 
+已具备：
+
+-   后端已包化，import 路径统一在 `mdescriptor_studio_backend` 之下
+-   测试集中于 `tests/`（共 32 个 `test_*.py`，含 `numerical/` 与 `regression/` 两层基线）
+-   CI 已在运行（`.github/workflows/ci.yml`、`release.yml`）
+
 解决：
 
--   文件组织混乱
--   模块职责不清
--   import依赖复杂
--   测试分散
--   文档缺失
+-   开源发布要件缺失：根目录无 LICENSE、README.md、CHANGELOG.md、CONTRIBUTING.md、pyproject.toml
+-   前端 `pages/Analysis.tsx` 2093 行仍需按关注点拆分
+    （后端侧同类问题已处理：`dataset_service.py` 1099 行已拆至 690 行）
 
 ------------------------------------------------------------------------
 
@@ -135,6 +139,9 @@
 
     └── LICENSE
 
+注：测试已集中在 `tests/` 且含 numerical 与 regression 两层，
+本节只是补齐目录与发布要件，不需要"把散落的测试搬回来"。
+
 ------------------------------------------------------------------------
 
 # 4. 当前代码迁移分类
@@ -213,18 +220,10 @@
 
 # 5. Import重构策略
 
-旧：
+现状：后端已作为包被导入（`mdescriptor_studio_backend.*`），
+路径依赖与散落 import 问题不存在，无需存量重构。
 
-``` python
-from xxx import function
-```
-
-问题：
-
--   路径依赖
--   难维护
-
-新：
+仅在确定 PyPI 发布名后，做一次机械改名：
 
 ``` python
 from mdescriptorstudio.core import xxx
@@ -359,12 +358,15 @@ Notebook分为：
 
 # 11. CI/CD结构
 
-自动检查：
+`ci.yml` 已覆盖：
 
 -   pytest
 -   lint
 -   type check
--   build package
+
+待补：
+
+-   build package（依赖 `pyproject.toml`）
 
 流程：
 
@@ -490,13 +492,15 @@ Notebook分为：
 
 Repository Reorganization Plan 提供 GitHub 仓库结构重构方案。
 
+仓库并非混乱代码库：分层、包化 import、集中测试与 CI 均已就位。
+
 核心目标：
 
-    Messy Codebase
+    已分层、已测试、CI在跑的私有仓库
 
     ↓
 
-    Professional Scientific Software Repository
+    可公开发布的科学软件仓库（补齐发布要件，拆分超大模块）
 
 为后续：
 

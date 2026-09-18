@@ -34,77 +34,43 @@
 
 # 2. 当前架构评估
 
-当前版本主要问题：
+本文档初版所列问题多数已在后续开发中消除。以下为按当前代码逐条复核后的结论。
 
-## 2.1 模块边界不清
+## 2.1 模块边界
 
-表现：
+已解决：
 
--   UI逻辑与计算逻辑混合
--   数据处理分散
--   分析功能重复实现
+-   UI 与计算分离：React 前端与 Python 后端是两个进程，仅经 IPC 协议通信
+-   科学计算不依赖 GUI：后端可独立运行与测试（255 项后端测试无前端参与）
+-   分析功能已分层：`analysis/algorithms/`、`analysis/sampling/`、`analysis/metrics/`
 
-影响：
+仍存在：
 
--   修改困难
--   测试困难
--   插件扩展困难
+-   `pages/Analysis.tsx` 2093 行 —— 单个组件 1598 行
 
-------------------------------------------------------------------------
-
-## 2.2 核心计算缺少统一接口
-
-问题：
-
-不同Descriptor：
-
-    SOAP
-
-    ACE
-
-    ACSF
-
-    Custom Descriptor
-
-接口不统一。
-
-需要：
-
-统一抽象：
-
-    DescriptorBase
-
-        |
-
-    Descriptor Implementation
+（原列于此的 `services/dataset_service.py` 1099 行已按关注点拆至 690 行。）
 
 ------------------------------------------------------------------------
 
-## 2.3 Workflow耦合
+## 2.2 核心计算接口
 
-当前：
+已由引擎契约解决，不需要再建 `DescriptorBase` 抽象层：
 
-计算流程依赖具体模块。
+-   引擎输出版本化 JSON schema（28 个描述符 / 170 个参数）与能力位
+    （`input.mixed_periodicity`、`execution.devices`、`execution.cooperative_cancel`）
+-   `mdescriptor_adapter.py` 按名字动态派发：
+    `list_descriptors()` → `describe_descriptor(name)` → `create_descriptor(cfg)`
+-   新增描述符不需要改动 Studio 代码；前端直接消费引擎 schema，
+    已不再维护参数名映射表
 
-目标：
+------------------------------------------------------------------------
 
-采用：
+## 2.3 Workflow
 
-    Task
+已与具体模块解耦：作业由 `JobService` 按类别线程池调度，状态机、取消一致性
+与崩溃恢复闭环（详见 Code_Refactor_Implementation_Plan Epic-002）。
 
-    ↓
-
-    Workflow
-
-    ↓
-
-    Executor
-
-    ↓
-
-    Backend
-
-架构。
+DAG、checkpoint 与错误恢复仍未实现 —— 属新功能缺口，不是债务清偿。
 
 ------------------------------------------------------------------------
 
@@ -310,32 +276,36 @@
 
 ## 高优先级
 
-立即处理：
-
--   重复代码
--   全局变量
--   硬编码参数
--   缺少异常处理
+-   拆分 `pages/Analysis.tsx`（2093 行，单组件 1598 行）
+-   建立 Benchmark 基线（1k / 10k / 100k 结构的 runtime 与 memory）
 
 ------------------------------------------------------------------------
 
 ## 中优先级
 
-处理：
-
--   API统一
--   数据结构统一
--   日志系统
+-   StructureFrame 统一结构对象
+-   AnalysisObject：聚合已有的 `algorithm_version` / `cache_key` / `warnings_json`
+-   测试目录分层（unit / integration）
 
 ------------------------------------------------------------------------
 
 ## 低优先级
 
-优化：
+-   大规模轨迹存储（lazy loading、chunk 读取、流式统计）
+-   GPU 路径接入（引擎 0.3.x 起 CUDA 插件已随 wheel 发布并验收）
+-   UI 细节与高级功能
 
--   性能
--   UI细节
--   高级功能
+------------------------------------------------------------------------
+
+## 已清偿（原高/中优先级项，勿再列入）
+
+-   硬编码参数、配置分散 → `config.py` 集中数据目录布局与协议版本
+-   缺少异常处理 → `errors.py` 的 `AppError` + 稳定错误码 + `error_id`；
+    后端已无 `except: pass`
+-   日志系统 → `logging_setup.py`，各模块统一 `getLogger`
+-   API 统一 → 引擎 schema 即契约（见 §2.2）
+-   重复计算 → `descriptor_runs.cache_key` sha256 命中复用
+-   全局变量 → 未发现成规模的问题
 
 ------------------------------------------------------------------------
 

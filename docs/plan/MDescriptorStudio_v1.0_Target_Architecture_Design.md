@@ -141,6 +141,9 @@
 
         zarr/
 
+注：描述符实现留在引擎内部，Studio 侧不再设 `engine/descriptor_engine/`
+按算法分包；`ml_engine/`、`zarr/` 对应尚未落地的能力。
+
 ------------------------------------------------------------------------
 
 # 4. 核心数据模型
@@ -204,7 +207,9 @@ metadata
 
 ## 4.3 DescriptorObject
 
-替代简单numpy矩阵：
+版本、参数与血缘已由 `descriptor_runs` 承载（descriptor_version、engine_version、
+parameters_json、scope、frame_index、output_dtype、device、cache_key），
+矩阵规模在分析侧也有上限保护；本节只是把这些既有记录整理为显式对象：
 
 ``` python
 DescriptorObject:
@@ -252,33 +257,22 @@ metadata
 
 ## 统一接口
 
-``` python
-class DescriptorBackend:
+引擎的版本化 JSON schema（28 个描述符、170 个参数）已经是统一契约：
+适配器动态枚举 `md.list_descriptors()`、逐项读取 `md.describe_descriptor(name)`、
+以 `md.create_descriptor(cfg)` 构建；能力位由 schema 声明（`input.mixed_periodicity`、
+`execution.devices`、`execution.cooperative_cancel`）。前端直接消费引擎 schema，
+不再维护参数名映射表。新增描述符不需要改动 Studio 代码。
 
-    name()
-
-    schema()
-
-    capabilities()
-
-    compute()
-```
+因此本节不再引入 `DescriptorBackend` 包装接口：
+引擎 schema 已承担该角色，再包一层只会重复映射、增加维护成本。
 
 ------------------------------------------------------------------------
 
 ## Backend插件
 
-    descriptor_backend/
-
-    SOAPBackend
-
-    ACEBackend
-
-    ACSFBackend
-
-    MACEBackend
-
-    DeepMDBackend
+描述符实现留在引擎内部，Studio 侧不存在按算法拆分的 backend 类
+（`descriptor_backend/`、`SOAPBackend`、`ACEBackend` 等方案不再需要）。
+引擎之外的扩展（第三方 ML 后端、可视化）见 Plugin System 文档。
 
 ------------------------------------------------------------------------
 
@@ -318,11 +312,7 @@ AnalysisObject
 
 # 7. Workflow Engine
 
-任务生命周期：
-
-    CREATED
-
-     |
+任务生命周期已由 `services/job_service.py` 实现：
 
     QUEUED
 
@@ -332,21 +322,26 @@ AnalysisObject
 
      |
 
-    CANCEL_REQUESTED
-
-     |
-
     COMPLETED
 
     or
 
-    CANCELLED
+    FAILED / CANCELLED
+
+配套的健壮性机制同样已落地：`detach()` 与状态守卫的 UPDATE 阻止
+CANCELLED→RUNNING 复活和重复 `job.finished`；构造期与关停期的
+`_sweep_zombie_runs` 关闭崩溃遗留的 jobs/`descriptor_runs`/`analysis_runs` 行；
+`_settle_linked_runs` 结算关联运行记录；`shutdown()` 协作式取消活动任务。
+
+不新增 CANCEL_REQUESTED 中间态，也不新增
+`cancel_requested_at` / `worker_id` / `error_trace` 列：
+它们会重新打开当前设计已经关闭的竞态窗口。
 
 负责：
 
 -   长任务
 -   并行计算
--   恢复
+-   崩溃后回收（已实现）与检查点续算（未实现）
 -   日志
 -   进度
 
@@ -382,7 +377,7 @@ AnalysisObject
 
 # 9. Provenance系统
 
-所有结果必须可追溯：
+追溯链已建立，下图与现有实现一致：
 
     Raw Dataset
 
@@ -402,12 +397,16 @@ AnalysisObject
 
     ML Model
 
-保存：
+已在记录：
 
--   软件版本
--   参数
--   数据hash
+-   软件版本（descriptor_version / engine_version）
+-   参数（parameters_json）
+-   数据范围（scope / frame_index / cache_key）
 -   算法版本
+-   资源占用（device / memory_peak_bytes）
+
+视图与运行血缘由 `dataset_views` 表和 `analysis_runs.descriptor_run_id` 承担。
+待补：ML 训练产物的模型版本登记。
 
 ------------------------------------------------------------------------
 
@@ -484,7 +483,8 @@ AnalysisObject
 
     modelStore
 
-避免单一workspace store膨胀。
+状态已按域拆分：`stores/workspace.ts`、`jobs.ts`、`analysisUi.ts`、`appUpdate.ts`，
+不存在单一 workspace store 膨胀问题。剩余的是随功能落地补充 modelStore。
 
 ------------------------------------------------------------------------
 
@@ -557,12 +557,14 @@ React负责：
 -   十万级结构descriptor
 -   GB级结果文件
 
-要求：
+已具备：并行执行（引擎 num_threads / device 选项）、结果缓存、
+矩阵规模上限保护（kernel 默认 400、硬上限 2000，并附采样受限警告）。
 
--   streaming
+仍缺：
+
+-   streaming统计
 -   lazy loading
 -   chunk storage
--   parallel execution
 
 ------------------------------------------------------------------------
 

@@ -23,60 +23,45 @@ Analysis
 
 主要技术债：
 
-1.  核心Service类过度集中
-2.  科学对象模型不足
-3.  大规模数据处理能力不足
-4.  ML势训练闭环不完整
+1.  前端 `pages/Analysis.tsx` 2093 行，其中单个组件占 1598 行
+2.  大规模数据处理能力不足（无 lazy loading / chunk 存储 / 流式统计）
+3.  ML势训练闭环不完整
+
+（原列首位的 `services/dataset_service.py` 1099 行已按关注点拆至 690 行，
+见 Code_Refactor_Implementation_Plan Epic-001。）
+
+已不再是债（原清单误列为待偿）：核心计算接口不统一、描述符缓存、
+大矩阵内存守卫、科学警告层、结果 provenance 与版本记录 —— 均已在现有代码中实现。
 
 ------------------------------------------------------------------------
 
-# Phase 0：稳定化版本（v0.8）
+# Phase 0：稳定化版本（v0.8）—— 已完成
 
-目标：
+原计划用于降低高风险技术债的三项均已在现有代码中落地，Phase 0 关闭。
 
-降低高风险技术债。
+## 1. Job系统 —— 已实现
 
-## 1. Job系统重构
+`services/job_service.py` 已闭环：
 
-建立完整状态机：
+    QUEUED → RUNNING → COMPLETED / FAILED / CANCELLED
 
-CREATED → QUEUED → RUNNING → CANCEL_REQUESTED → CANCELLED / COMPLETED
+-   任务取消一致性：取消即刻结算 job 与关联 run 行，并用状态守卫的
+    UPDATE 阻止 CANCELLED → RUNNING 复活与重复 `job.finished`
+-   崩溃恢复：构造时清扫上次会话遗留的非终态行
+-   孤儿任务：失败/取消会级联结算 `descriptor_runs` / `analysis_runs`
 
-解决：
+## 2. 大矩阵内存守卫 —— 已实现
 
--   任务取消一致性
--   崩溃恢复
--   孤儿任务
+-   kernel 矩阵：`max_samples` 采样上限（默认 400、硬顶 2000），确定性采样并附告警
+-   最近邻/参考搜索：显式有界内存实现，仅保留每查询 top-k
+-   峰值内存记账：`descriptor_runs.memory_peak_bytes`
 
-------------------------------------------------------------------------
+block 分块计算仍属可选优化，不是缺口。
 
-## 2. Matrix Budget Manager
+## 3. 科学警告层 —— 已实现
 
-统一管理：
-
--   kernel matrix
--   distance matrix
--   correlation matrix
--   PCA输入矩阵
-
-支持：
-
--   内存预测
--   自动采样
--   block计算
-
-------------------------------------------------------------------------
-
-## 3. Scientific Warning Layer
-
-增加科学解释提醒：
-
-例如：
-
--   PCA解释方差不足
--   样本数量不足
--   特征维度过高
--   相关分析可靠性不足
+`analysis/algorithms/` 共 23 处 `warnings.append`，随每次结果返回
+（零方差特征、常量特征、采样受限、特征维度过高等）。
 
 ------------------------------------------------------------------------
 
@@ -272,19 +257,20 @@ Visualization
 
 P0：
 
--   Job状态机
--   Descriptor科学模型
--   StructureFrame
--   大矩阵管理
+-   拆分超大模块：`pages/Analysis.tsx`（2093 行）
+-   StructureFrame 统一结构对象
+-   Benchmark（发表硬门槛，当前完全缺失）
 
 P1：
 
--   FeatureMatrix
+-   DescriptorObject / FeatureMatrix
+-   大规模轨迹存储（lazy loading、chunk 读取、流式统计）
 -   Model Registry
--   Dataset lineage graph
 
 P2：
 
 -   Active Learning
--   Benchmark
+-   Dataset lineage 图形化呈现（血缘数据已在库中）
 -   高级可视化
+
+已从 P0 移除（核实后确认已实现）：Job 状态机、大矩阵内存守卫、科学警告层。
