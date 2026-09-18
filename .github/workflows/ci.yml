@@ -51,8 +51,13 @@ jobs:
       - name: Check version fields agree
         shell: pwsh
         run: |
-          try { .\scripts\sync_version.ps1 -Check }
-          catch { "::error::sync_version.ps1 -Check failed: $($_.Exception.Message)"; exit 1 }
+          try {
+            .\scripts\sync_version.ps1 -Check
+          } catch {
+            # Job logs need a signed-in session; the step summary does not.
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "sync_version -Check failed: $($_.Exception.Message)"
+            exit 1
+          }
 
       - name: Run backend tests
         run: python -m pytest tests -q
