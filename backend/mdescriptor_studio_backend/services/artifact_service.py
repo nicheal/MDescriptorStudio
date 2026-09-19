@@ -20,6 +20,7 @@ from ..errors import (
 from ..security import UnsafePathError, open_text_for_write
 from .analysis_helpers import (
     ANALYSIS_ALGORITHM_VERSION,
+    CROSS_DATASET_TYPES,
     _ANALYSIS_SCHEMA_VERSION,
     _NOW,
 )
@@ -235,8 +236,13 @@ class AnalysisArtifactMixin:
                 except (OSError, ValueError):
                     pass
         input_ids = self._json_load(row.get("input_run_ids_json"), [row.get("descriptor_run_id")])
+        if not arrays:
+            # Nothing pageable means no rows. Rebuilding the preview anyway read
+            # the whole descriptor matrix off disk to return an empty table:
+            # every branch of _build_preview is gated on an array being present.
+            return []
         if isinstance(input_ids, list) and input_ids:
-            source_index = 1 if row.get("analysis_type") in ("coverage", "drift") and len(input_ids) > 1 else 0
+            source_index = 1 if row.get("analysis_type") in CROSS_DATASET_TYPES and len(input_ids) > 1 else 0
             source_row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (input_ids[source_index],))
             if source_row is not None:
                 try:

@@ -13,7 +13,13 @@ from mdescriptor_studio_backend.analysis import AtomDescriptorMatrix, StructureD
 from mdescriptor_studio_backend.analysis.algorithms.pca import pca
 from mdescriptor_studio_backend.analysis.metrics import neighbors, similarity
 from mdescriptor_studio_backend.datasets.base import DatasetFrame
-from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, ANALYSIS_STALE, AppError
+from mdescriptor_studio_backend.errors import (
+    ANALYSIS_INPUT_INVALID,
+    ANALYSIS_STALE,
+    INVALID_PARAMS,
+    RESULT_INCOMPATIBLE,
+    AppError,
+)
 from mdescriptor_studio_backend.services.analysis_service import _LIST_COLUMNS, AnalysisService
 from mdescriptor_studio_backend.services.dataset_service import DatasetService
 from mdescriptor_studio_backend.services.export_service import _identity_records
@@ -54,7 +60,7 @@ class _InlineJobs:
         return job_id
 
 
-def _service(tmp_path: Path):
+def _service(tmp_path: Path, datasets=None):
     db = Database(tmp_path / "database.sqlite")
     result_dir = tmp_path / "results" / "run_1"
     result_dir.mkdir(parents=True)
@@ -71,7 +77,22 @@ def _service(tmp_path: Path):
         (str(result_dir),),
     )
     jobs = _InlineJobs(db)
-    return db, jobs, AnalysisService(db, jobs, ResultService(db), datasets=None, data_dir=tmp_path)
+    return db, jobs, AnalysisService(db, jobs, ResultService(db), datasets=datasets, data_dir=tmp_path)
+
+
+def _dataset_and_view(db: Database, frame_indices: list[int], selection_hash: str = "h1") -> None:
+    """A dataset row plus one saved view over it, as ``dataset.view.create`` writes them."""
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, file_size, created_at)"
+        " VALUES ('ds_1', 'GaAs', 'deepmd', '/tmp/ds_1', 12, '[]', '{}', '{}', 'fp_1', 0, '2026-01-01T00:00:00+00:00')"
+    )
+    db.execute(
+        "INSERT INTO dataset_views (id, dataset_id, name, role, filter_json, frame_indices_json,"
+        " selection_hash, dataset_fingerprint, created_at, updated_at)"
+        " VALUES ('view_1', 'ds_1', 'Subset', 'selection', '{}', ?, 'fp_1|h1', 'fp_1',"
+        " '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
+        (json.dumps(frame_indices),),
+    )
 
 
 def test_export_repeats_when_the_written_file_disappears(tmp_path: Path) -> None:
@@ -118,6 +139,61 @@ def test_export_of_the_same_selection_to_two_paths_writes_both(tmp_path: Path) -
     assert left.read_text(encoding="utf-8").splitlines() == ["1"]
     assert right.read_text(encoding="utf-8").splitlines() == ["1"]
     assert jobs.calls == 2
+    db.close()
+
+
+def _stub_datasets():
+    """The slice of DatasetService an export needs: an adapter and a staleness check."""
+    return SimpleNamespace(_adapter_for=lambda row: list(range(12)), refresh_if_changed=lambda row: None)
+
+
+def test_export_resolves_the_selection_through_the_same_view_as_the_analysis(tmp_path: Path) -> None:
+    # A dataset view renumbers samples, so selection index 0 names the view's
+    # first frame rather than dataset frame 0. Exporting without the view wrote
+    # the frames that merely carried the same numbers in the whole run — and
+    # reported success while doing it.
+    db, jobs, service = _service(tmp_path, datasets=_stub_datasets())
+    _dataset_and_view(db, [3, 4, 5])
+
+    def frames_of(path: Path) -> list[int]:
+        return [record["frame"] for record in json.loads(path.read_text(encoding="utf-8"))["records"]]
+
+    scoped_path = tmp_path / "scoped.json"
+    scoped = service.submit_export({
+        "run_id": "run_1", "indices": [0, 1], "format": "json", "output_path": str(scoped_path), "view_id": "view_1",
+    })
+    assert frames_of(scoped_path) == [3, 4]
+
+    whole_path = tmp_path / "whole.json"
+    service.submit_export({"run_id": "run_1", "indices": [0, 1], "format": "json", "output_path": str(whole_path)})
+    assert frames_of(whole_path) == [0, 1]
+
+    # The scope is part of the export's identity: the same scoped request is
+    # still one cached job, and a different scope is not that job.
+    repeated = service.submit_export({
+        "run_id": "run_1", "indices": [1, 0], "format": "json", "output_path": str(scoped_path), "view_id": "view_1",
+    })
+    assert repeated["job_id"] is None
+    assert repeated["cache"]["existing_analysis_id"] == scoped["analysis_id"]
+
+    resubmit = service.submit_export({
+        "run_id": "run_1", "indices": [0, 1], "format": "json", "output_path": str(tmp_path / "again.json"), "view_id": "view_1",
+    })
+    assert resubmit["analysis_id"] != scoped["analysis_id"]
+    assert jobs.calls == 3
+    db.close()
+
+
+def test_export_rejects_a_malformed_view_id_before_claiming_a_row(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path, datasets=_stub_datasets())
+    with pytest.raises(AppError) as exc:
+        service.submit_export({
+            "run_id": "run_1", "indices": [0], "format": "indices",
+            "output_path": str(tmp_path / "x.txt"), "view_id": "   ",
+        })
+    assert exc.value.code == INVALID_PARAMS
+    assert jobs.calls == 0
+    assert service.db.query_one("SELECT COUNT(*) AS n FROM analysis_runs")["n"] == 0
     db.close()
 
 
@@ -749,6 +825,34 @@ def test_fps_warm_start_rejects_mismatched_feature_space(tmp_path: Path) -> None
     db.close()
 
 
+def test_warm_start_fps_scopes_its_candidate_view_before_enqueue(tmp_path: Path) -> None:
+    # Warm-start FPS takes the cross-run branch, so a view_id used to skip both
+    # the staleness check and the selection hash while the runner still sliced
+    # the candidate set by that view: two views of the same length shared one
+    # cache identity, and a stale view only failed minutes later inside the job.
+    db, jobs, service = _service(tmp_path)
+    _insert_compatible_run(db, tmp_path)
+    _dataset_and_view(db, [2, 3, 4, 5, 6, 7])
+    request = {
+        "run_id": "run_1", "algorithm": "fps", "n_samples": 3, "scaling": "raw",
+        "existing_run_id": "run_2", "mode": "structure", "view_id": "view_1",
+    }
+
+    submitted = service.sampling(dict(request))
+    saved = json.loads(
+        db.query_one("SELECT params_json FROM analysis_runs WHERE id = ?", (submitted["analysis_id"],))["params_json"]
+    )
+    assert saved["selection_hash"] == "fp_1|h1", "the view's content must decide cache reuse"
+    assert jobs.calls == 1
+
+    db.execute("UPDATE dataset_views SET dataset_fingerprint = 'fp_old' WHERE id = 'view_1'")
+    with pytest.raises(AppError) as exc:
+        service.sampling(dict(request))
+    assert exc.value.code == ANALYSIS_STALE
+    assert jobs.calls == 1, "a stale scope must be refused before a job exists"
+    db.close()
+
+
 def test_fps_warm_start_runs_and_exports_report_and_indices(tmp_path: Path) -> None:
     db, jobs, service = _service(tmp_path)
     _insert_compatible_run(db, tmp_path)
@@ -1118,4 +1222,66 @@ def test_artifact_rows_page_memory_mapped_arrays(tmp_path: Path) -> None:
     # rows past the shortest array omit it rather than padding a fake value
     assert "scores" in page[1] and "scores" not in page[2]
     assert service._rows_from_artifact(row, 5, 10) == [{"i": 5, "coords": [10.0, 11.0], "labels": 5}]
+    db.close()
+
+
+def test_an_unpageable_artifact_does_not_reload_the_descriptor_matrix(tmp_path: Path) -> None:
+    # An artifact that stores no pageable array has no rows to page: every branch
+    # of the preview builder is gated on one being present. Rebuilding anyway
+    # read the whole descriptor matrix off disk to return [] — once per click on
+    # a history row.
+    db, _jobs, service = _service(tmp_path)
+    analysis_id = "ana_unpageable1"
+    root = tmp_path / "analysis" / analysis_id
+    root.mkdir(parents=True)
+    np.save(root / "correlation_matrix.npy", np.zeros((2, 2), dtype=np.float64))
+    row = {
+        "id": analysis_id,
+        "result_path": str(root),
+        "analysis_type": "feature_correlation",
+        "params_json": "{}",
+        "input_run_ids_json": json.dumps(["run_1"]),
+        "descriptor_run_id": "run_1",
+        "artifact_manifest_json": json.dumps({"files": {"correlation_matrix": {"path": "correlation_matrix.npy"}}}),
+    }
+    loads: list = []
+    service._load_samples = lambda *args, **kwargs: loads.append(args)  # type: ignore[method-assign]
+
+    assert service._rows_from_artifact(row, 0, 10) == []
+    assert loads == []
+    db.close()
+
+
+def test_atom_level_run_without_offsets_refuses_structure_mode(tmp_path: Path) -> None:
+    # Numbering an atom-level run's rows 0..n-1 as frames made every
+    # structure-mode consumer — the reverse jump, the trajectory series, colour-by
+    # — describe the wrong structure, silently. Atom mode already refuses the same
+    # data, so structure mode must guess instead of reporting.
+    db, _jobs, service = _service(tmp_path)
+    result_dir = tmp_path / "results" / "run_atomish"
+    result_dir.mkdir(parents=True)
+    np.save(result_dir / "values.npy", np.arange(96, dtype=np.float32).reshape(12, 8))
+    (result_dir / "metadata.json").write_text(
+        json.dumps({
+            "run_id": "run_atomish", "level": "atom", "row_semantics": "atom",
+            "shape": [12, 8], "row_offsets_verified": False,
+        }),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES ('run_atomish', 'ds_1', 'SOAP', 'test', '{}',"
+        " 'dataset', 'COMPLETED', '2026-01-01T00:00:00+00:00', ?)",
+        (str(result_dir),),
+    )
+    atom_run = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_atomish'")
+
+    with pytest.raises(AppError) as exc:
+        service._load_samples(atom_run, {"mode": "structure"}, "fps")
+    assert exc.value.code == RESULT_INCOMPATIBLE
+    assert exc.value.details["row_offsets_verified"] is False
+
+    # A genuinely structure-level run has nothing to fold and keeps its reading.
+    flat = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_1'")
+    assert service._load_samples(flat, {"mode": "structure"}, "fps").n_samples == 12
     db.close()

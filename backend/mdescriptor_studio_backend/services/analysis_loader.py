@@ -19,6 +19,7 @@ from ..errors import (
 from ..datasets.statistics import frame_force_max
 from ..security import UnsafePathError, ensure_no_reparse_points
 from .analysis_helpers import (
+    CROSS_DATASET_TYPES,
     PHYSICAL_BLOCKS,
     _cell_parameters,
     _composition_matrix,
@@ -84,7 +85,7 @@ class AnalysisDataMixin:
         return props
 
     def _input_ids(self, analysis_type: str, params: dict) -> list[str]:
-        if analysis_type in ("coverage", "overlap", "acquisition", "drift"):
+        if analysis_type in CROSS_DATASET_TYPES:
             ids = [params.get("reference_run_id"), params.get("query_run_id")]
         elif analysis_type == "fps" and params.get("existing_run_id"):
             # Warm-start FPS: candidates plus the existing training set.
@@ -247,6 +248,22 @@ class AnalysisDataMixin:
             elements = None
             mode = "structure"
         else:
+            if declared_atom:
+                # Without verified offsets an atom-level run cannot be folded
+                # back into structures: numbering the rows 0..n-1 would call the
+                # i-th *atom row* frame i, so the reverse jump, the trajectory
+                # distance series and colour-by would all silently describe the
+                # wrong structure.  Atom mode refuses the same data outright, so
+                # structure mode must not guess instead.
+                raise AppError(
+                    RESULT_INCOMPATIBLE,
+                    "atom-level run has no verified row_offsets",
+                    {
+                        "run_id": row.get("id"),
+                        "rows": int(values.shape[0]),
+                        "row_offsets_verified": bool(meta.get("row_offsets_verified")),
+                    },
+                )
             used = values
             if row.get("scope") == "frame":
                 frames = np.arange(values.shape[0], dtype=np.int64) + int(row.get("frame_index") or 0)

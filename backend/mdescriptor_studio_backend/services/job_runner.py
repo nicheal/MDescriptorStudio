@@ -22,8 +22,10 @@ from ..errors import (
     JOB_CANCELLED,
 )
 from .analysis_helpers import (
+    CROSS_DATASET_TYPES,
     _NOW,
     _block_names,
+    _view_id,
 )
 
 
@@ -55,7 +57,7 @@ class AnalysisRunMixin:
             params["preprocess"] = "standardized"
         input_ids = self._input_ids(analysis_type, params)
         run_rows = [self._usable_run(run_id) for run_id in input_ids]
-        cross_dataset = analysis_type in ("coverage", "overlap", "acquisition", "drift")
+        cross_dataset = analysis_type in CROSS_DATASET_TYPES
         warm_start_fps = analysis_type == "fps" and len(input_ids) == 2
         if cross_dataset or warm_start_fps:
             signatures_and_meta = [self.results.feature_space_signature(run_id) for run_id in input_ids]
@@ -81,21 +83,24 @@ class AnalysisRunMixin:
                 view = self._usable_view(str(view_id), run_rows[index]["dataset_id"])
                 side = "reference" if index == 0 else "query"
                 params[f"{side}_selection_hash"] = view["selection_hash"]
-        elif params.get("view_id"):
+        view_id = _view_id(params)
+        if view_id:
             # Single-run analyses scope to a dataset view by slicing the run's
             # samples to the view frames (same lens the cross-dataset modules
-            # use). The selection hash joins the cache key so a view's content,
-            # not just its id, decides reuse.  Warm-start FPS scopes the view
-            # to the candidate run; the existing set is always used whole.
+            # use). The selection hash joins the cache key so a view's *content*,
+            # not just its id, decides reuse.  This cannot sit in an ``elif`` on
+            # the branch above: warm-start FPS takes that branch too, and the
+            # runner still slices its candidate set by view_id — skipping the
+            # validation left a stale or foreign view to fail minutes later
+            # inside the job, and skipping the hash let a result survive an edit
+            # of the very frames it was computed on.  Warm-start FPS scopes the
+            # view to the candidate run; the existing set is always used whole.
             if len(run_rows) != 1 and not warm_start_fps:
                 raise AppError(
                     ANALYSIS_INPUT_INVALID,
                     "view_id applies to single-run analyses only",
                     {"analysis_type": analysis_type},
                 )
-            view_id = params["view_id"]
-            if not isinstance(view_id, str) or not view_id.strip():
-                raise AppError(INVALID_PARAMS, "view_id must be a non-empty string")
             view = self._usable_view(view_id, run_rows[0]["dataset_id"])
             params["selection_hash"] = view["selection_hash"]
         if analysis_type == "sensitivity":
@@ -294,7 +299,9 @@ class AnalysisRunMixin:
             if analysis_type == "fps":
                 block_names = _block_names(params)
                 if str(params.get("strategy") or "global") == "grouped":
-                    group_labels = self._element_group_labels(rows[0], samples[0], (params.get("selection_hash"), samples[0].n_samples))
+                    # "" for "no view", the same spelling the fps_quota preview
+                    # uses: the two share one label cache and must hit it alike.
+                    group_labels = self._element_group_labels(rows[0], samples[0], (params.get("selection_hash") or "", samples[0].n_samples))
                 if block_names:
                     # Composition fractions must share one element layout across
                     # candidate and existing sets, so use their union.

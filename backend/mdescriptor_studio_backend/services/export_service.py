@@ -16,7 +16,7 @@ from ..security import (
     open_text_for_write,
     validate_local_path,
 )
-from .analysis_helpers import ANALYSIS_ALGORITHM_VERSION, _NOW
+from .analysis_helpers import ANALYSIS_ALGORITHM_VERSION, _NOW, _view_id
 
 
 def _cancellable_frames(adapter, frames: list[int], ctx):
@@ -58,6 +58,10 @@ class AnalysisExportMixin:
         mode = str(params.get("mode") or "structure")
         if mode not in ("structure", "atom"):
             raise AppError(ANALYSIS_INPUT_INVALID, "mode must be structure or atom")
+        # The selection is a set of sample indices *in the analysis' own scope*:
+        # a view slices the run's samples, so exporting without it writes the
+        # frames that merely happen to carry the same numbers in the whole set.
+        view_id = _view_id(params)
         # The sampling report carries the provenance of the analysis it came
         # from; every other format only needs the run plus the selection.
         report_analysis = self._analysis_row(str(params["analysis_id"])) if export_format == "report" and params.get("analysis_id") else None
@@ -84,6 +88,7 @@ class AnalysisExportMixin:
             "indices": sorted(set(selected)),
             "output_path": target,
             "mode": mode,
+            **({"view_id": view_id} if view_id else {}),
             **({"analysis_id": str(params["analysis_id"])} if export_format == "report" and params.get("analysis_id") else {}),
         })
         cache_key = self._analysis_cache_key("export", input_ids, canonical)
@@ -117,7 +122,7 @@ class AnalysisExportMixin:
                 try:
                     self._mark_run_running(analysis_id)
                     ctx.progress(0, 1, "writing export")
-                    path = self._write_export(run, selected, export_format, mode, Path(target), ctx, report_analysis)
+                    path = self._write_export(run, selected, export_format, mode, Path(target), ctx, report_analysis, view_id)
                     artifact_path, manifest = self._commit_artifact(
                         analysis_id,
                         "export",
@@ -155,7 +160,7 @@ class AnalysisExportMixin:
                 raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
-    def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None) -> Path:
+    def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None, view_id: str | None = None) -> Path:
         # Sample-index and provenance exports need neither the dataset service
         # nor a frame resolution, so they short-circuit before any loading.
         if export_format == "indices":
@@ -184,8 +189,9 @@ class AnalysisExportMixin:
         # Analysis selections are sample indices, not dataset frame indices.
         # Resolve them through the same identity table used to build previews;
         # this is essential for frame-scoped runs whose only sample may be
-        # dataset frame 7 (or any other non-zero frame).
-        samples = self._load_samples(run, {"mode": mode}, "export")
+        # dataset frame 7 (or any other non-zero frame), and for a selection
+        # taken under a dataset view, which renumbers every sample.
+        samples = self._load_samples(run, {"mode": mode}, "export", view_id=view_id)
         chosen = (
             sorted({int(i) for i in selected if 0 <= int(i) < samples.n_samples})
             if selected

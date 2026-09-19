@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from ..errors import ANALYSIS_INPUT_INVALID, AppError
+from ..errors import ANALYSIS_INPUT_INVALID, INVALID_PARAMS, AppError
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 _ANALYSIS_SCHEMA_VERSION = 1
@@ -26,6 +26,11 @@ COMPOSITE_BLOCKS = (
     "force",
 )
 PHYSICAL_BLOCKS = ("lattice", "composition", "energy", "force")
+
+# Analyses that take a reference run and a query run, and therefore preview and
+# page the *query* side.  Three call sites used to spell this set out by hand
+# and one of them had already drifted.
+CROSS_DATASET_TYPES = ("coverage", "overlap", "acquisition", "drift")
 
 # Per-sample array keys the preview builder maps onto points/rows.
 _PREVIEW_ARRAY_KEYS = (
@@ -48,6 +53,22 @@ def _block_names(params: dict) -> list[str]:
         if name not in names:
             names.append(name)
     return names
+
+def _view_id(params: dict) -> str | None:
+    """The optional dataset-view scope, validated the same way on every path.
+
+    A view slices the run's samples, so it changes what sample index *N* means:
+    a writer that ignored it exported different frames than the analysis it came
+    from, and a cache identity that left it out reused a result whose scope had
+    been edited away.  ``None`` covers both "absent" and "explicitly the whole
+    dataset", so those two spellings keep sharing one cache entry.
+    """
+    value = params.get("view_id")
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise AppError(INVALID_PARAMS, "view_id must be a non-empty string")
+    return value
 
 def _cell_parameters(cell: np.ndarray) -> np.ndarray:
     """a, b, c, α, β, γ of a 3×3 lattice matrix (angles in degrees)."""
