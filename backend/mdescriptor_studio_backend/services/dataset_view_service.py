@@ -24,9 +24,35 @@ from ..errors import (
     INVALID_PARAMS,
 )
 from ..security import UnsafePathError, validate_local_path
-from .dataset_service import _NOW, _frame_indices
+from .analysis_helpers import _NOW
 
 _VIEW_ROLES = ("train", "validation", "test", "selection", "filtered")
+
+
+def frame_indices(value: object, number_of_frames: int) -> list[int]:
+    """Validate an IPC list of frame indices (dedup, range-checked).
+
+    Lives here rather than in DatasetService because saving a view is its only
+    caller; the two modules used to meet over a private name instead.
+    """
+    if not isinstance(value, list) or not value:
+        raise AppError(INVALID_PARAMS, "'indices' must be a non-empty list of frame indices")
+    out: list[int] = []
+    seen: set[int] = set()
+    for v in value:
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise AppError(INVALID_PARAMS, "'indices' must contain integers")
+        if not 0 <= v < number_of_frames:
+            raise AppError(
+                INVALID_PARAMS,
+                f"frame index {v} out of range (dataset has {number_of_frames} frames)",
+            )
+        if v not in seen:
+            seen.add(v)
+            out.append(v)
+    return out
+
+
 _INSERT_VIEW = (
     "INSERT INTO dataset_views (id, dataset_id, name, role, filter_json, frame_indices_json,"
     " selection_hash, dataset_fingerprint, created_at, updated_at)"
@@ -142,7 +168,7 @@ class DatasetViewService:
         dataset = self.datasets._row(params.get("dataset_id"))
         if not self.datasets._meta(dataset)["cache_valid"]:
             raise AppError(DATASET_CHANGED, "dataset must be current before creating a view")
-        indices = sorted(_frame_indices(params.get("indices"), dataset["number_of_frames"]))
+        indices = sorted(frame_indices(params.get("indices"), dataset["number_of_frames"]))
         view_id = self._insert(
             dataset,
             params.get("name"),

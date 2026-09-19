@@ -115,19 +115,24 @@ export const SAMPLING_LABELS: Record<string, Pair> = {
   per_element: { en: "per element", zh: "按元素采样" },
 };
 
+// Arrays each result view actually reads, per kind. The loader fetches exactly
+// this list and the panel's loading gate waits for all of it, so a name that no
+// view reads costs a full chunk round-trip - and for the CSR neighbour arrays of
+// local diversity, that was seconds of "Loading bounded analysis arrays…" for a
+// payload that was then thrown away.
 export const ARTIFACT_ARRAYS: Record<string, string[]> = {
-  pairwise_similarity: ["similarity_matrix", "distance_matrix", "sample_indices"],
-  compare: ["left_coords", "right_coords", "left_pair_distances", "right_pair_distances", "neighbor_overlap", "sample_indices"],
+  pairwise_similarity: ["similarity_matrix"],
+  compare: ["left_coords", "right_coords", "left_pair_distances", "right_pair_distances"],
   mantel: ["left_pair_distances", "right_pair_distances", "null_distribution", "sample_indices"],
   feature_correlation: ["correlation_matrix", "correlation_feature_indices"],
   effective_dimension: ["explained_variance"],
   property_correlation: ["sample_indices", "sample_frames", "sample_rows", "targets", "predictions", "residuals", "absolute_errors", "feature_indices", "pearson_correlations", "spearman_correlations", "mutual_information", "oof_distances", "reliability_bin_center", "reliability_bin_median", "reliability_bin_p90", "reliability_bin_p95"],
-  coverage: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
-  overlap: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
-  drift: ["projection_coords", "projection_source", "projection_sample_indices", "labels", "distances"],
-  trajectory: ["time", "frames", "sample_indices", "step_distance", "reference_distance", "cumulative_distance", "coords", "pc_explained_variance", "event_indices"],
+  coverage: ["projection_coords", "projection_source", "labels"],
+  overlap: ["projection_coords", "projection_source", "labels"],
+  drift: ["projection_coords", "projection_source", "labels"],
+  trajectory: ["time", "frames", "sample_indices", "step_distance", "reference_distance", "cumulative_distance", "coords", "pc_explained_variance"],
   perturbation_sensitivity: ["amplitudes", "mean_response", "median_response", "p95_response", "max_response", "response_matrix", "sample_indices"],
-  local_diversity: ["coords", "sample_indices", "labels", "scores", "cluster_labels", "elements", "coordination", "neighbor_offsets", "neighbor_indices", "neighbor_distances"],
+  local_diversity: ["coords", "sample_indices", "labels", "coordination", "neighbor_distances"],
   kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
   sampling: ["coverage_radius_curve", "coverage_mean_curve", "coverage_r2_curve"],
 };

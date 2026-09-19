@@ -51,26 +51,6 @@ log = logging.getLogger(__name__)
 FINDINGS_ROW_LIMIT = 1000
 
 
-def _frame_indices(value: object, number_of_frames: int) -> list[int]:
-    """Validate an IPC list of frame indices (dedup, range-checked)."""
-    if not isinstance(value, list) or not value:
-        raise AppError(INVALID_PARAMS, "'indices' must be a non-empty list of frame indices")
-    out: list[int] = []
-    seen: set[int] = set()
-    for v in value:
-        if not isinstance(v, int) or isinstance(v, bool):
-            raise AppError(INVALID_PARAMS, "'indices' must contain integers")
-        if not 0 <= v < number_of_frames:
-            raise AppError(
-                INVALID_PARAMS,
-                f"frame index {v} out of range (dataset has {number_of_frames} frames)",
-            )
-        if v not in seen:
-            seen.add(v)
-            out.append(v)
-    return out
-
-
 def _symbol(z: int) -> str:
     return _Z_TO_SYMBOL.get(int(z), f"Z{z}")
 
