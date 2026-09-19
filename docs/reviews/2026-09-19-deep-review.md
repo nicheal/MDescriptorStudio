@@ -293,4 +293,10 @@
 
 需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
 
-不需要定调、剩下的只有两件小事：给 `truncated` 一个用户看得见的说法（否则宽数组被裁窄时只有日志知道）；mock 的 `analysis.*` 提交仍不读参数（模式/枚举/跨集特征空间一致性在 e2e 里依旧测不到）。前者是文案决定，后者是工作量。
+剩下不需要定调的只有一件：mock 的 `analysis.*` 提交仍不读参数（模式/枚举/跨集特征空间一致性在 e2e 里依旧测不到）——那是工作量，不是决定。
+
+### 第八批（截断要说出来 — `addacc4`）
+
+验证：**vitest 144**（新增 1 条）、**eslint + `tsc -b` 干净**、**Playwright 36 passed**。
+
+结果卡片在数组被裁窄时点名说明（`narrowedArrays()` 纯函数；`CachedAnalysis.narrowed` 与它描述的数组同存同取，重看历史行不会把同一张矩阵画成"完整的"）。诚实边界：今天 UI 能达到的参数都触发不了预算（最大的相关矩阵 512×512 恰好等于 `_MAX_CHUNK_VALUES`），所以这条提示是为"第一次有人抬高上限"准备的保险，而不是当前可见的行为变化。
