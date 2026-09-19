@@ -10,10 +10,44 @@ export const MAX_PERSISTED_SLOT_CHARS = 3500;
 
 type CompactSlot = [AnalysisModuleKey, string, string, string, number, number];
 
+/**
+ * Persist a whole-state blob, newest value only, one write at a time per key.
+ *
+ * The sidecar answers on a four-thread pool and `settings.set` is an
+ * unconditional UPSERT, so two in-flight writes for one key can land in the
+ * opposite order and last commit wins: dragging a stepper or switching module
+ * quickly could leave a *stale* blob as the value that greets the next launch.
+ * Serializing per key also coalesces, so a burst of view changes costs one
+ * frame instead of one per keystroke.
+ */
+const writers = new Map<string, { latest: string | null; running: boolean }>();
+
+function persistSetting(key: string, value: string): void {
+  let writer = writers.get(key);
+  if (!writer) {
+    writer = { latest: null, running: false };
+    writers.set(key, writer);
+  }
+  writer.latest = value;
+  if (writer.running) return;
+  writer.running = true;
+  const active = writer;
+  void (async () => {
+    while (active.latest !== null) {
+      const next = active.latest;
+      active.latest = null;
+      try {
+        await ipc.request("settings.set", { key, value: next });
+      } catch (error) {
+        console.warn(`Could not persist ${key}`, error);
+      }
+    }
+    active.running = false;
+  })();
+}
+
 export function persistView(view: unknown): void {
-  void ipc.request("settings.set", { key: VIEW_SETTINGS_KEY, value: JSON.stringify(view) }).catch((error) => {
-    console.warn("Could not persist Analysis view", error);
-  });
+  persistSetting(VIEW_SETTINGS_KEY, JSON.stringify(view));
 }
 
 export function serializeAnalysisSlots(slots: Record<string, AnalysisSlot>): string {
@@ -21,9 +55,7 @@ export function serializeAnalysisSlots(slots: Record<string, AnalysisSlot>): str
 }
 
 export function persistSlots(slots: Record<string, AnalysisSlot>): void {
-  void ipc.request("settings.set", { key: SLOTS_SETTINGS_KEY, value: serializeAnalysisSlots(slots) }).catch((error) => {
-    console.warn("Could not persist Analysis history", error);
-  });
+  persistSetting(SLOTS_SETTINGS_KEY, serializeAnalysisSlots(slots));
 }
 
 export function parseAnalysisSlots(raw: unknown): Record<string, AnalysisSlot> | null {

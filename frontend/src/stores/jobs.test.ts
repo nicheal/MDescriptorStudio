@@ -366,3 +366,44 @@ describe("waitForSuccessfulJob", () => {
     expect(onProgress).toHaveBeenCalledWith(0.5);
   });
 });
+
+describe("running job badge", () => {
+  afterEach(() => {
+    ipc.disconnect();
+    useJobs.setState({ jobs: {}, order: [] });
+    vi.restoreAllMocks();
+  });
+
+  it("follows the store, so a missed finished event cannot strand the count", () => {
+    const counts: number[] = [];
+    const off = wireJobEvents((n) => counts.push(n));
+
+    // Tracking alone is already a running job: the badge must not wait for the
+    // first progress heartbeat to notice.
+    trackJob("job-a", "descriptor.compute");
+    expect(counts.at(-1)).toBe(1);
+
+    // The backend died before emitting job.finished, and the job.get poll
+    // recovered the terminal state. Counting the events alone left the status
+    // bar reporting this job forever.
+    useJobs.setState((st) => ({ jobs: { ...st.jobs, "job-a": { ...st.jobs["job-a"], status: "CANCELLED" } } }));
+    expect(counts.at(-1)).toBe(0);
+    off();
+  });
+
+  it("settles on the normal event path too", () => {
+    const counts: number[] = [];
+    const off = wireJobEvents((n) => counts.push(n));
+    trackJob("job-b", "descriptor.compute");
+    ipc.processLine(JSON.stringify({
+      protocol_version: 1,
+      event: "job.finished",
+      data: { job_id: "job-b", status: "COMPLETED", result: null, error: null },
+    }));
+    expect(counts.at(-1)).toBe(0);
+    // A later job cannot resurrect the count once the page unmounted the wire.
+    off();
+    trackJob("job-c", "descriptor.compute");
+    expect(counts).toHaveLength(2);
+  });
+});

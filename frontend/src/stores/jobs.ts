@@ -214,6 +214,12 @@ export async function waitForSuccessfulJob(jobId: string, onProgress?: (p: numbe
 }
 
 let cleanupJobEvents: (() => void) | null = null;
+
+/** Queued or running: what the status bar and the Jobs badge count. */
+export function countRunning(jobs: Record<string, JobState>): number {
+  return Object.values(jobs).filter((j) => j.status === "RUNNING" || j.status === "QUEUED").length;
+}
+
 export function wireJobEvents(setRunning: (n: number) => void): () => void {
   cleanupJobEvents?.();
   const offProgress = ipc.on("job.progress", (data) => {
@@ -242,19 +248,15 @@ export function wireJobEvents(setRunning: (n: number) => void): () => void {
       };
     });
   });
-  const offProgressCount = ipc.on("job.progress", () => {
-    const st = useJobs.getState();
-    setRunning(Object.values(st.jobs).filter((j) => j.status === "RUNNING" || j.status === "QUEUED").length);
-  });
-  const offFinishedCount = ipc.on("job.finished", () => {
-    const st = useJobs.getState();
-    setRunning(Object.values(st.jobs).filter((j) => j.status === "RUNNING" || j.status === "QUEUED").length);
-  });
+  // Count the store, not the events: a tracked submission, a job.get recovery
+  // after a missed event and a settled run all change `jobs`, and listening only
+  // for the two events left the badge counting a job that had already finished
+  // whenever the backend died before emitting one.
+  const unsubscribe = useJobs.subscribe((st) => setRunning(countRunning(st.jobs)));
   const cleanup = () => {
     offProgress();
     offFinished();
-    offProgressCount();
-    offFinishedCount();
+    unsubscribe();
     if (cleanupJobEvents === cleanup) cleanupJobEvents = null;
   };
   cleanupJobEvents = cleanup;
