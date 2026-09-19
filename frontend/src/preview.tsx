@@ -392,7 +392,7 @@ function mockAnalysisSubmit(
   window.setTimeout(() => {
     mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { analysis_id: analysisId }, error: null });
   }, 800);
-  return { job_id: jobId, analysis_id: analysisId, cache: null };
+  return handOut({ job_id: jobId, analysis_id: analysisId, cache: null });
 }
 
 // Completed analysis rows the mock analysis.list serves; every submit
@@ -1014,6 +1014,95 @@ const jobRow = <T extends Record<string, unknown>>(row: T) => ({
   result: row.status === "COMPLETED" ? {} : null,
 });
 
+/**
+ * A rejection that carries the code the sidecar answers with.
+ *
+ * The mock used to answer an unknown id, check or array name with data instead:
+ * an empty row list, `stats: null`, or a job that was fabricated as RUNNING and
+ * therefore never ended. Every error branch in the renderer - the retry, the
+ * toast, the "not found" placeholder - was unreachable in e2e because of that,
+ * and a spec that misspelled an id watched a spinner instead of failing. Throw
+ * this from a handler and the frame comes back as the real protocol's envelope.
+ */
+class MockError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+const requireDataset = (id: unknown) => {
+  const row = DS.find((item) => item.id === id);
+  if (!row) throw new MockError("DATASET_NOT_FOUND", `dataset ${String(id)} does not exist`);
+  return row;
+};
+
+const requireView = (id: unknown) => {
+  const row = MOCK_DATASET_VIEWS.find((item) => item.id === id);
+  if (!row) throw new MockError("DATASET_NOT_FOUND", `dataset view ${String(id)} does not exist`);
+  return row;
+};
+
+/** The keys settings.get/settings.set accept - kept in step with
+ *  main.py:_ALLOWED_SETTINGS by tests/test_mock_backend_vocabulary.py. */
+const SETTING_KEYS = [
+  "workspace.activeDatasetId",
+  "workspace.activeDescriptorRunId",
+  "workspace.analysisUi",
+  "workspace.analysisSlots",
+  "ui.language",
+  "compute.default_threads",
+];
+
+/** The per-check frame lists the statistics pass produces; mirrors the `known`
+ *  set in DatasetService.findings, same test binding the two together. */
+const FINDINGS_CHECKS = [
+  "missing_values",
+  "energy_anomaly",
+  "invalid_cell",
+  "duplicate_structures",
+  "extreme_force",
+  "nonphysical_structures",
+  "net_force",
+];
+
+/** Job ids this mock has handed out, so job.get can tell an in-flight preview
+ *  job from a made-up one the way the sidecar tells a rows table from nothing. */
+const issuedJobs = new Set<string>();
+
+/** Terminal state of a job whose job.finished the mock already emitted. */
+const settledJobs = new Map<string, { status: string; result: Record<string, unknown> | null; error: unknown }>();
+
+const inFlightJob = (id: string) => ({
+  id,
+  job_type: "analysis",
+  dataset_id: "ds-gaas",
+  descriptor_run_id: null,
+  analysis_run_id: null,
+  status: "RUNNING",
+  progress: 0,
+  completed: null,
+  total: null,
+  message: null,
+  error: null,
+  result: null,
+  created_at: new Date().toISOString(),
+  started_at: new Date().toISOString(),
+  finished_at: null,
+});
+
+const requireSetting = (key: unknown) => {
+  if (typeof key !== "string" || !SETTING_KEYS.includes(key)) throw new MockError("INVALID_PARAMS", "'key' is required");
+  return key;
+};
+
+function handOut<T extends { job_id?: string }>(payload: T): T {
+  if (payload.job_id) issuedJobs.add(payload.job_id);
+  return payload;
+}
+
 const METHODS: Record<string, Handler> = {
   "system.info": () => ({
     // Every key the real sidecar answers (see tests/data/backend-response-keys.json):
@@ -1035,7 +1124,7 @@ const METHODS: Record<string, Handler> = {
   "dataset.list": () => DS.map(datasetRow),
   "dataset.view.list": (p) => p.dataset_id ? MOCK_DATASET_VIEWS.filter((view) => view.dataset_id === p.dataset_id) : MOCK_DATASET_VIEWS,
   "dataset.view.create": (p) => {
-    const dataset = DS.find((item) => item.id === p.dataset_id) ?? DS[0];
+    const dataset = requireDataset(p.dataset_id);
     const indices = Array.isArray(p.indices) ? p.indices.map(Number) : [];
     const view: DatasetView = {
       id: `view-${nextMockId++}`,
@@ -1056,16 +1145,17 @@ const METHODS: Record<string, Handler> = {
     return view;
   },
   "dataset.view.remove": (p) => {
+    requireView(p.id);
     MOCK_DATASET_VIEWS = MOCK_DATASET_VIEWS.filter((view) => view.id !== p.id);
     return { ok: true };
   },
   "dataset.view.rename": (p) => {
-    const view = MOCK_DATASET_VIEWS.find((item) => item.id === p.id);
-    if (view) view.name = String(p.name ?? view.name);
-    return view ?? null;
+    const view = requireView(p.id);
+    view.name = String(p.name ?? view.name);
+    return view;
   },
   "dataset.view.split": (p) => {
-    const dataset = DS.find((item) => item.id === p.dataset_id) ?? DS[0];
+    const dataset = requireDataset(p.dataset_id);
     const roles = ["train", "validation", "test"] as const;
     const views = roles.map((role, index) => ({
       id: `view-${role}-${nextMockId++}`,
@@ -1085,19 +1175,29 @@ const METHODS: Record<string, Handler> = {
     MOCK_DATASET_VIEWS = [...MOCK_DATASET_VIEWS, ...views];
     return { views };
   },
-  "dataset.statistics": (p) => ({
-    recalculating: false,
-    job_id: null,
-    stats: STATS[p.id as string] ?? null,
-  }),
+  "dataset.statistics": (p) => {
+    requireDataset(p.id);
+    return {
+      recalculating: false,
+      job_id: null,
+      stats: STATS[p.id as string] ?? null,
+    };
+  },
   "dataset.rescan": () => {
     window.setTimeout(() => {
       mockEmit("job.finished", { job_id: "job-rescan", status: "COMPLETED", result: null, error: null });
     }, 1500);
-    return { job_id: "job-rescan" };
+    return handOut({ job_id: "job-rescan" });
   },
-  "dataset.frame": (p) => mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4)),
+  "dataset.frame": (p) => {
+    requireDataset(p.id);
+    return mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4));
+  },
   "dataset.findings": (p) => {
+    requireDataset(p.id);
+    if (typeof p.check !== "string" || !FINDINGS_CHECKS.includes(p.check)) {
+      throw new MockError("INVALID_PARAMS", `'check' must be one of ${FINDINGS_CHECKS.join(", ")}`);
+    }
     const stats = STATS[p.id as string] as { health_findings?: { [k: string]: number[] } } | undefined;
     const indices = stats?.health_findings?.[p.check as string] ?? [];
     const limit = Math.min(Number(p.limit ?? 1000), 1000);
@@ -1131,33 +1231,38 @@ const METHODS: Record<string, Handler> = {
     window.setTimeout(() => {
       mockEmit("job.finished", { job_id: "job-register", status: "COMPLETED", result: { dataset_id: "ds-materialized" }, error: null });
     }, 800);
-    return { job_id: "job-register" };
+    return handOut({ job_id: "job-register" });
   },
   "job.list": () => JOB_ROWS.map(jobRow),
   "job.get": (p) => {
     const id = String(p.id ?? "");
     const row = JOB_ROWS.find((job) => job.id === id);
-    return jobRow(row ?? {
-      id,
-      job_type: "analysis",
-      dataset_id: "ds-gaas",
-      descriptor_run_id: null,
-      status: "RUNNING",
-      progress: 0,
-      completed: null,
-      total: null,
-      message: null,
-      error: null,
-      created_at: new Date().toISOString(),
-      started_at: new Date().toISOString(),
-      finished_at: null,
-    });
+    if (row) return jobRow(row);
+    const settled = settledJobs.get(id);
+    if (settled) {
+      // A watcher that missed job.finished settles from this row, exactly as it
+      // does against the sidecar - so an id the mock already finished must not
+      // read as running forever.
+      return {
+        ...inFlightJob(id),
+        ...settled,
+        progress: settled.status === "COMPLETED" ? 1 : 0,
+        finished_at: new Date().toISOString(),
+      };
+    }
+    if (!issuedJobs.has(id)) throw new MockError("JOB_NOT_FOUND", `job ${id} does not exist`);
+    return inFlightJob(id);
   },
-  "settings.get": (p) => ({ key: String(p?.key ?? ""), value: p?.key === "workspace.activeDatasetId" ? "ds-gaas" : null }),
-  "settings.set": () => ({}),
+  "settings.get": (p) => ({ key: requireSetting(p?.key), value: p?.key === "workspace.activeDatasetId" ? "ds-gaas" : null }),
+  "settings.set": (p) => {
+    requireSetting(p?.key);
+    return {};
+  },
   "descriptor.list": () => MOCK_DESCRIPTORS.map(descriptorRow),
   "descriptor.describe": (p) => {
-    const meta = MOCK_DESCRIPTORS.find((x) => x.name === (p.name ?? "dpa2")) ?? MOCK_DESCRIPTORS[0];
+    if (typeof p.name !== "string" || !p.name) throw new MockError("INVALID_PARAMS", "'name' is required");
+    const meta = MOCK_DESCRIPTORS.find((x) => x.name === p.name);
+    if (!meta) throw new MockError("INVALID_PARAMS", `unknown descriptor ${p.name}`);
     return {
       schema_version: DESCRIPTOR_SCHEMA_VERSION,
       name: meta.name,
@@ -1217,25 +1322,28 @@ const METHODS: Record<string, Handler> = {
     window.setTimeout(() => {
       mockEmit("job.finished", { job_id: "job-pca-live", status: "COMPLETED", result: { analysis_id: "ana-mock-pca" }, error: null });
     }, 800);
-    return { job_id: "job-pca-live", analysis_id: "ana-mock-pca" };
+    return handOut({ job_id: "job-pca-live", analysis_id: "ana-mock-pca" });
   },
   "analysis.list": () => Array.from(mockAnalysisRows.values()),
   "analysis.preview": (p) => {
-    const row = mockAnalysisRows.get(String(p.analysis_id ?? ""));
-    if (row) {
-      mockLatestAnalysisId = String(p.analysis_id);
-      mockLatestAnalysisKind = String(row.analysis_type);
-    }
+    const id = String(p.analysis_id ?? "");
+    const row = mockAnalysisRows.get(id);
+    if (!row) throw new MockError("ANALYSIS_NOT_FOUND", `analysis ${id} does not exist`);
+    mockLatestAnalysisId = id;
+    mockLatestAnalysisKind = String(row.analysis_type);
     return mockOverviewPreview();
   },
   "analysis.chunk": (p) => {
+    const id = String(p.analysis_id ?? "");
+    if (!mockAnalysisRows.has(id)) throw new MockError("ANALYSIS_NOT_FOUND", `analysis ${id} does not exist`);
     const array = String(p.array ?? "");
-    const values = mockAnalysisArrays[array] ?? [];
+    const values = mockAnalysisArrays[array];
+    if (!values) throw new MockError("ANALYSIS_INPUT_INVALID", `array '${array}' is not present in analysis artifact`);
     const offset = Math.max(0, Math.floor(Number(p.offset ?? 0) || 0));
     const limit = Math.min(20_000, Math.max(1, Math.floor(Number(p.limit ?? 2000) || 2000)));
     const data = values.slice(offset, offset + limit);
     const columns = Array.isArray(values[0]) ? (values[0] as unknown[]).length : undefined;
-    return { analysis_id: mockLatestAnalysisId, array, offset, next_offset: offset + data.length, shape: columns == null ? [values.length] : [values.length, columns], dtype: "float64", data };
+    return { analysis_id: id, array, offset, next_offset: offset + data.length, shape: columns == null ? [values.length] : [values.length, columns], dtype: "float64", data };
   },
   "analysis.umap": (p) => {
     mockLatestPcaMode = String(p.mode ?? mockLatestPcaMode);
@@ -1328,9 +1436,44 @@ const eventListeners: { event: string; fn: (evt: unknown) => void }[] = [];
 let nextMockId = 1;
 
 function mockEmit(event: string, data: Record<string, unknown>) {
+  if (event === "job.finished") {
+    // Recorded so job.get can answer for a job that already finished: a watcher
+    // that missed the event settles from this row, exactly as it does against
+    // the sidecar, rather than polling a RUNNING row forever.
+    const id = data.job_id;
+    if (typeof id === "string") {
+      settledJobs.set(id, { status: String(data.status ?? "COMPLETED"), result: (data.result as Record<string, unknown> | null) ?? null, error: data.error });
+    }
+  }
   const line = JSON.stringify({ protocol_version: 1, event, data });
   for (const l of [...eventListeners]) {
     if (l.event === "backend-message") l.fn({ event: "backend-message", payload: line });
+  }
+}
+
+/**
+ * The frame this mock answers a request with.
+ *
+ * One place builds it - for the delayed Tauri dispatch and for the spec hook -
+ * so a test that checks a refusal sees exactly what the renderer receives. A
+ * handler that throws must still answer, like Server._handle's top-level guard:
+ * the renderer waits on the request id, so an exception that produced no frame
+ * would leave the awaiting promise unsettled until its timeout and point the
+ * failure at the spec rather than at the mock.
+ */
+function replyFor(id: number, method: string, params: Record<string, unknown>): Record<string, unknown> {
+  const handler = METHODS[method];
+  if (!handler) {
+    return { protocol_version: 1, id, error: { code: "NO_HANDLER", message: "Preview mock method is unavailable.", error_id: "preview" } };
+  }
+  try {
+    return { protocol_version: 1, id, result: handler(params) };
+  } catch (error) {
+    // A MockError is the mock refusing a request the way the sidecar refuses it;
+    // anything else is a bug in the mock, and the real server answers those as
+    // INTERNAL_ERROR rather than staying quiet.
+    const code = error instanceof MockError ? error.code : "INTERNAL_ERROR";
+    return { protocol_version: 1, id, error: { code, message: error instanceof Error ? error.message : String(error), error_id: "preview" } };
   }
 }
 
@@ -1493,9 +1636,10 @@ function showPreviewError(text: string) {
       return JSON.stringify({ protocol_version: 1, event: "backend.ready", data: null });
     }
     if (cmd === "backend_request") {
+      const id = nextMockId++;
       const frame: MockFrame = {
         protocol_version: 1,
-        id: nextMockId++,
+        id,
         method: args?.method as string,
         params: (args?.params as Record<string, unknown>) ?? {},
       };
@@ -1503,22 +1647,7 @@ function showPreviewError(text: string) {
         ? Math.max(25, Number((window as unknown as { __PREVIEW_ANALYSIS_PREVIEW_DELAY__?: number }).__PREVIEW_ANALYSIS_PREVIEW_DELAY__ ?? 25))
         : 25;
       window.setTimeout(() => {
-        const handler = METHODS[frame.method ?? ""];
-        // A handler that throws must still answer, exactly like Server._handle's
-        // top-level guard: the renderer waits on the request id, so an exception
-        // here would leave the awaiting promise unsettled until its timeout and
-        // point the failure at the spec rather than at the mock.
-        let reply: Record<string, unknown>;
-        if (!handler) {
-          reply = { protocol_version: 1, id: frame.id, error: { code: "NO_HANDLER", message: "Preview mock method is unavailable.", error_id: "preview" } };
-        } else {
-          try {
-            reply = { protocol_version: 1, id: frame.id, result: handler(frame.params ?? {}) };
-          } catch (error) {
-            reply = { protocol_version: 1, id: frame.id, error: { code: "INTERNAL_ERROR", message: String(error instanceof Error ? error.message : error), error_id: "preview" } };
-          }
-        }
-        const payload = JSON.stringify(reply);
+        const payload = JSON.stringify(replyFor(id, frame.method ?? "", frame.params ?? {}));
         // route strictly by event name, like the Tauri event system
         for (const l of [...eventListeners]) {
           if (l.event === "backend-message") l.fn({ event: "backend-message", payload });
@@ -1538,8 +1667,15 @@ function showPreviewError(text: string) {
 // their top-level keys with tests/data/backend-response-keys.json, which a pytest
 // regenerates from the real sidecar - so a response shape that drifts here stops
 // being invisible to the suite that drives this mock.
-(window as unknown as { __mdsMock: { call: (method: string, params?: Record<string, unknown>) => unknown } }).__mdsMock = {
+(window as unknown as {
+  __mdsMock: {
+    call: (method: string, params?: Record<string, unknown>) => unknown;
+    respond: (method: string, params?: Record<string, unknown>) => Record<string, unknown>;
+  };
+}).__mdsMock = {
   call: (method, params = {}) => METHODS[method]?.(params),
+  // The frame the renderer would get, error envelope included.
+  respond: (method, params = {}) => replyFor(0, method, params),
 };
 
 async function bootstrap() {

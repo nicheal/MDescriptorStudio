@@ -146,3 +146,41 @@ def test_the_mock_speaks_the_current_protocol_version():
     )
     assert literals, "no protocol_version literal found in preview.tsx"
     assert set(literals) == {str(frames.PROTOCOL_VERSION)}, literals
+
+
+def _mock_string_list(name: str) -> set[str]:
+    """The members of one `const NAME = ["a", "b"]` table in preview.tsx."""
+    text = (FRONTEND_SRC / "preview.tsx").read_text(encoding="utf-8")
+    match = re.search(rf"const {name} = \[(.*?)\];", text, re.S)
+    assert match, f"preview.tsx no longer declares {name} - the mock stopped validating"
+    members = set(re.findall(r'"([^"]+)"', match.group(1)))
+    assert members, f"{name} extracted nothing"
+    return members
+
+
+def test_the_mock_validates_the_same_setting_keys_as_the_sidecar():
+    from mdescriptor_studio_backend.main import _ALLOWED_SETTINGS
+
+    assert _mock_string_list("SETTING_KEYS") == set(_ALLOWED_SETTINGS)
+
+
+def test_the_mock_answers_the_same_health_checks_as_the_sidecar():
+    # DatasetService.findings rejects an unknown check with INVALID_PARAMS. A
+    # mock that accepts anything hides the typo instead of failing on it, so the
+    # two lists have to be the same list.
+    text = (ROOT / "backend" / "mdescriptor_studio_backend" / "services" / "dataset_service.py").read_text(encoding="utf-8")
+    match = re.search(r"known = \{(.*?)\}", text, re.S)
+    assert match, "dataset_service.findings no longer spells out its check set"
+    known = set(re.findall(r'"([a-z_]+)"', match.group(1)))
+    assert known, "the findings check set extracted nothing"
+    assert _mock_string_list("FINDINGS_CHECKS") == known
+
+
+def test_the_mock_only_refuses_with_codes_the_backend_can_send():
+    from mdescriptor_studio_backend import errors
+
+    sendable = {value for name, value in vars(errors).items() if name.isupper() and isinstance(value, str)}
+    used = _literals(FRONTEND_SRC / "preview.tsx", r'MockError\(\s*"([A-Z_]+)"')
+    assert used, "the mock throws no MockError, so nothing in the renderer has an error to branch on"
+    invented = sorted(used - sendable - {"NO_HANDLER"})
+    assert not invented, "preview.tsx refuses requests with codes the sidecar never sends: " + ", ".join(invented)
