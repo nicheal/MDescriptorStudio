@@ -81,8 +81,18 @@ def _process_rss_bytes() -> int | None:
 
             counters = _Counters()
             counters.cb = ctypes.sizeof(_Counters)
-            ok = ctypes.windll.psapi.GetProcessMemoryInfo(
-                ctypes.windll.kernel32.GetCurrentProcess(),
+            # K32GetProcessMemoryInfo is the current export; psapi's unsuffixed
+            # name is the pre-Win7 one and still resolves.
+            memory_info = getattr(ctypes.windll.kernel32, "K32GetProcessMemoryInfo", None)
+            if memory_info is None:
+                memory_info = ctypes.windll.psapi.GetProcessMemoryInfo
+            # Declaring the signature matters: passed as the default c_int, the
+            # 64-bit process handle is truncated and the call quietly fails,
+            # which left memory_peak_bytes null in every Windows build.
+            memory_info.restype = ctypes.c_bool
+            memory_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(_Counters), ctypes.c_ulong]
+            ok = memory_info(
+                ctypes.c_void_p(-1),  # GetCurrentProcess()
                 ctypes.byref(counters),
                 counters.cb,
             )
