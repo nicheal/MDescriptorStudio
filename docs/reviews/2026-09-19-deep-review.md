@@ -271,8 +271,18 @@
 
 仍然开着的 mock 保真度问题（按性价比排序）：`analysis.*` 提交完全不读参数（模式/枚举/跨集特征空间一致性都测不到）；`mockAnalysisArrays` 是全局的、由 `analysis.preview` 的副作用写入，所以一个分析仍可能被喂另一个分析的数组（本轮至少让未知 `analysis_id` 与未知数组名开始报错）；`dataset.findings`/`statistics` 永远 `recalculating: false`，产不出真后端那个多带 `job_id` 的第二形状。
 
+### 第六批（把错误说清楚 — `238e24d`）
+
+验证：**vitest 143**（新增 3 条）、**eslint + `tsc -b` 干净**、**Playwright 36 passed**、pytest 不受影响。
+
+17 处各自拼 `${code}: ${message}`，没有一处带 `error_id` —— 而这个字段存在的理由恰恰是"结构化诊断可能引用路径、渲染端不受信"，于是它只进日志。用户报一句 `DATASET_CHANGED`，日志里那行解释性的记录与之毫无对应。`util/errors.describeError()` 把这一行收敛成一处并附上编号，回退码与措辞留给调用点（只有它知道是哪一步失败的）。
+
+`ErrorFrame` 声明了协议从不发送的 `details?`；`Stats` 把四个字段标成"legacy 缓存可能没有"，而后端自己的缓存门（`_cached_stats` 的 `required` + `stats_version` 比对）根本不会放出缺这些键的载荷 —— 这条谎养出了 `HealthFindingsDrawer` 里一个永远走不到的 `dataset.rescan` 分支，而且它没有防重入。两个类型现在说实话，`docs/plan/02-IPC_PROTOCOL.md` 的错误帧示例也改成 `frames.response_err` 真正写出的样子（并补了一条"UI 必须显示 error_id"的规则）。
+
+顺带核实：报告里"`Overview.tsx:322/414`、`Explore.tsx:205` 是对不可选字段的死防御"这句不准确 —— 那些 `?.` 防的是 `stats` 整体为 null（首次扫描前），不是字段缺失，收紧类型后依然必要，未动。
+
 ### 剩余清单（按"要不要你先定调"分）
 
 需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
 
-不需要定调、可作为下一批：`analysis.chunk` 的值预算（现在超限是整请求报错，不是截断——要么实现预算要么让 `truncated` 显式化，配套要动前端分页）；收紧说谎的 DTO 类型（`types/protocol.ts` 的 `details?` 后端故意不发、`error_id` 全仓无人消费而 12 处手抄 `${code}: ${message}`——现在 mock 会真发错误码了，这条终于可以在 e2e 里验、`Stats` 那批"legacy 可选"字段已被后端 `required` 变成不可能，进而养出 `HealthFindingsDrawer` 里不可达且无防环的 rescan 分支）；`dataset_service.get` 一次请求两遍全量指纹采样与 legacy 分支里算了不用的 `current`。
+不需要定调、可作为下一批：`analysis.chunk` 的值预算（超限现在整请求报错而不是截断，实现预算要配套改前端分页）；`dataset_service.get` 一次请求两遍全量指纹采样与 legacy 分支里算了不用的 `current`；mock 的 `analysis.*` 提交仍不读参数。
