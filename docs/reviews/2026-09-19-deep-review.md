@@ -281,8 +281,16 @@
 
 顺带核实：报告里"`Overview.tsx:322/414`、`Explore.tsx:205` 是对不可选字段的死防御"这句不准确 —— 那些 `?.` 防的是 `stats` 整体为 null（首次扫描前），不是字段缺失，收紧类型后依然必要，未动。
 
+### 第七批（把"有界"兑现成"真有界" — `b1873a9`）
+
+验证：**pytest 324 passed / 1 skipped**（新增 2 条）、**vitest 143**、**eslint + `tsc -b` 干净**、**Playwright 36 passed**。
+
+`analysis.chunk` 的行数上限是 20000、列窗由调用方给，注释把这称为 "value-bounded"，但两者之积从来没被限过：结果页固定发 `limit: 20_000, column_end: 2_000`，宽数组因此序列化成编码器拒收的一帧，调用方拿到的是整个请求的 INTERNAL_ERROR，而不是一页数据。现在由一个纯函数 `_column_window(rows, first, last, columns)` 按协议自身的行上限算出可负担的列窗，并在真的被裁时回 `truncated` —— 调用方第一次能区分"被裁窄的一页"和"完整的一页"。预算 `_MAX_CHUNK_VALUES = 262_144` 的推导写在常量旁边（float64 最短 repr ≤ 24 字符 → 6.3 MB < 8 MiB），mock 与 `AnalysisChunk` 同步加上该字段。UI 目前还不显示 truncated（文案要先定）。
+
+`DatasetService.meta` 对 fingerprint 尚未版本化的行也会去算版本化指纹，然后完全走 legacy 分支回答（`cache_valid=False`、`MIGRATING`，与算出的值无关）——这类数据集每次读注册表都白付一趟整目录遍历 + 32 MB 采样。现在只在该分支真正用得到时才计算。
+
 ### 剩余清单（按"要不要你先定调"分）
 
 需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
 
-不需要定调、可作为下一批：`analysis.chunk` 的值预算（超限现在整请求报错而不是截断，实现预算要配套改前端分页）；`dataset_service.get` 一次请求两遍全量指纹采样与 legacy 分支里算了不用的 `current`；mock 的 `analysis.*` 提交仍不读参数。
+不需要定调、剩下的只有两件小事：给 `truncated` 一个用户看得见的说法（否则宽数组被裁窄时只有日志知道）；mock 的 `analysis.*` 提交仍不读参数（模式/枚举/跨集特征空间一致性在 e2e 里依旧测不到）。前者是文案决定，后者是工作量。
