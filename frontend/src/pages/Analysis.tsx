@@ -30,12 +30,13 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import { useWorkspace, type PcaMode } from "../stores/workspace";
+import { useWorkspace } from "../stores/workspace";
 import { jobStatusLabel, trackJob, watchJob } from "../stores/jobs";
 import {
   buildAnalysisInputKey,
   buildParamsKey,
   buildSubmission,
+  restoreAnalysisParams,
   analysisSlotMatchesModule,
   latestSlotForModule,
   ANALYSIS_NAV_GROUPS,
@@ -48,8 +49,6 @@ import {
   useAnalysisUi,
   type AnalysisModuleKey,
   type AnalysisParams,
-  type EffectiveDimensionPreprocess,
-  type ProjectionName,
   type TabKey,
 } from "../features/analysis";
 import { useT } from "../i18n";
@@ -58,7 +57,7 @@ import SaveViewModal from "../components/SaveViewModal";
 import { normalizePoints, selectedDisplayIndices } from "./analysisPreview";
 import AnalysisResultVisualization from "./analysisVisualizations";
 import { getAnalysisMethodGuide } from "./analysisMethodGuides";
-import { HIGH_CONTRAST_COLORSCALE, num as finiteNumber, overviewLayout, plotData } from "./analysisChartKit";
+import { HIGH_CONTRAST_COLORSCALE, overviewLayout, plotData } from "./analysisChartKit";
 import { analysisCache, type CachedAnalysis } from "./analysisCache";
 import type {
   AnalysisJobResponse,
@@ -733,17 +732,17 @@ export default function Analysis() {
       setViewId(typeof parameters.view_id === "string" ? parameters.view_id : null);
     }
 
-    const loadedParams: AnalysisParams = { ...runContextRef.current.params };
-    loadedParams.overviewAnalysis = analysisTarget.overviewAnalysis ?? loadedParams.overviewAnalysis;
-    loadedParams.coverageMode = analysisTarget.coverageMode ?? loadedParams.coverageMode;
-    if (crossDatasetAnalysis) {
-      loadedParams.referenceRunId = inputRunIds[0] ?? null;
-      loadedParams.queryRunId = inputRunIds[1] ?? null;
-      loadedParams.referenceViewId = referenceView;
-      loadedParams.queryViewId = queryView;
-    } else {
-      loadedParams.viewId = typeof parameters.view_id === "string" ? parameters.view_id : null;
-    }
+    // One source for what this row was computed with: the restored parameters
+    // drive both the controls and the run context, so the two cannot drift.
+    const loadedParams: AnalysisParams = {
+      ...runContextRef.current.params,
+      ...restoreAnalysisParams({ tab: analysisTab, analysisType, parameters, current: runContextRef.current.params }),
+      overviewAnalysis: analysisTarget.overviewAnalysis ?? runContextRef.current.params.overviewAnalysis,
+      coverageMode: analysisTarget.coverageMode ?? runContextRef.current.params.coverageMode,
+      ...(crossDatasetAnalysis
+        ? { referenceRunId: inputRunIds[0] ?? null, queryRunId: inputRunIds[1] ?? null, referenceViewId: referenceView, queryViewId: queryView }
+        : { viewId: typeof parameters.view_id === "string" ? parameters.view_id : null }),
+    };
 
     let loadedSecondRun = secondRun;
     if (analysisType === "compare" || analysisType === "mantel" || analysisType === "sensitivity") {
@@ -758,241 +757,51 @@ export default function Analysis() {
     const navGroup = ANALYSIS_NAV_GROUPS.find((group) => group.modules.some((module) => module.key === analysisModule.key));
     if (navGroup) rememberNavigationModule(navGroup.key, analysisModule.key);
 
-    if (analysisTab === "overview") {
-      if (analysisType === "feature_variance") {
-        const savedNear = finiteNumber(parameters.near_zero_relative_threshold);
-        const savedLow = finiteNumber(parameters.low_variance_relative_threshold);
-        const nextNear = savedNear == null ? nearZeroThreshold : Math.min(1, Math.max(0, savedNear));
-        const nextLow = savedLow == null
-          ? Math.max(nextNear, lowVariationThreshold)
-          : Math.min(1, Math.max(nextNear, savedLow));
-        setNearZeroThreshold(nextNear);
-        setLowVariationThreshold(nextLow);
-        loadedParams.nearZeroThreshold = nextNear;
-        loadedParams.lowVariationThreshold = nextLow;
-      } else if (analysisType === "feature_correlation") {
-        const nextMethod = parameters.method === "spearman" ? "spearman" : "pearson";
-        const savedThreshold = finiteNumber(parameters.correlation_threshold ?? parameters.redundancy_threshold);
-        const nextThreshold = savedThreshold == null ? featureCorrelationThreshold : Math.min(1, Math.max(0, savedThreshold));
-        setFeatureCorrelationMethod(nextMethod);
-        setFeatureCorrelationThreshold(nextThreshold);
-        loadedParams.featureCorrelationMethod = nextMethod;
-        loadedParams.featureCorrelationThreshold = nextThreshold;
-      } else if (analysisType === "effective_dimension") {
-        // Analyses created before the preprocessing setting was exposed used
-        // centered data; keep their cache key and control faithful on restore.
-        const nextPreprocess: EffectiveDimensionPreprocess = parameters.preprocess === "standardized" ? "standardized" : "center";
-        setEffectiveDimensionPreprocess(nextPreprocess);
-        loadedParams.effectiveDimensionPreprocess = nextPreprocess;
-      } else if (analysisType === "property_correlation") {
-        const savedMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-        const nextFolds = Math.max(2, Math.round(finiteNumber(parameters.folds) ?? 5));
-        const nextK = Math.max(1, Math.round(finiteNumber(parameters.reliability_k) ?? 5));
-        const nextMetric = parameters.distance_metric === "cosine" ? "cosine" : "euclidean";
-        const nextSparse = Math.round((finiteNumber(parameters.sparse_quantile) ?? 0.90) * 100);
-        const nextOod = Math.round((finiteNumber(parameters.ood_quantile) ?? 0.99) * 100);
-        setMode(savedMode);
-        setPropertyName(String(parameters.property ?? "energy_per_atom"));
-        setPropertyFolds(nextFolds);
-        setPropertyReliabilityK(nextK);
-        setPropertyDistanceMetric(nextMetric);
-        setPropertySparsePercentile(nextSparse);
-        setPropertyOodPercentile(nextOod);
-        loadedParams.propertyName = String(parameters.property ?? "energy_per_atom");
-        loadedParams.propertyFolds = nextFolds;
-        loadedParams.propertyReliabilityK = nextK;
-        loadedParams.propertyDistanceMetric = nextMetric;
-        loadedParams.propertySparsePercentile = nextSparse;
-        loadedParams.propertyOodPercentile = nextOod;
-        loadedParams.mode = savedMode;
-      } else if (analysisType === "perturbation_sensitivity") {
-        const nextType = parameters.perturbation === "strain" ? "strain" : "jitter";
-        const nextCount = Math.max(2, Math.round(finiteNumber(parameters.n_amplitudes) ?? 8));
-        const nextMaximum = Math.max(0.001, finiteNumber(parameters.max_amplitude) ?? 0.2);
-        const nextStructures = Math.max(1, Math.round(finiteNumber(parameters.max_structures) ?? 64));
-        const nextMetric = typeof parameters.metric === "string" && parameters.metric ? parameters.metric : "euclidean";
-        setPerturbationType(nextType);
-        setPerturbationCount(nextCount);
-        setPerturbationMaximum(nextMaximum);
-        setPerturbationStructures(nextStructures);
-        setPerturbationMetric(nextMetric);
-        loadedParams.perturbationType = nextType;
-        loadedParams.perturbationCount = nextCount;
-        loadedParams.perturbationMaximum = nextMaximum;
-        loadedParams.perturbationStructures = nextStructures;
-        loadedParams.perturbationMetric = nextMetric;
-      } else if (analysisType === "sensitivity") {
-        loadedParams.overviewAnalysis = "sensitivity";
-      }
-    }
-
-    if (analysisTab === "projection") {
-      const nextProjection: ProjectionName = analysisType === "umap" || analysisType === "tsne" ? analysisType : "pca";
-      const savedMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-      const savedPreprocess = parameters.preprocess;
-      const savedPreprocessValue = savedPreprocess === "raw" || savedPreprocess === "center" || savedPreprocess === "standardized" ? savedPreprocess : "center";
-      setProjection(nextProjection);
-      setMode(savedMode);
-      setPreprocess(savedPreprocessValue);
-      loadedParams.projection = nextProjection;
-      loadedParams.mode = savedMode;
-      loadedParams.preprocess = savedPreprocessValue;
-      loadedParams.tsnePerplexity = Math.max(2, Math.round(finiteNumber(parameters.perplexity) ?? tsnePerplexity));
-      if (nextProjection === "tsne") setTsnePerplexity(loadedParams.tsnePerplexity);
-    }
-
-    if (analysisTab === "similarity") {
-      const requestedMode = typeof parameters.similarity_mode === "string" ? parameters.similarity_mode : "";
-      const nextSimilarityMode: "query" | "all_neighbors" | "pairwise" = analysisType === "neighbors" || requestedMode === "all_neighbors"
-        ? "all_neighbors"
-        : analysisType === "pairwise" || analysisType === "pairwise_similarity" || requestedMode === "pairwise"
-          ? "pairwise"
-          : "query";
-      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-      const nextK = Math.max(1, Math.round(finiteNumber(parameters.k ?? parameters.n_neighbors) ?? k));
-      const nextQueryIndex = Math.max(0, Math.round(finiteNumber(parameters.query_index) ?? queryIndex));
-      setSimilarityMode(nextSimilarityMode);
-      setMode(nextMode);
-      setK(nextK);
-      setQueryIndex(nextQueryIndex);
-      loadedParams.similarityMode = nextSimilarityMode;
-      loadedParams.mode = nextMode;
-      loadedParams.k = nextK;
-      loadedParams.queryIndex = nextQueryIndex;
-    }
-
-    if (analysisTab === "clusters") {
-      const requestedAlgorithm = String(parameters.algorithm ?? analysisType).toLowerCase();
-      const nextAlgorithm = requestedAlgorithm === "hierarchical"
-        ? "agglomerative"
-        : ["kmeans", "dbscan", "hdbscan", "agglomerative"].includes(requestedAlgorithm)
-          ? requestedAlgorithm
-        : clusterAlgorithm;
-      const nextClusters = Math.max(2, Math.round(finiteNumber(parameters.n_clusters ?? parameters.nClusters) ?? nClusters));
-      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-      setClusterAlgorithm(nextAlgorithm);
-      setNClusters(nextClusters);
-      setMode(nextMode);
-      loadedParams.clusterAlgorithm = nextAlgorithm;
-      loadedParams.nClusters = nextClusters;
-      loadedParams.mode = nextMode;
-    }
-
-    if (analysisTab === "outliers") {
-      const requestedAlgorithm = String(parameters.algorithm ?? analysisType).toLowerCase();
-      const nextAlgorithm = requestedAlgorithm === "isolation-forest" || requestedAlgorithm === "iforest"
-        ? "isolation_forest"
-        : requestedAlgorithm === "mahalanobis_distance"
-          ? "mahalanobis"
-          : ["lof", "knn", "isolation_forest", "mahalanobis"].includes(requestedAlgorithm)
-            ? requestedAlgorithm
-        : outlierAlgorithm;
-      const nextK = Math.max(1, Math.round(finiteNumber(parameters.k) ?? k));
-      const nextContamination = Math.min(0.5, Math.max(0.001, finiteNumber(parameters.contamination) ?? contamination));
-      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-      setOutlierAlgorithm(nextAlgorithm);
-      setK(nextK);
-      setContamination(nextContamination);
-      setMode(nextMode);
-      loadedParams.outlierAlgorithm = nextAlgorithm;
-      loadedParams.k = nextK;
-      loadedParams.contamination = nextContamination;
-      loadedParams.mode = nextMode;
-    }
-
-    if (analysisTab === "sampling") {
-      const requestedAlgorithm = String(parameters.algorithm ?? analysisType).toLowerCase();
-      const nextAlgorithm = analysisType === "acquisition"
-        ? (parameters.acquisition_method === "uncertainty_diversity" ? "uncertainty_diversity" : "novelty_fps")
-        : requestedAlgorithm === "cluster" ? "cluster_representative"
-          : requestedAlgorithm === "element" ? "per_element"
-            : ["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].includes(requestedAlgorithm)
-              ? requestedAlgorithm
-              : samplingAlgorithm;
-      const nextSamples = Math.max(1, Math.round(finiteNumber(parameters.n_samples) ?? nSamples));
-      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-      setSamplingAlgorithm(nextAlgorithm);
-      setNSamples(nextSamples);
-      setMode(nextMode);
-      loadedParams.samplingAlgorithm = nextAlgorithm;
-      loadedParams.nSamples = nextSamples;
-      loadedParams.mode = nextMode;
-      const nextUncertaintyK = Math.max(2, Math.round(finiteNumber(parameters.uncertainty_k) ?? uncertaintyK));
-      setUncertaintyK(nextUncertaintyK);
-      loadedParams.uncertaintyK = nextUncertaintyK;
-      if (nextAlgorithm === "fps") {
-        const savedStrategy = parameters.strategy === "grouped" ? "grouped" : "global";
-        const savedScaling = parameters.scaling === "raw" || parameters.scaling === "standardized" ? parameters.scaling : "robust";
-        const savedMinDistance = Math.max(0, finiteNumber(parameters.min_distance) ?? 0);
-        const savedExisting = typeof parameters.existing_run_id === "string" && parameters.existing_run_id ? parameters.existing_run_id : null;
-        const savedBlocks = Array.isArray(parameters.blocks) ? parameters.blocks.map(String) : [];
-        const savedCoverage = finiteNumber(parameters.target_coverage);
-        const savedBudgetMode = savedCoverage != null && savedCoverage > 0 ? "coverage" : "count";
-        const savedCoveragePercent = savedCoverage != null && savedCoverage > 0 ? Math.round(savedCoverage * 100) : 95;
-        setSamplingStrategy(savedStrategy);
-        setSamplingScaling(savedScaling);
-        setSamplingMinDistance(savedMinDistance);
-        setSamplingExistingRunId(savedExisting);
-        setSamplingBlocks(savedBlocks);
-        setSamplingBudgetMode(savedBudgetMode);
-        setSamplingCoverage(savedCoveragePercent);
-        loadedParams.samplingStrategy = savedStrategy;
-        loadedParams.samplingScaling = savedScaling;
-        loadedParams.samplingMinDistance = savedMinDistance;
-        loadedParams.samplingExistingRunId = savedExisting;
-        loadedParams.samplingBlocks = savedBlocks;
-        loadedParams.samplingBudgetMode = savedBudgetMode;
-        loadedParams.samplingCoverage = savedCoveragePercent;
-      }
-    }
-
-    if (analysisTab === "coverage") {
-      // The module target is authoritative, so loading coverage always resets
-      // an old overlap selection and vice versa.
-      loadedParams.coverageMode = analysisTarget.coverageMode ?? "coverage";
-      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-      setMode(nextMode);
-      loadedParams.mode = nextMode;
-    }
-
-    if (analysisTab === "compare") {
-      const nextCompareMode: CompareMode = analysisType === "mantel" || parameters.compare_mode === "mantel" ? "mantel" : "geometry";
-      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-      const nextMantelMethod = parameters.method === "spearman" || parameters.mantel_method === "spearman" ? "spearman" : "pearson";
-      const nextPermutations = Math.max(1, Math.round(finiteNumber(parameters.permutations ?? parameters.mantel_permutations) ?? mantelPermutations));
-      setCompareMode(nextCompareMode);
-      setMode(nextMode);
-      setMantelMethod(nextMantelMethod);
-      setMantelPermutations(nextPermutations);
-      loadedParams.compareMode = nextCompareMode;
-      loadedParams.mode = nextMode;
-      loadedParams.mantelMethod = nextMantelMethod;
-      loadedParams.mantelPermutations = nextPermutations;
-    }
-
-    if (analysisTab === "local") {
-      const nextK = Math.max(1, Math.round(finiteNumber(parameters.k) ?? k));
-      const nextClusters = Math.max(2, Math.round(finiteNumber(parameters.n_clusters) ?? nClusters));
-      const nextCutoff = Math.max(0.1, Math.min(10, finiteNumber(parameters.cutoff) ?? localCutoff));
-      setMode("atom");
-      setK(nextK);
-      setNClusters(nextClusters);
-      setLocalCutoff(nextCutoff);
-      loadedParams.mode = "atom";
-      loadedParams.k = nextK;
-      loadedParams.nClusters = nextClusters;
-      loadedParams.localCutoff = nextCutoff;
-    }
-
-    if (analysisTab === "kernel") {
-      const requestedKernel = String(parameters.kernel ?? parameters.kernel_name ?? kernelName).toLowerCase();
-      const nextKernel = ["rbf", "linear", "cosine", "polynomial"].includes(requestedKernel) ? requestedKernel : kernelName;
-      const nextMode: PcaMode = parameters.mode === "atom" ? "atom" : "structure";
-      setKernelName(nextKernel);
-      setMode(nextMode);
-      loadedParams.kernelName = nextKernel;
-      loadedParams.mode = nextMode;
-    }
+    // Every control the row can speak to, written once from the merged
+    // parameters. A parameter the row does not carry keeps its current value,
+    // so these assignments are no-ops in that case.
+    setProjection(loadedParams.projection);
+    setMode(loadedParams.mode);
+    setPreprocess(loadedParams.preprocess);
+    setTsnePerplexity(loadedParams.tsnePerplexity);
+    setSimilarityMode(loadedParams.similarityMode as "query" | "all_neighbors" | "pairwise");
+    setK(loadedParams.k);
+    setQueryIndex(loadedParams.queryIndex);
+    setClusterAlgorithm(loadedParams.clusterAlgorithm);
+    setNClusters(loadedParams.nClusters);
+    setOutlierAlgorithm(loadedParams.outlierAlgorithm);
+    setContamination(loadedParams.contamination);
+    setSamplingAlgorithm(loadedParams.samplingAlgorithm);
+    setNSamples(loadedParams.nSamples);
+    setUncertaintyK(loadedParams.uncertaintyK);
+    setSamplingStrategy(loadedParams.samplingStrategy);
+    setSamplingScaling(loadedParams.samplingScaling);
+    setSamplingMinDistance(loadedParams.samplingMinDistance);
+    setSamplingExistingRunId(loadedParams.samplingExistingRunId);
+    setSamplingBlocks(loadedParams.samplingBlocks);
+    setSamplingBudgetMode(loadedParams.samplingBudgetMode as "count" | "coverage");
+    setSamplingCoverage(loadedParams.samplingCoverage);
+    setCompareMode(loadedParams.compareMode as CompareMode);
+    setMantelMethod(loadedParams.mantelMethod as "pearson" | "spearman");
+    setMantelPermutations(loadedParams.mantelPermutations);
+    setLocalCutoff(loadedParams.localCutoff);
+    setKernelName(loadedParams.kernelName);
+    setNearZeroThreshold(loadedParams.nearZeroThreshold);
+    setLowVariationThreshold(loadedParams.lowVariationThreshold);
+    setFeatureCorrelationMethod(loadedParams.featureCorrelationMethod);
+    setFeatureCorrelationThreshold(loadedParams.featureCorrelationThreshold);
+    setEffectiveDimensionPreprocess(loadedParams.effectiveDimensionPreprocess);
+    setPropertyName(loadedParams.propertyName);
+    setPropertyFolds(loadedParams.propertyFolds);
+    setPropertyReliabilityK(loadedParams.propertyReliabilityK);
+    setPropertyDistanceMetric(loadedParams.propertyDistanceMetric as "euclidean" | "cosine");
+    setPropertySparsePercentile(loadedParams.propertySparsePercentile);
+    setPropertyOodPercentile(loadedParams.propertyOodPercentile);
+    setPerturbationType(loadedParams.perturbationType as "jitter" | "strain");
+    setPerturbationCount(loadedParams.perturbationCount);
+    setPerturbationMaximum(loadedParams.perturbationMaximum);
+    setPerturbationStructures(loadedParams.perturbationStructures);
+    setPerturbationMetric(loadedParams.perturbationMetric);
 
     const loadedContext = {
       moduleKey: analysisModule.key,
@@ -1063,7 +872,7 @@ export default function Analysis() {
         setLoadingAnalysisId(null);
       }
     }
-  }, [allRuns, clusterAlgorithm, commitAnalysis, contamination, dataset, featureCorrelationThreshold, fetchAnalysisPoints, k, kernelName, localCutoff, lowVariationThreshold, mantelPermutations, message, nClusters, nSamples, nearZeroThreshold, outlierAlgorithm, queryIndex, rememberNavigationModule, secondRun, selectedRun, samplingAlgorithm, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setMode, setNearZeroThreshold, setNavigationTarget, setPreprocess, setProjection, t, tsnePerplexity, uncertaintyK]);
+  }, [allRuns, commitAnalysis, dataset, fetchAnalysisPoints, message, rememberNavigationModule, secondRun, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setMode, setNearZeroThreshold, setNavigationTarget, setPreprocess, setProjection, t]);
 
   // Keep the displayed result in step with the current module + parameters:
   // an exact slot match is re-displayed from the backend artifacts instead of
