@@ -218,3 +218,18 @@
 一个必须知道的副作用：`collectDefaults` 现在会为所有带 `default` 的参数赋值，descriptor 的 `cache_key` 由提交参数计算，因此**升级后第一次重跑旧 run 的参数组合会重新计算一次**（旧 run 的 `parameters_json` 里少这些键）。换来的是"屏幕上显示什么就算什么"，以及可选参数被显式改回默认值时不再产生第二个 run。
 
 尚未动的（第七节第 4–6 步）：科学口径类需要一次决策（`coverage` 的默认尺度、零方差判据阈值、配位数与 `max_neighbors` 解耦、`acquisition.scores` 语义、strain 的缩放中心）；性能与结构收敛各条保持原样，其中 `statistics` 的 scipy 回退内存放大现在被发布门禁挡在了"出厂一定有原生核"之后，但非 Windows/源码构建仍会踩到。
+
+### 第二批（第 5–6 步的可安全落地部分）
+
+同一轮验证：**pytest 318 passed / 1 skipped**、**vitest 140**、**eslint + `tsc -b` 干净**、**Playwright 32 passed**。
+
+| 改动 | 位置 | 说明 / 测试 |
+| --- | --- | --- |
+| 单行读取默认不碰 `preview_json` | `artifact_service._analysis_row(include_preview=…)` | 列清单用 `PRAGMA table_info` 派生，而不是再抄一份列名；`get`/`preview`/report 导出显式要 blob。`chunk` 是前端按数组循环调的热路径。 |
+| 指纹每次提交只算一遍 | `dataset_service.refresh_if_changed` 返回指纹，`descriptor_service.submit` 复用 | 原来同一请求里"整目录遍历 + 32 MB 采样"跑两遍（校验一遍、算 cache_key 一遍），作业里还有第三遍。 |
+| `dataset.findings` 的 `total` 说真话 | `dataset_service.py:580` | 取该检查在 stats 里的精确计数，而不是被 `HEALTH_FINDINGS_CAP=5000` 截断后的列表长度；抽屉那句"Showing first n of total"因此终于成立。`:49-52` 的"抽屉会分页"注释改成实情（无 offset，第 1001 条今天读不到）。 |
+| 导出有进度了 | `export_service._cancellable_frames` | 250 帧节奏与其他三处一致；万帧 extxyz 不再在 0% 停几分钟。`test_export_reports_progress_while_writing_frames` |
+| 轨迹页的 memo 恢复有效 | `trajectoryView.tsx:46` | 数组转换收进一个 `useMemo([arrays])`，此前七个 memo 的依赖每次渲染都变，拖范围滑块就重排全量序列。 |
+| 力箭头不再每帧重算 | `Explore.tsx:149`、`:474` | `frameMaxForce` 收进 memo，viewer effect 复用同一个值（原来同一帧算两遍，且每次 hover/输入都重算）。 |
+
+有意留下的两项：Explore 的原子表分页会破坏"选中行滚动可见"所依赖的 `tbody tr.explore-atom-row-selected` 查询，需要一次带 UI 取舍的决定（受控分页并跟随选中，或 virtual + 改定位方式）；`ARTIFACT_ARRAYS` 裁剪（`registry.ts:118-133` 列 10 个数组、只有 2 个被读）要先逐个复核消费者，适合作为独立可验证的一次提交。两者都属于第六节，不是新发现。
