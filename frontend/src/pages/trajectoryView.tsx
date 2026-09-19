@@ -43,13 +43,18 @@ interface TrajectoryEvent {
 
 export default function TrajectoryView({ preview, arrays, points, selectedIndices, onSelect }: Props) {
   const { t } = useT();
-  const time = nums(arrays.time);
-  const frames = nums(arrays.frames).map(Math.round);
-  const sampleIndices = nums(arrays.sample_indices).map(Math.round);
-  const series = nums(arrays.step_distance);
-  const reference = nums(arrays.reference_distance);
-  const cumulative = nums(arrays.cumulative_distance);
-  const coords = matrix(arrays.coords);
+  // Convert the fetched payload once. Built in the render body, these views were
+  // a new identity every render, so every useMemo below re-ran - dragging the
+  // range slider re-sorted the whole series for the percentiles each time.
+  const { time, frames, sampleIndices, series, reference, cumulative, coords } = useMemo(() => ({
+    time: nums(arrays.time),
+    frames: nums(arrays.frames).map(Math.round),
+    sampleIndices: nums(arrays.sample_indices).map(Math.round),
+    series: nums(arrays.step_distance),
+    reference: nums(arrays.reference_distance),
+    cumulative: nums(arrays.cumulative_distance),
+    coords: matrix(arrays.coords),
+  }), [arrays]);
   const count = Math.min(time.length, frames.length, series.length, coords.length);
   const steps = useMemo(() => series.slice(1, count), [count, series]);
   const ranks = useMemo(() => stepPercentiles(steps), [steps]);

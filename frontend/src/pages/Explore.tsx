@@ -146,7 +146,10 @@ export default function Explore() {
   const selectedForceRow = frame && selectedAtom != null && selectedAtom < frame.atom_rows.length
     ? frame.atom_rows[selectedAtom]
     : undefined;
-  const maxForce = frame ? frameMaxForce(frame) : 0;
+  // One pass over the frame's forces per frame, not per render: the render body
+  // recomputed it on every hover and keystroke, and the viewer effect below
+  // computed the same value a second time for the force arrow.
+  const maxForce = useMemo(() => (frame ? frameMaxForce(frame) : 0), [frame]);
   // The atom carrying the frame's largest |F| — the target behind a red
   // "Max |F|" row; clicking the row selects it exactly like a table click.
   const maxForceAtom = useMemo(() => {
@@ -474,7 +477,7 @@ export default function Explore() {
       if (showForceArrow) {
         const row = selected < frame.atom_rows.length ? frame.atom_rows[selected] : undefined;
         const arrow = row
-          ? forceArrowGeometry(row.fx, row.fy, row.fz, frameMaxForce(frame), forceArrowScale, FORCE_ARROW_TARGET_LENGTH)
+          ? forceArrowGeometry(row.fx, row.fy, row.fz, maxForce, forceArrowScale, FORCE_ARROW_TARGET_LENGTH)
           : null;
         const atom = atoms[selected];
         if (arrow && atom) {
@@ -523,7 +526,7 @@ export default function Explore() {
     renderedFrameRef.current = frame.index;
     const ms = performance.now() - loadStart.current;
     console.info(`frame ${frame.index} fetched+rendered in ${ms.toFixed(0)}ms`);
-  }, [viewerReady, frame, localCutoff, selectedAtom, showLocalEnvironment, showForceArrow, forceArrowScale, showDistancePair, minDistancePair]);
+  }, [viewerReady, frame, localCutoff, maxForce, selectedAtom, showLocalEnvironment, showForceArrow, forceArrowScale, showDistancePair, minDistancePair]);
 
   if (!d) return <Empty description={t("Register a dataset first")} style={{ marginTop: 120 }} />;
 
