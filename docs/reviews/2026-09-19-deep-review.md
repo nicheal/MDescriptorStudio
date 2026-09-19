@@ -249,3 +249,18 @@
 这批的诚实边界：e2e **不能**验证数组裁剪——preview mock 的 `analysis.chunk` 对任何数组名都给同一份数据（第五节第 2 条仍未修的 mock 缺口）。裁剪依据是静态消费者核查，置信高但非测试钉住。
 
 第四批（仍未做，都不需要决策，只是各自要一次独立验证）：`datasets` 私有方法的越界（`self.datasets._meta/_row/_adapter_for`、`_symbol`/`formula_of`）；注释与实现的逐条对齐（`result_service.py:336` 承诺的 hard cap 只有列没有行、`analysis_service.py:210` 的 "value-bounded"）；`granularity`、`_ANALYSIS_SCHEMA_VERSION`、`config.py` 的 `cache/`、`deepmd.py:22` 的 re-export 注释这批"名存实亡"的按删或按用。第 4 步（科学口径）等你定调。
+
+### 第四批（私有名、名存实亡、说谎的注释 — `a072f57`…`21d6755`）
+
+验证同上：**pytest 319 passed / 1 skipped**、**vitest 140**、**eslint + `tsc -b` 干净**、**Playwright 32 passed**。四个提交：
+
+- `a072f57` — `row_or_raise` / `meta` / `adapter_for` / `managed_result_path` / `symbol_of` 转公开，六个模块不再靠下划线借宿主的实现。重命名能改到定义与调用点，改不到把方法名写成关键字参数或字典字符串的两个测试替身——它们立刻炸出来，正是"有测试覆盖时才做这种机械改名"的理由。
+- `dfe64a5` — 删 `DescriptorMatrix.granularity`（只有自证测试读它，且与本模块 docstring 的立意相反）、`run_{id.removeprefix('run_')}` 恒等式、`config.py` 无人写入的 `cache/`、`deepmd.py` 那句假的 "re-exported"；`result_service` 与 `analysis_service` 两处承诺了不存在保证的注释改成实情；三个同名 `schema_version` 各加一句归位说明。
+- `c0812d1` — `backend.ready` 与 `system.info` 的七个版本字段收进 `_version_payload()`。
+- `21d6755` — 删 `Explore` 里第二份 energy/forces/virial 标签表（`util/properties.ts` 的注释正是在警告这件事）、删 `workspace.activeDataset`（唯一"消费者"是下面那段解释为何别用它的 docstring）。
+
+### 剩余清单（按"要不要你先定调"分）
+
+需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
+
+不需要定调、可作为下一批：`analysis.chunk` 的值预算（现在超限是整请求报错，不是截断——要么实现预算要么让 `truncated` 显式化，配套要动前端分页）；收紧说谎的 DTO 类型（`types/protocol.ts` 的 `details?` 后端故意不发、`error_id` 全仓无人消费而 12 处手抄 `${code}: ${message}`、`Stats` 那批"legacy 可选"字段已被后端 `required` 变成不可能，进而养出 `HealthFindingsDrawer` 里不可达且无防环的 rescan 分支）；mock 补上校验语义（未知 id/check/数组名一律回错误帧，替掉 `preview.tsx:1096` 凭空造 RUNNING 作业那类）；`dataset_service.get` 一次请求两遍全量指纹采样与 legacy 分支里算了不用的 `current`。
