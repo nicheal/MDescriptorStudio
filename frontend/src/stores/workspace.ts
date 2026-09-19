@@ -106,15 +106,13 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   bumpStatsTick: () => set((st) => ({ statsTick: st.statsTick + 1 })),
 }));
 
-export const activeDataset = (st: WorkspaceState): DatasetMeta | undefined =>
-  st.datasets.find((d) => d.id === st.activeDatasetId);
-
 /**
  * The active dataset, subscribed field by field.
  *
- * Reading the whole store to find it (`activeDataset(useWorkspace())`) makes
- * the caller re-render on every unrelated write, including the job.progress
- * ticks that fire many times a second while a descriptor run is going.
+ * A selector that returns the dataset object itself invites reading the whole
+ * store to find it, which makes the caller re-render on every unrelated write -
+ * including the job.progress ticks that fire many times a second while a
+ * descriptor run is going. Take the two fields instead.
  */
 export function useActiveDataset(): DatasetMeta | undefined {
   const datasets = useWorkspace((st) => st.datasets);

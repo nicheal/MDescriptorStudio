@@ -15,6 +15,7 @@ import { useActiveDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import { forceArrowGeometry, frameMaxForce } from "../util/forces";
+import { DATASET_PROPERTY_LABELS } from "../util/properties";
 import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, virialSummary } from "../util/structure";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import { neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
@@ -33,8 +34,6 @@ const MAX_BOND_CUTOFF = 10;
 // data-health severity color for the inspector: rows behind a flagged check
 // (and the banner listing them) render in this red
 const HEALTH_RED = "#D13438";
-// localized labels for the per-frame missing-properties inspector row
-const MISSING_PROP_LABELS: Record<string, string> = { energy: "Energy", forces: "Forces", virial: "Virial" };
 // Force arrows are normalized per frame: the strongest force in the frame
 // renders at this length (Å) before the user multiplier applies. The length
 // is measured from the atom center, and ARROW_START_OFFSET keeps the tail
@@ -784,7 +783,7 @@ export default function Explore() {
               [t("Local coordination"), selectedAtom != null ? String(selectedLocalNeighbors.length) : "—"],
               [t("Neighbor shell"), selectedAtom != null ? `${localCutoff.toFixed(2)} Å` : "—"],
               ...(missingProps.length > 0
-                ? [[t("Missing"), missingProps.map((p) => t(MISSING_PROP_LABELS[p] ?? p)).join(" · "), HEALTH_RED] as [string, string, string]]
+                ? [[t("Missing"), missingProps.map((p) => t(DATASET_PROPERTY_LABELS[p] ?? p)).join(" · "), HEALTH_RED] as [string, string, string]]
                 : []),
             ]}
           />
