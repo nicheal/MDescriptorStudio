@@ -64,7 +64,9 @@ class Server:
         """
         try:
             line = frames.encode(frame)
-        except ValueError:
+        except (ValueError, TypeError):
+            # TypeError is what frames._unencodable raises: a producer that
+            # returned a numpy scalar, a set or a path instead of JSON values.
             log.exception("frame is not JSON-encodable")
         else:
             if len(line.encode("utf-8")) <= frames.MAX_LINE_BYTES:
@@ -105,13 +107,18 @@ class Server:
         warmup has finished on Windows pipes.
         """
         while not self._closed.is_set():
-            raw = stream.readline(frames.MAX_LINE_BYTES + 1)
+            # +2, and the cap compared against MAX+1: a frame of exactly
+            # MAX_LINE_BYTES plus its newline must still be accepted, which a
+            # MAX+1 byte read cannot tell from a truncated longer frame. This
+            # keeps the two input loops in agreement with _consume_frame and
+            # parse_request, which both test "> MAX_LINE_BYTES".
+            raw = stream.readline(frames.MAX_LINE_BYTES + 2)
             if not raw:
                 break
-            oversized = len(raw) > frames.MAX_LINE_BYTES
+            oversized = len(raw) > frames.MAX_LINE_BYTES + 1
             newline = b"\n" if isinstance(raw, bytes) else "\n"
             while oversized and raw and not raw.endswith(newline):
-                raw = stream.readline(frames.MAX_LINE_BYTES + 1)
+                raw = stream.readline(frames.MAX_LINE_BYTES + 2)
             if oversized:
                 self._write(frames.response_err(None, _request_too_large()))
                 continue

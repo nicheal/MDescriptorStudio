@@ -182,7 +182,12 @@ class ExtXYZAdapter(DatasetAdapter):
         )
         lattice = meta.get("lattice")
         cell = lattice.reshape(3, 3) if lattice is not None else np.zeros((3, 3))
-        periodic = bool(np.abs(cell).sum() > 1e-8)
+        # A Lattice with no periodic axis is a box around an isolated structure
+        # (ASE writes clusters this way), not a crystal: claiming periodicity
+        # there folds atoms across the vacuum into sub-Å contacts. Mixed
+        # periodicity still flattens to fully periodic, which the engine accepts;
+        # per-axis fidelity for it is an open product decision.
+        periodic = bool(np.abs(cell).sum() > 1e-8) and any(meta["pbc"])
         energy = meta.get("energy")
         virial = None
         if meta.get("virial") is not None:

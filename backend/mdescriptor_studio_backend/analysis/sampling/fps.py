@@ -408,7 +408,17 @@ def grouped_farthest_point_sampling(
         count = int(quota[group_index])
         if count == 0:
             continue
-        if target_coverage is not None and _r2_coverage(global_d2, total_spread) >= target_coverage:
+        if (
+            target_coverage is not None
+            # Nothing has been covered yet when the warm-start set is absent:
+            # every residual is still +inf, and _r2_coverage reports a perfect
+            # 1.0 for a zero-spread space, so the pre-check stopped the whole run
+            # before its first pick and handed back all-inf residuals — which
+            # the preview then could not encode. Only a measurable coverage may
+            # stop a group.
+            and np.isfinite(global_d2).all()
+            and _r2_coverage(global_d2, total_spread) >= target_coverage
+        ):
             # The merged selection already explains the requested spread; the
             # remaining groups would only add redundancy.
             stopped_by = _STOP_COVERAGE

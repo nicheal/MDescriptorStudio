@@ -182,7 +182,8 @@ def _frame_short_contact(
     "find non-physical structures" bond-length filter).
 
     Exact under the same per-axis stencil cap as _frame_min_distance (the
-    fractional-coefficient bound here is Cauchy–Schwarz on the inverse rows).
+    fractional-coefficient bound here is Cauchy–Schwarz on the inverse-cell
+    columns, as in _frame_min_distance).
     The scan only runs when the frame's minimum distance still leaves room
     for a pair to undercut its own threshold — every threshold is at most
     coefficient × 2 × the largest radius present — so healthy frames pay a
@@ -205,7 +206,7 @@ def _frame_short_contact(
     tree = cKDTree(pts)
     if periodic:
         # every pair (i, j+s) closer than t_max satisfies |s_k| <= t_max *
-        # |inv row_k| + 1 per periodic axis (|Δfrac_k| >= |s_k| - 1 for the
+        # ||inv column_k|| + 1 per periodic axis (|Δfrac_k| >= |s_k| - 1 for the
         # wrapped spread), so this stencil covers all candidates; the zero
         # shift (core-core pairs) is scanned first with exact self-pairs
         # dropped, while image shifts keep own-image contacts (i == j)
@@ -213,7 +214,7 @@ def _frame_short_contact(
         limits = [
             min(
                 _MIN_DISTANCE_IMAGE_LIMIT,
-                int(t_max * np.linalg.norm(inverse[axis, :])) + 1,
+                int(t_max * np.linalg.norm(inverse[:, axis])) + 1,
             )
             if pbc[axis]
             else 0
@@ -314,6 +315,17 @@ def _int_hist(values: list[int]) -> dict | None:
     counts = np.bincount(arr - lo, minlength=hi - lo + 1)
     edges = [float(lo - 0.5 + i) for i in range(hi - lo + 2)]
     return {"edges": [round(e, 6) for e in edges], "counts": [int(c) for c in counts]}
+
+
+def frame_force_max(forces: np.ndarray | None) -> float | None:
+    """Largest force magnitude on a frame, or None when it has none.
+
+    The health findings and the PCA colour-by both report this number, and
+    rounding in only one of them made the two views disagree in the last digit.
+    """
+    if forces is None or not np.asarray(forces).size:
+        return None
+    return round(float(np.linalg.norm(np.asarray(forces, dtype=np.float64), axis=1).max()), 5)
 
 
 def _frame_geometry(

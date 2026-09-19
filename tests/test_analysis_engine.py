@@ -620,3 +620,33 @@ def test_sensitivity_uses_baseline_scaling_for_common_shifts() -> None:
         {"max_samples": 4, "n_clusters": 2, "k": 1},
     )
     assert result["preview"]["runs"][1]["mean_delta_norm"] > 1.0
+
+
+def test_neighbour_search_excludes_self_by_identity_not_by_position() -> None:
+    # Column 0 of knn(x, k+1) is only reliably the query itself while no other
+    # row coincides with it. The old [:, 1:] slice assumed it always was, so for
+    # duplicate rows it dropped a genuine neighbour and kept the row's own index
+    # at distance 0 — which then averaged into every neighbour statistic.
+    from mdescriptor_studio_backend.analysis.algorithms._common import _nearest_distances
+
+    x = np.array([[1.0, 2.0], [1.0, 2.0], [1.0, 2.0], [5.0, 5.0]])
+    indices, distances = _nearest_distances(x, 2)
+    assert indices.shape == (4, 2)
+    for row, others in enumerate(indices.tolist()):
+        assert row not in others, f"row {row} lists itself as a neighbour"
+        assert len(set(others)) == 2
+    assert distances[3].tolist() == pytest.approx([distances[3][0]] * 2)
+    assert distances[3][0] > 0.0
+
+    # Distinct rows keep the previous shape exactly.
+    plain = np.array([[0.0], [1.0], [4.0], [9.0]])
+    plain_indices, plain_distances = _nearest_distances(plain, 1)
+    assert plain_indices.tolist() == [[1], [0], [1], [2]]
+    assert plain_distances[:, 0].tolist() == pytest.approx([1.0, 1.0, 3.0, 5.0])
+
+    # More neighbours than there are other rows: never self, never padding.
+    many_indices, many_distances = _nearest_distances(x, 10)
+    assert many_indices.shape == (4, 3)
+    for row, others in enumerate(many_indices.tolist()):
+        assert row not in others
+    assert np.isfinite(many_distances).all()

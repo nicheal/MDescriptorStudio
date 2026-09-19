@@ -29,6 +29,7 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../../ipc/client";
 import { refetchDatasets, useActiveDataset, useWorkspace } from "../../stores/workspace";
+import { DATASET_PROPERTY_LABELS } from "../../util/properties";
 import { useT, type T } from "../../i18n";
 import {
   JOB_STATUS_COLOR as STATUS_COLOR,
@@ -66,19 +67,14 @@ function missingValuesSubtitle(
   t: (key: string) => string,
 ): string {
   if (!byProp) return t("Across all properties");
-  const labels: Record<string, string> = {
-    energy: t("Energy"),
-    forces: t("Forces"),
-    virial: t("Virial"),
-  };
   const parts = Object.entries(byProp)
     .filter(([, n]) => (n ?? 0) > 0)
-    .map(([k, n]) => `${labels[k] ?? k} ${(n ?? 0).toLocaleString()}`);
+    .map(([k, n]) => `${t(DATASET_PROPERTY_LABELS[k] ?? k)} ${(n ?? 0).toLocaleString()}`);
   return parts.length > 0 ? parts.join(" · ") : t("Across all properties");
 }
 
 export default function RightRail() {
-  const page = useWorkspace().page;
+  const page = useWorkspace((s) => s.page);
   const wide = useSyncExternalStore(subscribeResize, () => window.innerWidth >= 1280);
   if (!wide || page === "analysis") return null;
   return page === "descriptors" || page === "results" ? <RecentJobsRail /> : <DataHealthRail />;
@@ -319,9 +315,12 @@ function DataHealthRail() {
 
 
 function RecentJobsRail() {
-  const { setJobsDrawerOpen, datasets, activeDatasetId } = useWorkspace();
+  const setJobsDrawerOpen = useWorkspace((s) => s.setJobsDrawerOpen);
+  const datasets = useWorkspace((s) => s.datasets);
+  const activeDatasetId = useWorkspace((s) => s.activeDatasetId);
   const { t } = useT();
-  const { jobs, order } = useJobs();
+  const jobs = useJobs((s) => s.jobs);
+  const order = useJobs((s) => s.order);
   const [rows, setRows] = useState<JobRow[]>([]);
   const datasetNames = useMemo(() => new Map(datasets.map((dataset) => [dataset.id, dataset.name])), [datasets]);
 

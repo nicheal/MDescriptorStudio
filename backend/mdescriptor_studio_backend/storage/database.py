@@ -143,6 +143,15 @@ MIGRATIONS: dict[int, str] = {
     9: """
     DROP TABLE IF EXISTS dataset_excluded_frames;
     """,
+    10: """
+    CREATE INDEX IF NOT EXISTS idx_descriptor_cache_key ON descriptor_runs(cache_key, status);
+    CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
+    """,
+    11: """
+    ALTER TABLE descriptor_runs ADD COLUMN result_shape_json TEXT;
+    ALTER TABLE descriptor_runs ADD COLUMN feature_count INTEGER;
+    ALTER TABLE descriptor_runs ADD COLUMN row_semantics TEXT;
+    """,
 }
 
 

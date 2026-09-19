@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { App as AntApp, Button } from "antd";
 import {
   Grid16Regular,
@@ -46,27 +46,34 @@ const TABS: { key: "overview" | "explore" | "descriptors" | "results" | "analysi
 
 export default function App() {
   const { message } = AntApp.useApp();
-  const {
-    backendStatus,
-    setBackendReady,
-    setBackendStarting,
-    setBackendError,
-    setDatasets,
-    setActiveDataset,
-    page,
-    setPage,
-  } = useWorkspace();
+  // One selector per field. Reading the whole store here re-renders the shell,
+  // the rail and the mounted page on every write, which during a descriptor
+  // run means every job.progress tick (see stores/workspace.ts).
+  const backendStatus = useWorkspace((s) => s.backendStatus);
+  const page = useWorkspace((s) => s.page);
+  const setPage = useWorkspace((s) => s.setPage);
+  const setBackendReady = useWorkspace((s) => s.setBackendReady);
+  const setBackendStarting = useWorkspace((s) => s.setBackendStarting);
+  const setBackendError = useWorkspace((s) => s.setBackendError);
+  const setDatasets = useWorkspace((s) => s.setDatasets);
+  const setActiveDataset = useWorkspace((s) => s.setActiveDataset);
   const { t } = useT();
+  // A user-initiated restart deliberately emits backend-exit, so the exit
+  // handler must not report it as a crash; the flag clears when the new
+  // process greets us (or if the restart call itself fails).
+  const restartingRef = useRef(false);
 
   const restartBackend = useCallback(async () => {
     setBackendStarting();
+    restartingRef.current = true;
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("backend_restart");
-      // The backend.ready frame the new process emits reaches the listener
-      // registered at startup, so nothing else has to be re-armed.
+      // backend_restart emits the exit event, and the exit handler re-arms the
+      // listeners (see the mount effect), so the new process is heard.
     } catch (error) {
       console.error(error);
+      restartingRef.current = false;
       setBackendError();
     }
   }, [setBackendStarting, setBackendError]);
@@ -81,7 +88,10 @@ export default function App() {
           key: "workspace.activeDatasetId",
         });
         const wanted = saved.value && list.some((d) => d.id === saved.value) ? saved.value : list[0].id;
-        useWorkspace.setState({ activeDatasetId: wanted, activeFrameIndex: 0 });
+        // through the action, not setState: the fallback choice is only stable
+        // across launches if it is persisted, and this is the one path that can
+        // pick a dataset the settings row never named.
+        setActiveDataset(wanted);
       }
       if (st.activeDatasetId && !list.some((d) => d.id === st.activeDatasetId)) {
         setActiveDataset(list[0]?.id ?? null);
@@ -99,6 +109,7 @@ export default function App() {
     const handleReady = async () => {
       if (disposed || readyHandled) return;
       readyHandled = true;
+      restartingRef.current = false;
       try {
         // apply the persisted UI language before the main UI renders
         await initLanguage();
@@ -120,40 +131,74 @@ export default function App() {
         if (!disposed) setBackendError();
       }
     };
-    (async () => {
-      await ipc.connect(() => {
-        if (disposed) return;
-        useWorkspace.getState().setBackendError();
-        message.error(getT().t("Backend process exited"));
-      });
-      if (disposed) return;
-      offReady = ipc.on("backend.ready", handleReady);
-      wireJobEvents(useWorkspace.getState().setRunningJobs);
-      // pull the ready snapshot in case the line arrived before our listener
-      const { invoke } = await import("@tauri-apps/api/core");
-      const started = Date.now();
-      poller = setInterval(async () => {
-        if (disposed) return;
-        try {
-          const line = await invoke<string | null>("backend_ready_line");
-          if (line) {
-            ipc.processLine(line);
-            clearInterval(poller!);
-            poller = null;
-          } else if (Date.now() - started > 90_000) {
-            clearInterval(poller!);
-            setBackendError();
-          }
-        } catch {
-          /* window not ready yet */
-        }
-      }, 600);
-    })();
+    const stopPoller = () => {
+      if (poller) clearInterval(poller);
+      poller = null;
+    };
+    // Arming installs everything that talks to one backend process: the Tauri
+    // listeners, the ready handshake and the snapshot poller. A backend exit
+    // tears the listeners down (ipc/client.ts releases both, which is the
+    // contract client.test.ts pins) and leaves `connected` false, so
+    // re-arming here is the only way "Restart the backend" can ever be seen:
+    // without it every later request rejects synchronously and the ready frame
+    // of the new process has no listener to arrive on. An exit that lands
+    // mid-arm is remembered rather than dropped, because that in-flight arm is
+    // about to abort on the generation change and would otherwise leave no
+    // listeners attached at all.
+    let arming = false;
+    let reArmRequested = false;
+    const arm = async () => {
+      if (arming) {
+        reArmRequested = true;
+        return;
+      }
+      arming = true;
+      try {
+        do {
+          reArmRequested = false;
+          offReady?.();
+          offReady = null;
+          readyHandled = false;
+          stopPoller();
+          await ipc.connect(() => {
+            if (disposed) return;
+            if (!restartingRef.current) message.error(getT().t("Backend process exited"));
+            useWorkspace.getState().setBackendError();
+            void arm();
+          });
+          if (disposed) break;
+          if (!ipc.isReady) continue;
+          offReady = ipc.on("backend.ready", handleReady);
+          wireJobEvents(useWorkspace.getState().setRunningJobs);
+          // pull the ready snapshot in case the line arrived before our listener
+          const { invoke } = await import("@tauri-apps/api/core");
+          const started = Date.now();
+          poller = setInterval(async () => {
+            if (disposed) return;
+            try {
+              const line = await invoke<string | null>("backend_ready_line");
+              if (line) {
+                ipc.processLine(line);
+                stopPoller();
+              } else if (Date.now() - started > 90_000) {
+                stopPoller();
+                setBackendError();
+              }
+            } catch {
+              /* window not ready yet */
+            }
+          }, 600);
+        } while (reArmRequested && !disposed);
+      } finally {
+        arming = false;
+      }
+    };
+    void arm();
     return () => {
       disposed = true;
       offReady?.();
       offReady = null;
-      if (poller) clearInterval(poller);
+      stopPoller();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshDatasets, setBackendError, setBackendReady]);
@@ -253,8 +298,11 @@ export default function App() {
               }}
             >
               {/* A page that throws on render must not take the shell, the rail
-                  or the status bar down with it. */}
-              <ErrorBoundary>
+                  or the status bar down with it. The key is part of that:
+                  without it the boundary keeps its error and every other tab
+                  renders the crash screen too, leaving Reload as the only way
+                  out of a single bad view. */}
+              <ErrorBoundary key={page}>
                 <Suspense fallback={<PageLoading />}>
                   {page === "overview" && <Overview />}
                   {page === "explore" && <Explore />}

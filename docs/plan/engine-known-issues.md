@@ -3,6 +3,7 @@
 > 日期：2026-09-13（0.3.2→0.3.3 复核；初版 2026-08-30 基于 0.2.7）；环境：Windows x64，cp312 wheel，项目 `.venv`
 > 性质：MDescriptor Studio 开发过程中的实测发现，可直接作为上游 issue 素材（github.com/nicheal/MDescriptor）
 > 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ 已历经 0.2.5（2026-08-29）、0.2.7（2026-08-30）、0.2.8（2026-09-05）、0.3.2/0.3.3（2026-09-13）升级复核；每轮按 `scripts/probe_engine.py` 重建 API 基线并跑 `scripts/verify_known_issues.py`。
+> **本清单的判定现在有门禁**：`verify_known_issues.py` 把十项判定写进脚本内的 `EXPECTED` 表，任一项与文档不符（含 checker 崩溃或漏记）即以非零码退出；`.github/workflows/engine-known-issues.yml` 在引擎版本约束、脚本或本文档变动时自动运行，也可手动触发。判定真的变化时，**同一提交里**同时更新本文档与 `EXPECTED`。
 > 仍需上游修改的项已整理为可开工清单：**`upstream-issues.md`**（无待开工项；CUDA 运行时验收已在 RTX 2080 SUPER 于 0.3.2/0.3.3 完成）
 
 ## 0.3.2→0.3.3 复核补充（2026-09-13）

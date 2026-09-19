@@ -350,11 +350,17 @@ class JobService:
         # between refreshes (_queue_positions does the same).
         sql += " ORDER BY created_at DESC, rowid DESC LIMIT 200"
         rows = self.db.query(sql, tuple(args))
-        positions = self._queue_positions()
+        # Only a queued row needs the map, and building it scans the whole jobs
+        # table: get_job() already gates on the row status, so list_jobs must not
+        # pay it for a history that has nothing waiting.
+        positions: dict[str, int] | None = None
         for row in rows:
             row["result"] = json.loads(row.pop("result_json")) if row.get("result_json") else None
-            if row["status"] == "QUEUED" and row["id"] in positions:
-                row["queue_position"] = positions[row["id"]]
+            if row["status"] == "QUEUED":
+                if positions is None:
+                    positions = self._queue_positions()
+                if row["id"] in positions:
+                    row["queue_position"] = positions[row["id"]]
         return rows
 
     def shutdown(self, wait_seconds: float = 3.0) -> None:

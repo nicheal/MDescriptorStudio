@@ -19,9 +19,11 @@ from ..datasets import (
     compute_statistics,
     create_adapter,
     detect_format,
-    is_v2_fingerprint,
+    is_versioned_fingerprint,
 )
-from ..datasets.statistics import STATS_VERSION, _frame_geometry
+from ..datasets.fingerprint import FINGERPRINT_VERSION
+from ..datasets.statistics import STATS_VERSION, _frame_geometry, frame_force_max
+from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
 from ..errors import (
     AppError,
     DATASET_BUSY,
@@ -33,7 +35,7 @@ from ..errors import (
 from ..mdescriptor_adapter import EngineAdapter
 from ..security import (
     UnsafePathError,
-    escape_like,
+    json_membership,
     remove_managed_tree,
     same_lexical_path,
     validate_local_path,
@@ -72,8 +74,6 @@ def _frame_indices(value: object, number_of_frames: int) -> list[int]:
 
 
 def _symbol(z: int) -> str:
-    from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
-
     return _Z_TO_SYMBOL.get(int(z), f"Z{z}")
 
 
@@ -136,7 +136,7 @@ class DatasetService:
             )
         except (OSError, TypeError, ValueError):
             current = None
-        legacy = not is_v2_fingerprint(row.get("fingerprint"))
+        legacy = not is_versioned_fingerprint(row.get("fingerprint"))
         if legacy and source is not None:
             try:
                 legacy_current = compute_legacy_fingerprint(source, row["number_of_frames"])
@@ -269,6 +269,7 @@ class DatasetService:
                 for frame in adapter.iter_frames():
                     frames_seen += 1
                     if frames_seen % 250 == 0 or frames_seen == total:
+                        ctx.check_cancelled()
                         ctx.progress(frames_seen, total, "computing statistics")
                     yield frame
 
@@ -546,10 +547,7 @@ class DatasetService:
             except Exception:  # noqa: BLE001 - unreadable frame: skip the row
                 continue
             symbols = [_symbol(z) for z in f.numbers.tolist()]
-            force_max = None
-            if f.forces is not None and f.forces.size:
-                mags = np.linalg.norm(np.asarray(f.forces, dtype=np.float64), axis=1)
-                force_max = round(float(mags.max()), 5)
+            force_max = frame_force_max(f.forces)
             cell = np.asarray(f.cell, dtype=np.float64)
             det = abs(float(np.linalg.det(cell))) if np.isfinite(cell).all() else 0.0
             present = {
@@ -588,7 +586,17 @@ class DatasetService:
         with self._scan_lock:
             active = self._active_scans.get(ds_id)
             if active is not None:
-                return active
+                # The entry is normally cleared by the scan's own finally, but a
+                # scan cancelled while still queued never reaches its runner at
+                # all (JobService skips it once cancel() dropped the context),
+                # so the id can name a job that is already settled. Honouring it
+                # would hand the caller a dead job forever: every later
+                # statistics/findings/rescan call would wait on a CANCELLED job
+                # and the dataset could only recover by restarting the backend.
+                job = self.jobs.get_job(active)
+                if job is not None and job["status"] in ("QUEUED", "RUNNING"):
+                    return active
+                self._active_scans.pop(ds_id, None)
             row = self._row(ds_id)
             # the on-disk files may have changed since registration: never reuse the
             # adapter built against the old content
@@ -609,21 +617,26 @@ class DatasetService:
                     for pos, frame in enumerate(adapter.iter_frames()):
                         count += 1
                         if count % 250 == 0 or count == total:
+                            # Without this the "cancelled" scan still decodes
+                            # every frame, holds one of the two dataset slots
+                            # and saturates the disk until it finishes.
+                            ctx.check_cancelled()
                             ctx.progress(count, total, "computing statistics")
                         yield frame
 
                 stats = compute_statistics(_CountingAdapter(adapter, counting_iter))
+                ctx.check_cancelled()  # a cancelled scan commits nothing
                 fingerprint = compute_fingerprint(source, len(adapter), use_cache=False)
-                if (
-                    not is_v2_fingerprint(old_fingerprint)
-                    or fingerprint != old_fingerprint
-                ):
-                    reason = (
+                upgraded = not is_versioned_fingerprint(old_fingerprint) or (
+                    old_fingerprint.partition(":")[0] != FINGERPRINT_VERSION
+                )
+                if upgraded or fingerprint != old_fingerprint:
+                    self._mark_runs_stale(
+                        ds_id,
                         "dataset fingerprint upgraded; recompute descriptor results"
-                        if not is_v2_fingerprint(old_fingerprint)
-                        else "source changed while fingerprint was being refreshed"
+                        if upgraded
+                        else "source changed while fingerprint was being refreshed",
                     )
-                    self._mark_runs_stale(ds_id, reason)
                 self._adapters[ds_id] = (fingerprint, adapter)
                 self.db.execute(
                     "INSERT INTO dataset_statistics (dataset_id, fingerprint, stats_json, created_at)"
@@ -655,7 +668,7 @@ class DatasetService:
             current = compute_fingerprint(source, row["number_of_frames"], use_cache=False)
         except (OSError, TypeError, ValueError, UnsafePathError) as exc:
             raise AppError(INVALID_DATASET, "dataset source is unavailable for fingerprint verification") from exc
-        if not is_v2_fingerprint(row.get("fingerprint")):
+        if not is_versioned_fingerprint(row.get("fingerprint")):
             try:
                 legacy_current = compute_legacy_fingerprint(source, row["number_of_frames"])
             except (OSError, TypeError, ValueError) as exc:
@@ -674,6 +687,7 @@ class DatasetService:
 
     def _mark_runs_stale(self, dataset_id: str, reason: str) -> None:
         """Invalidate old descriptor/analysis runs without deleting history."""
+        membership, pattern = json_membership("dataset_ids_json", dataset_id)
         now = _NOW()
         self.db.execute(
             "UPDATE descriptor_runs SET status = 'STALE', error_message = ?, finished_at = ?"
@@ -685,6 +699,6 @@ class DatasetService:
         self.db.execute(
             "UPDATE analysis_runs SET status = 'STALE', stale_reason = ?, finished_at = ?, updated_at = ?"
             " WHERE status = 'COMPLETED' AND (descriptor_run_id IN"
-            " (SELECT id FROM descriptor_runs WHERE dataset_id = ?) OR dataset_ids_json LIKE ? ESCAPE '!')",
-            (reason, now, now, dataset_id, f'%"{escape_like(dataset_id)}"%'),
+            f" (SELECT id FROM descriptor_runs WHERE dataset_id = ?) OR {membership})",
+            (reason, now, now, dataset_id, pattern),
         )

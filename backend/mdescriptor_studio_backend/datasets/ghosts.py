@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..lattice import image_shift_limits
+
 DEFAULT_BOND_CUTOFF = 2.4
-# How many images along one axis a bond cutoff can genuinely require. Beyond
-# this the lattice vector is shorter than a fraction of the cutoff, which is a
-# numerically degenerate direction rather than a periodic one worth rendering.
-MAX_IMAGES_PER_AXIS = 4
 
 
 def periodic_boundary_ghosts(
@@ -41,19 +39,12 @@ def periodic_boundary_ghosts(
     cand = np.nonzero(near_face.any(axis=1))[0]
     if cand.size == 0:
         return []
-    # The inverse-cell columns bound the lattice coefficients of any
-    # displacement with norm <= cutoff.  The extra one accounts for the
-    # wrapped fractional separation between two atoms. This keeps local-shell
-    # visualization correct when the cutoff spans more than one unit cell.
-    limits: list[int] = []
-    for axis in range(3):
-        limit = max(1, int(np.ceil(cutoff * np.linalg.norm(a_inv[:, axis]))) + 1)
-        if limit > MAX_IMAGES_PER_AXIS:
-            # A cell vector this short relative to the cutoff makes the shift
-            # count explode into the billions, freezing the request thread for
-            # a picture no real system produces. Draw no images instead.
-            return []
-        limits.append(limit)
+    # The shared bound keeps local-shell visualization correct when the cutoff
+    # spans more than one unit cell, and refuses the degenerate cells whose
+    # shift count would otherwise explode into the billions.
+    limits = image_shift_limits(cell, cutoff)
+    if limits is None:
+        return []  # no image stencil for this cell/cutoff: draw no ghosts
     shifts = np.array(
         [
             (dx, dy, dz)
@@ -66,7 +57,11 @@ def periodic_boundary_ghosts(
     ) @ cell
     pos_sq = (pos * pos).sum(axis=1)
     out: list[tuple[str, np.ndarray, int]] = []
-    chunk = max(1, int(4_000_000 // max(len(symbols), 1)))
+    # One block holds (candidates x shifts) x atoms of squared distances, so the
+    # budget has to divide by both multipliers: bounding candidates alone let a
+    # 4000-atom frame allocate gigabytes for a single block.
+    block_cells = max(1, len(shifts) * len(symbols))
+    chunk = max(1, int(4_000_000 // block_cells))
     for start in range(0, cand.size, chunk):
         idx = cand[start:start + chunk]
         imgs = (pos[idx][:, None, :] + shifts[None, :, :]).reshape(-1, 3)

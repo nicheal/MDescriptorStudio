@@ -10,6 +10,7 @@ import pytest
 
 from mdescriptor_studio_backend.datasets import compute_fingerprint
 from mdescriptor_studio_backend.datasets.extxyz import ExtXYZAdapter
+from mdescriptor_studio_backend.datasets.fingerprint import FINGERPRINT_VERSION
 from mdescriptor_studio_backend.errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
 from mdescriptor_studio_backend.protocol.frames import parse_request, response_err
 from mdescriptor_studio_backend.security import UnsafePathError, validate_local_path
@@ -50,7 +51,7 @@ def test_local_path_policy_rejects_namespace_ads_and_device_forms(tmp_path: Path
     assert validate_local_path(str(tmp_path / "safe.out")) == (tmp_path / "safe.out").resolve()
 
 
-def test_fingerprint_v2_changes_when_file_content_changes(tmp_path: Path) -> None:
+def test_fingerprint_changes_when_file_content_changes(tmp_path: Path) -> None:
     source = tmp_path / "sample.xyz"
     source.write_bytes(b"A" * 4096)
     before = compute_fingerprint(source)
@@ -60,7 +61,7 @@ def test_fingerprint_v2_changes_when_file_content_changes(tmp_path: Path) -> Non
     time.sleep(0.02)
     source.write_bytes(b"B" * 4096)
     after = compute_fingerprint(source)
-    assert before.startswith("v2:")
+    assert before.startswith(FINGERPRINT_VERSION + ":")
     assert after != before
 
 

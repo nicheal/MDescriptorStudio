@@ -11,7 +11,7 @@ from pathlib import Path
 from ..errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
 from ..security import (
     UnsafePathError,
-    escape_like,
+    json_membership,
     ensure_no_reparse_points,
     remove_managed_tree,
     validate_managed_path,
@@ -83,13 +83,27 @@ class ResultService:
         rows = self.db.query(sql, tuple(args))
         for row in rows:
             # Keep the list response small: expose only the computed array
-            # shape from metadata, never the descriptor values themselves.
-            metadata = self._read_result_metadata(row["id"], row.get("result_path"))
-            row["shape"] = self._shape_text(metadata)
+            # shape, never the descriptor values themselves. A completed run
+            # carries that (plus feature count and row semantics) in columns, so
+            # a 500-row page no longer costs 500 file reads and JSON parses;
+            # only runs predating that migration still read metadata.json.
+            metadata = self._listed_metadata(row)
+            row["shape"] = row.get("result_shape_json") or self._shape_text(metadata)
             row["feature_space_signature"] = self._feature_space_signature(row, metadata)
-            row["feature_count"] = metadata.get("feature_count") if metadata else None
-            row["row_semantics"] = metadata.get("row_semantics") if metadata else None
+            row["feature_count"] = row.get("feature_count") or (
+                metadata.get("feature_count") if metadata else None
+            )
+            row["row_semantics"] = row.get("row_semantics") or (
+                metadata.get("row_semantics") if metadata else None
+            )
+            row.pop("result_shape_json", None)
         return rows
+
+    def _listed_metadata(self, row: dict) -> dict:
+        """Metadata for one listed run, read only when the columns cannot answer."""
+        if row.get("result_shape_json") is not None and row.get("row_semantics") is not None:
+            return {}
+        return self._read_result_metadata(row["id"], row.get("result_path"))
 
     def _read_result_metadata(self, run_id: str, result_path: str | None) -> dict:
         if not result_path:
@@ -116,22 +130,32 @@ class ResultService:
 
     @staticmethod
     def _feature_space_signature(row: dict, metadata: dict) -> str | None:
-        if row.get("status") not in ("COMPLETED", "STALE") or not metadata:
+        if row.get("status") not in ("COMPLETED", "STALE"):
+            return None
+        if not metadata and row.get("result_shape_json") is None:
             return None
         try:
             parameters = json.loads(row.get("parameters_json") or "{}")
         except (TypeError, ValueError):
             parameters = row.get("parameters_json")
-        shape = metadata.get("shape")
-        feature_count = metadata.get("feature_count")
-        if feature_count is None and isinstance(shape, list) and len(shape) >= 2:
-            feature_count = shape[-1]
+        # Columns first, metadata second: the hash must not change depending on
+        # which of the two a row's values came from.
+        feature_count = row.get("feature_count")
+        if feature_count is None:
+            feature_count = metadata.get("feature_count")
+        if feature_count is None:
+            shape = metadata.get("shape")
+            if isinstance(shape, list) and len(shape) >= 2:
+                feature_count = shape[-1]
+        row_semantics = row.get("row_semantics")
+        if row_semantics is None:
+            row_semantics = metadata.get("row_semantics") or metadata.get("level")
         payload = {
             "descriptor": row.get("descriptor_name"),
             "descriptor_version": row.get("descriptor_version"),
             "engine_version": row.get("engine_version"),
             "parameters": parameters,
-            "row_semantics": metadata.get("row_semantics") or metadata.get("level"),
+            "row_semantics": row_semantics,
             "feature_count": feature_count,
         }
         return hashlib.sha256(
@@ -192,10 +216,11 @@ class ResultService:
                 f"run {run_id} is {row['status']} — cancel its job first",
             )
 
+        membership, pattern = json_membership("input_run_ids_json", run_id)
         analyses = self.db.query(
             "SELECT id, result_path FROM analysis_runs"
-            " WHERE descriptor_run_id = ? OR input_run_ids_json LIKE ? ESCAPE '!'",
-            (run_id, f'%"{escape_like(str(run_id))}"%'),
+            f" WHERE descriptor_run_id = ? OR {membership}",
+            (run_id, pattern),
         )
         analysis_ids = {str(analysis["id"]) for analysis in analyses}
         active_jobs = self.db.query(

@@ -252,6 +252,11 @@ fn spawn_backend(app: &tauri::AppHandle) {
         };
         if should_notify {
             clear_pending(&handle.state::<BackendState>());
+            // The webview re-arms and polls backend_ready_line after an exit, so
+            // a snapshot from this now-dead process must not answer that poll.
+            if let Ok(mut ready) = handle.state::<BackendState>().ready_line.lock() {
+                *ready = None;
+            }
             let _ = handle.emit_to(
                 EventTarget::webview_window(MAIN_WEBVIEW),
                 BACKEND_EXIT_EVENT,

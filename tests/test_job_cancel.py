@@ -1,5 +1,6 @@
 """M4 acceptance: cooperative cancel takes effect (ADR-10 quantification)."""
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -9,6 +10,8 @@ from make_fixtures import write_deepmd
 
 from conftest import BackendProcess, wait_job
 from mdescriptor_studio_backend.errors import AppError, JOB_CANCELLED
+from mdescriptor_studio_backend.datasets.fingerprint import FINGERPRINT_VERSION
+from mdescriptor_studio_backend.services.dataset_service import DatasetService
 from mdescriptor_studio_backend.services.descriptor_service import DescriptorService
 from mdescriptor_studio_backend.services.job_service import JobContext, JobService
 from mdescriptor_studio_backend.storage.database import Database
@@ -65,6 +68,233 @@ def test_queued_compute_still_marks_its_run_row_running(tmp_path: Path) -> None:
     assert row["status"] == "RUNNING"
     assert row["started_at"] is not None
     db.close()
+
+
+class _ScanJobs:
+    """JobService stand-in: reports job rows, records submissions, runs nothing."""
+
+    def __init__(self, rows: dict[str, dict]) -> None:
+        self.rows = rows
+        self.submitted: list[str] = []
+
+    def get_job(self, job_id: str) -> dict | None:
+        return self.rows.get(job_id)
+
+    def submit(self, job_type: str, runner, **kwargs) -> str:
+        self.submitted.append(job_type)
+        return "job_fresh"
+
+
+def _scan_service(db: Database, jobs) -> "DatasetService":
+    service = object.__new__(DatasetService)
+    service.db = db
+    service.jobs = jobs
+    service._scan_lock = threading.Lock()
+    service._active_scans = {}
+    service._adapters = {}
+    return service
+
+
+def _insert_dataset(db: Database, ds_id: str = "ds_scan") -> str:
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
+        " properties, periodicity, fingerprint, created_at)"
+        " VALUES (?, ?, 'extxyz', ?, 1, '[]', '[]', '[]', ?, '2026-01-01T00:00:00+00:00')",
+        (ds_id, ds_id, f"D:/data/{ds_id}.xyz", f"{FINGERPRINT_VERSION}:placeholder"),
+    )
+    return ds_id
+
+
+def test_recompute_does_not_rediscover_a_settled_scan(tmp_path: Path) -> None:
+    # _active_scans is cleared by the scan runner's own finally. A scan
+    # cancelled while queued never reaches that runner (JobService._run skips
+    # it), so the cached id can name a settled job: trusting it makes
+    # statistics/findings/rescan wait on a dead job until the backend restarts.
+    db = Database(tmp_path / "database.sqlite")
+    ds_id = _insert_dataset(db)
+    for status in ("CANCELLED", "FAILED", "COMPLETED"):
+        jobs = _ScanJobs({f"job_{status}": {"id": f"job_{status}", "status": status}})
+        service = _scan_service(db, jobs)
+        service._active_scans[ds_id] = f"job_{status}"
+        assert service._submit_recompute(ds_id) == "job_fresh", status
+        assert service._active_scans[ds_id] == "job_fresh"
+        assert jobs.submitted == ["dataset.statistics"]
+    # A job row that is gone entirely (pruned) is equally untrustworthy.
+    jobs = _ScanJobs({})
+    service = _scan_service(db, jobs)
+    service._active_scans[ds_id] = "job_gone"
+    assert service._submit_recompute(ds_id) == "job_fresh"
+    # ... while a scan still in flight must be reused, not resubmitted.
+    for live in ("QUEUED", "RUNNING"):
+        jobs = _ScanJobs({"job_live": {"id": "job_live", "status": live}})
+        service = _scan_service(db, jobs)
+        service._active_scans[ds_id] = "job_live"
+        assert service._submit_recompute(ds_id) == "job_live"
+        assert jobs.submitted == []
+    db.close()
+
+
+def test_scan_cancelled_while_queued_leaves_the_dataset_recomputable(tmp_path: Path) -> None:
+    # The same failure through the real JobService: two blockers occupy the
+    # 2-wide dataset pool so the scan is genuinely queued when it is cancelled.
+    db = Database(tmp_path / "database.sqlite")
+    ds_id = _insert_dataset(db)
+    jobs = JobService(db, lambda name, data: None)
+    release = threading.Event()
+    try:
+        blockers = [jobs.submit("dataset.statistics", lambda ctx: release.wait(10)) for _ in range(2)]
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            states = [db.query_one("SELECT status FROM jobs WHERE id = ?", (jid,))["status"] for jid in blockers]
+            if states == ["RUNNING", "RUNNING"]:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail(f"blockers never started: {states}")
+
+        service = _scan_service(db, jobs)
+        queued = service._submit_recompute(ds_id)
+        assert db.query_one("SELECT status FROM jobs WHERE id = ?", (queued,))["status"] == "QUEUED"
+        assert service._active_scans[ds_id] == queued
+        jobs.cancel(queued)
+        release.set()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if db.query_one("SELECT status FROM jobs WHERE id = ?", (blockers[0],))["status"] == "COMPLETED":
+                break
+            time.sleep(0.02)
+        # The user-visible recovery: the health panel asks for statistics and
+        # must not be handed the cancelled job id to wait on forever. (The
+        # placeholder source path makes the stats cache miss, which is what
+        # routes statistics() back through _submit_recompute.)
+        result = service.statistics({"id": ds_id})
+        assert result["recalculating"] is True
+        assert result["job_id"] != queued
+    finally:
+        release.set()
+        jobs.shutdown()
+        db.close()
+
+
+def test_cancelled_materialize_stops_mid_write_and_leaves_nothing_behind(tmp_path: Path) -> None:
+    # Materialize writes through a lazily consumed generator. Without a
+    # cooperative checkpoint in that generator the "cancelled" copy runs to
+    # completion, and the half-written destination then blocks every retry:
+    # _export_destination refuses a path that already exists.
+    from make_fixtures import write_extxyz
+
+    from mdescriptor_studio_backend.datasets import compute_fingerprint, create_adapter
+    from mdescriptor_studio_backend.services.dataset_view_service import (
+        _INSERT_VIEW,
+        DatasetViewService,
+        _discard_partial_output,
+    )
+
+    db = Database(tmp_path / "database.sqlite")
+    source = tmp_path / "source.xyz"
+    write_extxyz(source, n_frames=600, natoms=4)
+    now = "2026-01-01T00:00:00+00:00"
+    fingerprint = compute_fingerprint(source, 600, use_cache=False)
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
+        " properties, periodicity, fingerprint, created_at)"
+        " VALUES ('ds_m', 'src', 'extxyz', ?, 600, '[]', '[]', '[]', ?, ?)",
+        (str(source), fingerprint, now),
+    )
+    db.execute(
+        _INSERT_VIEW,
+        ("view_m", "ds_m", "all", "selection", "[]", json.dumps(list(range(600))), "h", fingerprint, now, now),
+    )
+
+    slow = _SlowAdapter(create_adapter(source, "extxyz"))
+    jobs = JobService(db, lambda name, data: None)
+    datasets = _ViewDatasets(db, jobs, slow)
+    views = DatasetViewService(datasets)
+    dest = tmp_path / "copy.xyz"
+    try:
+        submitted = views.materialize({"view_id": "view_m", "dest_path": str(dest)})
+        job_id = submitted["job_id"]
+        _wait_for(
+            lambda: dest.exists() and jobs.get_job(job_id)["status"] == "RUNNING",
+            "materialize never started copying",
+        )
+        jobs.cancel(job_id)
+        _wait_for(lambda: jobs.get_job(job_id)["status"] in ("CANCELLED", "COMPLETED", "FAILED"), "job never settled")
+        assert jobs.get_job(job_id)["status"] == "CANCELLED", "600 slow frames must not finish before the cancel"
+        # cancel() settles the row up front; the runner notices at its next
+        # frame and only then unwinds the writer, so the removal is what proves
+        # the checkpoint exists rather than a race with this assert.
+        _wait_for(lambda: not dest.exists(), "cancelled copy left its partial destination behind")
+
+        # The same request now works instead of failing on the leftover path.
+        again = views.materialize({"view_id": "view_m", "dest_path": str(dest)})
+        _wait_for(lambda: jobs.get_job(again["job_id"])["status"] == "COMPLETED", "retry never completed")
+        assert dest.exists()
+    finally:
+        jobs.shutdown()
+        db.close()
+
+
+def test_partial_output_cleanup_covers_both_writers(tmp_path: Path) -> None:
+    # extXYZ leaves a file, DeepMD a directory; either would poison a retry.
+    from mdescriptor_studio_backend.services.dataset_view_service import _discard_partial_output
+
+    leftover = tmp_path / "out.xyz"
+    leftover.write_text("partial", encoding="utf-8")
+    _discard_partial_output(leftover)
+    assert not leftover.exists()
+    directory = tmp_path / "deepmd"
+    (directory / "set.000").mkdir(parents=True)
+    (directory / "type.raw").write_text("H", encoding="utf-8")
+    _discard_partial_output(directory)
+    assert not directory.exists()
+    _discard_partial_output(tmp_path / "never-created")  # must not raise
+
+
+class _ViewDatasets:
+    """The slice of DatasetService that DatasetViewService reaches into."""
+
+    def __init__(self, db, jobs, adapter) -> None:
+        self.db = db
+        self.jobs = jobs
+        self._adapter = adapter
+        self._row_cache = db.query_one("SELECT * FROM datasets WHERE id = 'ds_m'")
+
+    def _row(self, dataset_id):
+        return self._row_cache
+
+    def _meta(self, row):
+        return {"cache_valid": True}
+
+    def _adapter_for(self, row):
+        return self._adapter
+
+
+class _SlowAdapter:
+    """Delegates to a real adapter, slowly, so a cancel lands mid-copy."""
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def __len__(self) -> int:
+        return len(self._inner)
+
+    def get_frame(self, index):
+        time.sleep(0.005)
+        return self._inner.get_frame(index)
+
+    def iter_frames(self):
+        return self._inner.iter_frames()
+
+
+def _wait_for(condition, message: str):
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        result = condition()
+        if result:
+            return result
+        time.sleep(0.02)
+    pytest.fail(message)
 
 
 def test_shutdown_waits_for_a_runner_that_outlived_its_context(tmp_path: Path) -> None:

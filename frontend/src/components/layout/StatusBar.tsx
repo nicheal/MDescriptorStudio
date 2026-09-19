@@ -2,7 +2,10 @@ import { useWorkspace } from "../../stores/workspace";
 import { useT } from "../../i18n";
 
 export default function StatusBar() {
-  const { backendStatus, engineVersion, runningJobs, cpuThreads } = useWorkspace();
+  const backendStatus = useWorkspace((s) => s.backendStatus);
+  const engineVersion = useWorkspace((s) => s.engineVersion);
+  const runningJobs = useWorkspace((s) => s.runningJobs);
+  const cpuThreads = useWorkspace((s) => s.cpuThreads);
   const { t } = useT();
   const color = backendStatus === "ready" ? "#107C10" : "#C42B1C";
   const threads = cpuThreads ?? (typeof navigator !== "undefined" ? navigator.hardwareConcurrency : null);

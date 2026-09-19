@@ -14,6 +14,7 @@ from mdescriptor_studio_backend.datasets import (
     detect_format,
     exporters,
 )
+from mdescriptor_studio_backend.datasets.ghosts import periodic_boundary_ghosts
 from mdescriptor_studio_backend.datasets.statistics import _int_hist
 from mdescriptor_studio_backend.errors import AppError
 
@@ -165,6 +166,46 @@ def test_min_distance_per_structure(tmp_path: Path) -> None:
     assert hist is not None and sum(hist["counts"]) == 4
     assert abs(summary["min"] - 0.2) < 1e-6
     assert abs(summary["max"] - 5.0) < 1e-6
+
+
+def test_declared_isolated_box_is_not_periodic(tmp_path: Path) -> None:
+    """A Lattice with pbc="F F F" is a box around an isolated structure (ASE
+    writes clusters this way). Inventing periodicity there folds the two halves
+    of the box together: this pair reads as a 0.1 Å non-physical contact and
+    grows ghost atoms bonded across the vacuum."""
+    lat = "12.0 0.0 0.0 0.0 12.0 0.0 0.0 0.0 30.0"
+    p = tmp_path / "box.xyz"
+    p.write_text(
+        f'2\nLattice="{lat}" Properties=species:S:1:pos:R:3 pbc="F F F" energy=-1.0\n'
+        "H 0.0 0.0 0.0\nH 11.9 0.0 0.0\n",
+        encoding="utf-8",
+    )
+    adapter = create_adapter(p)
+    frame = adapter.get_frame(0)
+    assert frame.pbc.tolist() == [False, False, False]
+    assert np.allclose(frame.cell, 0.0)  # nothing to wrap by
+    stats = compute_statistics(adapter)
+    assert stats["min_distance_summary"]["min"] == pytest.approx(11.9)
+    assert stats["periodicity"]["isolated"] is True
+    assert stats["health"]["nonphysical_structures"] == 0
+    assert stats["health"]["invalid_cell"] == 0
+    assert periodic_boundary_ghosts(["H", "H"], frame.positions, frame.cell) == []
+
+
+def test_mixed_periodicity_still_flattens_to_periodic(tmp_path: Path) -> None:
+    """Pinned deliberately: a slab keeps computing as fully periodic. Per-axis
+    fidelity would make descriptors that do not advertise mixed_periodicity
+    fail instead, which is an open product decision (see the extxyz reader)."""
+    p = tmp_path / "slab.xyz"
+    p.write_text(
+        '2\nLattice="3.0 0.0 0.0 0.0 3.0 0.0 0.0 0.0 15.0"'
+        ' Properties=species:S:1:pos:R:3 pbc="T T F" energy=-1.0\n'
+        "Si 0.0 0.0 0.0\nSi 0.0 0.0 14.9\n",
+        encoding="utf-8",
+    )
+    adapter = create_adapter(p)
+    assert adapter.scan().periodicity["flags"] == ["XY."]
+    assert adapter.get_frame(0).pbc.tolist() == [True, True, True]
 
 
 def test_unsupported_format(tmp_path: Path) -> None:

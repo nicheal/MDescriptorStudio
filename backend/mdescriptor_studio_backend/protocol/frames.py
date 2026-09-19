@@ -11,13 +11,22 @@ MAX_LINE_BYTES = 8 * 1024 * 1024
 MAX_REQUEST_ID = (1 << 53) - 1
 
 
+def _unencodable(value: object) -> str:
+    # Deliberately not ``default=str``: that would turn a numpy float32 into
+    # "1.5", a set into "{1, 2}", and — because allow_nan only inspects Python
+    # floats — an ``inf`` float32 into the text "inf", shipping a non-finite
+    # value past the guard below and into a chart. Unserialisable is a bug in
+    # the producer, so fail and let Server._encode answer with an error frame.
+    raise TypeError(f"{type(value).__name__} is not JSON serialisable")
+
+
 def encode(frame: dict) -> str:
     # allow_nan=False is a protocol requirement, not a style preference: the
     # default emits bare NaN/Infinity tokens, which the Rust bridge forwards
     # verbatim but JSON.parse in the renderer rejects. The frame is dropped
     # there, so the awaiting request would never be answered and never fail.
     return json.dumps(
-        frame, ensure_ascii=False, separators=(",", ":"), default=str, allow_nan=False
+        frame, ensure_ascii=False, separators=(",", ":"), default=_unencodable, allow_nan=False
     )
 
 

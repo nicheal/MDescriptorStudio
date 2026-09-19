@@ -14,6 +14,7 @@ from ...errors import (
     ANALYSIS_INSUFFICIENT_SAMPLES,
     AppError,
 )
+from ...lattice import image_shift_limits
 from ..models import DescriptorMatrix
 
 
@@ -21,6 +22,14 @@ _warmup_gate = threading.Event()
 _warmup_gate.set()
 
 _TRAJECTORY_EVENT_METHODS = ("mad", "zscore", "percentile")
+
+# Bounds for the periodic image stencil in _local_neighbor_graph. A degenerate
+# cell wants ~1e6 images per axis and would freeze this runner past any
+# cancellation, but a merely *skewed* cell legitimately needs several images on
+# every axis at once, so the total is what has to be budgeted as well: 1024
+# images over a frame is tens of megabytes and seconds, not gigabytes and never.
+_GRAPH_MAX_IMAGES_PER_AXIS = 8
+_GRAPH_MAX_TOTAL_IMAGES = 1024
 
 def warmup() -> dict[str, bool]:
     """Import optional numeric backends on the background warmup thread.
@@ -169,7 +178,15 @@ def _nearest_distances(x: np.ndarray, k: int, metric: str = "euclidean") -> tupl
     k_eff = min(k + 1, x.shape[0])
     model = neighbors(n_neighbors=k_eff, metric=metric, n_jobs=1)
     distances, indices = model.fit(x).kneighbors(x)
-    return indices[:, 1:], distances[:, 1:]
+    # Exclude self by identity, not by position. Column 0 is the query itself
+    # only while no other row coincides with it: exact duplicates tie, and the
+    # old [1:] slice then dropped a genuine neighbour and kept the row's own
+    # index at distance 0 — which averaged into every neighbour statistic
+    # downstream (group scores, outlier depth, pair distances).
+    out_k = min(k, x.shape[0] - 1)
+    is_self = indices == np.arange(indices.shape[0], dtype=indices.dtype)[:, None]
+    order = np.argsort(is_self, kind="stable")[:, :out_k]
+    return np.take_along_axis(indices, order, axis=1), np.take_along_axis(distances, order, axis=1)
 
 def _bounded_indices(count: int, limit: int) -> np.ndarray:
     """Return deterministic, order-preserving indices for bounded visual artifacts."""
@@ -357,6 +374,9 @@ def _cross_nearest(reference: np.ndarray, query: np.ndarray, metric: str, query_
         raise AppError(ANALYSIS_INPUT_INVALID, "cross-dataset metric must be euclidean, cosine, or manhattan")
     distances = np.empty(query.shape[0], dtype=np.float64)
     nearest = np.empty(query.shape[0], dtype=np.int64)
+    # Hoisted like _cross_k_nearest below: a warmup-gated import per block would
+    # be repeated tens of thousands of times for one search.
+    cdist = _safe_import("scipy.spatial.distance", "scipy").cdist
     for start in range(0, query.shape[0], query_chunk):
         stop = min(start + query_chunk, query.shape[0])
         query_block = query[start:stop]
@@ -369,17 +389,9 @@ def _cross_nearest(reference: np.ndarray, query: np.ndarray, metric: str, query_
                 # scipy's cdist subtracts coordinates directly. This preserves
                 # exact zero for identical rows, unlike the cancellation-prone
                 # ||a||² + ||b||² - 2a·b identity.
-                matrix = _safe_import("scipy.spatial.distance", "scipy").cdist(
-                    query_block,
-                    ref_block,
-                    metric="euclidean",
-                )
+                matrix = cdist(query_block, ref_block, metric="euclidean")
             elif metric == "manhattan":
-                matrix = _safe_import("scipy.spatial.distance", "scipy").cdist(
-                    query_block,
-                    ref_block,
-                    metric="cityblock",
-                )
+                matrix = cdist(query_block, ref_block, metric="cityblock")
             else:
                 ref_norm = np.linalg.norm(ref_block, axis=1)
                 similarity = (query_block @ ref_block.T) / np.maximum(query_norm * ref_norm[None, :], 1e-15)
@@ -518,10 +530,24 @@ def _local_neighbor_graph(samples: DescriptorMatrix, cutoff: float, max_neighbor
             fractional = frame_positions @ frame_inverse
             fractional[:, periodic_axes] -= np.floor(fractional[:, periodic_axes])
             graph_positions = fractional @ frame_cell
-            shift_limits = [
-                max(1, int(np.ceil(cutoff * np.linalg.norm(frame_inverse[:, axis]))) + 1)
-                for axis in periodic_axes
-            ]
+            shift_limits = image_shift_limits(
+                frame_cell,
+                cutoff,
+                tuple(periodic_axes),
+                max_per_axis=_GRAPH_MAX_IMAGES_PER_AXIS,
+                max_total_images=_GRAPH_MAX_TOTAL_IMAGES,
+            )
+            if shift_limits is None:
+                # The lattice-coefficient bound needs an unbounded number of
+                # images for this cell/cutoff combination. Enumerating them
+                # would consume the shift list before any neighbour is found,
+                # and the runner cannot be cancelled inside it, so refuse the
+                # frame: an unbounded stencil is not a result.
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    f"frame {frame}: cell geometry is too narrow for the {cutoff} Å neighbour cutoff",
+                    {"frame": int(frame), "cutoff": cutoff},
+                )
             shift_tuples = list(product(*[range(-limit, limit + 1) for limit in shift_limits]))
             shifts = []
             for compact_shift in shift_tuples:

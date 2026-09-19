@@ -5,7 +5,14 @@ Usage:
     .venv/Scripts/python.exe scripts/verify_known_issues.py --deadlock-child
                                                                        # internal: child for issue #1
 
-Prints one "## issue N ... VERDICT" section per known issue plus a final JSON summary.
+Prints one "## issue N ... VERDICT" section per known issue plus a final JSON summary,
+and exits non-zero unless every verdict still matches EXPECTED below.
+
+The exit code is the point: docs/plan/engine-known-issues.md states these verdicts as
+current fact, so a run that cannot fail lets an engine upgrade silently invalidate the
+document. Re-run after each upgrade (`.venv/Scripts/python.exe
+scripts/verify_known_issues.py`, or the "Engine known issues" workflow on demand); if a
+verdict genuinely changed, update BOTH this table and the document in the same commit.
 """
 from __future__ import annotations
 
@@ -18,12 +25,47 @@ from pathlib import Path
 
 import numpy as np
 
+# The verdicts the document currently claims. Any other value — including a
+# checker that crashed and recorded nothing — is drift.
+EXPECTED: dict[str, str] = {
+    "1": "FIXED?",
+    "2": "FIXED?",
+    "3": "FIXED?",
+    "4": "FIXED",
+    "5": "FIXED?",
+    "6": "FIXED?",
+    "7": "FIXED",
+    "8": "PARTIAL",
+    "9": "FIXED",
+    "10": "FIXED",
+}
+
 VERDICTS: dict[str, dict] = {}
+CRASHED: list[str] = []
 
 
 def record(issue: str, verdict: str, detail: dict) -> None:
     VERDICTS[issue] = {"verdict": verdict, **detail}
     print(f"  => {verdict}: {json.dumps(detail, ensure_ascii=False, default=str)[:500]}")
+
+
+def drift_against_expectations() -> list[str]:
+    """Every way this run's verdicts disagree with the document.
+
+    Split out of main() so a test can assert the gate actually reports drift —
+    a summary nobody has to agree with is what this script used to be.
+    """
+    drift: list[str] = []
+    for issue, wanted in EXPECTED.items():
+        if issue in CRASHED:
+            drift.append(f"#{issue}: checker crashed (documented as {wanted})")
+            continue
+        found = VERDICTS.get(issue, {}).get("verdict")
+        if found is None:
+            drift.append(f"#{issue}: no verdict recorded (documented as {wanted})")
+        elif found != wanted:
+            drift.append(f"#{issue}: observed {found}, documented as {wanted}")
+    return drift
 
 
 def fill_required(schema: dict) -> dict:
@@ -449,14 +491,25 @@ def main() -> int:
     import mdescriptor as md
 
     print(f"# verify_known_issues against mdescriptor {md.__version__}\n")
-    for _, fn in checks:
+    for issue, fn in checks:
         try:
             fn()
         except Exception:
+            CRASHED.append(issue)
             print(f"  !! checker crashed: {traceback.format_exc(limit=2)}")
         print()
     print("SUMMARY_JSON")
     print(json.dumps(VERDICTS, ensure_ascii=False, indent=1, default=str))
+
+    drift = drift_against_expectations()
+    if drift:
+        print("\nDRIFT — the document and the installed engine no longer agree:")
+        for line in drift:
+            print(f"  - {line}")
+        print("Update docs/plan/engine-known-issues.md and EXPECTED together, "
+              "or fix the regression this run just found.")
+        return 1
+    print("\nAll ten verdicts match the document.")
     return 0
 
 

@@ -196,3 +196,9 @@
 **背景**：JobService 此前为全局 2 线程 FIFO：被取消但仍卡在原生调用里的「僵尸计算」可占满全部工作线程；`shutdown()` 不协作取消且非 daemon 线程会在解释器退出时 join，卡住的原生调用可挂住后端进程；`compute.default_threads` 设置无任何后端读取。
 **决策**：JobService 改为按类别的三个线程池——`engine`（1 线程，承载 `descriptor.compute`）、`analysis`（2）、`dataset`（2，兜底未知类型）；`submit` 签名与队列背压不变。`shutdown()` 先对所有存活 context 调 `cancel()`（触发引擎 ComputeControl 取消并结算 run 行）再关池，`main()` 在清理完成后 `os._exit` 绕过 atexit join。RUNNING 状态更新补 `AND status='QUEUED'` 守卫。`job.get`/`job.list` 加入 RPC 控制通道；`descriptor.submit` 增加在途去重（`_submit_lock` + cache_key JOIN 查询，`force` 绕过）；`_load_samples`/`_pool_per_structure` 增加取消检查点并改用 `np.add.reduceat` 向量化池化；`result.heatmap` 改 mmap 读取；`compute.default_threads` 经 threadpoolctl 作用于分析计算（进程级、不恢复，描述符引擎线程仍由引擎管理）。QUEUED 任务在 `job.get`/`job.list` 附带 `queue_position`（按类别池内排队序，created_at 秒级精度下用 rowid 次级排序），前端 JobsDrawer 显示「第 N 位」。
 **后果**：最坏并发从全局 2 变为按类别 1+2+2；类别内 FIFO 不变。僵尸计算的最坏影响被限制在 engine 池内；关停不再依赖「计算及时返回」；values 结果 LRU 缓存与僵尸池占用可视化暂缓（见 docs/plan/scheduling-fix-plan.md）。
+
+## ADR-28 extxyz 周期性判定与指纹 v3（2026-09-19）
+
+**背景**：`extxyz.get_frame` 只看「有无 Lattice」决定周期性，把注释里解析出的逐轴 `pbc` 丢弃，于是 `pbc="F F F"` 加盒子的团簇/分子（ASE 常见写法）被当成三维晶体：min_distance 由 11.9 Å 变成跨真空的 0.1 Å、帧被误标「非物理结构」与 `invalid_cell`、Explore 画出跨真空的 ghost 键；而 `scan()`/DB/闸门 `_check_input_capability` 用逐轴真相，送进引擎的批量却是 pbc=(1,1,1)——与 `to_structure_batch` 自己声明的契约（孤立帧必须零 cell + pbc=(0,0,0)）冲突。
+**决策**：reader 仅在「没有任何周期轴」时改判为孤立（cell 归零），其余保持原样拍平为全周期。`FINGERPRINT_VERSION` v2→v3 令既有指纹全部失配，走 ADR-23 的 STALE 路径；`is_v2_fingerprint` 更名 `is_versioned_fingerprint`（任何 `vN:` 前缀都算已迁移，旧版本靠指纹比对失效，不进迁移分支）。混合周期性（板面/链）的逐轴保真度**不在本次范围**：它会让未声明 `mixed_periodicity` 的描述符由「静默算错」变成显式失败，需产品裁决；ghost 侧的 `np.all(f.pbc)` 门与 `periodic_boundary_ghosts` 缺 pbc 参数属于那一次改动。
+**后果**：盒子中的孤立体系与 scan/闸门/引擎契约一致，误报健康项与跨真空 ghost 消失；每个数据集需一次 recompute（rescan 前 `descriptor.submit` 报 `DATASET_CHANGED`），缓存统计由 `_cached_stats` 的指纹比对自动失效，`STATS_VERSION` 无需改动。`tests/test_datasets.py` 钉住两侧行为，其中 `test_mixed_periodicity_still_flattens_to_periodic` 标明待裁决。

@@ -10,7 +10,10 @@ from pathlib import Path
 
 from ..security import ensure_no_reparse_points, is_reparse_point
 
-FINGERPRINT_VERSION = "v2"
+# Bumped when reader semantics change in a way that alters stored results, so
+# every existing fingerprint mismatches and its runs go STALE. v3: extxyz stops
+# inventing periodicity for a Lattice that declares pbc="F F F".
+FINGERPRINT_VERSION = "v3"
 MAX_FINGERPRINT_FILES = 100_000
 MAX_FINGERPRINT_BYTES = 4 * 1024 * 1024 * 1024
 SAMPLE_CHUNK_BYTES = 1 * 1024 * 1024
@@ -93,7 +96,7 @@ def _sample_digest(path: Path, size: int, budget: list[int]) -> bytes:
 
 
 def compute_legacy_fingerprint(source_path: Path, number_of_frames: int | None = None) -> str:
-    """Reproduce the pre-v2 metadata-only fingerprint for migration."""
+    """Reproduce the pre-versioning metadata-only fingerprint for migration."""
     path = Path(source_path)
     ensure_no_reparse_points(path)
     h = hashlib.sha256()
@@ -108,8 +111,17 @@ def compute_legacy_fingerprint(source_path: Path, number_of_frames: int | None =
     return h.hexdigest()
 
 
-def is_v2_fingerprint(value: object) -> bool:
-    return isinstance(value, str) and value.startswith(FINGERPRINT_VERSION + ":")
+def is_versioned_fingerprint(value: object) -> bool:
+    """True for any content-derived fingerprint (``v<digits>:<digest>``).
+
+    The pre-versioning legacy form is a bare hexdigest, so an *older* version
+    still counts: its rows go stale on the fingerprint comparison rather than
+    through the migration path, which cannot recognise them.
+    """
+    if not isinstance(value, str):
+        return False
+    head, sep, _ = value.partition(":")
+    return bool(sep) and head.startswith("v") and head[1:].isdigit()
 
 
 def compute_fingerprint(

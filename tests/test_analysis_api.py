@@ -74,6 +74,53 @@ def _service(tmp_path: Path):
     return db, jobs, AnalysisService(db, jobs, ResultService(db), datasets=None, data_dir=tmp_path)
 
 
+def test_export_repeats_when_the_written_file_disappears(tmp_path: Path) -> None:
+    # An export is a side effect on a user path, so its COMPLETED row is only
+    # evidence that the file was written once. Trusting it afterwards answered
+    # "success" for a file the user had moved or deleted.
+    db, jobs, service = _service(tmp_path)
+    target = tmp_path / "selected.txt"
+
+    first = service.submit_export({"run_id": "run_1", "indices": [2, 0], "format": "indices", "output_path": str(target)})
+    assert first["job_id"] is not None
+    assert target.read_text(encoding="utf-8").splitlines() == ["0", "2"]
+    assert jobs.calls == 1
+
+    # Unchanged request, file still present: the cache answer is truthful.
+    cached = service.submit_export({"run_id": "run_1", "indices": [0, 2], "format": "indices", "output_path": str(target)})
+    assert cached["job_id"] is None
+    assert cached["cache"]["existing_analysis_id"] == first["analysis_id"]
+    assert jobs.calls == 1
+
+    target.unlink()
+    again = service.submit_export({"run_id": "run_1", "indices": [2, 0], "format": "indices", "output_path": str(target)})
+    assert again["job_id"] is not None, "a missing export must be rewritten, not reported from cache"
+    assert target.exists()
+    assert again["analysis_id"] != first["analysis_id"]
+
+    # The rewrite is itself cached, and repeated deletions keep producing work
+    # rather than falling back onto a stale row.
+    assert service.submit_export({"run_id": "run_1", "indices": [2, 0], "format": "indices", "output_path": str(target)})["job_id"] is None
+    assert jobs.calls == 2
+    for _ in range(3):
+        target.unlink()
+        assert service.submit_export({"run_id": "run_1", "indices": [2, 0], "format": "indices", "output_path": str(target)})["job_id"] is not None
+        assert target.exists()
+    assert jobs.calls == 5
+    db.close()
+
+
+def test_export_of_the_same_selection_to_two_paths_writes_both(tmp_path: Path) -> None:
+    db, jobs, service = _service(tmp_path)
+    left, right = tmp_path / "a.txt", tmp_path / "b.txt"
+    service.submit_export({"run_id": "run_1", "indices": [1], "format": "indices", "output_path": str(left)})
+    service.submit_export({"run_id": "run_1", "indices": [1], "format": "indices", "output_path": str(right)})
+    assert left.read_text(encoding="utf-8").splitlines() == ["1"]
+    assert right.read_text(encoding="utf-8").splitlines() == ["1"]
+    assert jobs.calls == 2
+    db.close()
+
+
 def test_sensitivity_requires_same_descriptor_before_enqueue(tmp_path: Path) -> None:
     db, jobs, service = _service(tmp_path)
     result_dir = tmp_path / "results" / "run_2"

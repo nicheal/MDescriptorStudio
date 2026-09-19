@@ -23,11 +23,17 @@ def _table_exists(path: Path, table: str) -> bool:
         conn.close()
 
 
+# The version assertions read max(MIGRATIONS) rather than a literal: a new
+# migration is not a reason to edit this file, but a migration that fails to
+# apply still is.
+LATEST = max(database_module.MIGRATIONS)
+
+
 def test_fresh_database_is_at_schema_v9_without_legacy_exclusions(tmp_path: Path) -> None:
     db_path = tmp_path / "database.sqlite"
     db = Database(db_path)
     try:
-        assert db.query_one("SELECT MAX(version) AS version FROM schema_version")["version"] == 9
+        assert db.query_one("SELECT MAX(version) AS version FROM schema_version")["version"] == LATEST
     finally:
         db.close()
 
@@ -57,8 +63,12 @@ def test_schema_v8_upgrade_drops_legacy_exclusions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db_path = tmp_path / "database.sqlite"
-    migration9 = database_module.MIGRATIONS[9]
-    monkeypatch.delitem(database_module.MIGRATIONS, 9)
+    # Hold back migration 9 *and* everything after it: a v8 database is one
+    # where nothing from 9 on has run, and restoring them has to restore all of
+    # them for the second open to reach the current schema.
+    held = {key: script for key, script in sorted(database_module.MIGRATIONS.items()) if key >= 9}
+    for key in held:
+        monkeypatch.delitem(database_module.MIGRATIONS, key)
     db = Database(db_path)
     try:
         assert db.query_one("SELECT MAX(version) AS version FROM schema_version")["version"] == 8
@@ -66,10 +76,11 @@ def test_schema_v8_upgrade_drops_legacy_exclusions(
         db.close()
     assert _table_exists(db_path, "dataset_excluded_frames")
 
-    monkeypatch.setitem(database_module.MIGRATIONS, 9, migration9)
+    for key, script in held.items():
+        monkeypatch.setitem(database_module.MIGRATIONS, key, script)
     db = Database(db_path)
     try:
-        assert db.query_one("SELECT MAX(version) AS version FROM schema_version")["version"] == 9
+        assert db.query_one("SELECT MAX(version) AS version FROM schema_version")["version"] == LATEST
     finally:
         db.close()
 
@@ -83,9 +94,10 @@ def test_failed_migration_rolls_back_and_can_retry(
     db = Database(db_path)
     db.close()
 
+    probe = LATEST + 1
     monkeypatch.setitem(
         database_module.MIGRATIONS,
-        10,
+        probe,
         """
         CREATE TABLE migration_probe (id INTEGER);
         CREATE TABLE migration_probe (id INTEGER);
@@ -96,7 +108,7 @@ def test_failed_migration_rolls_back_and_can_retry(
 
     conn = sqlite3.connect(db_path)
     try:
-        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 9
+        assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == LATEST
         assert (
             conn.execute(
                 "SELECT 1 FROM sqlite_master "
@@ -109,12 +121,12 @@ def test_failed_migration_rolls_back_and_can_retry(
 
     monkeypatch.setitem(
         database_module.MIGRATIONS,
-        10,
+        probe,
         "CREATE TABLE migration_probe (id INTEGER);",
     )
     db = Database(db_path)
     try:
-        assert db.query_one("SELECT MAX(version) AS version FROM schema_version")["version"] == 10
+        assert db.query_one("SELECT MAX(version) AS version FROM schema_version")["version"] == probe
         assert db.query_one(
             "SELECT 1 FROM sqlite_master "
             "WHERE type = 'table' AND name = 'migration_probe'"

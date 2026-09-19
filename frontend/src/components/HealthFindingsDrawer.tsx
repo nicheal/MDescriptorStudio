@@ -13,7 +13,8 @@ import {
 import { ipc } from "../ipc/client";
 import SaveViewModal from "./SaveViewModal";
 import { waitForSuccessfulJob } from "../stores/jobs";
-import { activeDataset, refetchDatasets, useWorkspace } from "../stores/workspace";
+import { refetchDatasets, useActiveDataset, useWorkspace } from "../stores/workspace";
+import { DATASET_PROPERTY_LABELS } from "../util/properties";
 import { useT } from "../i18n";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import { createAsyncRequestGuard } from "../util/asyncRequestGuard";
@@ -33,16 +34,17 @@ type FindingsResponse = {
   rows: FindingsRow[];
 };
 
-/** Localized labels for per-frame missing-property tags (dataset properties). */
-const PROP_LABELS: Record<string, string> = { energy: "Energy", forces: "Forces", virial: "Virial" };
-
 export default function HealthFindingsDrawer() {
   const { t } = useT();
-  const st = useWorkspace();
-  const d = activeDataset(st);
+  // Field by field: reading the whole store re-renders this drawer on every
+  // unrelated write, including the job.progress ticks that fire many times a
+  // second while a descriptor run is going (see stores/workspace.ts).
+  const d = useActiveDataset();
+  const statsTick = useWorkspace((st) => st.statsTick);
+  const findingsCheck = useWorkspace((st) => st.findingsCheck);
+  const open = useWorkspace((st) => st.findingsDrawerOpen);
+  const closeFindings = useWorkspace((st) => st.closeFindings);
   const datasetId = d?.id;
-  const findingsCheck = st.findingsCheck;
-  const open = st.findingsDrawerOpen;
   const [stats, setStats] = useState<Stats | null>(null);
   const [activeTab, setActiveTab] = useState<string>(CHECK_KEYS[0]);
   const [rows, setRows] = useState<FindingsRow[]>([]);
@@ -171,7 +173,7 @@ export default function HealthFindingsDrawer() {
       disposed = true;
       loadGuard.invalidate();
     };
-  }, [open, datasetId, st.statsTick, activeTab, fetchStats, fetchRows]);
+  }, [open, datasetId, statsTick, activeTab, fetchStats, fetchRows]);
 
   const preview = useCallback(
     (index: number) => {
@@ -239,7 +241,7 @@ export default function HealthFindingsDrawer() {
       placement="right"
       width={560}
       open={open}
-      onClose={st.closeFindings}
+      onClose={closeFindings}
       destroyOnClose
     >
       {tabItems.length > 1 && (
@@ -362,7 +364,7 @@ export default function HealthFindingsDrawer() {
                         <span style={{ display: "inline-flex", flexWrap: "wrap", gap: 2 }}>
                           {(row.missing_props ?? []).map((p) => (
                             <Tag key={p} color="warning" style={{ marginInlineEnd: 0, fontSize: 11, lineHeight: "16px" }}>
-                              {t(PROP_LABELS[p] ?? p)}
+                              {t(DATASET_PROPERTY_LABELS[p] ?? p)}
                             </Tag>
                           ))}
                         </span>

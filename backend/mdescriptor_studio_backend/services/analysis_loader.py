@@ -16,6 +16,7 @@ from ..errors import (
     INVALID_PARAMS,
     RESULT_INCOMPATIBLE,
 )
+from ..datasets.statistics import frame_force_max
 from ..security import UnsafePathError, ensure_no_reparse_points
 from .analysis_helpers import (
     PHYSICAL_BLOCKS,
@@ -75,9 +76,7 @@ class AnalysisDataMixin:
                 "force_max": None,
                 "volume": None,
             }
-            if f.forces is not None and len(f.forces):
-                mags = np.linalg.norm(np.asarray(f.forces), axis=1)
-                entry["force_max"] = round(float(mags.max()), 5)
+            entry["force_max"] = frame_force_max(f.forces)
             det = abs(float(np.linalg.det(np.asarray(f.cell))))
             if det > 1e-8:
                 entry["volume"] = round(det, 4)

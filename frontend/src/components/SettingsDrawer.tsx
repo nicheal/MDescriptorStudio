@@ -23,6 +23,8 @@ export default function SettingsDrawer() {
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [defaultThreads, setDefaultThreads] = useState<number | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [saveState, setSaveState] = useState<"saving" | "saved" | "failed" | null>(null);
   const appUpdate = useAppUpdate();
   const { t } = useT();
   const lang = useI18n((s) => s.lang);
@@ -30,14 +32,27 @@ export default function SettingsDrawer() {
 
   useEffect(() => {
     if (!open) return;
+    let disposed = false;
     (async () => {
-      const i = await ipc.request<SystemInfo>("system.info");
-      setInfo(i);
-      const th = await ipc.request<{ value: string | null }>("settings.get", {
-        key: "compute.default_threads",
-      });
-      setDefaultThreads(th.value ? Number(th.value) : null);
+      try {
+        const i = await ipc.request<SystemInfo>("system.info");
+        const th = await ipc.request<{ value: string | null }>("settings.get", {
+          key: "compute.default_threads",
+        });
+        if (disposed) return;
+        setInfo(i);
+        setDefaultThreads(th.value ? Number(th.value) : null);
+        setLoadFailed(false);
+      } catch (error) {
+        // Both calls reject while the backend is down. Without this the drawer
+        // just shows "—" for everything and the rejection escapes unhandled.
+        console.error("settings load failed", error);
+        if (!disposed) setLoadFailed(true);
+      }
     })();
+    return () => {
+      disposed = true;
+    };
   }, [open]);
 
   useEffect(() => {
@@ -88,22 +103,48 @@ export default function SettingsDrawer() {
               max={64}
               value={defaultThreads ?? undefined}
               placeholder={t("engine default")}
-              onChange={(v) => setDefaultThreads(v)}
+              onChange={(v) => {
+                setDefaultThreads(v);
+                setSaveState(null);
+              }}
               style={{ width: 160 }}
             />
             <Button
+              loading={saveState === "saving"}
               onClick={async () => {
-                if (defaultThreads) {
-                  await ipc.request("settings.set", {
-                    key: "compute.default_threads",
-                    value: String(defaultThreads),
-                  });
+                // Always write: the backend reads an empty value as "engine
+                // default" (job_runner._apply_thread_limit), so clearing the
+                // box has to be able to reset the override — with `if
+                // (defaultThreads)` here a set value could never be removed.
+                const value = defaultThreads === null ? "" : String(defaultThreads);
+                setSaveState("saving");
+                try {
+                  await ipc.request("settings.set", { key: "compute.default_threads", value });
+                  setSaveState("saved");
+                } catch (error) {
+                  console.error("settings.set failed", error);
+                  setSaveState("failed");
                 }
               }}
             >
               {t("Save")}
             </Button>
           </Space>
+          {loadFailed && (
+            <Typography.Text type="danger" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+              {t("could not load settings")}
+            </Typography.Text>
+          )}
+          {saveState === "failed" && (
+            <Typography.Text type="danger" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+              {t("save failed")}
+            </Typography.Text>
+          )}
+          {saveState === "saved" && (
+            <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
+              {t("saved")}
+            </Typography.Text>
+          )}
           <Typography.Text type="secondary" style={{ fontSize: 11, display: "block", marginTop: 4 }}>
             {t("Caps BLAS/OpenMP threads for analysis compute; descriptor runs are managed by the engine.")}
           </Typography.Text>

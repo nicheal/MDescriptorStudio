@@ -70,9 +70,27 @@ jobs:
       - name: Smoke the benchmark harness
         run: python benchmark/run_benchmarks.py --quick --suite analysis
 
+  # The bridge's frame re-alignment and bundle-verification invariants live in
+  # #[cfg(test)] code in src-tauri/src/main.rs, and nothing executed them: this
+  # job is their only home. Separate so a cold crate build cannot spend the
+  # backend job's timeout.
+  bridge:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the cargo target directory
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
   frontend:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -97,3 +115,15 @@ jobs:
       - name: Unit tests
         working-directory: frontend
         run: npm run test
+
+      # e2e starts the dev server itself (playwright.config.ts webServer). It is
+      # the only layer that drives the real renderer, so it must run here even
+      # though it currently talks to preview.tsx's mock backend: the specs pin
+      # interaction behaviour that no unit test reaches.
+      - name: Install Playwright chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - name: Run end-to-end tests
+        working-directory: frontend
+        run: npx playwright test

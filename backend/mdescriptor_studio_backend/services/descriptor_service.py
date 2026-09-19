@@ -202,6 +202,15 @@ class DescriptorService:
         row = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (ds_id,))
         if row is None:
             raise AppError(DATASET_NOT_FOUND, f"dataset {ds_id} does not exist")
+        if scope == "frame" and frame_index >= int(row["number_of_frames"] or 0):
+            # Checked here, not in the job: a frame-scoped run past the end of
+            # the dataset would otherwise settle as a failed job and reach the
+            # user as the generic "backend failed" message.
+            raise AppError(
+                INVALID_PARAMS,
+                f"frame_index {frame_index} is outside dataset {ds_id}"
+                f" ({row['number_of_frames']} frames)",
+            )
         # A changed source must be explicitly rescanned before a new run can
         # be created. Existing lightweight test/dry-run dataset services may
         # not implement the optional freshness hook.
@@ -618,12 +627,11 @@ class DescriptorService:
             ),
             "row_offsets_verified": result.row_offsets is not None,
             "feature_count": int(getattr(result, "feature_count", values.shape[-1] if values.ndim > 1 else 0)),
-            "structure_ids": list(getattr(result, "structure_ids", []) or []),
             "created_at": _NOW(),
         }
         with open_text_for_write(run_dir / "metadata.json") as fh:
             fh.write(json.dumps(metadata, ensure_ascii=False, indent=2))
-        self._complete_run(run_id, run_dir, memory_peak_bytes)
+        self._complete_run(run_id, run_dir, memory_peak_bytes, metadata)
         ctx.progress(None, None, "done", fraction=1.0)
         return {
             "run_id": run_id,
@@ -633,12 +641,26 @@ class DescriptorService:
             "feature_count": metadata["feature_count"],
         }
 
-    def _complete_run(self, run_id: str, run_dir: Path, memory_peak_bytes: int | None) -> None:
-        """Commit a descriptor artifact only while its run is still RUNNING."""
+    def _complete_run(self, run_id: str, run_dir: Path, memory_peak_bytes: int | None, metadata: dict) -> None:
+        """Commit a descriptor artifact only while its run is still RUNNING.
+
+        The shape/feature/semantics triple is copied out of the artifact metadata
+        into columns here, because the run *list* needs them for every row on a
+        page and must not read and parse one JSON file per row to show them.
+        """
         changed = self.db.execute(
-            "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ?, memory_peak_bytes = ?"
+            "UPDATE descriptor_runs SET status = 'COMPLETED', finished_at = ?, result_path = ?,"
+            " memory_peak_bytes = ?, result_shape_json = ?, feature_count = ?, row_semantics = ?"
             " WHERE id = ? AND status = 'RUNNING'",
-            (_NOW(), str(run_dir), memory_peak_bytes, run_id),
+            (
+                _NOW(),
+                str(run_dir),
+                memory_peak_bytes,
+                json.dumps(metadata["shape"], ensure_ascii=False),
+                metadata["feature_count"],
+                metadata["row_semantics"],
+                run_id,
+            ),
         )
         if changed == 1:
             return

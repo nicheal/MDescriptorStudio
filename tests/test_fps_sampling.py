@@ -491,3 +491,47 @@ def test_engine_target_coverage_and_invalid_target() -> None:
     with pytest.raises(AppError) as exc:
         sampling(samples, {"scaling": "raw", "target_coverage": 1.0}, "fps")
     assert exc.value.code == ANALYSIS_INPUT_INVALID
+
+
+def test_grouped_coverage_stop_needs_a_measurable_coverage() -> None:
+    # A constant feature space has no spread to explain, so _r2_coverage answers
+    # 1.0 for it — and with no warm-start set every residual is still +inf at
+    # that moment. The pre-check stopped the run before its first pick and the
+    # grouped result carried all-inf residuals, which the sampling preview then
+    # could not encode as a protocol frame.
+    x = np.zeros((4, 3))
+    labels = np.array(["A", "A", "B", "B"])
+    result = grouped_farthest_point_sampling(x, labels, n_samples=2, target_coverage=0.95)
+    assert result.n_selected >= 1
+    assert np.isfinite(result.nearest_distances).all()
+    assert result.coverage_radius == pytest.approx(0.0)
+
+    # The same stop is still legitimate when a warm start already covers the
+    # space: the residuals are finite, so "add nothing" is the honest answer.
+    existing = np.zeros((2, 3))
+    warm = grouped_farthest_point_sampling(
+        x, labels, n_samples=4, selected_features=existing, target_coverage=0.95
+    )
+    assert warm.n_selected == 0
+    assert np.isfinite(warm.nearest_distances).all()
+
+
+def test_engine_grouped_sampling_preview_encodes() -> None:
+    import json
+
+    from mdescriptor_studio_backend.protocol import frames
+
+    x = np.zeros((6, 2))
+    samples = StructureDescriptorMatrix(x, np.arange(6))
+    result = sampling(
+        samples,
+        {"n_samples": 2, "strategy": "grouped", "scaling": "raw", "target_coverage": 0.9},
+        "fps",
+        group_labels=np.array(["si", "si", "si", "ge", "ge", "ge"]),
+    )
+    preview = result["preview"]
+    assert preview["selected_count"] >= 1
+    assert np.isfinite(preview["mean_residual"])
+    # The preview is what crosses the wire: encode it for real, since the
+    # protocol refuses (rather than stringifies) a non-finite number.
+    assert json.loads(frames.encode(frames.response_ok(1, preview)))["result"] == preview

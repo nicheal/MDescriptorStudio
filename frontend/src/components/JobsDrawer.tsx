@@ -6,15 +6,18 @@ import { Badge, Button, Drawer, Empty, Popconfirm, Progress, Space, Typography }
 import { Clock16Regular, Dismiss16Regular } from "@fluentui/react-icons";
 import SettingsDrawer from "./SettingsDrawer";
 import { ipc } from "../ipc/client";
-import { jobStatusLabel, jobTypeLabel, mergeJobRows, useJobs, type JobState } from "../stores/jobs";
+import { JOB_STATUS_COLOR, jobStatusLabel, jobTypeLabel, mergeJobRows, useJobs, type JobState } from "../stores/jobs";
 import { useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import type { JobRow } from "../types/protocol";
 
 export default function JobsDrawer() {
-  const { runningJobs, jobsDrawerOpen, setJobsDrawerOpen } = useWorkspace();
+  const runningJobs = useWorkspace((s) => s.runningJobs);
+  const jobsDrawerOpen = useWorkspace((s) => s.jobsDrawerOpen);
+  const setJobsDrawerOpen = useWorkspace((s) => s.setJobsDrawerOpen);
   const { t } = useT();
-  const { jobs, order } = useJobs();
+  const jobs = useJobs((s) => s.jobs);
+  const order = useJobs((s) => s.order);
   const [rows, setRows] = useState<JobRow[]>([]);
 
   useEffect(() => {
@@ -57,8 +60,9 @@ function JobCard({ job }: { job: JobState }) {
   // A QUEUED job has no progress events yet — a bare 0% bar reads as a stuck
   // job, so say "queued" outright and only show the bar once it is RUNNING.
   const queued = job.status === "QUEUED";
-  const statusColor =
-    job.status === "COMPLETED" ? "#107C10" : job.status === "FAILED" ? "#C42B1C" : job.status === "CANCELLED" ? "#8A8A8A" : "#0F6CBD";
+  // The shared map, not a local ternary: this one made QUEUED fall through to
+  // the RUNNING blue, so a job changed colour between the drawer and the rail.
+  const statusColor = JOB_STATUS_COLOR[job.status];
   return (
     <div style={{ borderBottom: "1px solid #EAECF0", padding: "12px 4px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -75,7 +79,12 @@ function JobCard({ job }: { job: JobState }) {
             )}
             <Popconfirm
               title={t("Stop this job?")}
-              onConfirm={() => void ipc.request("job.cancel", { id: job.id })}
+              onConfirm={() =>
+                // With the backend down the request rejects synchronously; the
+                // row keeps its live status either way, but an unhandled
+                // rejection would poison the console and any global hook.
+                void ipc.request("job.cancel", { id: job.id }).catch(() => {})
+              }
               okText={t("Stop job")}
               cancelText={t("Keep running")}
               okButtonProps={{ danger: true }}

@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import uuid
+from pathlib import Path
 
 import numpy as np
 
@@ -30,6 +32,22 @@ _INSERT_VIEW = (
     " selection_hash, dataset_fingerprint, created_at, updated_at)"
     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
+
+
+def _discard_partial_output(dest: Path) -> None:
+    """Delete what a failed write left at a path this run created.
+
+    ``_export_destination`` refuses a destination that already exists, so
+    anything at that path afterwards is ours: extXYZ writes one file, DeepMD a
+    directory, and either leftover makes every retry fail with "destination
+    already exists" for a job the user was told had stopped.
+    """
+    if not dest.exists():
+        return
+    if dest.is_dir():
+        shutil.rmtree(dest, ignore_errors=True)
+    else:
+        dest.unlink(missing_ok=True)
 
 
 class DatasetViewService:
@@ -263,11 +281,23 @@ class DatasetViewService:
 
             def frames():
                 for position, frame_index in enumerate(indices, 1):
+                    # Deferred like export_service._cancellable_frames: a writer
+                    # pulls frames lazily, so this is the only place a cancel can
+                    # take effect during the copy.
+                    ctx.check_cancelled()
                     if position % 250 == 0 or position == len(indices):
                         ctx.progress(position, max(len(indices), 1), "writing view frames")
                     yield adapter.get_frame(frame_index)
 
-            written = writer(dest, frames())
+            try:
+                written = writer(dest, frames())
+            except BaseException:
+                # _export_destination refuses a path that already exists, so
+                # anything here is this run's own partial output. Leaving it
+                # would make every later retry fail with "destination already
+                # exists" on a job the user was told had stopped.
+                _discard_partial_output(dest)
+                raise
             ctx.progress(max(len(indices), 1), max(len(indices), 1), "done")
             return {
                 "path": str(dest),

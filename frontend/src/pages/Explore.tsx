@@ -18,7 +18,12 @@ import { forceArrowGeometry, frameMaxForce } from "../util/forces";
 import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, virialSummary } from "../util/structure";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import { neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
-import { STRUCTURE_VIEWER_BACKGROUND, addUnitCell, load3Dmol } from "../viz/StructureViewer";
+import {
+  STRUCTURE_VIEWER_BACKGROUND,
+  addUnitCell,
+  disposeStructureViewer,
+  load3Dmol,
+} from "../viz/StructureViewer";
 import { createExploreFrameLoader, type ExploreFrameLoader } from "./exploreFrameLoader";
 import type { ClickedAtom, ViewerModel } from "../util/viewerAtoms";
 import type { DatasetHealth, DatasetView, FramePayload, HealthFindings } from "../types/protocol";
@@ -129,19 +134,28 @@ export default function Explore() {
     && selectedSample.frame === frame?.index
     ? selectedSample.atom
     : undefined;
-  const selectedLocalNeighbors = frame && selectedAtom != null
-    ? neighborsWithinCutoff(
-        parseViewerAtoms(frame, Math.max(bondCutoff, localCutoff), showLocalEnvironment),
-        selectedAtom,
-        localCutoff,
-      )
-    : [];
-  const selectedLocalNeighborSet = new Set(
-    showLocalEnvironment
-      ? selectedLocalNeighbors
-          .flatMap(({ index, parent }) => [index, parent ?? index])
-          .filter((index) => index >= 0 && index < (frame?.natoms ?? 0))
-      : [],
+  // Parsed once per frame/selection rather than in the render body:
+  // parseViewerAtoms builds the bond list over real plus ghost atoms, and it ran
+  // on every hover, table scroll and keystroke (and again in the viewer effect).
+  const selectedLocalNeighbors = useMemo(
+    () => (frame && selectedAtom != null
+      ? neighborsWithinCutoff(
+          parseViewerAtoms(frame, Math.max(bondCutoff, localCutoff), showLocalEnvironment),
+          selectedAtom,
+          localCutoff,
+        )
+      : []),
+    [frame, selectedAtom, bondCutoff, localCutoff, showLocalEnvironment],
+  );
+  const selectedLocalNeighborSet = useMemo(
+    () => new Set(
+      showLocalEnvironment
+        ? selectedLocalNeighbors
+            .flatMap(({ index, parent }) => [index, parent ?? index])
+            .filter((index) => index >= 0 && index < (frame?.natoms ?? 0))
+        : [],
+    ),
+    [selectedLocalNeighbors, showLocalEnvironment, frame],
   );
   // Force components live on atom_rows (real atoms only); selection indices
   // always reference real atoms, so a direct index lookup is safe.
@@ -405,9 +419,8 @@ export default function Explore() {
     return () => {
       cancelled = true;
       setViewerReady(false);
-      viewerRef.current?.clear();
+      disposeStructureViewer(element, viewerRef.current);
       viewerRef.current = null;
-      if (element) element.innerHTML = "";
     };
   }, []);
 

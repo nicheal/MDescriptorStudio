@@ -26,7 +26,8 @@ export default function Sidebar() {
   const confirmDelete = useDatasetDelete();
   const { t } = useT();
   const [renameTarget, setRenameTarget] = useState<DatasetMeta | null>(null);
-  const { datasets, setActiveDataset } = useWorkspace();
+  const datasets = useWorkspace((s) => s.datasets);
+  const setActiveDataset = useWorkspace((s) => s.setActiveDataset);
   const [collapsed, setCollapsed] = useState(false);
   const [query, setQuery] = useState("");
   const [adding, setAdding] = useState(false);
@@ -416,7 +417,8 @@ function DatasetItem({
   onDelete: (d: DatasetMeta) => void;
   onSplit: () => void;
 }) {
-  const { setActiveDataset, activeDatasetId } = useWorkspace();
+  const setActiveDataset = useWorkspace((s) => s.setActiveDataset);
+  const activeDatasetId = useWorkspace((s) => s.activeDatasetId);
   const { t } = useT();
   const active = d.id === activeDatasetId;
   return (

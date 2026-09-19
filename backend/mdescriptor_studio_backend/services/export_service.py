@@ -89,16 +89,28 @@ class AnalysisExportMixin:
         cache_key = self._analysis_cache_key("export", input_ids, canonical)
 
         with self._submit_lock:
-            analysis_id, early, created = self._claim_analysis_row(
-                analysis_type="export",
-                cache_key=cache_key,
-                canonical_params=canonical,
-                input_ids=input_ids,
-                primary_run_id=run["id"],
-                dataset_ids=[run["dataset_id"]],
-            )
-            if early is not None:
-                return early
+            # An export is a side effect on a user path, not a pure computation:
+            # a COMPLETED row only proves the file was written once. If it is no
+            # longer there (moved, deleted, cleaned up) the cached answer would
+            # report a success the disk contradicts, so keep claiming under keys
+            # no completed row can match until this submission owns a fresh
+            # QUEUED row. A live job is still deduplicated on the first pass, so
+            # a double click cannot interleave two writers on one path.
+            attempt = 0
+            while True:
+                analysis_id, early, created = self._claim_analysis_row(
+                    analysis_type="export",
+                    cache_key=cache_key if attempt == 0 else f"{cache_key}\x1fre-export-{attempt}",
+                    canonical_params=canonical,
+                    input_ids=input_ids,
+                    primary_run_id=run["id"],
+                    dataset_ids=[run["dataset_id"]],
+                )
+                if early is None:
+                    break
+                if early.get("job_id") is not None or Path(target).exists():
+                    return early
+                attempt += 1
 
             def runner(ctx):
                 artifact_path: Path | None = None

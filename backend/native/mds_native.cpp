@@ -596,15 +596,18 @@ MDS_EXPORT int mds_frame_geometry(
     }
     if (*out_short_contact != 0 || !periodic) return 0;
 
-    // image shifts (row-norm bound, capped, zero shift excluded)
+    // image shifts (column-norm bound, capped, zero shift excluded)
     int64_t limits[3] = {0, 0, 0};
     for (int k = 0; k < 3; ++k) {
         if (!pbc_flag[k]) continue;
-        // row k of inv (row-major): inv[3k + c]
-        const double row = std::sqrt(inv[3 * k + 0] * inv[3 * k + 0] +
-                                     inv[3 * k + 1] * inv[3 * k + 1] +
-                                     inv[3 * k + 2] * inv[3 * k + 2]);
-        int64_t want = static_cast<int64_t>(std::floor(t_max * row)) + 1;
+        // column k of inv (row-major): inv[3r + k].  The bound is on the
+        // lattice coefficients s = d . inv, so it is the columns that carry
+        // |s_k| <= ||d|| * ||inv column_k|| -- rows would under-read a skewed
+        // cell and miss the very image contacts this scan exists to find.
+        const double col = std::sqrt(inv[k] * inv[k] +
+                                     inv[3 + k] * inv[3 + k] +
+                                     inv[6 + k] * inv[6 + k]);
+        int64_t want = static_cast<int64_t>(std::floor(t_max * col)) + 1;
         if (want > image_limit) want = image_limit;
         limits[k] = want;
     }

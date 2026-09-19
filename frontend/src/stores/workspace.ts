@@ -77,10 +77,14 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   setActiveDataset: (id) =>
     set((st) => {
       if (st.activeDatasetId !== id && id) {
-        void ipc.request("settings.set", {
-          key: "workspace.activeDatasetId",
-          value: id,
-        });
+        void ipc
+          .request("settings.set", {
+            key: "workspace.activeDatasetId",
+            value: id,
+          })
+          // The write is a persistence nicety; with the backend down it must
+          // not surface as an unhandled rejection (see setActiveRun above).
+          .catch(() => {});
       }
       return { activeDatasetId: id, activeFrameIndex: 0, activeDescriptorRunId: null, selectedSample: null };
     }),

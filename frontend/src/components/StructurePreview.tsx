@@ -3,7 +3,12 @@ import { elementColor } from "../util/elements";
 import { neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
 import type { ClickedAtom, ViewerModel } from "../util/viewerAtoms";
 import { useT } from "../i18n";
-import { STRUCTURE_VIEWER_BACKGROUND, addUnitCell, load3Dmol } from "../viz/StructureViewer";
+import {
+  STRUCTURE_VIEWER_BACKGROUND,
+  addUnitCell,
+  disposeStructureViewer,
+  load3Dmol,
+} from "../viz/StructureViewer";
 import type { FramePayload } from "../types/protocol";
 
 type Viewer = {
@@ -56,9 +61,8 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
     return () => {
       cancelled = true;
       setViewerReady(false);
-      viewerRef.current?.clear();
+      disposeStructureViewer(element, viewerRef.current);
       viewerRef.current = null;
-      if (element) element.innerHTML = "";
     };
   }, []);
 

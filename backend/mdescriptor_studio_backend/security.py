@@ -155,3 +155,14 @@ def open_text_for_write(path: Path, *, newline: str | None = None) -> TextIO:
 def escape_like(value: str) -> str:
     """Escape SQLite LIKE wildcards for literal identifier matching."""
     return value.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+
+def json_membership(column: str, value: object) -> tuple[str, str]:
+    """A LIKE predicate matching a JSON array column that contains *value*.
+
+    Run and dataset ids are persisted as JSON arrays, so membership is a quoted
+    substring match. Predicate and pattern must come from here together: a call
+    site that escapes the value but forgets ``ESCAPE '!'`` — or the surrounding
+    quotes — keeps running and silently matches the wrong rows.
+    """
+    return f"{column} LIKE ? ESCAPE '!'", f'%"{escape_like(str(value))}"%'

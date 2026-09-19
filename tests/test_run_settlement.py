@@ -212,7 +212,7 @@ def test_cancelled_descriptor_cannot_complete(tmp_path: Path) -> None:
     (artifact / "values.npy").write_bytes(b"stale")
 
     with pytest.raises(AppError) as exc:
-        svc._complete_run("run_cancelled", artifact, None)
+        svc._complete_run("run_cancelled", artifact, None, {"shape": [1, 2], "feature_count": 2, "row_semantics": "structure"})
 
     assert exc.value.code == JOB_CANCELLED
     assert db.query_one("SELECT status FROM descriptor_runs WHERE id = 'run_cancelled'")["status"] == "CANCELLED"

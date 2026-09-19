@@ -25,6 +25,36 @@ const UNIT_CELL_EDGES: [number, number, number, number, number, number][] = [
   [0, 0, 1, 1, 0, 1], [0, 0, 1, 0, 1, 1],
 ];
 
+/** Free what a viewer leaves behind when it is unmounted.
+ *
+ * 3Dmol exposes no dispose: `clear()` drops the models but keeps the WebGL
+ * context, and because the library registers a bound `mouseup` handler on
+ * document.body that it never removes, the viewer graph stays reachable for
+ * the life of the page. Browsers cap live contexts (around 16) and discard the
+ * oldest past that limit, which surfaces as earlier viewers silently going
+ * blank — so the context is released explicitly through its own canvas before
+ * the element is emptied.
+ */
+export function disposeStructureViewer(element: HTMLElement | null | undefined, viewer: unknown): void {
+  try {
+    (viewer as { clear?: () => void } | null | undefined)?.clear?.();
+  } catch (error) {
+    console.error("structure viewer clear failed", error);
+  }
+  const canvas = element?.querySelector("canvas");
+  if (canvas) {
+    for (const type of ["webgl2", "webgl"] as const) {
+      const context = canvas.getContext(type) as WebGLRenderingContext | null;
+      const loser = context?.getExtension("WEBGL_lose_context");
+      if (loser) {
+        loser.loseContext();
+        break;
+      }
+    }
+  }
+  if (element) element.innerHTML = "";
+}
+
 export function addUnitCell(
   viewer: { addLine: (spec: object) => void },
   cell: number[] | null | undefined,

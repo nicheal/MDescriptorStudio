@@ -36,7 +36,7 @@ from .result_service import ResultService
 from .analysis_artifact_store import AnalysisArtifactStore
 from ..storage.database import Database
 from .job_service import JobService
-from ..security import UnsafePathError, escape_like
+from ..security import UnsafePathError, json_membership
 
 log = logging.getLogger(__name__)
 
@@ -121,8 +121,9 @@ class AnalysisService(
         args: list[object] = []
         if params.get("run_id"):
             run_id = str(params["run_id"])
-            conditions.append("(descriptor_run_id = ? OR input_run_ids_json LIKE ? ESCAPE '!')")
-            args.extend([run_id, f'%"{escape_like(run_id)}"%'])
+            membership, pattern = json_membership("input_run_ids_json", run_id)
+            conditions.append(f"(descriptor_run_id = ? OR {membership})")
+            args.extend([run_id, pattern])
         if params.get("analysis_type"):
             conditions.append("analysis_type = ?")
             args.append(params["analysis_type"])
@@ -207,6 +208,11 @@ class AnalysisService(
             array = np.load(path, mmap_mode="r", allow_pickle=False)
             offset = max(0, int(params.get("offset", 0)))
             limit = min(_MAX_PREVIEW_POINTS, max(1, int(params.get("limit", 2000))))
+            # Parsed with the rest: outside this try a non-numeric column bound
+            # escaped as an unhandled error and answered INTERNAL_ERROR for what
+            # is a bad request.
+            column_start = max(0, int(params.get("column_start", 0)))
+            column_end = int(params.get("column_end", column_start + 256))
         except (OSError, TypeError, ValueError) as exc:
             raise AppError(ARTIFACT_INVALID, f"cannot read analysis array {name!r}: {exc}") from exc
         if array.ndim == 0:
@@ -222,10 +228,8 @@ class AnalysisService(
         # single very-wide descriptor row from turning IPC into a large JSON
         # transport; callers can page columns with column_start/column_end.
         if chunk.ndim == 2:
-            col_start = max(0, int(params.get("column_start", 0)))
-            col_end = min(chunk.shape[1], int(params.get("column_end", col_start + 256)))
-            col_end = max(col_start, col_end)
-            chunk = chunk[:, col_start:col_end]
+            col_end = min(chunk.shape[1], max(column_start, column_end))
+            chunk = chunk[:, column_start:col_end]
         values = chunk.tolist()
         return {
             "analysis_id": row["id"],
