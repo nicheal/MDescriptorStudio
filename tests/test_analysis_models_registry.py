@@ -25,10 +25,8 @@ def test_typed_matrices_reject_inconsistent_aligned_arrays() -> None:
 
     matrix = StructureDescriptorMatrix(values, np.arange(6, dtype=np.int64))
     assert matrix.n_samples == 6
-    assert matrix.granularity == "structure"
 
-    atom = AtomDescriptorMatrix(values, np.arange(6, dtype=np.int64), row=np.arange(6), elements=np.arange(6))
-    assert atom.granularity == "atom"
+    AtomDescriptorMatrix(values, np.arange(6, dtype=np.int64), row=np.arange(6), elements=np.arange(6))
 
 
 def test_matrix_consistency_validates_field_shapes() -> None:

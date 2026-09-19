@@ -40,7 +40,10 @@ def data_dir() -> Path:
     root.mkdir(parents=True, exist_ok=True)
     ensure_no_reparse_points(root)
     _warn_if_shared(root)
-    for sub in ("logs", "results", "analysis", "cache"):
+    # Only directories something actually writes: each one costs a reparse-point
+    # and share-permission walk on every start, and an unused entry makes this
+    # list a claim about the data layout that the layout does not keep.
+    for sub in ("logs", "results", "analysis"):
         child = root / sub
         child.mkdir(parents=True, exist_ok=True)
         ensure_no_reparse_points(child)

@@ -18,6 +18,12 @@ _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa:
 # value that does not match is either corrupt or hostile - both callers pair it
 # with the prefix they require (run_/ana_) before touching the filesystem.
 MANAGED_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
+# The analysis_runs.schema_version column (row layout, migration-gated, and
+# nothing compares it). Three things in this codebase are called schema_version:
+# this one, the per-analysis revision an algorithm stamps on its preview
+# (correlation.py, metrics), and the descriptor configuration schema the engine
+# reports. Only the middle one invalidates cached results - and it does so by
+# being written into the params keys feature_*_schema, not by this column.
 _ANALYSIS_SCHEMA_VERSION = 1
 ANALYSIS_ALGORITHM_VERSION = "studio-analysis-4"
 _MAX_PREVIEW_POINTS = 20_000

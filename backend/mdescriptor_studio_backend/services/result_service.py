@@ -332,7 +332,12 @@ class ResultService:
             max_features = int(params.get("max_features", 256))
         except (TypeError, ValueError):
             max_features = 256
-        # hard cap: never stream the full matrix over IPC (design doc §25)
+        # The column bound is the only cap here: rows are the one structure's
+        # atoms, so a wide-frame reply is atoms x 256 values. It is not a
+        # "never stream the full matrix" guarantee - that was the claim, and the
+        # real backstop is Server._encode refusing an over-large frame rather
+        # than the row count. Callers that need a bound on atoms must ask for
+        # one; nothing does yet, because no view reads this method.
         max_features = max(1, min(max_features, 256))
         block = block[:, :max_features]
         return {

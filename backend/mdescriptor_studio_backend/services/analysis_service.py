@@ -224,9 +224,11 @@ class AnalysisService(
             offset = min(offset, array.shape[0])
             stop = min(offset + limit, array.shape[0])
             chunk = array[offset:stop]
-        # A chunk is row-bounded and also value-bounded.  The latter prevents a
-        # single very-wide descriptor row from turning IPC into a large JSON
-        # transport; callers can page columns with column_start/column_end.
+        # Rows are bounded by limit (at most _MAX_PREVIEW_POINTS) and columns by
+        # column_start/column_end, each on its own - the product of the two is
+        # not, so a caller can still ask for a chunk too big to encode. That
+        # request fails as an error frame from Server._encode rather than
+        # streaming; paging a wide artifact is the caller's job.
         if chunk.ndim == 2:
             col_end = min(chunk.shape[1], max(column_start, column_end))
             chunk = chunk[:, column_start:col_end]

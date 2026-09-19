@@ -164,10 +164,6 @@ class DescriptorMatrix:
     def n_features(self) -> int:
         return int(self.values.shape[1])
 
-    @property
-    def granularity(self) -> str:
-        return "structure"
-
     def subset(self, indices: Any) -> "DescriptorMatrix":
         selected = np.asarray(indices, dtype=np.int64).reshape(-1)
         kwargs = {
@@ -193,10 +189,6 @@ class StructureDescriptorMatrix(DescriptorMatrix):
 @dataclass
 class AtomDescriptorMatrix(DescriptorMatrix):
     """One descriptor row per atom/local environment."""
-
-    @property
-    def granularity(self) -> str:
-        return "atom"
 
 
 __all__ = [

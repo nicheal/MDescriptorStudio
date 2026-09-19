@@ -19,7 +19,7 @@ import numpy as np
 from ..errors import AppError, INVALID_DATASET, INVALID_PARAMS
 from ..security import ensure_no_reparse_points
 from .base import DatasetAdapter, DatasetFrame, ScanMeta, pbc_summary
-from .deepmd_symbols import _SYMBOL_TO_Z, _Z_TO_SYMBOL  # noqa: F401 (re-exported)
+from .deepmd_symbols import _SYMBOL_TO_Z, _Z_TO_SYMBOL
 
 MAX_DEEPMD_FRAMES = 250_000
 MAX_DEEPMD_ATOMS = 10_000_000

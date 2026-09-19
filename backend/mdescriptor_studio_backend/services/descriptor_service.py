@@ -592,7 +592,7 @@ class DescriptorService:
         values = np.asarray(result.values)
         if output_dtype == "float32" and values.dtype != np.float32:
             values = values.astype(np.float32)
-        run_dir = self.data_dir / "results" / f"run_{run_id.removeprefix('run_')}"
+        run_dir = self.data_dir / "results" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         ensure_no_reparse_points(run_dir)
         np.save(run_dir / "values.npy", values, allow_pickle=False)
