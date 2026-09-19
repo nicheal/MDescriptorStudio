@@ -29,6 +29,14 @@ from .analysis_helpers import (
 class AnalysisArtifactMixin:
     """Managed analysis artifact access, caching keys and JSON helpers."""
 
+    # preview_json is a per-row blob that can reach tens of megabytes, and
+    # reading it means holding it: the list query already leaves it out, and so
+    # do the single-row readers that never look at it - analysis.chunk is called
+    # once per array while the result view pages, and its reserved lane shares
+    # the database write lock with job.get.
+    _ROW_SKIP_COLUMNS = ("preview_json",)
+    _row_columns: str | None = None
+
     def _commit_artifact(self, analysis_id: str, analysis_type: str, input_ids: list[str], params: dict, result: dict, preview: dict, ctx) -> tuple[Path, dict]:
         return self._artifacts.commit(
             analysis_id,
@@ -148,10 +156,21 @@ class AnalysisArtifactMixin:
         )
         return analysis_id, None, True
 
-    def _analysis_row(self, analysis_id: str | None) -> dict:
+    def _analysis_row(self, analysis_id: str | None, *, include_preview: bool = False) -> dict:
         if not analysis_id:
             raise AppError(INVALID_PARAMS, "'analysis_id' is required")
-        row = self.db.query_one("SELECT * FROM analysis_runs WHERE id = ?", (analysis_id,))
+        if include_preview:
+            sql = "SELECT * FROM analysis_runs WHERE id = ?"
+        else:
+            owner = type(self)
+            if owner._row_columns is None:
+                # Ask the schema rather than keeping a second column list: the
+                # one thing dropped must never silently fall out of date.
+                names = [str(column["name"]) for column in self.db.query("PRAGMA table_info(analysis_runs)")]
+                keep = [name for name in names if name not in owner._ROW_SKIP_COLUMNS]
+                owner._row_columns = ", ".join(keep) if keep else "*"
+            sql = f"SELECT {owner._row_columns} FROM analysis_runs WHERE id = ?"
+        row = self.db.query_one(sql, (analysis_id,))
         if row is None:
             raise AppError(ANALYSIS_NOT_FOUND, f"analysis {analysis_id} does not exist")
         return row

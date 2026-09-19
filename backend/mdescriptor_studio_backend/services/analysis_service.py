@@ -137,7 +137,7 @@ class AnalysisService(
         return [self._public_analysis_row(row) for row in rows]
 
     def get(self, params: dict) -> dict:
-        row = self._analysis_row(params.get("analysis_id") or params.get("id"))
+        row = self._analysis_row(params.get("analysis_id") or params.get("id"), include_preview=True)
         return self._public_analysis_row(row, include_preview=True)
 
     def delete(self, params: dict) -> dict:
@@ -156,7 +156,7 @@ class AnalysisService(
 
     def preview(self, params: dict) -> dict:
         """Return a bounded identity/plot preview from a completed artifact."""
-        row = self._analysis_row(params.get("analysis_id") or params.get("id"))
+        row = self._analysis_row(params.get("analysis_id") or params.get("id"), include_preview=True)
         self._require_artifact(row)
         try:
             offset = max(0, int(params.get("offset", 0)))

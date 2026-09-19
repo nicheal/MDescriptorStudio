@@ -22,7 +22,7 @@ from mdescriptor_studio_backend.errors import (
 )
 from mdescriptor_studio_backend.services.analysis_service import _LIST_COLUMNS, AnalysisService
 from mdescriptor_studio_backend.services.dataset_service import DatasetService
-from mdescriptor_studio_backend.services.export_service import _identity_records
+from mdescriptor_studio_backend.services.export_service import _cancellable_frames, _identity_records
 from mdescriptor_studio_backend.services import preview_service
 from mdescriptor_studio_backend.services.result_service import ResultService
 from mdescriptor_studio_backend.storage.database import Database
@@ -182,6 +182,27 @@ def test_export_resolves_the_selection_through_the_same_view_as_the_analysis(tmp
     assert resubmit["analysis_id"] != scoped["analysis_id"]
     assert jobs.calls == 3
     db.close()
+
+
+def test_export_reports_progress_while_writing_frames() -> None:
+    # The writer streams frames, so the only progress an export used to report
+    # was 0 and then 1: a large extxyz export sat at 0% for minutes.
+    reports: list[tuple[int, int]] = []
+
+    class _Ctx:
+        def check_cancelled(self) -> None:
+            return None
+
+        def progress(self, completed, total, message="") -> None:
+            reports.append((completed, total))
+
+    class _Adapter:
+        def get_frame(self, index):
+            return index
+
+    frames = list(range(600))
+    assert list(_cancellable_frames(_Adapter(), frames, _Ctx())) == frames
+    assert reports == [(250, 600), (500, 600), (600, 600)]
 
 
 def test_export_rejects_a_malformed_view_id_before_claiming_a_row(tmp_path: Path) -> None:

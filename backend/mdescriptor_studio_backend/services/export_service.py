@@ -20,9 +20,18 @@ from .analysis_helpers import ANALYSIS_ALGORITHM_VERSION, _NOW, _view_id
 
 
 def _cancellable_frames(adapter, frames: list[int], ctx):
-    """Resolve dataset frames lazily so a cancelled export stops mid-write."""
-    for frame_index in frames:
+    """Resolve dataset frames lazily so a cancelled export stops mid-write.
+
+    Progress is reported on the 250-frame cadence the statistics and materialize
+    passes use. Without it a ten-thousand-frame extxyz export sat at 0% for
+    minutes - which is indistinguishable from a frozen application - because the
+    only reports around this loop were 0 and 1.
+    """
+    total = len(frames)
+    for position, frame_index in enumerate(frames, start=1):
         ctx.check_cancelled()
+        if position % 250 == 0 or position == total:
+            ctx.progress(position, total, "writing frames")
         yield adapter.get_frame(frame_index)
 
 
@@ -64,7 +73,7 @@ class AnalysisExportMixin:
         view_id = _view_id(params)
         # The sampling report carries the provenance of the analysis it came
         # from; every other format only needs the run plus the selection.
-        report_analysis = self._analysis_row(str(params["analysis_id"])) if export_format == "report" and params.get("analysis_id") else None
+        report_analysis = self._analysis_row(str(params["analysis_id"]), include_preview=True) if export_format == "report" and params.get("analysis_id") else None
         if export_format == "report" and report_analysis is None:
             raise AppError(ANALYSIS_INPUT_INVALID, "report export requires the analysis_id of a completed analysis")
         selected = params.get("indices")

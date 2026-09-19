@@ -215,8 +215,7 @@ class DescriptorService:
         # be created. Existing lightweight test/dry-run dataset services may
         # not implement the optional freshness hook.
         refresh = getattr(self.datasets, "refresh_if_changed", None)
-        if callable(refresh):
-            refresh(row)
+        fingerprint = refresh(row) if callable(refresh) else None
         schema = self.adapter.schema(name) if name else None
         if schema is None:
             raise AppError(INVALID_PARAMS, "'descriptor_name' is required")
@@ -237,11 +236,15 @@ class DescriptorService:
             if device != "cpu" or not (schema.get("execution") or {}).get("num_threads"):
                 raise AppError(INVALID_PARAMS, "thread count is not supported for this execution mode")
 
-        try:
-            source = validate_local_path(row["source_path"], field="dataset source path")
-            fingerprint = compute_fingerprint(source, row["number_of_frames"], use_cache=False)
-        except (TypeError, ValueError, OSError, UnsafePathError) as exc:
-            raise AppError(INVALID_PARAMS, "dataset source is unavailable") from exc
+        if fingerprint is None:
+            # Only when the freshness hook above was absent or returned nothing:
+            # it already measured the source, and doing so twice in one submit
+            # walks the file and hashes a sampled 32 MB twice.
+            try:
+                source = validate_local_path(row["source_path"], field="dataset source path")
+                fingerprint = compute_fingerprint(source, row["number_of_frames"], use_cache=False)
+            except (TypeError, ValueError, OSError, UnsafePathError) as exc:
+                raise AppError(INVALID_PARAMS, "dataset source is unavailable") from exc
         canonical = json.dumps(parameters, sort_keys=True, ensure_ascii=False)
         cache_key = hashlib.sha256(
             "\x1f".join(

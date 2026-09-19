@@ -47,8 +47,9 @@ from .job_service import JobService
 log = logging.getLogger(__name__)
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
-# max per-frame summary rows one dataset.findings call returns (the drawer
-# pages through longer lists)
+# max per-frame summary rows one dataset.findings call returns; longer lists are
+# reported by their exact count in "total" and truncated in "rows" (the drawer
+# says so) - there is no offset, so frame 1001 is not reachable today
 FINDINGS_ROW_LIMIT = 1000
 _ARTIFACT_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
 
@@ -577,7 +578,11 @@ class DatasetService:
             )
         return {
             "recalculating": False,
-            "total": len(indices),
+            # the check's exact count rather than len(indices): the index list
+            # behind it is capped at HEALTH_FINDINGS_CAP, so a dataset with
+            # 40 000 invalid cells reported 5 000 and the drawer presented that
+            # as the whole truth.
+            "total": int((cached.get("health") or {}).get(check, len(indices))),
             "returned": len(rows),
             "rows": rows,
         }
@@ -662,7 +667,14 @@ class DatasetService:
             self._active_scans[ds_id] = job_id
             return job_id
 
-    def refresh_if_changed(self, row: dict) -> None:
+    def refresh_if_changed(self, row: dict) -> str:
+        """Verify the stored fingerprint against the source, and return it.
+
+        The caller gets the value it just paid for: walking the source and
+        hashing a sampled 32 MB is the whole cost, and a submit that needed the
+        fingerprint for its cache key used to measure the source a second time
+        in the same request.
+        """
         try:
             source = validate_local_path(row["source_path"], field="dataset source path")
             current = compute_fingerprint(source, row["number_of_frames"], use_cache=False)
@@ -684,6 +696,7 @@ class DatasetService:
                 f"dataset changed on disk: {row['source_path']}",
                 {"dataset_id": row["id"]},
             )
+        return current
 
     def _mark_runs_stale(self, dataset_id: str, reason: str) -> None:
         """Invalidate old descriptor/analysis runs without deleting history."""
