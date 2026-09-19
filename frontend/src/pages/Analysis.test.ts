@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { displayableDescriptorRuns, hasColorByData, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
+import { displayableDescriptorRuns, hasColorByData, narrowedArrays, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
 import type { RunRow } from "../types/protocol";
 
 describe("Analysis preview mapping", () => {
@@ -39,6 +39,17 @@ describe("Analysis preview mapping", () => {
     expect(points[1]).toMatchObject({ energy_per_atom: null, force_max: null, volume: null });
     expect(hasColorByData(points)).toBe(true);
     expect(hasColorByData(normalizePoints({ analysis_id: "ana-test", points: [{ i: 0, frame: 0, x: 1, y: 1 }] }))).toBe(false);
+  });
+
+  it("reports which arrays arrived narrower than the chart asked for", () => {
+    // A column-truncated matrix is otherwise indistinguishable from a genuinely
+    // narrow one, and every chart built from it would read as complete.
+    expect(narrowedArrays([
+      { array: "coords", truncated: false },
+      { array: "similarity_matrix", truncated: true },
+      { array: "correlation_matrix", truncated: true },
+    ])).toEqual(["correlation_matrix", "similarity_matrix"]);
+    expect(narrowedArrays([{ array: "coords", truncated: false }])).toEqual([]);
   });
 
   it("maps logical sample selections to displayed positions after preview sampling", () => {

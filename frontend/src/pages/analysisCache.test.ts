@@ -6,6 +6,7 @@ const value = (size: number): CachedAnalysis => ({
   points: [],
   selectedIndices: [],
   arrays: { values: ["x".repeat(size)] },
+  narrowed: [],
 });
 
 describe("analysis cache", () => {

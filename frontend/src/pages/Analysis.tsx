@@ -54,7 +54,7 @@ import {
 import { useT } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import SaveViewModal from "../components/SaveViewModal";
-import { hasColorByData, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
+import { hasColorByData, narrowedArrays, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
 import AnalysisResultVisualization from "./analysisVisualizations";
 import { getAnalysisMethodGuide } from "./analysisMethodGuides";
 import { HIGH_CONTRAST_COLORSCALE, overviewLayout, plotData } from "./analysisChartKit";
@@ -189,6 +189,7 @@ export default function Analysis() {
   const [perturbationMetric, setPerturbationMetric] = useState("euclidean");
   const [tsnePerplexity, setTsnePerplexity] = useState(30);
   const [overviewArrays, setOverviewArrays] = useState<NumericArrays>({});
+  const [overviewArraysNarrowed, setOverviewArraysNarrowed] = useState<string[]>([]);
   const [overviewArraysBusy, setOverviewArraysBusy] = useState(false);
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
   const activeNavModule = useMemo(() => analysisNavModuleForView(tab, overviewAnalysis, coverageMode), [coverageMode, overviewAnalysis, tab]);
@@ -444,6 +445,7 @@ export default function Analysis() {
     const arrayNames = ARTIFACT_ARRAYS[kind] ?? [];
     if (!analysisId || !arrayNames.length) {
       setOverviewArrays({});
+      setOverviewArraysNarrowed([]);
       setOverviewArraysBusy(false);
       return;
     }
@@ -453,6 +455,7 @@ export default function Analysis() {
     const missingArrays = arrayNames.filter((name) => !Object.prototype.hasOwnProperty.call(cachedArrays, name));
     if (!missingArrays.length) {
       setOverviewArrays(cachedArrays);
+      setOverviewArraysNarrowed(cached?.narrowed ?? []);
       setOverviewArraysBusy(false);
       return;
     }
@@ -466,6 +469,7 @@ export default function Analysis() {
         const loadAll = (kind === "effective_dimension" && name === "explained_variance") || kind === "trajectory";
         const values: unknown[] = [];
         let offset = 0;
+        let truncated = false;
         while (true) {
           const chunk = await ipc.request<AnalysisChunk>("analysis.chunk", {
             analysis_id: analysisId,
@@ -475,13 +479,14 @@ export default function Analysis() {
             column_end: 2_000,
           });
           values.push(...chunk.data);
+          truncated = truncated || chunk.truncated;
           if (!loadAll) break;
           const nextOffset = Number(chunk.next_offset);
           const total = Number(chunk.shape?.[0]);
           if (!chunk.data.length || !Number.isFinite(nextOffset) || nextOffset <= offset || (Number.isFinite(total) && nextOffset >= total)) break;
           offset = nextOffset;
         }
-        return [name, values] as const;
+        return { array: name, values, truncated } as const;
       } catch {
         // Stay "missing" rather than caching an empty array: hasOwnProperty is
         // what counts as loaded, so [] told every later visit that a result
@@ -491,16 +496,22 @@ export default function Analysis() {
       }
     })).then((entries) => {
       if (disposed) return;
-      const loaded = entries.filter((entry): entry is readonly [string, unknown[]] => entry !== null);
-      const arrays = { ...cachedArrays, ...Object.fromEntries(loaded) };
+      const loaded = entries.filter((entry): entry is { array: string; values: unknown[]; truncated: boolean } => entry !== null);
+      const arrays = { ...cachedArrays, ...Object.fromEntries(loaded.map((entry) => [entry.array, entry.values] as const)) };
       const current = analysisCache.get(analysisId);
+      const narrowed = narrowedArrays([
+        ...loaded,
+        ...Array.from(new Set([...(current?.narrowed ?? []), ...(cached?.narrowed ?? [])])).map((array) => ({ array, truncated: true })),
+      ]);
       analysisCache.set(analysisId, {
         preview: current?.preview ?? cached?.preview ?? preview,
         points: current?.points ?? cached?.points ?? normalizePoints(preview ?? { analysis_id: analysisId }),
         selectedIndices: current?.selectedIndices ?? cached?.selectedIndices ?? selectedIndicesFromPreview(preview ?? { analysis_id: analysisId }),
         arrays,
+        narrowed,
       });
       setOverviewArrays(arrays);
+      setOverviewArraysNarrowed(narrowed);
     }).finally(() => {
       if (!disposed) setOverviewArraysBusy(false);
     });
@@ -542,16 +553,19 @@ export default function Analysis() {
   const fetchAnalysisPoints = useCallback(async (id: string, source: "preview" | "pca"): Promise<CachedAnalysis> => {
     if (source === "pca") {
       const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: id });
-      return { preview: null, points: pcaPayloadPoints(payload), selectedIndices: [], arrays: {} };
+      return { preview: null, points: pcaPayloadPoints(payload), selectedIndices: [], arrays: {}, narrowed: [] };
     }
     const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: id, limit: 20_000 });
-    return { preview: result, points: normalizePoints(result), selectedIndices: selectedIndicesFromPreview(result), arrays: {} };
+    return { preview: result, points: normalizePoints(result), selectedIndices: selectedIndicesFromPreview(result), arrays: {}, narrowed: [] };
   }, []);
 
   // Cache + display: the single place a resolved analysis lands on screen.
   const commitAnalysis = useCallback((id: string, next: CachedAnalysis) => {
     const cached = analysisCache.get(id);
-    analysisCache.set(id, { ...next, arrays: cached?.arrays ?? next.arrays });
+    // Whatever arrays are kept are the ones `narrowed` describes, so the two
+    // travel together: a history load must not lose the notice that the cached
+    // matrix arrived column-truncated.
+    analysisCache.set(id, { ...next, arrays: cached?.arrays ?? next.arrays, narrowed: cached ? cached.narrowed : next.narrowed });
     setAnalysisId(id);
     setPreview(next.preview);
     setPoints(next.points);
@@ -1389,7 +1403,7 @@ export default function Analysis() {
 
           {tab === "projection" && <section className="analysis-card analysis-plot-card"><SectionHeading title={t("DESCRIPTOR SPACE")} meta={`${t("{n} preview points", { n: points.length.toLocaleString() })}${selectedIndices.length ? t(" · {n} selected", { n: selectedIndices.length }) : ""}`} />{points.length ? <div className="analysis-plot-frame">{plot}</div> : <Empty description={t("Run PCA, UMAP, or t-SNE to populate the Plotly canvas.")} />}</section>}
           {legacyOverview && <OverviewResultVisualization preview={preview} arrays={overviewArrays} loading={overviewArraysBusy} analysisId={analysisId} />}
-          {tab !== "projection" && !legacyOverview && <AnalysisResultVisualization preview={preview} arrays={overviewArrays} points={points} loading={overviewArraysBusy} selectedIndices={selectedIndices} onSelect={handlePoint} />}
+          {tab !== "projection" && !legacyOverview && <AnalysisResultVisualization preview={preview} arrays={overviewArrays} narrowed={overviewArraysNarrowed} points={points} loading={overviewArraysBusy} selectedIndices={selectedIndices} onSelect={handlePoint} />}
           {tab !== "projection" && selectedFrames.length > 0 && (
             <section className="analysis-card">
               <Space wrap>

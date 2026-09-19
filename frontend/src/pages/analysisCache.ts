@@ -7,6 +7,8 @@ export type CachedAnalysis = {
   points: AnalysisPoint[];
   selectedIndices: number[];
   arrays: AnalysisArrays;
+  /** arrays whose chunk arrived narrower than the view asked for */
+  narrowed: string[];
 };
 
 export const MAX_ANALYSIS_CACHE_ENTRIES = 5;

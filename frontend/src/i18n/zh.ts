@@ -599,6 +599,7 @@ export const zhDict: Record<string, string> = {
   // analysisVisualizations
   "Purpose-built visual summary": "专用可视化摘要",
   "Loading bounded analysis arrays…": "正在加载有界分析数组…",
+  "Some arrays were narrowed to fit one response: {names}": "部分数组为适配单次响应已截窄：{names}",
   "No neighbors were returned.": "未返回近邻结果。",
   "Neighbors": "近邻数",
   "Ranked nearest descriptor samples": "最近邻描述符样本排行",

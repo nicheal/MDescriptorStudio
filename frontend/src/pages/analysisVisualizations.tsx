@@ -13,6 +13,8 @@ export type AnalysisArrays = Record<string, unknown[]>;
 type Props = {
   preview: AnalysisPreview | null;
   arrays: AnalysisArrays;
+  /** arrays that arrived with fewer columns than the view asked for */
+  narrowed?: string[];
   points: AnalysisPoint[];
   loading: boolean;
   selectedIndices: number[];
@@ -51,7 +53,7 @@ const SENSITIVITY_METRIC_LABELS: Record<string, Pair> = {
 const COLORS = ["#0F6CBD", "#F7630C", "#107C10", "#8764B8", "#D13438", "#00B7C3", "#C239B3"];
 
 export default function AnalysisResultVisualization(props: Props) {
-  const { preview, loading } = props;
+  const { preview, loading, narrowed } = props;
   const { t, tr } = useT();
   if (!preview) return null;
   const kind = String(preview.kind ?? "");
@@ -62,6 +64,13 @@ export default function AnalysisResultVisualization(props: Props) {
         <Typography.Text strong>{tr(TITLES[kind])}</Typography.Text>
         <Typography.Text type="secondary">{t("Purpose-built visual summary")}</Typography.Text>
       </div>
+      {/* A matrix that arrived column-truncated looks exactly like a narrower
+          matrix, and the charts built from it would be read as complete. */}
+      {narrowed && narrowed.length > 0 && (
+        <Typography.Text type="warning" style={{ display: "block", marginBottom: 8 }}>
+          {t("Some arrays were narrowed to fit one response: {names}", { names: narrowed.join(", ") })}
+        </Typography.Text>
+      )}
       {loading ? <NoData message={t("Loading bounded analysis arrays…")} /> : <Visualization {...props} kind={kind} />}
     </section>
   );

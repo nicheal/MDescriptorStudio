@@ -56,3 +56,15 @@ export function selectedDisplayIndices(points: Pick<AnalysisPoint, "i">[], selec
   const selected = new Set(selectedIndices);
   return points.flatMap((point, displayIndex) => selected.has(point.i) ? [displayIndex] : []);
 }
+
+/**
+ * Which artifact arrays arrived narrower than the chart asked for.
+ *
+ * The backend keeps one `analysis.chunk` reply inside the protocol's frame cap
+ * by shortening the column window and answering `truncated: true`. A matrix
+ * chart cannot tell that apart from a genuinely narrow artifact, so the names
+ * have to be carried up to the card that draws it.
+ */
+export function narrowedArrays(replies: readonly { array: string; truncated: boolean }[]): string[] {
+  return replies.filter((reply) => reply.truncated).map((reply) => reply.array).sort();
+}
