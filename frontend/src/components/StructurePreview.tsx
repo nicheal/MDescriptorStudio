@@ -37,7 +37,13 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
       try {
         if (!element) return;
         const viewer = await createStructureViewer(element);
-        if (cancelled) return;
+        if (cancelled) {
+          // The cleanup above already ran with an empty ref, so this is the only
+          // place the just-created viewer can be released. Each WebGL context
+          // left behind eats one of the ~16 the browser allows.
+          disposeStructureViewer(element, viewer);
+          return;
+        }
         viewerRef.current = viewer;
         setViewerReady(true);
       } catch (error) {

@@ -300,7 +300,11 @@ export function collectDefaults(schema: Record<string, ParamSchema>, elementOpti
   for (const [k, meta] of Object.entries(schema)) {
     if (meta.type === "species") {
       out[k] = [...elementOptions];
-    } else if (meta.required && meta.type !== "model" && meta.default !== undefined) {
+    } else if (meta.type !== "model" && meta.default !== undefined) {
+      // Seeded for every parameter that shows a default, not only the required
+      // ones: the controls display schema.default for an untouched optional
+      // field, so omitting it here submitted something other than what the form
+      // showed — and made the cache key disagree with the screen.
       out[k] = meta.default;
     }
   }

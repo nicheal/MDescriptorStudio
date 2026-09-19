@@ -390,7 +390,13 @@ export default function Explore() {
         // Orthographic projection so crystal structures keep parallel cell
         // edges (no perspective foreshortening) while rotating.
         const viewer = await createStructureViewer(element, { orthographic: true });
-        if (cancelled) return;
+        if (cancelled) {
+          // Cleanup already ran with an empty ref, so only this branch can
+          // release a viewer that finished loading after the page moved on;
+          // a leaked context is one of the ~16 the browser allows.
+          disposeStructureViewer(element, viewer);
+          return;
+        }
         viewerRef.current = viewer;
         setViewerReady(true);
       } catch (e) {

@@ -54,7 +54,7 @@ import {
 import { useT } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import SaveViewModal from "../components/SaveViewModal";
-import { normalizePoints, selectedDisplayIndices } from "./analysisPreview";
+import { hasColorByData, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
 import AnalysisResultVisualization from "./analysisVisualizations";
 import { getAnalysisMethodGuide } from "./analysisMethodGuides";
 import { HIGH_CONTRAST_COLORSCALE, overviewLayout, plotData } from "./analysisChartKit";
@@ -289,17 +289,23 @@ export default function Analysis() {
   const analysisContextRunId = crossDatasetModule ? referenceRunId : selectedRun;
   const selectedPoint = inspectedPoint ?? points.find((point) => point.i === selectedIndices[0]) ?? null;
   // Dataset frames behind the current selection, for saving a purification
-  // view: sample i maps to its frame via the preview rows (exact in atom mode;
-  // structure-mode rows fall back to i === frame).
+  // view. The scatter and the preview rows both name the frame of a sample
+  // index; an index neither names has no frame we may claim, so it is dropped
+  // rather than saved as its own number — under a Scope, or in atom mode, the
+  // two are different things and the wrong one silently changes the dataset.
   const selectedFrames = useMemo(() => {
     if (tab === "projection") return [];
     const frameOf = new Map<number, number>();
-    (preview?.selected ?? []).forEach((row) => {
+    for (const point of points) frameOf.set(point.i, point.frame);
+    for (const row of preview?.selected ?? []) {
       const index = Number(row.i ?? row.sample_index);
-      if (Number.isInteger(index) && index >= 0) frameOf.set(index, Number(row.frame ?? index));
-    });
-    return [...new Set(selectedIndices.map((index) => frameOf.get(index) ?? index))].sort((a, b) => a - b);
-  }, [preview, selectedIndices, tab]);
+      const frame = Number(row.frame);
+      if (Number.isInteger(index) && index >= 0 && Number.isInteger(frame)) frameOf.set(index, frame);
+    }
+    const unmapped = selectedIndices.filter((index) => !frameOf.has(index));
+    if (unmapped.length) console.warn("saving a view without a frame for", unmapped.length, "selected sample(s)");
+    return [...new Set(selectedIndices.map((index) => frameOf.get(index)).filter((frame): frame is number => frame !== undefined))].sort((a, b) => a - b);
+  }, [points, preview, selectedIndices, tab]);
 
   // Whether the (module, input, parameter combination) result is already computed
   // and can be re-displayed without rerunning. One parameter can be probed
@@ -476,11 +482,16 @@ export default function Analysis() {
         }
         return [name, values] as const;
       } catch {
-        return [name, []] as const;
+        // Stay "missing" rather than caching an empty array: hasOwnProperty is
+        // what counts as loaded, so [] told every later visit that a result
+        // that merely failed once had been fetched — the panel then reported
+        // the matrix as unavailable until the app was restarted.
+        return null;
       }
     })).then((entries) => {
       if (disposed) return;
-      const arrays = { ...cachedArrays, ...Object.fromEntries(entries) };
+      const loaded = entries.filter((entry): entry is readonly [string, unknown[]] => entry !== null);
+      const arrays = { ...cachedArrays, ...Object.fromEntries(loaded) };
       const current = analysisCache.get(analysisId);
       analysisCache.set(analysisId, {
         preview: current?.preview ?? cached?.preview ?? preview,
@@ -1070,7 +1081,7 @@ export default function Analysis() {
     }
     const indices = selectedIndices.length ? selectedIndices : points.map((point) => point.i);
     try {
-      const response = await ipc.request<AnalysisJobResponse>("analysis.export", { run_id: selectedRun, indices, mode, format: exportFormat, output_path: exportPath.trim(), ...(exportFormat === "report" && analysisId ? { analysis_id: analysisId } : {}) });
+      const response = await ipc.request<AnalysisJobResponse>("analysis.export", { run_id: selectedRun, indices, mode, format: exportFormat, output_path: exportPath.trim(), ...(viewId ? { view_id: viewId } : {}), ...(exportFormat === "report" && analysisId ? { analysis_id: analysisId } : {}) });
       if (!response.job_id) {
         message.success(t("Export loaded from cache"));
         return;
@@ -1344,7 +1355,7 @@ export default function Analysis() {
                 <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.moduleKey === activeNavModule?.key && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={crossDatasetModule ? !crossInputsReady : !selectedRun} onClick={() => void runTabAnalysis()}>{t("Run {name}", { name: tab === "projection" ? projection.toUpperCase() : activeModuleLabel })}</Button>
                 {/* Only the Projection canvas recolors by property; every
                     other module owns its coloring inside the result view. */}
-                {tab === "projection" && points.length > 0 && <Select size="small" style={{ width: 132 }} aria-label={t("Color by")} value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy / atom") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
+                {tab === "projection" && points.length > 0 && hasColorByData(points) && <Select size="small" style={{ width: 132 }} aria-label={t("Color by")} value={colorBy} onChange={setColorBy} options={[{ value: "none", label: t("No color") }, { value: "energy", label: t("Energy / atom") }, { value: "force_max", label: t("Max |F|") }, { value: "volume", label: t("Volume") }]} />}
                 {overviewModuleHint}
               </Space>
               <Button

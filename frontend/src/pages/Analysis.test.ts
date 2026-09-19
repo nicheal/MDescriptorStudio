@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { displayableDescriptorRuns, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
+import { displayableDescriptorRuns, hasColorByData, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
 import type { RunRow } from "../types/protocol";
 
 describe("Analysis preview mapping", () => {
@@ -20,8 +20,25 @@ describe("Analysis preview mapping", () => {
 
   it("uses stable defaults for missing sample identity", () => {
     expect(normalizePoints({ analysis_id: "ana-test", points: [{ x: 1, y: 2 }] })).toEqual([
-      { i: 0, frame: 0, row: undefined, sample_id: undefined, x: 1, y: 2, label: undefined, score: undefined, distance: undefined, element: undefined, cluster: undefined },
+      { i: 0, frame: 0, row: undefined, sample_id: undefined, x: 1, y: 2, label: undefined, score: undefined, distance: undefined, element: undefined, cluster: undefined, energy_per_atom: null, force_max: null, volume: null },
     ]);
+  });
+
+  it("carries the per-frame properties the projection canvas colors by", () => {
+    // The scatter reads these three off the normalized point, so dropping them
+    // here left "Color by" a control that changed nothing on screen.
+    const points = normalizePoints({
+      analysis_id: "ana-test",
+      points: [
+        { i: 0, frame: 4, x: 1, y: 1, energy_per_atom: -3.5, force_max: null, volume: 12.25 },
+        { i: 1, frame: 5, x: 2, y: 2 },
+      ],
+    });
+
+    expect(points[0]).toMatchObject({ energy_per_atom: -3.5, force_max: null, volume: 12.25 });
+    expect(points[1]).toMatchObject({ energy_per_atom: null, force_max: null, volume: null });
+    expect(hasColorByData(points)).toBe(true);
+    expect(hasColorByData(normalizePoints({ analysis_id: "ana-test", points: [{ i: 0, frame: 0, x: 1, y: 1 }] }))).toBe(false);
   });
 
   it("maps logical sample selections to displayed positions after preview sampling", () => {

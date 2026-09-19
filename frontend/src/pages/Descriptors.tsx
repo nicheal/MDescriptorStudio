@@ -152,10 +152,13 @@ export default function Descriptors() {
 
   const datasetElements = d?.elements;
   const elementOptions = useMemo(() => datasetElements ?? [], [datasetElements]);
+  // Compare by content: any dataset refresh replaces the array, and resetting
+  // the form then threw away parameters the user had already edited.
+  const elementKey = elementOptions.join(",");
 
   useEffect(() => {
-    setValues(schema ? collectDefaults(schema.parameters, elementOptions) : {});
-  }, [selected, schema, d?.id, elementOptions]);
+    setValues(schema ? collectDefaults(schema.parameters, elementKey ? elementKey.split(",") : []) : {});
+  }, [selected, schema, d?.id, elementKey]);
 
   // ADR-11 precheck: disable descriptors incompatible with the dataset's periodicity
   const incompatibleReasons = useMemo(() => {
