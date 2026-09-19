@@ -259,8 +259,20 @@
 - `c0812d1` — `backend.ready` 与 `system.info` 的七个版本字段收进 `_version_payload()`。
 - `21d6755` — 删 `Explore` 里第二份 energy/forces/virial 标签表（`util/properties.ts` 的注释正是在警告这件事）、删 `workspace.activeDataset`（唯一"消费者"是下面那段解释为何别用它的 docstring）。
 
+### 第五批（mock 的校验语义 — `abbb9b8`）
+
+验证：**pytest 322 passed / 1 skipped**（新增 3 条绑定测试）、**vitest 140**、**eslint + `tsc -b` 干净**、**Playwright 36 passed**（新增 4 条）。
+
+`preview.tsx` 以前对未知 id/check/数组名一律回数据：空行表、`stats: null`，最糟的是任何拼错的 `job.get` id 都会拿到一条凭空造的 RUNNING 作业——真后端一帧 `JOB_NOT_FOUND` 就解决的事，在 e2e 里表现为一个永远转圈的圈。于是渲染端所有错误分支（提示、重试、not-found 占位）在唯一真正驱动渲染器的这套用例里不可达。
+
+现在 mock 按自己的表校验（数据集、视图、已发出的 job id、描述符名、设置白名单、健康检查项、分析行、该行发布的数组），并抛 `MockError` 携带真后端会发的错误码；已完成的 job 会答成 completed 而不是永远 running，于是 `watchJob` 依赖的"漏事件后靠轮询收敛"路径第一次在浏览器侧可测。`replyFor()` 一处构造响应帧，延迟派发与测试钩子共用，测试看到的与页面看到的同形。
+
+双向钉住：`mock-validation.spec.ts` 断言 13 种拒绝 + 合法请求仍回数据；`test_mock_backend_vocabulary.py` 把 `SETTING_KEYS` 绑到 `main._ALLOWED_SETTINGS`、`FINDINGS_CHECKS` 绑到 `dataset_service.findings` 的 `known` 集、把 mock 能抛的每个码绑到 `errors.py` 里真会发的常量——校验表一旦漂移就在 pytest 里红，而不是变成浏览器里一个莫名的拒绝。
+
+仍然开着的 mock 保真度问题（按性价比排序）：`analysis.*` 提交完全不读参数（模式/枚举/跨集特征空间一致性都测不到）；`mockAnalysisArrays` 是全局的、由 `analysis.preview` 的副作用写入，所以一个分析仍可能被喂另一个分析的数组（本轮至少让未知 `analysis_id` 与未知数组名开始报错）；`dataset.findings`/`statistics` 永远 `recalculating: false`，产不出真后端那个多带 `job_id` 的第二形状。
+
 ### 剩余清单（按"要不要你先定调"分）
 
 需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
 
-不需要定调、可作为下一批：`analysis.chunk` 的值预算（现在超限是整请求报错，不是截断——要么实现预算要么让 `truncated` 显式化，配套要动前端分页）；收紧说谎的 DTO 类型（`types/protocol.ts` 的 `details?` 后端故意不发、`error_id` 全仓无人消费而 12 处手抄 `${code}: ${message}`、`Stats` 那批"legacy 可选"字段已被后端 `required` 变成不可能，进而养出 `HealthFindingsDrawer` 里不可达且无防环的 rescan 分支）；mock 补上校验语义（未知 id/check/数组名一律回错误帧，替掉 `preview.tsx:1096` 凭空造 RUNNING 作业那类）；`dataset_service.get` 一次请求两遍全量指纹采样与 legacy 分支里算了不用的 `current`。
+不需要定调、可作为下一批：`analysis.chunk` 的值预算（现在超限是整请求报错，不是截断——要么实现预算要么让 `truncated` 显式化，配套要动前端分页）；收紧说谎的 DTO 类型（`types/protocol.ts` 的 `details?` 后端故意不发、`error_id` 全仓无人消费而 12 处手抄 `${code}: ${message}`——现在 mock 会真发错误码了，这条终于可以在 e2e 里验、`Stats` 那批"legacy 可选"字段已被后端 `required` 变成不可能，进而养出 `HealthFindingsDrawer` 里不可达且无防环的 rescan 分支）；`dataset_service.get` 一次请求两遍全量指纹采样与 legacy 分支里算了不用的 `current`。
