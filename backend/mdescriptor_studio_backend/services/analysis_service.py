@@ -17,6 +17,7 @@ from ..analysis.sampling import group_sizes, sqrt_quota
 from .analysis_helpers import (
     ANALYSIS_ALGORITHM_VERSION,
     _ANALYSIS_SCHEMA_VERSION,
+    _MAX_CHUNK_VALUES,
     _MAX_PREVIEW_POINTS,
     _block_names,
 )
@@ -39,6 +40,22 @@ from .job_service import JobService
 from ..security import UnsafePathError, json_membership
 
 log = logging.getLogger(__name__)
+
+
+def _column_window(rows: int, column_start: int, column_end: int, columns: int) -> tuple[int, int, bool]:
+    """The column slice one chunk may carry, and whether that had to be cut.
+
+    Rows and columns were each bounded before; their product was not. The result
+    view asks for 20 000 rows and column_end 2 000, so a wide artifact turned
+    into 40 million values that the encoder then refused to serialise - one
+    INTERNAL_ERROR for the whole request instead of a page of data. Staying
+    within _MAX_CHUNK_VALUES keeps the frame inside the protocol's line cap, and
+    `truncated` says out loud that the caller did not get the width it asked for.
+    """
+    end = min(columns, max(column_start, column_end))
+    affordable = max(1, _MAX_CHUNK_VALUES // max(1, rows))
+    width = min(end - column_start, affordable)
+    return column_start, column_start + width, width < end - column_start
 
 
 # Every analysis_runs column except preview_json. analysis.list is the history
@@ -224,13 +241,12 @@ class AnalysisService(
             offset = min(offset, array.shape[0])
             stop = min(offset + limit, array.shape[0])
             chunk = array[offset:stop]
-        # Rows are bounded by limit (at most _MAX_PREVIEW_POINTS) and columns by
-        # column_start/column_end, each on its own - the product of the two is
-        # not, so a caller can still ask for a chunk too big to encode. That
-        # request fails as an error frame from Server._encode rather than
-        # streaming; paging a wide artifact is the caller's job.
+        # Rows come from limit (at most _MAX_PREVIEW_POINTS); the column window
+        # below keeps the product inside one encodable frame and reports when it
+        # had to cut the width the caller asked for.
+        truncated = False
         if chunk.ndim == 2:
-            col_end = min(chunk.shape[1], max(column_start, column_end))
+            column_start, col_end, truncated = _column_window(stop - offset, column_start, column_end, chunk.shape[1])
             chunk = chunk[:, column_start:col_end]
         values = chunk.tolist()
         return {
@@ -240,6 +256,7 @@ class AnalysisService(
             "next_offset": stop,
             "shape": list(array.shape),
             "dtype": str(array.dtype),
+            "truncated": truncated,
             "data": values,
         }
 

@@ -19,6 +19,45 @@ from mdescriptor_studio_backend.datasets.statistics import _int_hist
 from mdescriptor_studio_backend.errors import AppError
 
 
+def test_meta_skips_the_fingerprint_it_cannot_use(tmp_path: Path, monkeypatch) -> None:
+    # A row stored before fingerprint versioning is answered entirely by the
+    # legacy branch of DatasetService.meta: cache_valid is False and the status
+    # is MIGRATING regardless. Measuring the versioned fingerprint anyway cost a
+    # full directory walk plus a 32 MB sample on every read of such a dataset.
+    from mdescriptor_studio_backend.services import dataset_service as ds_module
+    from mdescriptor_studio_backend.services.dataset_service import DatasetService
+    from mdescriptor_studio_backend.storage.database import Database
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        ds_module,
+        "compute_fingerprint",
+        lambda source, frames, use_cache=True: calls.append("versioned") or "v3:abc123",
+    )
+
+    db = Database(tmp_path / "database.sqlite")
+    # source_path is unique per dataset row, so the two generations get their own file
+    for label, fingerprint in (("old", "fingerprint"), ("new", "v3:abc123")):
+        source = tmp_path / f"{label}.extxyz"
+        write_extxyz(source, n_frames=2, natoms=2)
+        db.execute(
+            "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties,"
+            " periodicity, fingerprint, file_size, created_at)"
+            " VALUES (?, 'ds', 'extxyz', ?, 2, '[]', '{}', '{}', ?, 0, '2026-01-01T00:00:00+00:00')",
+            (f"ds_{label}", str(source), fingerprint),
+        )
+    service = DatasetService(db, adapter=None, jobs=None, data_dir=tmp_path)
+
+    legacy_meta = service.meta(service.row_or_raise("ds_old"))
+    assert calls == [], "a pre-versioning row must not pay for the versioned walk"
+    assert legacy_meta["fingerprint_status"] == "MIGRATING"
+    assert legacy_meta["cache_valid"] is False
+
+    assert service.meta(service.row_or_raise("ds_new"))["fingerprint_status"] == "CURRENT"
+    assert calls == ["versioned"], "a versioned row must still verify its source"
+    db.close()
+
+
 def test_detect_and_scan_deepmd(tmp_path: Path) -> None:
     d = tmp_path / "d"
     write_deepmd(d, 5, 64, seed=3)

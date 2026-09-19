@@ -106,15 +106,16 @@ class DatasetService:
             source = validate_local_path(row["source_path"], field="dataset source path")
         except (TypeError, UnsafePathError):
             source = None
-        try:
-            current = (
-                compute_fingerprint(source, row["number_of_frames"])
-                if source is not None
-                else None
-            )
-        except (OSError, TypeError, ValueError):
-            current = None
         legacy = not is_versioned_fingerprint(row.get("fingerprint"))
+        current: str | None = None
+        # A pre-versioning row is answered entirely by the legacy branch below,
+        # so measuring the source for the versioned fingerprint would be a full
+        # directory walk and 32 MB sample that nothing reads.
+        if not legacy and source is not None:
+            try:
+                current = compute_fingerprint(source, row["number_of_frames"])
+            except (OSError, TypeError, ValueError):
+                current = None
         if legacy and source is not None:
             try:
                 legacy_current = compute_legacy_fingerprint(source, row["number_of_frames"])

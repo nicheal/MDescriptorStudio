@@ -372,6 +372,9 @@ export interface AnalysisChunk {
   next_offset: number;
   shape: number[];
   dtype: string;
+  /** true when the reply carries fewer columns than column_end asked for, so a
+   *  wide artifact stays inside one protocol frame */
+  truncated: boolean;
   data: unknown[];
 }
 

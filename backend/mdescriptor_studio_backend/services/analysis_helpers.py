@@ -27,6 +27,10 @@ MANAGED_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
 _ANALYSIS_SCHEMA_VERSION = 1
 ANALYSIS_ALGORITHM_VERSION = "studio-analysis-4"
 _MAX_PREVIEW_POINTS = 20_000
+# Values one analysis.chunk reply may carry. A float64's shortest repr is at
+# most 24 characters (1.7976931348623157e+308), so this stays under the 8 MiB
+# frame cap with room for the row brackets and separators.
+_MAX_CHUNK_VALUES = 262_144
 
 COMPOSITE_BLOCKS = (
     "descriptor",

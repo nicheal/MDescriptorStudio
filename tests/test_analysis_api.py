@@ -1246,6 +1246,25 @@ def test_artifact_rows_page_memory_mapped_arrays(tmp_path: Path) -> None:
     db.close()
 
 
+def test_column_window_keeps_a_chunk_encodable() -> None:
+    from mdescriptor_studio_backend.services.analysis_helpers import _MAX_CHUNK_VALUES
+    from mdescriptor_studio_backend.services.analysis_service import _column_window
+
+    # The width a request asked for is kept while it fits one frame.
+    assert _column_window(100, 0, 2_000, 400) == (0, 400, False)
+    # A wide array with many rows cannot: the answer is a narrower window that
+    # says so, not an unserialisable frame that fails the whole request.
+    start, end, truncated = _column_window(20_000, 0, 2_000, 2_000)
+    assert truncated is True
+    assert 0 < end - start <= _MAX_CHUNK_VALUES // 20_000
+    # Column paging continues from where the last window stopped.
+    start, end, truncated = _column_window(10, 500, 1_000, 2_000)
+    assert (start, end, truncated) == (500, 1_000, False)
+    # Degenerate widths still return at least one column, so a page never
+    # becomes empty and indistinguishable from "nothing left to read".
+    assert _column_window(1_000_000, 0, 10, 10)[1] == 1
+
+
 def test_an_unpageable_artifact_does_not_reload_the_descriptor_matrix(tmp_path: Path) -> None:
     # An artifact that stores no pageable array has no rows to page: every branch
     # of the preview builder is gated on one being present. Rebuilding anyway
