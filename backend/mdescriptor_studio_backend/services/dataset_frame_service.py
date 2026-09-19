@@ -12,7 +12,7 @@ import numpy as np
 from ..datasets.ghosts import DEFAULT_BOND_CUTOFF, periodic_boundary_ghosts
 from ..datasets.statistics import frame_force_max
 from ..errors import AppError, INVALID_DATASET, INVALID_PARAMS
-from .dataset_service import _symbol, formula_of
+from .dataset_service import formula_of, symbol_of
 
 MIN_BOND_CUTOFF = 0.1
 MAX_BOND_CUTOFF = 10.0
@@ -45,15 +45,15 @@ class DatasetFrameService:
         if not isinstance(index, int) or isinstance(index, bool):
             raise AppError(INVALID_PARAMS, "'index' (int) is required")
         bond_cutoff = _bond_cutoff(params.get("bond_cutoff"))
-        row = self.datasets._row(ds_id)
-        adapter = self.datasets._adapter_for(row)
+        row = self.datasets.row_or_raise(ds_id)
+        adapter = self.datasets.adapter_for(row)
         try:
             f = adapter.get_frame(index)
         except AppError:
             raise
         except Exception as exc:  # noqa: BLE001 - parse/data errors are dataset faults
             raise AppError(INVALID_DATASET, f"cannot read frame {index}: {exc}") from exc
-        symbols = [_symbol(z) for z in f.numbers.tolist()]
+        symbols = [symbol_of(z) for z in f.numbers.tolist()]
         positions = np.asarray(f.positions)
         rows = []
         for i, (s, pos) in enumerate(zip(symbols, positions)):

@@ -51,7 +51,7 @@ log = logging.getLogger(__name__)
 FINDINGS_ROW_LIMIT = 1000
 
 
-def _symbol(z: int) -> str:
+def symbol_of(z: int) -> str:
     return _Z_TO_SYMBOL.get(int(z), f"Z{z}")
 
 
@@ -95,13 +95,13 @@ class DatasetService:
         self._active_scans: dict[str, str] = {}
 
     # -- helpers -----------------------------------------------------------
-    def _row(self, dataset_id: str) -> dict:
+    def row_or_raise(self, dataset_id: str) -> dict:
         row = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (dataset_id,))
         if row is None:
             raise AppError(DATASET_NOT_FOUND, f"dataset {dataset_id} does not exist")
         return row
 
-    def _meta(self, row: dict) -> dict:
+    def meta(self, row: dict) -> dict:
         try:
             source = validate_local_path(row["source_path"], field="dataset source path")
         except (TypeError, UnsafePathError):
@@ -154,7 +154,7 @@ class DatasetService:
             "lineage": lineage,
         }
 
-    def _adapter_for(self, row: dict):
+    def adapter_for(self, row: dict):
         # cache keyed by the registry fingerprint: a recompute that converges the
         # fingerprint naturally rebuilds; otherwise entries live for the session
         try:
@@ -181,7 +181,7 @@ class DatasetService:
     # -- IPC methods -----------------------------------------------------------
     def list(self, params: dict) -> list[dict]:
         rows = self.db.query("SELECT * FROM datasets ORDER BY created_at")
-        return [self._meta(r) for r in rows]
+        return [self.meta(r) for r in rows]
 
     def register(self, params: dict) -> dict:
         raw_path = params.get("path")
@@ -325,15 +325,15 @@ class DatasetService:
             or any(ord(ch) < 0x20 for ch in name)
         ):
             raise AppError(INVALID_PARAMS, "dataset name is invalid")
-        row = self._row(params.get("id"))
+        row = self.row_or_raise(params.get("id"))
         self.db.execute(
             "UPDATE datasets SET name = ? WHERE id = ?", (name.strip(), row["id"])
         )
-        return self._meta(self._row(row["id"]))
+        return self.meta(self.row_or_raise(row["id"]))
 
     def remove(self, params: dict) -> dict:
         ds_id = params.get("id")
-        self._row(ds_id)
+        self.row_or_raise(ds_id)
         runs = self.db.query(
             "SELECT id, result_path FROM descriptor_runs WHERE dataset_id = ?", (ds_id,)
         )
@@ -417,8 +417,8 @@ class DatasetService:
         return validate_managed_path(self.data_dir / kind, stored, artifact_id)
 
     def get(self, params: dict) -> dict:
-        row = self._row(params.get("id"))
-        meta = self._meta(row)
+        row = self.row_or_raise(params.get("id"))
+        meta = self.meta(row)
         stats_row = self.db.query_one(
             "SELECT stats_json FROM dataset_statistics WHERE dataset_id = ?", (row["id"],)
         )
@@ -426,7 +426,7 @@ class DatasetService:
         return meta
 
     def statistics(self, params: dict) -> dict:
-        row = self._row(params.get("id"))
+        row = self.row_or_raise(params.get("id"))
         cached = self._cached_stats(row)
         if cached is not None:
             return {"recalculating": False, "job_id": None, "stats": cached}
@@ -435,7 +435,7 @@ class DatasetService:
 
     def rescan(self, params: dict) -> dict:
         """Force a full rescan (health panel button), even on a valid cache."""
-        row = self._row(params.get("id"))
+        row = self.row_or_raise(params.get("id"))
         return {"job_id": self._submit_recompute(row["id"])}
 
     def _cached_stats(self, row: dict) -> dict | None:
@@ -482,7 +482,7 @@ class DatasetService:
         Rows carry the original file index, so the UI can preview any flagged
         frame with dataset.frame and save it as a dataset view.
         """
-        row = self._row(params.get("id"))
+        row = self.row_or_raise(params.get("id"))
         check = params.get("check")
         known = {
             "missing_values",
@@ -514,7 +514,7 @@ class DatasetService:
         limit = params.get("limit", FINDINGS_ROW_LIMIT)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= FINDINGS_ROW_LIMIT:
             raise AppError(INVALID_PARAMS, f"'limit' must be an integer in [1, {FINDINGS_ROW_LIMIT}]")
-        adapter = self._adapter_for(row)
+        adapter = self.adapter_for(row)
         # the shortest interatomic distance only pays for itself on the
         # non-physical tab (the check's metric); other tabs skip the NN pass
         want_min_distance = check == "nonphysical_structures"
@@ -524,7 +524,7 @@ class DatasetService:
                 f = adapter.get_frame(idx)
             except Exception:  # noqa: BLE001 - unreadable frame: skip the row
                 continue
-            symbols = [_symbol(z) for z in f.numbers.tolist()]
+            symbols = [symbol_of(z) for z in f.numbers.tolist()]
             force_max = frame_force_max(f.forces)
             cell = np.asarray(f.cell, dtype=np.float64)
             det = abs(float(np.linalg.det(cell))) if np.isfinite(cell).all() else 0.0
@@ -579,7 +579,7 @@ class DatasetService:
                 if job is not None and job["status"] in ("QUEUED", "RUNNING"):
                     return active
                 self._active_scans.pop(ds_id, None)
-            row = self._row(ds_id)
+            row = self.row_or_raise(ds_id)
             # the on-disk files may have changed since registration: never reuse the
             # adapter built against the old content
             self._adapters.pop(ds_id, None)
@@ -590,7 +590,7 @@ class DatasetService:
                     source = validate_local_path(row["source_path"], field="dataset source path")
                 except UnsafePathError as exc:
                     raise AppError(INVALID_DATASET, "dataset source path is not a safe local path") from exc
-                adapter = self._adapter_for(row)
+                adapter = self.adapter_for(row)
                 total = max(len(adapter), 1)
                 count = 0
 

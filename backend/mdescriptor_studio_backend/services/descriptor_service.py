@@ -529,10 +529,10 @@ class DescriptorService:
         descriptor = self.adapter.build(name, parameters, **execution)
         log.info("compute %s: built, loading frames", run_id)
         if scope == "frame":
-            frames = [self.datasets._adapter_for(row).get_frame(frame_index)]
+            frames = [self.datasets.adapter_for(row).get_frame(frame_index)]
             total = 1
         else:
-            adapter = self.datasets._adapter_for(row)
+            adapter = self.datasets.adapter_for(row)
             frames = []
             total = max(len(adapter), 1)
             if total > _MAX_COMPUTE_FRAMES:

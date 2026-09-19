@@ -193,7 +193,7 @@ class AnalysisExportMixin:
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run["dataset_id"],))
         if dataset is None:
             raise AppError(EXPORT_FAILED, f"dataset {run['dataset_id']} does not exist")
-        adapter = self.datasets._adapter_for(dataset)
+        adapter = self.datasets.adapter_for(dataset)
         count = len(adapter)
         # Analysis selections are sample indices, not dataset frame indices.
         # Resolve them through the same identity table used to build previews;

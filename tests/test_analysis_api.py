@@ -144,7 +144,7 @@ def test_export_of_the_same_selection_to_two_paths_writes_both(tmp_path: Path) -
 
 def _stub_datasets():
     """The slice of DatasetService an export needs: an adapter and a staleness check."""
-    return SimpleNamespace(_adapter_for=lambda row: list(range(12)), refresh_if_changed=lambda row: None)
+    return SimpleNamespace(adapter_for=lambda row: list(range(12)), refresh_if_changed=lambda row: None)
 
 
 def test_export_resolves_the_selection_through_the_same_view_as_the_analysis(tmp_path: Path) -> None:
@@ -681,7 +681,7 @@ def test_frame_scoped_export_resolves_selected_sample_to_actual_frame(tmp_path: 
             return 8
 
     class _Datasets:
-        def _adapter_for(self, _dataset):
+        def adapter_for(self, _dataset):
             return _Adapter()
 
     service.datasets = _Datasets()
@@ -791,7 +791,7 @@ def test_structural_perturbation_service_recomputes_descriptor_sweep(tmp_path: P
         adapter = _ComputeAdapter()
 
         @staticmethod
-        def _adapter_for(_dataset):
+        def adapter_for(_dataset):
             return source_adapter
 
     jobs = _InlineJobs(db)
@@ -956,7 +956,7 @@ def _grouped_service(tmp_path: Path, frames: list[DatasetFrame]):
             return frames[index]
 
     class _Datasets:
-        def _adapter_for(self, _dataset):
+        def adapter_for(self, _dataset):
             return _Adapter()
 
     service.datasets = _Datasets()
@@ -1073,7 +1073,7 @@ def _composite_service(tmp_path: Path):
             return frames[index]
 
     class _Datasets:
-        def _adapter_for(self, _dataset):
+        def adapter_for(self, _dataset):
             return _Adapter()
 
     service.datasets = _Datasets()
@@ -1154,7 +1154,7 @@ def test_composite_sampling_requires_the_metadata_it_promises(tmp_path: Path) ->
             return frames[index]
 
     class _Datasets:
-        def _adapter_for(self, _dataset):
+        def adapter_for(self, _dataset):
             return _Adapter()
 
     service.datasets = _Datasets()

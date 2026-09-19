@@ -83,15 +83,15 @@ class DatasetViewService:
         self.jobs = datasets.jobs
 
     # -- view records --------------------------------------------------------
-    def _row(self, view_id: object) -> dict:
+    def row_or_raise(self, view_id: object) -> dict:
         row = self.db.query_one("SELECT * FROM dataset_views WHERE id = ?", (view_id,))
         if row is None:
             raise AppError(DATASET_NOT_FOUND, f"dataset view {view_id} does not exist")
         return row
 
-    def _meta(self, row: dict) -> dict:
-        dataset = self.datasets._row(row["dataset_id"])
-        dataset_meta = self.datasets._meta(dataset)
+    def meta(self, row: dict) -> dict:
+        dataset = self.datasets.row_or_raise(row["dataset_id"])
+        dataset_meta = self.datasets.meta(dataset)
         indices = json.loads(row["frame_indices_json"])
         return {
             "id": row["id"],
@@ -155,18 +155,18 @@ class DatasetViewService:
     def list(self, params: dict) -> list[dict]:
         dataset_id = params.get("dataset_id")
         if dataset_id:
-            self.datasets._row(dataset_id)
+            self.datasets.row_or_raise(dataset_id)
             rows = self.db.query(
                 "SELECT * FROM dataset_views WHERE dataset_id = ? ORDER BY created_at",
                 (dataset_id,),
             )
         else:
             rows = self.db.query("SELECT * FROM dataset_views ORDER BY created_at")
-        return [self._meta(row) for row in rows]
+        return [self.meta(row) for row in rows]
 
     def create(self, params: dict) -> dict:
-        dataset = self.datasets._row(params.get("dataset_id"))
-        if not self.datasets._meta(dataset)["cache_valid"]:
+        dataset = self.datasets.row_or_raise(params.get("dataset_id"))
+        if not self.datasets.meta(dataset)["cache_valid"]:
             raise AppError(DATASET_CHANGED, "dataset must be current before creating a view")
         indices = sorted(frame_indices(params.get("indices"), dataset["number_of_frames"]))
         view_id = self._insert(
@@ -176,10 +176,10 @@ class DatasetViewService:
             params.get("filter") or {"type": "explicit_indices"},
             indices,
         )
-        return self._meta(self._row(view_id))
+        return self.meta(self.row_or_raise(view_id))
 
     def rename(self, params: dict) -> dict:
-        row = self._row(params.get("id"))
+        row = self.row_or_raise(params.get("id"))
         name = params.get("name")
         if not isinstance(name, str) or not name.strip() or len(name.strip()) > 200:
             raise AppError(INVALID_PARAMS, "dataset view name is invalid")
@@ -192,21 +192,21 @@ class DatasetViewService:
             if "UNIQUE constraint failed: dataset_views.dataset_id, dataset_views.name" in str(exc):
                 raise AppError(INVALID_PARAMS, "a dataset view with this name already exists") from exc
             raise
-        return self._meta(self._row(row["id"]))
+        return self.meta(self.row_or_raise(row["id"]))
 
     def remove(self, params: dict) -> dict:
-        row = self._row(params.get("id"))
+        row = self.row_or_raise(params.get("id"))
         self.db.execute("DELETE FROM dataset_views WHERE id = ?", (row["id"],))
         return {"ok": True}
 
     def split(self, params: dict) -> dict:
         """Deterministic train/validation/test split, optionally of one source view."""
-        dataset = self.datasets._row(params.get("dataset_id"))
-        if not self.datasets._meta(dataset)["cache_valid"]:
+        dataset = self.datasets.row_or_raise(params.get("dataset_id"))
+        if not self.datasets.meta(dataset)["cache_valid"]:
             raise AppError(DATASET_CHANGED, "dataset must be current before creating a split")
         source_view_id = params.get("view_id")
         if source_view_id:
-            source = self._row(source_view_id)
+            source = self.row_or_raise(source_view_id)
             if source["dataset_id"] != dataset["id"]:
                 raise AppError(INVALID_PARAMS, "source view does not belong to the dataset")
             if source["dataset_fingerprint"] != dataset["fingerprint"]:
@@ -265,7 +265,7 @@ class DatasetViewService:
                     [int(value) for value in np.sort(group).tolist()],
                 )
             )
-        return {"views": [self._meta(self._row(view_id)) for view_id in created]}
+        return {"views": [self.meta(self.row_or_raise(view_id)) for view_id in created]}
 
     # -- materialization -----------------------------------------------------
     def _export_destination(self, row: dict, params: dict, verb: str, extxyz_msg: str):
@@ -292,9 +292,9 @@ class DatasetViewService:
         return dest, fmt, writer
 
     def materialize(self, params: dict) -> dict:
-        view = self._row(params.get("view_id"))
-        dataset = self.datasets._row(view["dataset_id"])
-        if view["dataset_fingerprint"] != dataset["fingerprint"] or not self.datasets._meta(dataset)["cache_valid"]:
+        view = self.row_or_raise(params.get("view_id"))
+        dataset = self.datasets.row_or_raise(view["dataset_id"])
+        if view["dataset_fingerprint"] != dataset["fingerprint"] or not self.datasets.meta(dataset)["cache_valid"]:
             raise AppError(DATASET_CHANGED, "dataset view is stale")
         dest, fmt, writer = self._export_destination(
             dataset, params, "materialize",
@@ -303,7 +303,7 @@ class DatasetViewService:
         indices = [int(value) for value in json.loads(view["frame_indices_json"])]
 
         def runner(ctx):
-            adapter = self.datasets._adapter_for(dataset)
+            adapter = self.datasets.adapter_for(dataset)
 
             def frames():
                 for position, frame_index in enumerate(indices, 1):

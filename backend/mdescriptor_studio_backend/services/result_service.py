@@ -44,7 +44,7 @@ class ResultService:
             for staging in staging_root.glob(".*.tmp-*"):
                 remove_managed_tree(staging)
 
-    def _managed_result_path(self, run_id: str, stored: object) -> Path:
+    def managed_result_path(self, run_id: str, stored: object) -> Path:
         if not MANAGED_ID_RE.fullmatch(run_id or "") or not str(run_id).startswith("run_"):
             raise UnsafePathError("invalid descriptor run id")
         return validate_managed_path(self.data_dir / "results", stored, run_id)
@@ -57,7 +57,7 @@ class ResultService:
     def _managed_result_file(self, run_id: str, stored: object, name: str) -> Path:
         if name not in {"metadata.json", "values.npy", "row_offsets.npy", "pca.json"}:
             raise UnsafePathError("invalid descriptor artifact file")
-        root = self._managed_result_path(run_id, stored)
+        root = self.managed_result_path(run_id, stored)
         path = root / name
         ensure_no_reparse_points(path)
         if not path.is_file():
@@ -231,7 +231,7 @@ class ResultService:
         ):
             raise AppError(RESULT_INCOMPATIBLE, f"run {run_id} has active jobs — cancel them first")
         try:
-            result_path = self._managed_result_path(str(run_id), row["result_path"]) if row["result_path"] else None
+            result_path = self.managed_result_path(str(run_id), row["result_path"]) if row["result_path"] else None
             analysis_paths = [
                 self._managed_analysis_path(str(ana["id"]), ana["result_path"])
                 for ana in analyses

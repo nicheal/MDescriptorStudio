@@ -61,7 +61,7 @@ def _env(tmp_path: Path):
         db,
         adapter=_BuildBoomAdapter(),
         jobs=jobs,
-        datasets=type("DS", (), {"_adapter_for": staticmethod(lambda row: _frames_adapter())})(),
+        datasets=type("DS", (), {"adapter_for": staticmethod(lambda row: _frames_adapter())})(),
         data_dir=tmp_path,
         engine_version="test",
     )

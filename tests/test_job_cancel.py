@@ -260,13 +260,13 @@ class _ViewDatasets:
         self._adapter = adapter
         self._row_cache = db.query_one("SELECT * FROM datasets WHERE id = 'ds_m'")
 
-    def _row(self, dataset_id):
+    def row_or_raise(self, dataset_id):
         return self._row_cache
 
-    def _meta(self, row):
+    def meta(self, row):
         return {"cache_valid": True}
 
-    def _adapter_for(self, row):
+    def adapter_for(self, row):
         return self._adapter
 
 

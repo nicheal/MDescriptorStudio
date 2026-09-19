@@ -35,7 +35,7 @@ class AnalysisDataMixin:
 
     def _result_root(self, row: dict) -> Path:
         try:
-            root = self.results._managed_result_path(str(row.get("id") or ""), row.get("result_path"))
+            root = self.results.managed_result_path(str(row.get("id") or ""), row.get("result_path"))
             if not root.is_dir():
                 raise OSError("descriptor result directory is missing")
             ensure_no_reparse_points(root)
@@ -64,7 +64,7 @@ class AnalysisDataMixin:
         dataset_row = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
         if dataset_row is None:
             return props
-        adapter = self.datasets._adapter_for(dataset_row)
+        adapter = self.datasets.adapter_for(dataset_row)
         indices = [run_row["frame_index"]] if frame_scope else list(range(min(n_points, len(adapter))))
         for i in indices:
             try:
@@ -132,7 +132,7 @@ class AnalysisDataMixin:
             dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
             if dataset is None:
                 raise AppError(ANALYSIS_INPUT_INVALID, f"dataset {run_row['dataset_id']} does not exist")
-            adapter = self.datasets._adapter_for(dataset)
+            adapter = self.datasets.adapter_for(dataset)
             count = len(adapter)
             frame_cache: dict[int, str] = {}
             labels_list: list[str] = []
@@ -310,7 +310,7 @@ class AnalysisDataMixin:
         if dataset is None:
             return None, None, None, None
         try:
-            adapter = self.datasets._adapter_for(dataset)
+            adapter = self.datasets.adapter_for(dataset)
             frames = [adapter.get_frame(int(index)) for index in self._run_frame_values(run_row, len(offsets) - 1).tolist()]
         except Exception:  # optional metadata, not a reason to corrupt a run
             return None, None, None, None
@@ -348,7 +348,7 @@ class AnalysisDataMixin:
         if dataset is None:
             return {}
         try:
-            adapter = self.datasets._adapter_for(dataset)
+            adapter = self.datasets.adapter_for(dataset)
             frame_cache = {int(index): adapter.get_frame(int(index)) for index in np.unique(frames).tolist()}
         except Exception:
             return {}
@@ -444,7 +444,7 @@ class AnalysisDataMixin:
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
         if dataset is None:
             raise AppError(ANALYSIS_INPUT_INVALID, f"dataset {run_row['dataset_id']} does not exist")
-        adapter = self.datasets._adapter_for(dataset)
+        adapter = self.datasets.adapter_for(dataset)
         count = len(adapter)
         n = samples.n_samples
         lattice = np.full((n, 6), np.nan, dtype=np.float64)

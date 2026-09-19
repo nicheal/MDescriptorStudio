@@ -333,7 +333,7 @@ class AnalysisRunMixin:
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
         if dataset is None:
             raise AppError(ANALYSIS_INPUT_INVALID, f"dataset {run_row['dataset_id']} does not exist")
-        source_adapter = self.datasets._adapter_for(dataset)
+        source_adapter = self.datasets.adapter_for(dataset)
         frame_count = samples.n_samples
         if frame_count < 1:
             raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "at least one structure is required")
