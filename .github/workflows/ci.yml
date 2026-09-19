@@ -59,7 +59,9 @@ jobs:
 
       - name: Build native geometry kernel
         shell: pwsh
-        run: .\scripts\build_native.ps1
+        # -Require: this job exists to cover the accelerated path, so a missing
+        # compiler must fail here rather than skip every native test silently.
+        run: .\scripts\build_native.ps1 -Require
 
       - name: Run backend tests
         run: python -m pytest tests -q

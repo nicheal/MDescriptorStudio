@@ -368,10 +368,13 @@ fn read_line_bounded<R: BufRead>(
 fn clean_command_environment(command: &mut Command, temp_dir: &Path) {
     for (key, _) in std::env::vars() {
         let upper = key.to_ascii_uppercase();
-        if matches!(
-            upper.as_str(),
-            "PYTHONPATH" | "PYTHONHOME" | "PYTHONSTARTUP" | "MDS_DATA_DIR"
-        ) || upper.starts_with("PIP_")
+        // Every MDS_* switch the sidecar understands is stripped as a class, not
+        // by name: datasets/native.py reads MDS_DISABLE_NATIVE, so one left over
+        // in the user's environment would silently ship the app down the scipy
+        // fallback, and a list of names would need each new switch added to it.
+        if matches!(upper.as_str(), "PYTHONPATH" | "PYTHONHOME" | "PYTHONSTARTUP")
+            || upper.starts_with("PIP_")
+            || upper.starts_with("MDS_")
         {
             command.env_remove(key);
         }

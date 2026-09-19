@@ -930,6 +930,7 @@ function mockFramePayload(index: number, bondCutoff = 2.4) {
 }
 
 // representative engine values so sidebar badges/tooltip render all variants
+const DESCRIPTOR_SCHEMA_VERSION = 3;
 const MOCK_DESCRIPTORS = [
   {
     name: "dpa2",
@@ -973,6 +974,46 @@ const MOCK_DESCRIPTORS = [
   },
 ];
 
+// The seeded rows above stay readable by omitting the fields every reply carries
+// anyway; these three mappers add them, so a page can never see a dataset,
+// descriptor or job row that the sidecar would not answer with.  The
+// wire-contract spec compares the first row's key set against
+// tests/data/backend-response-keys.json field by field.
+const datasetRow = (row: (typeof DS)[number]) => ({
+  ...row,
+  // The verdict DatasetService derives from the stored fingerprint; every
+  // seeded set was registered directly, so it has no parent lineage.
+  fingerprint_status: row.cache_valid ? "CURRENT" : "STALE",
+  lineage: null,
+});
+
+const descriptorRow = (meta: (typeof MOCK_DESCRIPTORS)[number]) => ({
+  name: meta.name,
+  display_name: meta.display_name,
+  description: "Mock descriptor for the browser preview.",
+  schema_version: DESCRIPTOR_SCHEMA_VERSION,
+  descriptor_version: "1",
+  level: meta.level,
+  backend: meta.backend,
+  execution_engine: meta.backend,
+  category: meta.category,
+  capabilities: meta.capabilities,
+  input: {
+    periodicity: meta.capabilities.includes("isolated") ? ["isolated", "fully_periodic"] : ["fully_periodic"],
+    mixed_periodicity: false,
+    spin: false,
+    charge_spin: meta.capabilities.includes("charged"),
+  },
+});
+
+// Generic rather than `(typeof JOB_ROWS)[number]`: that union is a member per
+// seeded row, and job.get's synthesized row matches none of them exactly.
+const jobRow = <T extends Record<string, unknown>>(row: T) => ({
+  ...row,
+  analysis_run_id: null,
+  result: row.status === "COMPLETED" ? {} : null,
+});
+
 const METHODS: Record<string, Handler> = {
   "system.info": () => ({
     // Every key the real sidecar answers (see tests/data/backend-response-keys.json):
@@ -991,7 +1032,7 @@ const METHODS: Record<string, Handler> = {
     data_dir: "C:\\Users\\preview\\AppData\\Roaming\\mdescriptor-studio",
     cpu_threads: 16,
   }),
-  "dataset.list": () => DS,
+  "dataset.list": () => DS.map(datasetRow),
   "dataset.view.list": (p) => p.dataset_id ? MOCK_DATASET_VIEWS.filter((view) => view.dataset_id === p.dataset_id) : MOCK_DATASET_VIEWS,
   "dataset.view.create": (p) => {
     const dataset = DS.find((item) => item.id === p.dataset_id) ?? DS[0];
@@ -1092,11 +1133,11 @@ const METHODS: Record<string, Handler> = {
     }, 800);
     return { job_id: "job-register" };
   },
-  "job.list": () => JOB_ROWS,
+  "job.list": () => JOB_ROWS.map(jobRow),
   "job.get": (p) => {
     const id = String(p.id ?? "");
     const row = JOB_ROWS.find((job) => job.id === id);
-    return row ?? {
+    return jobRow(row ?? {
       id,
       job_type: "analysis",
       dataset_id: "ds-gaas",
@@ -1110,15 +1151,15 @@ const METHODS: Record<string, Handler> = {
       created_at: new Date().toISOString(),
       started_at: new Date().toISOString(),
       finished_at: null,
-    };
+    });
   },
   "settings.get": (p) => ({ key: String(p?.key ?? ""), value: p?.key === "workspace.activeDatasetId" ? "ds-gaas" : null }),
   "settings.set": () => ({}),
-  "descriptor.list": () => MOCK_DESCRIPTORS,
+  "descriptor.list": () => MOCK_DESCRIPTORS.map(descriptorRow),
   "descriptor.describe": (p) => {
     const meta = MOCK_DESCRIPTORS.find((x) => x.name === (p.name ?? "dpa2")) ?? MOCK_DESCRIPTORS[0];
     return {
-      schema_version: 1,
+      schema_version: DESCRIPTOR_SCHEMA_VERSION,
       name: meta.name,
       display_name: meta.display_name,
       description: "Mock descriptor for the browser preview.",
@@ -1463,11 +1504,21 @@ function showPreviewError(text: string) {
         : 25;
       window.setTimeout(() => {
         const handler = METHODS[frame.method ?? ""];
-        const payload = JSON.stringify(
-          handler
-            ? { protocol_version: 1, id: frame.id, result: handler(frame.params ?? {}) }
-            : { protocol_version: 1, id: frame.id, error: { code: "NO_HANDLER", message: "Preview mock method is unavailable.", error_id: "preview" } },
-        );
+        // A handler that throws must still answer, exactly like Server._handle's
+        // top-level guard: the renderer waits on the request id, so an exception
+        // here would leave the awaiting promise unsettled until its timeout and
+        // point the failure at the spec rather than at the mock.
+        let reply: Record<string, unknown>;
+        if (!handler) {
+          reply = { protocol_version: 1, id: frame.id, error: { code: "NO_HANDLER", message: "Preview mock method is unavailable.", error_id: "preview" } };
+        } else {
+          try {
+            reply = { protocol_version: 1, id: frame.id, result: handler(frame.params ?? {}) };
+          } catch (error) {
+            reply = { protocol_version: 1, id: frame.id, error: { code: "INTERNAL_ERROR", message: String(error instanceof Error ? error.message : error), error_id: "preview" } };
+          }
+        }
+        const payload = JSON.stringify(reply);
         // route strictly by event name, like the Tauri event system
         for (const l of [...eventListeners]) {
           if (l.event === "backend-message") l.fn({ event: "backend-message", payload });

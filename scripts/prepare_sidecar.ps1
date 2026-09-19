@@ -8,7 +8,7 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 
-& powershell -ExecutionPolicy Bypass -File "$root\scripts\build_native.ps1"
+& powershell -ExecutionPolicy Bypass -File "$root\scripts\build_native.ps1" -Require
 if ($LASTEXITCODE -ne 0) { throw "native kernel build failed" }
 
 Push-Location "$root\backend"

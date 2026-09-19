@@ -8,7 +8,7 @@
 import { expect, test } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
-type Contract = Record<string, { params: Record<string, unknown>; kind: string; keys?: string[] }>;
+type Contract = Record<string, { params: Record<string, unknown>; kind: string; keys?: string[] | null }>;
 
 const contract = JSON.parse(
   readFileSync(new URL("../../tests/data/backend-response-keys.json", import.meta.url), "utf8"),
@@ -39,16 +39,23 @@ test("the preview mock answers with the real backend's envelope", async ({ page 
     const observed = await page.evaluate(
       ([name, sent]) => {
         const value = window.__mdsMock?.call(name, sent);
-        if (Array.isArray(value)) return { kind: "array", keys: [] };
+        if (Array.isArray(value)) {
+          // Row keys, not just "it is an array": the UI reads the fields inside
+          // these rows, and an array answer used to satisfy this gate vacuously.
+          const first = value.find((row) => row && typeof row === "object" && !Array.isArray(row)) as Record<string, unknown> | undefined;
+          return { kind: "array", keys: first ? Object.keys(first).sort() : null };
+        }
         if (value && typeof value === "object") return { kind: "object", keys: Object.keys(value).sort() };
         return { kind: typeof value, keys: [] };
       },
       [method, params] as [string, Record<string, unknown>],
     );
-    if (observed.kind !== expected.kind || (expected.keys ?? []).join() !== observed.keys.join()) {
-      drifted.push(
-        `${method}: mock ${observed.kind} [${observed.keys.join(", ")}] != backend ${expected.kind} [${(expected.keys ?? []).join(", ")}]`,
-      );
+    // null keys means an empty reply on one side: nothing was observed, so
+    // nothing may be claimed - the kind is still compared.
+    const comparable = expected.keys !== null && observed.keys !== null;
+    const show = (value: { kind: string; keys?: string[] | null }) => `${value.kind} [${value.keys?.join(", ") ?? "no rows returned"}]`;
+    if (observed.kind !== expected.kind || (comparable && (expected.keys ?? []).join() !== observed.keys.join())) {
+      drifted.push(`${method}: mock ${show(observed)} != backend ${show(expected)}`);
     }
   }
   expect(drifted, `preview.tsx drifted from the real response shapes:\n${drifted.join("\n")}`).toEqual([]);

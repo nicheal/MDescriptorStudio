@@ -1,5 +1,6 @@
 {
  "analysis.list": {
+  "keys": null,
   "kind": "array",
   "params": {}
  },
@@ -18,6 +19,23 @@
   }
  },
  "dataset.list": {
+  "keys": [
+   "cache_valid",
+   "created_at",
+   "elements",
+   "file_size",
+   "fingerprint",
+   "fingerprint_status",
+   "format",
+   "id",
+   "last_scan_at",
+   "lineage",
+   "name",
+   "number_of_frames",
+   "periodicity",
+   "properties",
+   "source_path"
+  ],
   "kind": "array",
   "params": {}
  },
@@ -33,18 +51,64 @@
   }
  },
  "dataset.view.list": {
+  "keys": [
+   "created_at",
+   "dataset_fingerprint",
+   "dataset_id",
+   "dataset_name",
+   "filter",
+   "frame_indices",
+   "id",
+   "name",
+   "number_of_frames",
+   "role",
+   "selection_hash",
+   "stale",
+   "updated_at"
+  ],
   "kind": "array",
   "params": {}
  },
  "descriptor.list": {
+  "keys": [
+   "backend",
+   "capabilities",
+   "category",
+   "description",
+   "descriptor_version",
+   "display_name",
+   "execution_engine",
+   "input",
+   "level",
+   "name",
+   "schema_version"
+  ],
   "kind": "array",
   "params": {}
  },
  "job.list": {
+  "keys": [
+   "analysis_run_id",
+   "completed",
+   "created_at",
+   "dataset_id",
+   "descriptor_run_id",
+   "error",
+   "finished_at",
+   "id",
+   "job_type",
+   "message",
+   "progress",
+   "result",
+   "started_at",
+   "status",
+   "total"
+  ],
   "kind": "array",
   "params": {}
  },
  "result.list": {
+  "keys": null,
   "kind": "array",
   "params": {}
  },

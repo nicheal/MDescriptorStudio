@@ -45,7 +45,14 @@ def _shape(result: object) -> dict:
     if isinstance(result, dict):
         return {"kind": "object", "keys": sorted(result)}
     if isinstance(result, list):
-        return {"kind": "array"}
+        # The row keys are the part the UI actually reads. An array was once
+        # recorded as nothing but "it is an array", so a renamed or dropped
+        # field inside a dataset/job/descriptor row satisfied this gate
+        # vacuously while every page that reads it broke.
+        first = next((row for row in result if isinstance(row, dict)), None)
+        # None, not []: an empty reply proves nothing about row shape, and the
+        # browser spec must be able to tell "matched" from "not observed".
+        return {"kind": "array", "keys": sorted(first) if first else None}
     return {"kind": type(result).__name__}
 
 
@@ -62,6 +69,9 @@ def _capture(data_dir: Path) -> dict[str, dict]:
         source = data_dir / "contract.xyz"
         write_extxyz(source, n_frames=2, natoms=2)
         dataset_id = register_dataset(proc, 900, source)
+        # One saved view, so dataset.view.list answers with a row rather than an
+        # empty list: an array reply cannot describe a row shape it never sent.
+        proc.request(901, "dataset.view.create", {"dataset_id": dataset_id, "name": "Contract", "indices": [0]})
         contract: dict[str, dict] = {}
         for vid, (method, requested) in enumerate(METHODS, start=1):
             # "ds_missing" is a placeholder resolved to the throwaway dataset, so
