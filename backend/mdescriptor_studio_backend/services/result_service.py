@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
-import re
 from pathlib import Path
 
 from ..errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
@@ -16,9 +15,9 @@ from ..security import (
     remove_managed_tree,
     validate_managed_path,
 )
+from .analysis_helpers import MANAGED_ID_RE
 
 log = logging.getLogger(__name__)
-_ARTIFACT_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
 
 
 class ResultService:
@@ -46,12 +45,12 @@ class ResultService:
                 remove_managed_tree(staging)
 
     def _managed_result_path(self, run_id: str, stored: object) -> Path:
-        if not _ARTIFACT_ID_RE.fullmatch(run_id or "") or not str(run_id).startswith("run_"):
+        if not MANAGED_ID_RE.fullmatch(run_id or "") or not str(run_id).startswith("run_"):
             raise UnsafePathError("invalid descriptor run id")
         return validate_managed_path(self.data_dir / "results", stored, run_id)
 
     def _managed_analysis_path(self, analysis_id: str, stored: object) -> Path:
-        if not _ARTIFACT_ID_RE.fullmatch(analysis_id or "") or not str(analysis_id).startswith("ana_"):
+        if not MANAGED_ID_RE.fullmatch(analysis_id or "") or not str(analysis_id).startswith("ana_"):
             raise UnsafePathError("invalid analysis id")
         return validate_managed_path(self.data_dir / "analysis", stored, analysis_id)
 

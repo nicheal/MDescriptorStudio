@@ -12,14 +12,12 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
 
 from ..errors import AppError, INVALID_PARAMS, JOB_CANCELLED, JOB_NOT_FOUND
 from ..storage.database import Database
+from .analysis_helpers import _NOW
 
 log = logging.getLogger(__name__)
-
-_NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 
 # Pool sizes per job category. The descriptor pool is deliberately size 1:
 # descriptor compute is the heaviest work in the process and must not overlap

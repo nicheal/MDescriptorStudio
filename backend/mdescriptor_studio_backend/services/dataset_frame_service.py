@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..datasets.ghosts import DEFAULT_BOND_CUTOFF, periodic_boundary_ghosts
+from ..datasets.statistics import frame_force_max
 from ..errors import AppError, INVALID_DATASET, INVALID_PARAMS
 from .dataset_service import _symbol, formula_of
 
@@ -96,10 +97,7 @@ class DatasetFrameService:
         energy_per_atom = None
         if f.energy is not None and symbols:
             energy_per_atom = round(float(f.energy) / len(symbols), 6)
-        force_max = None
-        if f.forces is not None and len(rows):
-            vals = [r["f"] for r in rows if r["f"] is not None]
-            force_max = round(max(vals), 5) if vals else None
+        force_max = frame_force_max(f.forces) if f.forces is not None else None
         # row-major 3×3 as stored by the source (extxyz comment / deepmd set);
         # sign conventions differ between ecosystems, so the GUI shows it raw
         virial = None

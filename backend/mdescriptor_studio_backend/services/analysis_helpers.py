@@ -6,6 +6,7 @@ facade, the data loader, preview/export writers and the job runner.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import numpy as np
@@ -13,6 +14,10 @@ import numpy as np
 from ..errors import ANALYSIS_INPUT_INVALID, INVALID_PARAMS, AppError
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
+# An id that names a managed run directory. Storage wrote these prefixes, so a
+# value that does not match is either corrupt or hostile - both callers pair it
+# with the prefix they require (run_/ana_) before touching the filesystem.
+MANAGED_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
 _ANALYSIS_SCHEMA_VERSION = 1
 ANALYSIS_ALGORITHM_VERSION = "studio-analysis-4"
 _MAX_PREVIEW_POINTS = 20_000

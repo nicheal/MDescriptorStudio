@@ -10,7 +10,6 @@ import os
 import re
 import threading
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -36,10 +35,9 @@ from ..security import (
 from ..storage.database import Database
 from .dataset_service import DatasetService
 from .job_service import JobService
+from .analysis_helpers import _NOW
 
 log = logging.getLogger(__name__)
-
-_NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 
 _VALIDATE_TYPES = {"integer", "number", "boolean", "string", "enum", "array", "object", "model", "species"}
 

@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-import re
 from collections import Counter
 import logging
 import threading
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -42,16 +40,15 @@ from ..security import (
     validate_managed_path,
 )
 from ..storage.database import Database
+from .analysis_helpers import MANAGED_ID_RE, _NOW
 from .job_service import JobService
 
 log = logging.getLogger(__name__)
 
-_NOW = lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: E731
 # max per-frame summary rows one dataset.findings call returns; longer lists are
 # reported by their exact count in "total" and truncated in "rows" (the drawer
 # says so) - there is no offset, so frame 1001 is not reachable today
 FINDINGS_ROW_LIMIT = 1000
-_ARTIFACT_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
 
 
 def _frame_indices(value: object, number_of_frames: int) -> list[int]:
@@ -435,7 +432,7 @@ class DatasetService:
         return {str(item) for item in value} if isinstance(value, list) else set()
 
     def _managed_artifact_path(self, kind: str, artifact_id: str, stored: object) -> Path:
-        if not _ARTIFACT_ID_RE.fullmatch(artifact_id):
+        if not MANAGED_ID_RE.fullmatch(artifact_id):
             raise UnsafePathError("invalid artifact id")
         return validate_managed_path(self.data_dir / kind, stored, artifact_id)
 
