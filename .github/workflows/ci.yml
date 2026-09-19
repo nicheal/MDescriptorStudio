@@ -64,6 +64,12 @@ jobs:
       - name: Run backend tests
         run: python -m pytest tests -q
 
+      # The numbers themselves are not gated - runner timing varies by an order
+      # of magnitude - but a benchmark that no longer runs is worse than one
+      # that regressed, so the cheapest suite is exercised here.
+      - name: Smoke the benchmark harness
+        run: python benchmark/run_benchmarks.py --quick --suite analysis
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15

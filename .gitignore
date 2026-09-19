@@ -50,4 +50,5 @@ backend/mdescriptor_studio_backend/datasets/_native/
 # Local scratch and generated artifacts
 tmp/
 /output/
+/benchmark/results/
 /scripts/create_analysis_report_pdf.py
