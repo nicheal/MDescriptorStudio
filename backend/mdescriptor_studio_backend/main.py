@@ -59,18 +59,31 @@ def _configure_stdio() -> None:
             reconfigure(encoding="utf-8", errors="strict")
 
 
+def _version_payload(engine_info: dict) -> dict:
+    """The versions the handshake reports, and that system.info reports again.
+
+    Both sides tell the UI which engine and analysis build they are talking to,
+    and the handshake is what the version gate compares against. Writing the
+    field list twice meant a version added to one answer could be missing from
+    the other - and the UI would read that as "the backend does not report it".
+    """
+    return {
+        "backend_version": __version__,
+        "mdescriptor_version": engine_info.get("version"),
+        "mdescriptor_api_version": engine_info.get("api_version"),
+        "mdescriptor_baseline_version": engine_info.get("baseline_version"),
+        "mdescriptor_descriptor_info_schema_version": engine_info.get("descriptor_info_schema_version"),
+        "analysis_api_version": ANALYSIS_API_VERSION,
+        "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
+    }
+
+
 def build_methods(jobs, datasets, views, frame_service, descriptors, results, analysis, settings_kv, engine_info, root):
     def system_info(_params):
         return {
-            "backend_version": __version__,
+            **_version_payload(engine_info),
             "protocol_version": frames.PROTOCOL_VERSION,
             "platform": platform.platform(),
-            "mdescriptor_version": engine_info.get("version"),
-            "mdescriptor_api_version": engine_info.get("api_version"),
-            "mdescriptor_baseline_version": engine_info.get("baseline_version"),
-            "mdescriptor_descriptor_info_schema_version": engine_info.get("descriptor_info_schema_version"),
-            "analysis_api_version": ANALYSIS_API_VERSION,
-            "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
             "analysis_dependencies": {
                 name: _dependency_version(name)
                 for name in ("scikit-learn", "hdbscan")
@@ -207,18 +220,7 @@ def main() -> int:
     # handshake must be the first frame (docs/plan/02 §2). It deliberately
     # precedes the warmups so the UI opens immediately; the warmups continue
     # on the background thread below.
-    server.emit(
-        "backend.ready",
-        {
-            "backend_version": __version__,
-            "mdescriptor_version": info.get("version"),
-            "mdescriptor_api_version": info.get("api_version"),
-            "mdescriptor_baseline_version": info.get("baseline_version"),
-            "mdescriptor_descriptor_info_schema_version": info.get("descriptor_info_schema_version"),
-            "analysis_api_version": ANALYSIS_API_VERSION,
-            "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
-        },
-    )
+    server.emit("backend.ready", _version_payload(info))
     def _warmup() -> None:
         # Engine first, then analysis dependencies: one thread, one import
         # pass. Safe alongside serve_forever only because the stdin loop
