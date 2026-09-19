@@ -22,6 +22,7 @@ import { trackJob, watchJob } from "../stores/jobs";
 import { collectDefaults, SchemaField, speciesToNumbers, type ParamValues } from "../components/SchemaForm";
 import { useT } from "../i18n";
 import type { DescriptorInfo, DescriptorSchema } from "../types/protocol";
+import { describeError } from "../util/errors";
 
 // Single-letter badge coding for the sidebar (soft tinted block + letter per
 // enum value; the row tooltip expands each letter into its full meaning).
@@ -260,7 +261,7 @@ export default function Descriptors() {
       }
     } catch (e) {
       const err = e as { code: string; message: string };
-      message.error(`${err.code}: ${err.message}`);
+      message.error(describeError(err, "DESCRIPTOR"));
     } finally {
       setSubmitting(false);
     }

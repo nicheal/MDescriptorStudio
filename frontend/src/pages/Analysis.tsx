@@ -91,6 +91,7 @@ import {
   type Point,
   type ProjectionOverrides,
 } from "./analysisShared";
+import { describeError } from "../util/errors";
 
 
 export default function Analysis() {
@@ -340,7 +341,7 @@ export default function Analysis() {
       setSelectedRun(current && completedRuns.some((row) => row.id === current) ? current : completedRuns[0]?.id ?? null);
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "ANALYSIS"}: ${err.message ?? t("Could not load analysis runs")}`);
+      message.error(describeError(err, "ANALYSIS", t("Could not load analysis runs")));
     }
   }, [dataset, message, setSelectedRun, t]);
 
@@ -655,7 +656,7 @@ export default function Analysis() {
       return id;
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      if (isCurrent()) message.error(`${err.code ?? label}: ${err.message ?? t("analysis failed")}`);
+      if (isCurrent()) message.error(describeError(err, label, t("analysis failed")));
       return null;
     } finally {
       if (operationRef.current === operation) {
@@ -875,7 +876,7 @@ export default function Analysis() {
       if (!opts?.silent) message.success(t("Loaded cached {name}", { name: analysisType.toUpperCase() }));
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      if (isCurrent()) message.error(`${err.code ?? "ANALYSIS"}: ${err.message ?? t("could not load analysis")}`);
+      if (isCurrent()) message.error(describeError(err, "ANALYSIS", t("could not load analysis")));
     } finally {
       if (operationRef.current === operation) {
         setBusy(false);
@@ -1092,7 +1093,7 @@ export default function Analysis() {
       else message.error(`Export ${jobStatusLabel(tr, done.status)}: ${done.error?.message ?? ""}`);
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "EXPORT"}: ${err.message ?? t("export failed")}`);
+      message.error(describeError(err, "EXPORT", t("export failed")));
     }
   };
 
@@ -1127,7 +1128,7 @@ export default function Analysis() {
       await refresh();
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "ANALYSIS"}: ${err.message ?? t("delete failed")}`);
+      message.error(describeError(err, "ANALYSIS", t("delete failed")));
     }
   };
 

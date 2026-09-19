@@ -18,6 +18,7 @@ import { formatLabel, formatSize } from "../../util/format";
 import { trackJob, watchJob } from "../../stores/jobs";
 import { useT } from "../../i18n";
 import type { DatasetMeta, DatasetView } from "../../types/protocol";
+import { describeError } from "../../util/errors";
 
 type SplitTarget = { dataset: DatasetMeta; view?: DatasetView };
 
@@ -94,7 +95,7 @@ export default function Sidebar() {
       message.success(t("Train, validation, and test views created"));
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "DATASET_VIEW"}: ${err.message ?? t("Could not create split")}`);
+      message.error(describeError(err, "DATASET_VIEW", t("Could not create split")));
     } finally {
       setBusy(false);
     }
@@ -111,7 +112,7 @@ export default function Sidebar() {
       message.success(t("Dataset view renamed"));
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "DATASET_VIEW"}: ${err.message ?? t("Could not rename dataset view")}`);
+      message.error(describeError(err, "DATASET_VIEW", t("Could not rename dataset view")));
     } finally {
       setBusy(false);
     }
@@ -138,7 +139,7 @@ export default function Sidebar() {
       message.success(t("Dataset view materialized and registered"));
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "DATASET_VIEW"}: ${err.message ?? t("Could not materialize dataset view")}`);
+      message.error(describeError(err, "DATASET_VIEW", t("Could not materialize dataset view")));
     }
   }, [message, refreshViews, t]);
 
@@ -191,12 +192,12 @@ export default function Sidebar() {
           })
           .catch((error) => {
             const err = error as { code?: string; message?: string };
-            message.error(t("Register failed: {message}", { message: err.message ?? err.code ?? "unknown error" }));
+            message.error(t("Register failed: {message}", { message: describeError(err, "DATASET") }));
           });
       }
     } catch (e) {
       const err = e as { code: string; message: string };
-      message.error(`${err.code}: ${err.message}`);
+      message.error(describeError(err, "DATASET"));
     } finally {
       setBusy(false);
     }

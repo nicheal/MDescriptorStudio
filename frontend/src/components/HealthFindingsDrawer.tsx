@@ -82,14 +82,9 @@ export default function HealthFindingsDrawer() {
       await refetchDatasets();
       r = await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId });
     }
-    // legacy cache between the health pass and the findings pass: one rescan
-    // fills in health_findings
-    if (r.stats?.health && !r.stats.health_findings) {
-      const rescan = await ipc.request<{ job_id: string }>("dataset.rescan", { id: dsId });
-      await waitForSuccessfulJob(rescan.job_id);
-      await refetchDatasets();
-      r = await ipc.request<StatisticsResponse>("dataset.statistics", { id: dsId });
-    }
+    // No remediation path: the backend's own cache gate refuses a stats payload
+    // missing any key the current pass writes, so health and health_findings
+    // always arrive together.
     if (useWorkspace.getState().activeDatasetId !== dsId) return null;
     return r.stats;
   }, [datasetId]);

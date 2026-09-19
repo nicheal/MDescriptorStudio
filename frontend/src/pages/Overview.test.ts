@@ -91,6 +91,16 @@ function stats(atomsTotal: number): Stats {
       virial: { per_structure: true },
     },
     periodicity: { fully_periodic: true, isolated: false, mixed: false, flags: ["periodic"] },
+    stats_version: 3,
+    health: {
+      missing_values: 0, energy_anomaly: 0, invalid_cell: 0, duplicate_structures: 0,
+      extreme_force: 0, extreme_force_threshold: 0.5, nonphysical_structures: 0,
+      short_contact_coefficient: 0.7, net_force: 0, net_force_threshold: 0.01,
+    },
+    health_findings: {
+      cap: 5000, missing_values: [], energy_anomaly: [], invalid_cell: [],
+      duplicate_structures: [], extreme_force: [], nonphysical_structures: [], net_force: [],
+    },
   };
 }
 

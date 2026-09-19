@@ -8,6 +8,7 @@ import { ipc } from "../ipc/client";
 import { refetchDatasets, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import type { DatasetMeta } from "../types/protocol";
+import { describeError } from "../util/errors";
 
 export function RenameDatasetModal({
   dataset,
@@ -46,7 +47,7 @@ export function RenameDatasetModal({
       onClose();
     } catch (e) {
       const err = e as { code: string; message: string };
-      message.error(`${err.code}: ${err.message}`);
+      message.error(describeError(err, "DATASET"));
     } finally {
       setBusy(false);
     }
@@ -103,7 +104,7 @@ export function useDatasetDelete() {
             await refetchDatasets();
           } catch (e) {
             const err = e as { code: string; message: string };
-            message.error(`${err.code}: ${err.message}`);
+            message.error(describeError(err, "DATASET"));
             throw e; // keep the dialog open when removal fails
           }
         },

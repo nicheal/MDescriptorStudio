@@ -9,6 +9,7 @@ import { App as AntApp, Input, Modal, Radio, Select, Typography } from "antd";
 import { ipc } from "../ipc/client";
 import { useT } from "../i18n";
 import type { DatasetView } from "../types/protocol";
+import { describeError } from "../util/errors";
 
 export default function SaveViewModal({ open, onClose, datasetId, frames, totalFrames, source, defaultName = "", initialMode = "save", onSaved }: {
   open: boolean;
@@ -71,7 +72,7 @@ export default function SaveViewModal({ open, onClose, datasetId, frames, totalF
       onClose();
     } catch (e) {
       const err = e as { code?: string; message?: string };
-      message.error(`${err.code ?? "DATASET_VIEW"}: ${err.message ?? t("Could not save dataset view")}`);
+      message.error(describeError(err, "DATASET_VIEW", t("Could not save dataset view")));
     } finally {
       setBusy(false);
     }

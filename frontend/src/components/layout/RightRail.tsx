@@ -41,6 +41,7 @@ import {
   type JobState,
 } from "../../stores/jobs";
 import type { DatasetHealth, JobRow } from "../../types/protocol";
+import { describeError } from "../../util/errors";
 
 const BLUE = "#0F6CBD";
 const GREEN = "#107C10";
@@ -189,7 +190,7 @@ function DataHealthRail() {
       message.success(t("Rescan complete"));
     } catch (e) {
       const err = e as { code: string; message: string };
-      message.error(`${err.code}: ${err.message}`);
+      message.error(describeError(err, "DATASET"));
     } finally {
       setScanning(null);
     }

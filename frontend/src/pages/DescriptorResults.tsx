@@ -12,6 +12,7 @@ import { displayableDescriptorRuns } from "./analysisPreview";
 import { useT } from "../i18n";
 import type { RunRow } from "../types/protocol";
 import { formatComputeDuration } from "../util/duration";
+import { describeError } from "../util/errors";
 
 const RUN_STATUS_COLOR: Record<string, string> = {
   QUEUED: "#616161",
@@ -65,7 +66,7 @@ export default function DescriptorResults() {
       }
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "RESULT"}: ${err.message ?? "Could not load descriptor results"}`);
+      message.error(describeError(err, "RESULT", "Could not load descriptor results"));
     } finally {
       setRefreshing(false);
     }
@@ -94,7 +95,7 @@ export default function DescriptorResults() {
       await refresh();
     } catch (error) {
       const err = error as { code?: string; message?: string };
-      message.error(`${err.code ?? "RESULT"}: ${err.message ?? "delete failed"}`);
+      message.error(describeError(err, "RESULT", "delete failed"));
     } finally {
       setDeletingRunId(null);
     }

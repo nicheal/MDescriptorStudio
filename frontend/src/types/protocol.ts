@@ -1,11 +1,20 @@
 // Protocol types mirroring docs/plan/02-IPC_PROTOCOL.md
 export const PROTOCOL_VERSION = 1;
 
+/**
+ * A refusal from the sidecar.
+ *
+ * There is deliberately no `details` field: the structured diagnosis can quote a
+ * path, and the renderer is not a trusted recipient, so `frames.response_err`
+ * omits it and `Server._handle` logs it against `error_id` instead. `error_id` is
+ * therefore the only thing that joins what a user saw to the log line that
+ * explains it - show it, and keep it optional only because the client's own
+ * synthetic rejections (BACKEND_DOWN before any request left) have none.
+ */
 export interface ErrorFrame {
   code: string;
   message: string;
   error_id?: string;
-  details?: Record<string, unknown>;
 }
 
 export interface DatasetMeta {
@@ -64,20 +73,20 @@ export interface Hist {
 }
 
 export interface Stats {
-  /** statistics algorithm version; used to invalidate incompatible caches */
-  stats_version?: number;
+  /** statistics algorithm version; the backend refuses a cache whose value
+   * differs and recomputes, so a payload that reaches the UI always has it */
+  stats_version: number;
   structures: number;
   atoms_total: number;
   elements: { symbol: string; count: number }[];
-  /** structures grouped by their exact element combination (unary/binary/…);
-   *  undefined on caches computed before this field existed */
-  compositions?: { elements: string[]; count: number }[];
+  /** structures grouped by their exact element combination (unary/binary/…) */
+  compositions: { elements: string[]; count: number }[];
   /** structures grouped by exact stoichiometry (Hill-notation formula, actual
-   *  atom counts); most common first; undefined on legacy caches */
-  formulas?: { formula: string; elements: string[]; count: number }[];
+   *  atom counts); most common first */
+  formulas: { formula: string; elements: string[]; count: number }[];
   /** per-element histogram of how many atoms of that element each structure
-   *  contains (integer-aligned bins); undefined on legacy caches */
-  element_atom_counts?: Record<string, Hist | null>;
+   * contains (integer-aligned bins) */
+  element_atom_counts: Record<string, Hist | null>;
   atoms_per_structure: Hist | null;
   atoms_per_structure_summary: Summary | null;
   energy_per_atom: Hist | null;
@@ -101,11 +110,10 @@ export interface Stats {
     mixed: boolean;
     flags: string[];
   };
-  /** present in scans since the data-health pass; undefined on legacy caches */
-  health?: DatasetHealth;
+  health: DatasetHealth;
   /** frame indices behind the health counts (original file positions, capped
-   * per check); undefined on caches older than the findings pass */
-  health_findings?: HealthFindings;
+   * per check by health_findings.cap) */
+  health_findings: HealthFindings;
 }
 
 export interface HealthFindings {

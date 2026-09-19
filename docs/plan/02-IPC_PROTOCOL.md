@@ -29,7 +29,7 @@ backend 初始化完成后，**第一帧**输出：
 // success
 {"protocol_version":1,"id":101,"result":{}}
 // error
-{"protocol_version":1,"id":101,"error":{"code":"DATASET_NOT_FOUND","message":"Dataset does not exist.","details":{}}}
+{"protocol_version":1,"id":101,"error":{"code":"DATASET_NOT_FOUND","message":"Dataset does not exist.","error_id":"7f3ac1e04b"}}
 // event
 {"protocol_version":1,"event":"job.progress","data":{"job_id":"...","progress":0.67,"completed":6700,"total":10000}}
 ```
@@ -38,6 +38,7 @@ backend 初始化完成后，**第一帧**输出：
 - `id` 由前端生成（自增整数），响应必须原样携带；**允许多请求并发**（id 关联，ADR-16）。
 - 事件独立下行，可能与响应交错；事件无 `id`。
 - `protocol_version` 不为 1 → 回 `PROTOCOL_VERSION_MISMATCH` 错误帧并退出（exit 2）。
+- 错误帧只有 `code`/`message`/`error_id` 三个字段。`AppError.details` **不上线**：它可能引用路径，而渲染端不是受信接收者；`Server._handle` 把它按 `error_id` 写进日志。因此 UI 必须把 `error_id` 显示给用户，否则报障信息与日志再也对不上（`util/errors.describeError` 统一这一行）。
 - method 未知 / params 非法 → `INVALID_PARAMS`；job id 不存在 → `JOB_NOT_FOUND`。
 
 ## 4. Job 模式（ADR-8/16）
