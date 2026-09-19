@@ -1082,3 +1082,40 @@ def test_failed_settlement_cleans_committed_artifact(tmp_path: Path, monkeypatch
     assert not list(analysis_root.glob("ana_*"))
     assert not list(analysis_root.glob(".ana_*.tmp-*"))
     db.close()
+
+
+def test_artifact_rows_page_memory_mapped_arrays(tmp_path: Path) -> None:
+    # The fallback row table pages over np.load(mmap_mode="r") arrays. It used to
+    # index them element by element from Python, which turns every value into its
+    # own disk-backed scalar read; the slicing version must keep the paging and
+    # the ragged-length behaviour exactly.
+    db, _jobs, service = _service(tmp_path)
+    analysis_id = "ana_paging0001"
+    root = tmp_path / "analysis" / analysis_id
+    root.mkdir(parents=True)
+    arrays = {
+        "coords": np.arange(12, dtype=np.float32).reshape(6, 2),
+        "labels": np.arange(6, dtype=np.int64),
+        "scores": np.arange(4, dtype=np.float64),  # shorter on purpose
+    }
+    for name, array in arrays.items():
+        np.save(root / f"{name}.npy", array, allow_pickle=False)
+    row = {
+        "id": analysis_id,
+        "result_path": str(root),
+        "analysis_type": "unbuilt_shape",
+        "params_json": "{}",
+        "input_run_ids_json": json.dumps(["run_missing"]),
+        "descriptor_run_id": "run_missing",
+        "artifact_manifest_json": json.dumps({"files": {name: {"path": f"{name}.npy"} for name in arrays}}),
+    }
+
+    page = service._rows_from_artifact(row, 2, 3)
+    assert [entry["i"] for entry in page] == [2, 3, 4]
+    assert page[0]["coords"] == [4.0, 5.0]
+    assert page[0]["labels"] == 2
+    assert all(isinstance(value, (int, float)) for value in page[0]["coords"])
+    # rows past the shortest array omit it rather than padding a fake value
+    assert "scores" in page[1] and "scores" not in page[2]
+    assert service._rows_from_artifact(row, 5, 10) == [{"i": 5, "coords": [10.0, 11.0], "labels": 5}]
+    db.close()

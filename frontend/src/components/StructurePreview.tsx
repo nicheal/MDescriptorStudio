@@ -1,27 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { elementColor } from "../util/elements";
 import { neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
-import type { ClickedAtom, ViewerModel } from "../util/viewerAtoms";
 import { useT } from "../i18n";
 import {
-  STRUCTURE_VIEWER_BACKGROUND,
   addUnitCell,
+  createStructureViewer,
   disposeStructureViewer,
-  load3Dmol,
+  type StructureViewer,
 } from "../viz/StructureViewer";
 import type { FramePayload } from "../types/protocol";
-
-type Viewer = {
-  clear: () => void;
-  addModel: () => ViewerModel;
-  addLine: (spec: object) => void;
-  addSphere?: (spec: object) => void;
-  setStyle: (sel: object, style: object) => void;
-  addStyle: (sel: object, style: object) => void;
-  setClickable: (sel: object, clickable: boolean, callback: (atom: ClickedAtom) => void) => void;
-  zoomTo: () => void;
-  render: () => void;
-};
 
 interface StructurePreviewProps {
   frame: FramePayload;
@@ -35,7 +22,7 @@ interface StructurePreviewProps {
 export default function StructurePreview({ frame, onOpen, selectedAtom, localCutoff, onSelectAtom }: StructurePreviewProps) {
   const { t } = useT();
   const viewerDiv = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<Viewer | null>(null);
+  const viewerRef = useRef<StructureViewer | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
   // The 3Dmol click callback is registered inside the render effect; route it
@@ -48,9 +35,10 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
     let cancelled = false;
     void (async () => {
       try {
-        const $3Dmol = await load3Dmol();
-        if (cancelled || !element) return;
-        viewerRef.current = $3Dmol.createViewer(element, { backgroundColor: STRUCTURE_VIEWER_BACKGROUND }) as Viewer;
+        if (!element) return;
+        const viewer = await createStructureViewer(element);
+        if (cancelled) return;
+        viewerRef.current = viewer;
         setViewerReady(true);
       } catch (error) {
         console.error("structure preview init failed", error);
@@ -91,7 +79,7 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
           viewer.addStyle({ index: neighbor.index }, { sphere: { scale: 0.34, color: "#F7630C" }, stick: { radius: 0.13, color: "#F7630C" } });
           viewer.addLine({ start: center, end: atoms[neighbor.index], color: "#F7630C", opacity: 0.7, linewidth: 2 });
         }
-        viewer.addSphere?.({ center, radius: Math.max(0.1, Math.min(10, localCutoff)), color: "#F7630C", opacity: 0.12, wireframe: true });
+        viewer.addSphere({ center, radius: Math.max(0.1, Math.min(10, localCutoff)), color: "#F7630C", opacity: 0.12, wireframe: true });
       }
     }
     addUnitCell(viewer, frame.cell);

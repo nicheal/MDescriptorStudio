@@ -28,7 +28,7 @@ import {
   useAnalysisUi,
   type AnalysisParams,
   type AnalysisSlot,
-} from "./analysisUi";
+} from "../features/analysis";
 
 const persistedView = {
   tab: "projection",

@@ -1,0 +1,79 @@
+{
+ "analysis.list": {
+  "kind": "array",
+  "params": {}
+ },
+ "dataset.findings": {
+  "keys": [
+   "recalculating",
+   "returned",
+   "rows",
+   "total"
+  ],
+  "kind": "object",
+  "params": {
+   "check": "missing_values",
+   "id": "@dataset",
+   "limit": 5
+  }
+ },
+ "dataset.list": {
+  "kind": "array",
+  "params": {}
+ },
+ "dataset.statistics": {
+  "keys": [
+   "job_id",
+   "recalculating",
+   "stats"
+  ],
+  "kind": "object",
+  "params": {
+   "id": "@dataset"
+  }
+ },
+ "dataset.view.list": {
+  "kind": "array",
+  "params": {}
+ },
+ "descriptor.list": {
+  "kind": "array",
+  "params": {}
+ },
+ "job.list": {
+  "kind": "array",
+  "params": {}
+ },
+ "result.list": {
+  "kind": "array",
+  "params": {}
+ },
+ "settings.get": {
+  "keys": [
+   "key",
+   "value"
+  ],
+  "kind": "object",
+  "params": {
+   "key": "ui.language"
+  }
+ },
+ "system.info": {
+  "keys": [
+   "analysis_algorithm_version",
+   "analysis_api_version",
+   "analysis_dependencies",
+   "backend_version",
+   "cpu_threads",
+   "data_dir",
+   "mdescriptor_api_version",
+   "mdescriptor_baseline_version",
+   "mdescriptor_descriptor_info_schema_version",
+   "mdescriptor_version",
+   "platform",
+   "protocol_version"
+  ],
+  "kind": "object",
+  "params": {}
+ }
+}

@@ -76,7 +76,7 @@ def build_methods(jobs, datasets, views, frame_service, descriptors, results, an
                 for name in ("scikit-learn", "hdbscan")
             },
             "data_dir": str(root),
-            "cpu_threads": platform.os.cpu_count(),
+            "cpu_threads": os.cpu_count(),
         }
 
     def settings_get(params):

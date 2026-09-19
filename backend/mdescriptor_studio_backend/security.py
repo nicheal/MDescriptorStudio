@@ -29,11 +29,12 @@ def _reject_windows_path_forms(raw: str, field: str) -> None:
     if any(ord(character) < 0x20 for character in raw):
         raise UnsafePathError(f"{field} contains a control character")
     normalized = raw.replace("/", "\\")
-    if (
-        normalized.startswith("\\\\")
-        or normalized.startswith("\\\\?\\")
-        or normalized.startswith("\\\\.\\")
-    ):
+    # Order matters: an extended-length (\\?\) or device (\\.\) path also starts
+    # with the UNC double backslash, so naming them after the broad test made
+    # their distinct reasons unreachable. The rejected set is unchanged.
+    if normalized.startswith("\\\\?\\") or normalized.startswith("\\\\.\\"):
+        raise UnsafePathError(f"{field} must not use an extended-length or device path")
+    if normalized.startswith("\\\\"):
         raise UnsafePathError(f"{field} must be a local path")
     drive, tail = ntpath.splitdrive(normalized)
     if drive and not _DRIVE_ONLY_RE.fullmatch(drive):

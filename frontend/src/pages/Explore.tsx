@@ -19,13 +19,12 @@ import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, vi
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
 import { neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
 import {
-  STRUCTURE_VIEWER_BACKGROUND,
   addUnitCell,
+  createStructureViewer,
   disposeStructureViewer,
-  load3Dmol,
+  type StructureViewer,
 } from "../viz/StructureViewer";
 import { createExploreFrameLoader, type ExploreFrameLoader } from "./exploreFrameLoader";
-import type { ClickedAtom, ViewerModel } from "../util/viewerAtoms";
 import type { DatasetHealth, DatasetView, FramePayload, HealthFindings } from "../types/protocol";
 
 const DEFAULT_BOND_CUTOFF = 2.4;
@@ -96,22 +95,7 @@ export default function Explore() {
   const [showDistancePair, setShowDistancePair] = useState(false);
   const viewerDiv = useRef<HTMLDivElement>(null);
   const atomTableRef = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<
-    {
-      clear: () => void;
-      addModel: () => ViewerModel;
-      addLine: (spec: object) => void;
-      addArrow: (spec: object) => void;
-      addSphere?: (spec: object) => void;
-      setStyle: (sel: object, style: object) => void;
-      addStyle: (sel: object, style: object) => void;
-      setClickable: (sel: object, clickable: boolean, callback: (atom: ClickedAtom) => void) => void;
-      getView: () => number[];
-      setView: (view: number[]) => void;
-      zoomTo: () => void;
-      render: () => void;
-    } | null
-  >(null);
+  const viewerRef = useRef<StructureViewer | null>(null);
   const [viewerReady, setViewerReady] = useState(false);
   const [viewerError, setViewerError] = useState<string | null>(null);
   const loadStart = useRef<number>(0);
@@ -402,14 +386,12 @@ export default function Explore() {
     let cancelled = false;
     (async () => {
       try {
-        const $3Dmol = await load3Dmol();
-        if (cancelled || !element) return;
-        viewerRef.current = $3Dmol.createViewer(element, {
-          backgroundColor: STRUCTURE_VIEWER_BACKGROUND,
-          // Orthographic projection so crystal structures keep parallel cell
-          // edges (no perspective foreshortening) while rotating.
-          orthographic: true,
-        }) as never;
+        if (!element) return;
+        // Orthographic projection so crystal structures keep parallel cell
+        // edges (no perspective foreshortening) while rotating.
+        const viewer = await createStructureViewer(element, { orthographic: true });
+        if (cancelled) return;
+        viewerRef.current = viewer;
         setViewerReady(true);
       } catch (e) {
         console.error("3dmol init failed", e);
@@ -481,7 +463,7 @@ export default function Explore() {
         for (const neighbor of shellNeighbors) {
           v.addLine({ start: center, end: atoms[neighbor.index], color: "#F7630C", opacity: 0.7, linewidth: 2 });
         }
-        v.addSphere?.({ center, radius: localCutoff, color: "#F7630C", opacity: 0.12, wireframe: true });
+        v.addSphere({ center, radius: localCutoff, color: "#F7630C", opacity: 0.12, wireframe: true });
       }
       if (showForceArrow) {
         const row = selected < frame.atom_rows.length ? frame.atom_rows[selected] : undefined;

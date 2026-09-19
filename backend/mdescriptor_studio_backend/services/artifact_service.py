@@ -247,7 +247,19 @@ class AnalysisArtifactMixin:
                 except (AppError, OSError, TypeError, ValueError, IndexError):
                     pass
         n = max((len(v) for v in arrays.values()), default=0)
-        return [{"i": i, **{name: self._json_safe(value[i]) for name, value in arrays.items() if i < len(value)}} for i in range(offset, min(offset + limit, n))]
+        stop = min(offset + limit, n)
+        # One slice per array. These arrays are memory-mapped, so indexing them
+        # row by row from Python made every single value its own disk-backed
+        # scalar read — the slowest possible way to page a table.
+        columns = {name: array[offset:stop].tolist() for name, array in arrays.items()}
+        rows: list[dict] = []
+        for position in range(stop - offset):
+            row_values: dict[str, object] = {"i": offset + position}
+            for name, values in columns.items():
+                if position < len(values):
+                    row_values[name] = self._json_safe(values[position])
+            rows.append(row_values)
+        return rows
 
     @staticmethod
     def _json_safe(value):

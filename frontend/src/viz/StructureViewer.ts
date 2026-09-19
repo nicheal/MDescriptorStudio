@@ -1,17 +1,51 @@
 /** Structure viewers are 3Dmol by convention.
  *
- * The dynamic import is centralized so the pages do not each own a copy of
- * the module shape cast and viewer options.
+ * The module shape, the viewer subset the pages are allowed to use, and the one
+ * unsound cast all live here, so a page cannot hand its own copy of the surface
+ * to `as never` and stop checking it.
  */
-export type StructureViewerModule = {
+import type { ClickedAtom, ViewerModel } from "../util/viewerAtoms";
+
+type StructureViewerModule = {
   createViewer: (element: HTMLElement, options: object) => unknown;
 };
 
-export const STRUCTURE_VIEWER_BACKGROUND = "white";
+const STRUCTURE_VIEWER_BACKGROUND = "white";
 
-export async function load3Dmol(): Promise<StructureViewerModule> {
+async function load3Dmol(): Promise<StructureViewerModule> {
   const mod = await import("3dmol");
   return ((mod as { default?: unknown }).default ?? mod) as StructureViewerModule;
+}
+
+/** The 3Dmol surface this app actually uses.
+ *
+ * 3Dmol ships declarations, but ``createViewer`` there returns a class whose
+ * ``addModel().addAtoms()`` takes the library's own atom spec, while both
+ * callers feed the narrower ``ViewerAtom`` shape ``util/viewerAtoms`` builds.
+ * Declaring the subset we touch is what keeps a rename upstream from compiling
+ * quietly and failing at render time.
+ */
+export type StructureViewer = {
+  addArrow: (spec: object) => void;
+  addLine: (spec: object) => void;
+  addModel: () => ViewerModel;
+  addSphere: (spec: object) => void;
+  addStyle: (sel: object, style: object) => void;
+  clear: () => void;
+  getView: () => number[];
+  render: () => void;
+  setClickable: (sel: object, clickable: boolean, callback: (atom: ClickedAtom) => void) => void;
+  setStyle: (sel: object, style: object) => void;
+  setView: (view: number[]) => void;
+  zoomTo: () => void;
+};
+
+export async function createStructureViewer(
+  element: HTMLElement,
+  options: Record<string, unknown> = {},
+): Promise<StructureViewer> {
+  const $3Dmol = await load3Dmol();
+  return $3Dmol.createViewer(element, { backgroundColor: STRUCTURE_VIEWER_BACKGROUND, ...options }) as StructureViewer;
 }
 
 /** Row-major 3x3 lattice (a1, a2, a3) as the wireframe the viewer draws.

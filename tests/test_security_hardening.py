@@ -51,6 +51,17 @@ def test_local_path_policy_rejects_namespace_ads_and_device_forms(tmp_path: Path
     assert validate_local_path(str(tmp_path / "safe.out")) == (tmp_path / "safe.out").resolve()
 
 
+def test_extended_length_and_device_paths_are_named_not_merged():
+    # Both of these also start with the UNC double backslash. Behind a single
+    # broad test their distinct reasons were unreachable, so a device name was
+    # reported as "must be a local path" — the same rejection, bad advice.
+    for raw in (r"\\?\C:\file.xyz", r"\\.\PhysicalDrive0"):
+        with pytest.raises(UnsafePathError, match="extended-length or device"):
+            validate_local_path(raw)
+    with pytest.raises(UnsafePathError, match="must be a local path"):
+        validate_local_path(r"\\server\share\file.xyz")
+
+
 def test_fingerprint_changes_when_file_content_changes(tmp_path: Path) -> None:
     source = tmp_path / "sample.xyz"
     source.write_bytes(b"A" * 4096)

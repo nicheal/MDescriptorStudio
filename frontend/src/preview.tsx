@@ -975,11 +975,19 @@ const MOCK_DESCRIPTORS = [
 
 const METHODS: Record<string, Handler> = {
   "system.info": () => ({
+    // Every key the real sidecar answers (see tests/data/backend-response-keys.json):
+    // the e2e wire-contract spec fails if a field appears there and not here,
+    // because the UI would then be coded against something only the mock supplies.
     backend_version: "0.3.2",
     protocol_version: 1,
     platform: "Windows-11-preview",
     mdescriptor_version: "0.3.2",
     mdescriptor_api_version: 3,
+    mdescriptor_baseline_version: "2",
+    mdescriptor_descriptor_info_schema_version: 3,
+    analysis_api_version: 1,
+    analysis_algorithm_version: "studio-analysis-4",
+    analysis_dependencies: { "scikit-learn": "1.7.2", hdbscan: "0.8.40" },
     data_dir: "C:\\Users\\preview\\AppData\\Roaming\\mdescriptor-studio",
     cpu_threads: 16,
   }),
@@ -1059,8 +1067,9 @@ const METHODS: Record<string, Handler> = {
       return i === 21 || i === 512 ? ["energy", "virial"] : ["virial"];
     };
     return {
+      // The sidecar names a job only while it is still recalculating, so the
+      // settled reply must not carry job_id at all.
       recalculating: false,
-      job_id: null,
       total: indices.length,
       returned: Math.min(indices.length, limit),
       rows: indices.slice(0, limit).map((i: number) => ({
@@ -1103,7 +1112,7 @@ const METHODS: Record<string, Handler> = {
       finished_at: null,
     };
   },
-  "settings.get": (p) => ({ value: p?.key === "workspace.activeDatasetId" ? "ds-gaas" : null }),
+  "settings.get": (p) => ({ key: String(p?.key ?? ""), value: p?.key === "workspace.activeDatasetId" ? "ds-gaas" : null }),
   "settings.set": () => ({}),
   "descriptor.list": () => MOCK_DESCRIPTORS,
   "descriptor.describe": (p) => {
@@ -1471,6 +1480,15 @@ function showPreviewError(text: string) {
     // backend_restart, anything else → no-op
     return null;
   },
+};
+
+// Reachable only from the dev page this module exists for. The e2e contract spec
+// (frontend/e2e/wire-contract.spec.ts) calls handlers through it and compares
+// their top-level keys with tests/data/backend-response-keys.json, which a pytest
+// regenerates from the real sidecar - so a response shape that drifts here stops
+// being invisible to the suite that drives this mock.
+(window as unknown as { __mdsMock: { call: (method: string, params?: Record<string, unknown>) => unknown } }).__mdsMock = {
+  call: (method, params = {}) => METHODS[method]?.(params),
 };
 
 async function bootstrap() {

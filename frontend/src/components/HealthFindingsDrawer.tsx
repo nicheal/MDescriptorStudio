@@ -57,6 +57,7 @@ export default function HealthFindingsDrawer() {
   const tabRef = useRef(activeTab);
   tabRef.current = activeTab;
   const pendingResetTabRef = useRef<string | undefined>(undefined);
+  const statsCacheRef = useRef<{ key: string; stats: Stats } | null>(null);
   const loadGuardRef = useRef(createAsyncRequestGuard());
 
   const title = (key: string): string => healthCheckTitle(key, t);
@@ -121,6 +122,10 @@ export default function HealthFindingsDrawer() {
       };
     }
     const dsId = datasetId;
+    // Statistics only change when the dataset changes or a scan bumps the tick,
+    // so switching tabs must not re-ask for them: that call makes the backend
+    // re-read and re-hash a sampled fingerprint (32 MB of the source file).
+    const statsCacheKey = `${dsId}:${statsTick}`;
     const resetTab = pendingResetTabRef.current;
     pendingResetTabRef.current = undefined;
     if (resetTab != null && resetTab !== activeTab) {
@@ -141,9 +146,11 @@ export default function HealthFindingsDrawer() {
       setRows([]);
       setRowsTotal(0);
       try {
-        const s = await fetchStats();
+        const cached = statsCacheRef.current?.key === statsCacheKey ? statsCacheRef.current.stats : null;
+        const s = cached ?? await fetchStats();
         if (!isCurrent()) return;
         if (s) {
+          statsCacheRef.current = { key: statsCacheKey, stats: s };
           setStats(s);
           // the check behind the rail click may have lost its findings since
           // (or the drawer may have opened without one): snap to the first
