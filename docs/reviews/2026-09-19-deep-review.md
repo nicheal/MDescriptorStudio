@@ -233,3 +233,19 @@
 | 力箭头不再每帧重算 | `Explore.tsx:149`、`:474` | `frameMaxForce` 收进 memo，viewer effect 复用同一个值（原来同一帧算两遍，且每次 hover/输入都重算）。 |
 
 有意留下的两项：Explore 的原子表分页会破坏"选中行滚动可见"所依赖的 `tbody tr.explore-atom-row-selected` 查询，需要一次带 UI 取舍的决定（受控分页并跟随选中，或 virtual + 改定位方式）；`ARTIFACT_ARRAYS` 裁剪（`registry.ts:118-133` 列 10 个数组、只有 2 个被读）要先逐个复核消费者，适合作为独立可验证的一次提交。两者都属于第六节，不是新发现。
+
+### 第三批（去重与裁剪，`0f4c2a0`、`18f2b2d`）
+
+验证同上：**pytest 319 passed / 1 skipped**、**vitest 140**、**eslint + `tsc -b` 干净**、**Playwright 32 passed**。
+
+| 改动 | 位置 |
+| --- | --- |
+| `_NOW` 从四份定义收敛为一份（`analysis_helpers`），三处改为 import；时间戳精度是队列位次 tiebreak 的前提，原来要同时改四个文件 | `job_service.py`、`dataset_service.py`、`descriptor_service.py` |
+| 受管目录 id 的正则从两份收敛为 `MANAGED_ID_RE` | `result_service.py`、`dataset_service.py` |
+| `dataset.frame` 的 max|F| 改用 `statistics.frame_force_max`（原先"逐行取整再求最大"，与健康检查/PCA 配色的最后一位可能不一致） | `dataset_frame_service.py:99` |
+| `_frame_indices` 移到唯一调用者所在的模块并改为公开名；`dataset_view_service` 不再向兄弟模块借私有名 | `dataset_view_service.py` |
+| `ARTIFACT_ARRAYS` 裁掉 10 个无人读取的数组（逐个用 `arrays.<name>` 与方括号读取核实，无动态遍历 manifest 的用法）。loading 门等的是这张表，`local_diversity` 的 CSR 邻接表（≤20k×128）此前每次打开都白读一遍 | `registry.ts:118-133` |
+
+这批的诚实边界：e2e **不能**验证数组裁剪——preview mock 的 `analysis.chunk` 对任何数组名都给同一份数据（第五节第 2 条仍未修的 mock 缺口）。裁剪依据是静态消费者核查，置信高但非测试钉住。
+
+第四批（仍未做，都不需要决策，只是各自要一次独立验证）：`datasets` 私有方法的越界（`self.datasets._meta/_row/_adapter_for`、`_symbol`/`formula_of`）；注释与实现的逐条对齐（`result_service.py:336` 承诺的 hard cap 只有列没有行、`analysis_service.py:210` 的 "value-bounded"）；`granularity`、`_ANALYSIS_SCHEMA_VERSION`、`config.py` 的 `cache/`、`deepmd.py:22` 的 re-export 注释这批"名存实亡"的按删或按用。第 4 步（科学口径）等你定调。
