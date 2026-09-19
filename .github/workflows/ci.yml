@@ -80,6 +80,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # tauri.conf.json maps bundle.resources -> src-tauri/resources/backend,
+      # which scripts/prepare_sidecar.ps1 generates and .gitignore excludes.
+      # tauri-build refuses to compile the crate while that path does not exist
+      # (tauri-utils ResourcePaths checks `path.exists()`), so the bridge's unit
+      # tests cannot build from a bare checkout. An empty directory is all the
+      # validator asks for; the real bundle is the release workflow's job, and
+      # nothing here pretends to be one.
+      - name: Provide the bundle resource path
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path src-tauri/resources/backend | Out-Null
+
       - name: Cache the cargo target directory
         uses: Swatinem/rust-cache@v2
         with:
