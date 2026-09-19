@@ -5,6 +5,9 @@
 // key used in the source is not listed here.
 export const zhDict: Record<string, string> = {
   // App shell / navigation
+  "This view could not be displayed": "该视图无法显示",
+  "The dataset and its computations are unaffected. Reload to continue where you left off.": "数据集及其计算结果不受影响，重新加载即可继续。",
+  "Reload": "重新加载",
   "Overview": "总览",
   "Explore": "浏览",
   "Descriptors": "描述符",
@@ -15,7 +18,8 @@ export const zhDict: Record<string, string> = {
   "Analysis modules": "分析模块",
   "The selected analysis module is no longer available": "所选分析模块已不可用",
   "Starting backend…": "正在启动后端…",
-  "Backend exited. Restart the app.": "后端已退出，请重启应用。",
+  "Backend process exited.": "后端进程已退出。",
+  "Restart the backend": "重启后端",
   "Backend process exited": "后端进程已退出",
 
   // TitleBar

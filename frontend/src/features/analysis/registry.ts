@@ -129,5 +129,5 @@ export const ARTIFACT_ARRAYS: Record<string, string[]> = {
   perturbation_sensitivity: ["amplitudes", "mean_response", "median_response", "p95_response", "max_response", "response_matrix", "sample_indices"],
   local_diversity: ["coords", "sample_indices", "labels", "scores", "cluster_labels", "elements", "coordination", "neighbor_offsets", "neighbor_indices", "neighbor_distances"],
   kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
-  sampling: ["coverage_radius_curve", "coverage_mean_curve"],
+  sampling: ["coverage_radius_curve", "coverage_mean_curve", "coverage_r2_curve"],
 };

@@ -40,18 +40,33 @@ _GAMMA = 1.0
 _SPREAD = 1.0
 
 
-def _knn_indices_and_distances(x: np.ndarray, k: int, metric: str) -> tuple[np.ndarray, np.ndarray]:
+def _knn_indices_and_distances(
+    x: np.ndarray, k: int, metric: str, progress: Progress | None = None
+) -> tuple[np.ndarray, np.ndarray]:
     """Exact kNN with self at column 0, chunked to bound temporary memory."""
     n = x.shape[0]
     if metric == "manhattan":
         from scipy.spatial.distance import cdist
     elif metric == "cosine":
         x = x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-12)
+    elif metric == "euclidean":
+        # The expanded form of the distance below keeps only as many bits as
+        # the features have left after their mean value, and UMAP embeds
+        # untransformed descriptors by default. Centring costs one copy and
+        # changes euclidean distances not at all. cdist subtracts coordinates
+        # directly and is immune for the same reason; see _common.py.
+        x = x - x.mean(axis=0)
     sq = (x * x).sum(1)
     idx = np.empty((n, k + 1), dtype=np.int64)
     dist = np.empty((n, k + 1), dtype=np.float32)
-    block = max(256, min(2048, (1 << 23) // max(n, 1)))
-    for start in range(0, n, block):
+    # Keep the (block x n) float32 distance block near 32 MB. The previous
+    # 256-row floor defeated that above n=32768, where 256 x n is ~1 GB.
+    block = min(2048, max(1, (1 << 23) // max(n, 1)))
+    total_blocks = -(-n // block)
+    # At most ~100 checkpoints however the blocking turns out: each one is an
+    # IPC event, and the callback is also where cancellation is checked.
+    every = max(1, total_blocks // 100)
+    for index, start in enumerate(range(0, n, block)):
         stop = min(start + block, n)
         if metric == "manhattan":
             d = cdist(x[start:stop], x, metric="cityblock")
@@ -65,6 +80,11 @@ def _knn_indices_and_distances(x: np.ndarray, k: int, metric: str) -> tuple[np.n
         order = np.argsort(near, axis=1)
         idx[start:stop] = np.take_along_axis(part, order, 1)
         dist[start:stop] = np.take_along_axis(near, order, 1)
+        # This pass is O(n²·D) and the first thing a large selection set waits
+        # through. Without a checkpoint inside it the job cannot be cancelled
+        # until the search is already over.
+        if progress is not None and (index % every == every - 1 or index == total_blocks - 1):
+            progress(0.05 + 0.09 * (index + 1) / total_blocks, "fitting UMAP")
     return idx, dist
 
 
@@ -126,6 +146,10 @@ def _pca_init(x: np.ndarray) -> np.ndarray:
     centered = x - x.mean(axis=0)
     _, _, axes = np.linalg.svd(centered, full_matrices=False)
     axes = axes[:2]
+    if axes.shape[0] < 2:
+        # A single-descriptor run still needs two init axes; the spare stays
+        # zero and the optimiser spreads it, instead of the run crashing.
+        axes = np.pad(axes, ((0, 2 - axes.shape[0]), (0, 0)))
     # LAPACK sign conventions are platform-dependent; a flipped axis would
     # mirror the whole embedding, so pin each axis to a positive lead entry.
     flip = axes[np.arange(2), np.argmax(np.abs(axes), axis=1)] < 0
@@ -212,7 +236,7 @@ def fit_umap(
     n = x.shape[0]
     if progress is not None:
         progress(0.05, "fitting UMAP")
-    idx, dist = _knn_indices_and_distances(x, n_neighbors, metric)
+    idx, dist = _knn_indices_and_distances(x, n_neighbors, metric, progress)
     if progress is not None:
         progress(0.15, "fitting UMAP")
     weights = _smooth_knn_weights(dist, n_neighbors)

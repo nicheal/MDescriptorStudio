@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Callable
 
 import numpy as np
 
@@ -20,7 +20,7 @@ def umap(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str
     if n_neighbors < 2:
         raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "UMAP needs at least 3 samples")
     min_dist = _float_param(params, "min_dist", 0.1, 0.0, 1.0)
-    metric = params.get("metric", "euclidean")
+    metric = str(params.get("metric") or "euclidean")
     if metric not in ("euclidean", "cosine", "manhattan"):
         raise AppError(ANALYSIS_INPUT_INVALID, "UMAP metric must be euclidean, cosine, or manhattan")
     coords = fit_umap(

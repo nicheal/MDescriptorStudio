@@ -206,11 +206,6 @@ class Database:
                 self._conn.rollback()
                 raise
 
-    def executemany(self, sql: str, seq) -> None:
-        with self._write_lock:
-            self._conn.executemany(sql, seq)
-            self._conn.commit()
-
     def query(self, sql: str, params: tuple = ()) -> list[dict]:
         with self._write_lock:
             return [dict(r) for r in self._conn.execute(sql, params).fetchall()]

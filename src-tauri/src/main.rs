@@ -140,9 +140,13 @@ fn clear_pending(state: &BackendState) {
 fn kill_backend(state: &BackendState) {
     if let Ok(mut guard) = state.child.lock() {
         if let Some(mut child) = guard.take() {
-            // graceful: close stdin, give it a moment, then kill
+            // graceful: close stdin, give it a moment, then kill. The moment is
+            // deliberately short — this runs on the window-destroy path, and
+            // waiting out a handler that ignores EOF would freeze the UI for
+            // the whole grace period. Crash recovery already closes whatever
+            // the backend did not get to settle.
             drop(child.stdin.take());
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
             while child
                 .try_wait()
                 .map(|status| status.is_none())
@@ -152,7 +156,7 @@ fn kill_backend(state: &BackendState) {
                     let _ = child.kill();
                     break;
                 }
-                thread::sleep(std::time::Duration::from_millis(50));
+                thread::sleep(std::time::Duration::from_millis(10));
             }
         }
     }
@@ -209,14 +213,18 @@ fn spawn_backend(app: &tauri::AppHandle) {
                 Ok(Some(bytes)) => match String::from_utf8(bytes) {
                     Ok(line) => line.trim_end_matches(['\r', '\n']).to_string(),
                     Err(_) => {
-                        eprintln!("backend emitted non-UTF-8 output");
-                        break;
+                        eprintln!("backend emitted non-UTF-8 output; frame skipped");
+                        continue;
                     }
                 },
                 Ok(None) => break,
                 Err(error) => {
-                    eprintln!("backend output rejected: {error}");
-                    break;
+                    // read_line_bounded consumed through the next newline, so the
+                    // stream stays frame-aligned. The sidecar is alive and every
+                    // other request still needs this channel, so drop the one
+                    // oversized frame instead of tearing the link down.
+                    eprintln!("backend output rejected: {error}; frame skipped");
+                    continue;
                 }
             };
             if line.is_empty() {
@@ -229,7 +237,12 @@ fn spawn_backend(app: &tauri::AppHandle) {
             // The reader owns the authoritative exit transition. Avoid
             // replacing a newly spawned child if restart raced with EOF.
             if guard.as_ref().map(|child| child.id()) == Some(child_id) {
-                *guard = None;
+                if let Some(mut child) = guard.take() {
+                    // Nothing will drain this pipe again. A live sidecar left
+                    // here blocks on its next write and is orphaned for the rest
+                    // of the session, because kill_backend() now finds None.
+                    let _ = child.kill();
+                }
                 true
             } else {
                 false
@@ -311,21 +324,27 @@ fn read_line_bounded<R: BufRead>(
             .map(|index| index + 1)
             .unwrap_or(available.len());
         if output.len() + take > max_bytes_including_newline {
+            // `take` already spans the newline when the oversized line ends
+            // inside this buffer, so draining further would swallow the *next*
+            // frame and strand the request it answers.
+            let reached_end = available[..take].contains(&b'\n');
             reader.consume(take);
-            loop {
-                let rest = reader.fill_buf()?;
-                if rest.is_empty() {
-                    break;
-                }
-                let discard = rest
-                    .iter()
-                    .position(|byte| *byte == b'\n')
-                    .map(|index| index + 1)
-                    .unwrap_or(rest.len());
-                let has_newline = rest[..discard].contains(&b'\n');
-                reader.consume(discard);
-                if has_newline {
-                    break;
+            if !reached_end {
+                loop {
+                    let rest = reader.fill_buf()?;
+                    if rest.is_empty() {
+                        break;
+                    }
+                    let discard = rest
+                        .iter()
+                        .position(|byte| *byte == b'\n')
+                        .map(|index| index + 1)
+                        .unwrap_or(rest.len());
+                    let has_newline = rest[..discard].contains(&b'\n');
+                    reader.consume(discard);
+                    if has_newline {
+                        break;
+                    }
                 }
             }
             return Err(io::Error::new(
@@ -548,6 +567,27 @@ mod tests {
         let manifest = serde_json::to_vec(&entries).unwrap();
         fs::write(dir.join("backend-manifest.json"), &manifest).unwrap();
         format!("{:x}", Sha256::digest(&manifest))
+    }
+
+    #[test]
+    fn oversized_frame_is_drained_so_the_next_line_still_reads() {
+        // The reader loop skips an oversized frame instead of tearing the
+        // channel down. That is only safe if the stream stays frame-aligned,
+        // for both ways the limit can be crossed: the long line ending inside
+        // the buffer, and running past it.
+        let mut within = BufReader::new("xxxxxxx\nnext\n".as_bytes());
+        assert!(read_line_bounded(&mut within, 6).is_err());
+        assert_eq!(
+            read_line_bounded(&mut within, 6).unwrap(),
+            Some(b"next\n".to_vec())
+        );
+
+        let mut across = BufReader::with_capacity(3, "xxxxxxxxx\nnext\n".as_bytes());
+        assert!(read_line_bounded(&mut across, 6).is_err());
+        assert_eq!(
+            read_line_bounded(&mut across, 6).unwrap(),
+            Some(b"next\n".to_vec())
+        );
     }
 
     #[test]

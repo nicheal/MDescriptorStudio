@@ -10,7 +10,7 @@
 //    "View all jobs" opens the top-right Jobs drawer (full history).
 // Fits the viewport by design — no scrollbar at default window sizes; below
 // 1280px window width it hides so pages keep their working area.
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { App as AntApp, Button, Progress, Tooltip, Typography } from "antd";
 import {
   ArrowSync16Regular,
@@ -28,7 +28,7 @@ import {
   Warning16Filled,
 } from "@fluentui/react-icons";
 import { ipc } from "../../ipc/client";
-import { activeDataset, refetchDatasets, useWorkspace } from "../../stores/workspace";
+import { refetchDatasets, useActiveDataset, useWorkspace } from "../../stores/workspace";
 import { useT, type T } from "../../i18n";
 import {
   JOB_STATUS_COLOR as STATUS_COLOR,
@@ -84,11 +84,57 @@ export default function RightRail() {
   return page === "descriptors" || page === "results" ? <RecentJobsRail /> : <DataHealthRail />;
 }
 
+/** One rail card: fixed-width column, white surface, titled header with help. */
+function RailShell({ title, help, children }: { title: string; help: string; children: ReactNode }) {
+  return (
+    <div
+      style={{
+        width: 264,
+        flex: "0 0 264px",
+        borderLeft: "1px solid #E1E4E8",
+        background: "#F9FAFB",
+        padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        minWidth: 0,
+      }}
+    >
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #EAECF0",
+          borderRadius: 10,
+          boxShadow: "0 1px 2px rgba(16,24,40,0.06)",
+          padding: "12px 14px 14px",
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minHeight: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingBottom: 4 }}>
+          <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
+            {title}
+          </Typography.Text>
+          <Tooltip title={help}>
+            <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
+              <Info16Regular />
+            </span>
+          </Tooltip>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+
 function DataHealthRail() {
   const { message } = AntApp.useApp();
   const { t } = useT();
-  const st = useWorkspace();
-  const d = activeDataset(st);
+  const d = useActiveDataset();
+  const statsTick = useWorkspace((st) => st.statsTick);
   const [health, setHealth] = useState<DatasetHealth | null>(null);
   const [structures, setStructures] = useState<number | null>(null);
   const [scanning, setScanning] = useState<number | null>(null); // job progress 0..1
@@ -130,7 +176,7 @@ function DataHealthRail() {
     return () => {
       disposed = true;
     };
-  }, [d?.id, st.statsTick, applyStats]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [d?.id, statsTick, applyStats]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rescan = useCallback(async () => {
     if (!d || scanning !== null) return;
@@ -223,89 +269,54 @@ function DataHealthRail() {
   ];
 
   return (
-    <div
-      style={{
-        width: 264,
-        flex: "0 0 264px",
-        borderLeft: "1px solid #E1E4E8",
-        background: "#F9FAFB",
-        padding: 14,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        minWidth: 0,
-      }}
-    >
-      <div
-        style={{
-          background: "#FFFFFF",
-          border: "1px solid #EAECF0",
-          borderRadius: 10,
-          boxShadow: "0 1px 2px rgba(16,24,40,0.06)",
-          padding: "12px 14px 14px",
-          display: "flex",
-          flexDirection: "column",
-          flex: 1,
-          minHeight: 0,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingBottom: 4 }}>
-          <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
-            {t("Data Health")}
-          </Typography.Text>
-          <Tooltip title={t("Quality checks from the last full scan: property values missing on some structures, structures with non-negative per-atom energy, non-positive or degenerate cells, exact duplicate structures (content hash), any atom force above the threshold, atom pairs closer than the covalent-radii bound (non-physical structures), and net force above the threshold.")}>
-            <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
-              <Info16Regular />
-            </span>
-          </Tooltip>
-        </div>
+    <RailShell title={t("Data Health")} help={t("Quality checks from the last full scan: property values missing on some structures, structures with non-negative per-atom energy, non-positive or degenerate cells, exact duplicate structures (content hash), any atom force above the threshold, atom pairs closer than the covalent-radii bound (non-physical structures), and net force above the threshold.")}>
 
-        {!d ? (
-          <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
-            {t("Register a dataset to see its health.")}
-          </Typography.Text>
-        ) : (
-          <>
-            <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-              {rows.map((row, i) => (
-                <HealthRow
-                  key={row.key}
-                  icon={row.icon}
-                  title={row.title}
-                  subtitle={row.subtitle}
-                  count={row.count}
-                  total={structures}
-                  first={i === 0}
-                  loading={health === null && scanning === null}
-                  clickable={!!health && !!row.count}
-                  onClick={() => openFindings(row.check)}
-                />
-              ))}
-              <ScanRow scanning={scanning} lastScanAt={d.last_scan_at} />
-            </div>
-            <Button
-              block
-              disabled={scanning !== null}
-              onClick={() => void rescan()}
-              icon={scanning === null ? <ArrowSync16Regular /> : <ArrowSync16Regular className="rail-spin" />}
-              style={{
-                marginTop: 12,
-                flex: "0 0 auto",
-                borderRadius: 8,
-                borderColor: BLUE,
-                color: BLUE,
-                background: "#FFFFFF",
-                fontWeight: 600,
-              }}
-            >
-              {scanning === null ? t("Rescan") : t("Scanning… {percent}%", { percent: Math.round(scanning * 100) })}
-            </Button>
-          </>
-        )}
-      </div>
-    </div>
+      {!d ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
+          {t("Register a dataset to see its health.")}
+        </Typography.Text>
+      ) : (
+        <>
+          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+            {rows.map((row, i) => (
+              <HealthRow
+                key={row.key}
+                icon={row.icon}
+                title={row.title}
+                subtitle={row.subtitle}
+                count={row.count}
+                total={structures}
+                first={i === 0}
+                loading={health === null && scanning === null}
+                clickable={!!health && !!row.count}
+                onClick={() => openFindings(row.check)}
+              />
+            ))}
+            <ScanRow scanning={scanning} lastScanAt={d.last_scan_at} />
+          </div>
+          <Button
+            block
+            disabled={scanning !== null}
+            onClick={() => void rescan()}
+            icon={scanning === null ? <ArrowSync16Regular /> : <ArrowSync16Regular className="rail-spin" />}
+            style={{
+              marginTop: 12,
+              flex: "0 0 auto",
+              borderRadius: 8,
+              borderColor: BLUE,
+              color: BLUE,
+              background: "#FFFFFF",
+              fontWeight: 600,
+            }}
+          >
+            {scanning === null ? t("Rescan") : t("Scanning… {percent}%", { percent: Math.round(scanning * 100) })}
+          </Button>
+        </>
+      )}
+    </RailShell>
   );
 }
+
 
 function RecentJobsRail() {
   const { setJobsDrawerOpen, datasets, activeDatasetId } = useWorkspace();
@@ -339,75 +350,40 @@ function RecentJobsRail() {
   );
 
   return (
-    <div
-      style={{
-        width: 264,
-        flex: "0 0 264px",
-        borderLeft: "1px solid #E1E4E8",
-        background: "#F9FAFB",
-        padding: 14,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        minWidth: 0,
-      }}
-    >
-      <div
+    <RailShell title={t("Recent Jobs")} help={t("Latest descriptor compute jobs. Live jobs update automatically — the top-right Jobs button has the full history.")}>
+
+      {recent.length === 0 ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
+          {t("No descriptor computes yet — submit one from this page.")}
+        </Typography.Text>
+      ) : (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {recent.map((j, i) => (
+            <JobRailRow key={j.id} job={j} first={i === 0} datasetName={j.dataset_id ? datasetNames.get(j.dataset_id) ?? null : null} />
+          ))}
+        </div>
+      )}
+
+      <Button
+        block
+        onClick={() => setJobsDrawerOpen(true)}
+        icon={<Clock16Regular />}
         style={{
+          marginTop: 12,
+          flex: "0 0 auto",
+          borderRadius: 8,
+          borderColor: BLUE,
+          color: BLUE,
           background: "#FFFFFF",
-          border: "1px solid #EAECF0",
-          borderRadius: 10,
-          boxShadow: "0 1px 2px rgba(16,24,40,0.06)",
-          padding: "12px 14px 14px",
-          display: "flex",
-          flexDirection: "column",
-          flex: 1,
-          minHeight: 0,
+          fontWeight: 600,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 6, paddingBottom: 4 }}>
-          <Typography.Text strong style={{ fontSize: 14, color: "#242424" }}>
-            {t("Recent Jobs")}
-          </Typography.Text>
-          <Tooltip title={t("Latest descriptor compute jobs. Live jobs update automatically — the top-right Jobs button has the full history.")}>
-            <span style={{ color: GRAY, display: "inline-flex", cursor: "default" }}>
-              <Info16Regular />
-            </span>
-          </Tooltip>
-        </div>
-
-        {recent.length === 0 ? (
-          <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
-            {t("No descriptor computes yet — submit one from this page.")}
-          </Typography.Text>
-        ) : (
-          <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-            {recent.map((j, i) => (
-              <JobRailRow key={j.id} job={j} first={i === 0} datasetName={j.dataset_id ? datasetNames.get(j.dataset_id) ?? null : null} />
-            ))}
-          </div>
-        )}
-
-        <Button
-          block
-          onClick={() => setJobsDrawerOpen(true)}
-          icon={<Clock16Regular />}
-          style={{
-            marginTop: 12,
-            flex: "0 0 auto",
-            borderRadius: 8,
-            borderColor: BLUE,
-            color: BLUE,
-            background: "#FFFFFF",
-            fontWeight: 600,
-          }}
-        >
-          {t("View all jobs")}
-        </Button>
-      </div>
-    </div>
+        {t("View all jobs")}
+      </Button>
+    </RailShell>
   );
 }
+
 
 function JobRailRow({ job, first, datasetName }: { job: JobState; first: boolean; datasetName: string | null }) {
   const i18n = useT();

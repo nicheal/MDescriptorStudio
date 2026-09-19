@@ -6,7 +6,7 @@ import {
   Delete16Regular,
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
-import { activeDataset, useWorkspace } from "../stores/workspace";
+import { useActiveDataset, useWorkspace } from "../stores/workspace";
 import { jobStatusLabel } from "../stores/jobs";
 import { displayableDescriptorRuns } from "./analysisPreview";
 import { useT } from "../i18n";
@@ -39,11 +39,12 @@ function SectionHeading({ title, meta }: { title: string; meta?: string }) {
 
 export default function DescriptorResults() {
   const { message } = AntApp.useApp();
-  const st = useWorkspace();
   const { t, tr } = useT();
-  const dataset = activeDataset(st);
+  const dataset = useActiveDataset();
   const datasetId = dataset?.id;
-  const selectedRun = st.activeDescriptorRunId;
+  const selectedRun = useWorkspace((state) => state.activeDescriptorRunId);
+  const setActiveRun = useWorkspace((state) => state.setActiveRun);
+  const setPage = useWorkspace((state) => state.setPage);
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
@@ -120,7 +121,7 @@ export default function DescriptorResults() {
               size="small"
               icon={<ArrowRight16Regular />}
               disabled={selectedRunRow?.status !== "COMPLETED"}
-              onClick={() => st.setPage("analysis")}
+              onClick={() => setPage("analysis")}
             >
               {t("Open Analysis")}
             </Button>
@@ -140,7 +141,7 @@ export default function DescriptorResults() {
             dataSource={resultRuns}
             rowClassName={(run) => run.id === selectedRun ? "descriptor-results-row-selected" : ""}
             onRow={(run) => ({
-              onClick: () => { if (run.status === "COMPLETED") st.setActiveRun(run.id); },
+              onClick: () => { if (run.status === "COMPLETED") setActiveRun(run.id); },
               style: {
                 cursor: run.status === "COMPLETED" ? "pointer" : "default",
               },
@@ -205,7 +206,7 @@ export default function DescriptorResults() {
                           title={t("Open in Analysis")}
                           icon={<ArrowRight16Regular />}
                           disabled={run.status !== "COMPLETED"}
-                          onClick={() => { st.setActiveRun(run.id); st.setPage("analysis"); }}
+                          onClick={() => { setActiveRun(run.id); setPage("analysis"); }}
                         />
                         <Popconfirm
                           title={t("Delete this descriptor result?")}

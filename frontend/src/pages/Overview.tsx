@@ -9,7 +9,7 @@ import Histogram from "../components/Histogram";
 import { createCartesianDataZoom } from "../components/chartInteraction";
 import { ipc } from "../ipc/client";
 import { waitForSuccessfulJob } from "../stores/jobs";
-import { activeDataset, useWorkspace } from "../stores/workspace";
+import { useActiveDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import { formatLabel, formatSize } from "../util/format";
@@ -22,8 +22,8 @@ type OverviewStatisticsResponse = {
 };
 
 export default function Overview() {
-  const st = useWorkspace();
-  const d = activeDataset(st);
+  const d = useActiveDataset();
+  const statsTick = useWorkspace((st) => st.statsTick);
   const { t } = useT();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recalculating, setRecalculating] = useState(false);
@@ -62,7 +62,7 @@ export default function Overview() {
     return () => {
       disposed = true;
     };
-  }, [d?.id, st.statsTick]);
+  }, [d?.id, statsTick]);
 
   if (!d) {
     return <EmptyState />;
@@ -180,7 +180,7 @@ function StatsTable({
   d,
   stats,
 }: {
-  d: NonNullable<ReturnType<typeof activeDataset>>;
+  d: NonNullable<ReturnType<typeof useActiveDataset>>;
   stats: Stats | null;
 }) {
   const { t } = useT();

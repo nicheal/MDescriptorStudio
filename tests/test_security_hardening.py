@@ -120,7 +120,7 @@ def test_analysis_manifest_cannot_escape_managed_artifact(tmp_path: Path) -> Non
         encoding="utf-8",
     )
     service = AnalysisService(db, jobs=None, results=ResultService(db, tmp_path), datasets=None, data_dir=tmp_path)
-    assert not service._artifact_is_complete({"id": "ana_1", "result_path": str(root)})
+    assert not service._artifacts.is_complete({"id": "ana_1", "result_path": str(root)})
 
 
 def test_descriptor_schema_rejects_nonfinite_or_out_of_range_values() -> None:

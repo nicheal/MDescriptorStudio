@@ -103,3 +103,23 @@ export function parseViewerAtoms(frame: FramePayload, cutoff: number, includePer
   }
   return atoms;
 }
+
+/** Atoms within `cutoff` of one atom, nearest first, excluding the atom itself
+ * and any image standing exactly on it. Shared by the preview card and the
+ * Explore page so a local shell means the same thing in both. */
+export function neighborsWithinCutoff(
+  atoms: ViewerAtom[],
+  selectedAtom: number,
+  cutoff: number,
+): { index: number; distance: number; parent?: number }[] {
+  const center = atoms[selectedAtom];
+  if (!center) return [];
+  return atoms
+    .map((atom, index) => ({
+      index,
+      parent: atom.parent,
+      distance: Math.sqrt((atom.x - center.x) ** 2 + (atom.y - center.y) ** 2 + (atom.z - center.z) ** 2),
+    }))
+    .filter(({ index, distance }) => index !== selectedAtom && distance > 1e-6 && distance <= cutoff)
+    .sort((left, right) => left.distance - right.distance);
+}

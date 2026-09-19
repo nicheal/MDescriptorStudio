@@ -1,10 +1,16 @@
 """Regression tests for adversarial-review fixes (red-team findings #1-#8)."""
 
+import json
+import logging
+import threading
 from pathlib import Path
 
 from make_fixtures import write_extxyz
 
 from conftest import BackendProcess, register_dataset, wait_job
+from mdescriptor_studio_backend.errors import AppError, INVALID_PARAMS
+from mdescriptor_studio_backend.protocol import frames
+from mdescriptor_studio_backend.protocol.server import Server
 
 
 def test_job_get_unknown_id_is_error(tmp_path: Path) -> None:
@@ -105,3 +111,63 @@ def test_malformed_extxyz_reports_invalid_dataset(tmp_path: Path) -> None:
         assert bp.request(11, "system.info")["result"]["backend_version"]
     finally:
         assert bp.close() == 0
+
+
+def test_non_finite_extxyz_values_are_rejected(tmp_path: Path) -> None:
+    """NaN/Infinity must not leave the parser.
+
+    json encodes them as bare tokens that JSON.parse rejects, so the renderer
+    drops the frame and the request hangs with no error anywhere (red-team:
+    protocol layer). energy=nan is an SCF that never converged: unusable data,
+    not missing data."""
+    xyz = tmp_path / "nan.xyz"
+    xyz.write_text(
+        '2\nLattice="10 0 0 0 10 0 0 0 10" Properties=species:S:1:pos:R:3 energy=nan\n'
+        "Ga 0.0 0.0 0.0\nAs 1.4 0.0 0.5\n",
+        encoding="utf-8",
+    )
+    bp = BackendProcess(tmp_path)
+    try:
+        assert bp.read_line()["event"] == "backend.ready"
+        resp = bp.request(10, "dataset.register", {"path": str(xyz)})
+        done = wait_job(bp, resp["result"]["job_id"])
+        assert done["status"] == "FAILED"
+        assert done["error"]["code"] == "INVALID_DATASET"
+    finally:
+        assert bp.close() == 0
+
+
+def test_unencodable_response_is_answered_not_dropped(capsys) -> None:
+    """The last line of defence: whatever produces a non-finite result, the
+    request must still come back as an error frame the renderer can parse."""
+    Server({})._write(frames.response_ok(7, {"energy": float("nan")}))
+    frame = json.loads(capsys.readouterr().out.strip())
+    assert frame["id"] == 7
+    assert frame["error"]["code"] == "INTERNAL_ERROR"
+
+
+def test_oversized_response_is_answered_not_dropped(capsys) -> None:
+    # A frame over the bridge's line cap used to tear the whole channel down
+    # and orphan the sidecar; the renderer must get a failure for its request.
+    Server({})._write(frames.response_ok(7, {"blob": "x" * (frames.MAX_LINE_BYTES + 16)}))
+    frame = json.loads(capsys.readouterr().out.strip())
+    assert frame["id"] == 7
+    assert frame["error"]["code"] == "INTERNAL_ERROR"
+
+
+def test_app_error_details_reach_the_log_not_the_frame(caplog) -> None:
+    """AppError.details can quote a path, so response_err() deliberately keeps
+    it off the wire — but it must not vanish either, or the ~25 call sites that
+    build a structured diagnosis produce something nobody can ever read."""
+    error = AppError(INVALID_PARAMS, "unknown sampling block", {"blocks": ["energy", "forces"]})
+
+    def handler(_params):
+        raise error
+
+    server = Server({"x": handler})
+    with caplog.at_level(logging.WARNING, logger="mdescriptor_studio_backend.protocol.server"):
+        # unbounded: _handle() only ever releases the slot the caller acquired
+        server._handle(8, "x", {}, threading.Semaphore())
+    assert error.error_id in caplog.text
+    assert "unknown sampling block" in caplog.text
+    assert "forces" in caplog.text

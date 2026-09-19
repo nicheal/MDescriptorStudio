@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { elementColor } from "../util/elements";
-import { parseViewerAtoms } from "../util/viewerAtoms";
-import type { ClickedAtom, ViewerAtom, ViewerModel } from "../util/viewerAtoms";
+import { neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
+import type { ClickedAtom, ViewerModel } from "../util/viewerAtoms";
 import { useT } from "../i18n";
-import { STRUCTURE_VIEWER_BACKGROUND, load3Dmol } from "../viz/StructureViewer";
+import { STRUCTURE_VIEWER_BACKGROUND, addUnitCell, load3Dmol } from "../viz/StructureViewer";
 import type { FramePayload } from "../types/protocol";
 
 type Viewer = {
@@ -17,43 +17,6 @@ type Viewer = {
   zoomTo: () => void;
   render: () => void;
 };
-
-function addUnitCell(viewer: Viewer, cell: number[] | null) {
-  if (!cell || cell.length !== 9) return;
-  const point = (i: number, j: number, k: number) => ({
-    x: i * cell[0] + j * cell[3] + k * cell[6],
-    y: i * cell[1] + j * cell[4] + k * cell[7],
-    z: i * cell[2] + j * cell[5] + k * cell[8],
-  });
-  const edges: [number, number, number, number, number, number][] = [
-    [0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 0, 1, 1], [1, 1, 1, 1, 0, 1], [1, 1, 1, 1, 1, 0],
-    [1, 0, 0, 1, 1, 0], [1, 0, 0, 1, 0, 1],
-    [0, 1, 0, 1, 1, 0], [0, 1, 0, 0, 1, 1],
-    [0, 0, 1, 1, 0, 1], [0, 0, 1, 0, 1, 1],
-  ];
-  for (const [i1, j1, k1, i2, j2, k2] of edges) {
-    viewer.addLine({
-      start: point(i1, j1, k1),
-      end: point(i2, j2, k2),
-      color: "#0F6CBD",
-      opacity: 0.72,
-      linewidth: 1.5,
-    });
-  }
-}
-
-function localNeighbors(atoms: ViewerAtom[], selectedAtom: number, cutoff: number): { index: number; distance: number }[] {
-  const center = atoms[selectedAtom];
-  if (!center) return [];
-  return atoms
-    .map((atom, index) => ({
-      index,
-      distance: Math.sqrt((atom.x - center.x) ** 2 + (atom.y - center.y) ** 2 + (atom.z - center.z) ** 2),
-    }))
-    .filter(({ index, distance }) => index !== selectedAtom && distance > 1e-6 && distance <= cutoff)
-    .sort((left, right) => left.distance - right.distance);
-}
 
 interface StructurePreviewProps {
   frame: FramePayload;
@@ -118,7 +81,7 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
     if (selectedAtom != null && selectedAtom >= 0 && selectedAtom < atoms.length) {
       viewer.addStyle({ index: selectedAtom }, { sphere: { scale: 0.44, color: "#D13438" }, stick: { radius: 0.15, color: "#D13438" } });
       if (localCutoff != null && Number.isFinite(localCutoff)) {
-        const neighbors = localNeighbors(atoms, selectedAtom, Math.max(0.1, Math.min(10, localCutoff)));
+        const neighbors = neighborsWithinCutoff(atoms, selectedAtom, Math.max(0.1, Math.min(10, localCutoff)));
         const center = atoms[selectedAtom];
         for (const neighbor of neighbors) {
           viewer.addStyle({ index: neighbor.index }, { sphere: { scale: 0.34, color: "#F7630C" }, stick: { radius: 0.13, color: "#F7630C" } });

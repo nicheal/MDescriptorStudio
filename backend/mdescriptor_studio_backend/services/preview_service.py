@@ -1,10 +1,4 @@
-"""Analysis service responsibilities split by concern.
-
-The :class:`AnalysisService` facade inherits these mixins; each file owns one
-responsibility (data loading, preview shaping, artifacts/export or job
-execution) so the request surface stays free of numerical and filesystem
-details.
-"""
+"""Shaping the bounded identity/plot preview stored with each analysis."""
 
 from __future__ import annotations
 
@@ -76,16 +70,21 @@ class AnalysisPreviewMixin:
             preview["total_points"] = int(coords.shape[0])
             row_keys = [key for key in _PREVIEW_ARRAY_KEYS if key in arrays and np.asarray(arrays[key]).ndim == 1]
             if row_keys:
+                row_arrays = {key: np.asarray(arrays[key]) for key in row_keys}
                 rows = []
-                for i in range(min(coords.shape[0], _MAX_PREVIEW_POINTS)):
+                # The table must describe the same samples the scatter drew:
+                # taking the first N rows while the points strided across the
+                # whole set made the two halves of one preview disagree.
+                for i in indices.tolist():
                     logical_index = int(sample_indices[i]) if sample_indices.ndim == 1 and i < sample_indices.size else int(i)
                     item = sample_identity(logical_index)
                     if item is None:
                         continue
                     for key in row_keys:
-                        if i >= len(arrays[key]):
+                        values = row_arrays[key]
+                        if i >= len(values):
                             continue
-                        value = np.asarray(arrays[key])[i]
+                        value = values[i]
                         output_key = "labels" if key == "labels" else "cluster_labels" if key == "cluster_labels" else "element" if key == "elements" else key
                         item[output_key] = int(value) if key in ("labels", "cluster_labels", "elements", "coordination") else float(value)
                     rows.append(item)

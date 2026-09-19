@@ -45,6 +45,23 @@ const DYNAMIC_KEYS = [
   "Results",
   "Analysis",
   "Similarity",
+  // Emitted as variables by features/analysis/submission.ts, which holds the
+  // run payloads as data rather than as t() call sites.
+  "Pairwise similarity",
+  "Neighbor graph",
+  "Sampling",
+  "Coverage",
+  "Overlap",
+  "Compare",
+  "Mantel test",
+  "Local diversity",
+  "Kernel diagnostics",
+  "Uncertainty acquisition",
+  "Novelty acquisition",
+  "Select compatible reference and query runs",
+  "Select a descriptor run pair",
+  "Select a reference/query run pair",
+  "Parameter sensitivity requires the same descriptor; use Compare for different descriptors",
 ];
 
 describe("zh dictionary completeness", () => {

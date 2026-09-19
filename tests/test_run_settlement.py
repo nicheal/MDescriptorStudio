@@ -166,6 +166,40 @@ def test_restart_settles_zombie_runs(tmp_path: Path) -> None:
     jobs.shutdown()
 
 
+def test_abandoned_run_directories_are_reclaimed_on_startup(tmp_path: Path) -> None:
+    """A run that dies while writing leaves result_path NULL, so neither
+    result.remove nor dataset.remove can ever reach the directory it created,
+    and a hard exit mid-commit leaves an analysis staging directory behind."""
+    db = Database(tmp_path / "db.sqlite3")
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version,"
+        " parameters_json, scope, status, created_at)"
+        " VALUES ('run_dead', 'ds_1', 'ACE', 'test', '{}', 'dataset', 'FAILED', '2026-01-01T00:00:00+00:00')"
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version,"
+        " parameters_json, scope, status, created_at, result_path)"
+        " VALUES ('run_live', 'ds_1', 'ACE', 'test', '{}', 'dataset', 'COMPLETED',"
+        " '2026-01-01T00:00:00+00:00', ?)",
+        (str(tmp_path / "results" / "run_live"),),
+    )
+    abandoned = tmp_path / "results" / "run_dead"
+    abandoned.mkdir(parents=True)
+    (abandoned / "values.npy").write_bytes(b"half a matrix")
+    completed = tmp_path / "results" / "run_live"
+    completed.mkdir(parents=True)
+    (completed / "values.npy").write_bytes(b"whole matrix")
+    staging = tmp_path / "analysis" / ".ana_x.tmp-01234567"
+    staging.mkdir(parents=True)
+
+    ResultService(db, tmp_path).sweep_abandoned()
+
+    assert not abandoned.exists()
+    assert not staging.exists()
+    assert completed.exists() and (completed / "values.npy").is_file()
+    db.close()
+
+
 def test_cancelled_descriptor_cannot_complete(tmp_path: Path) -> None:
     db, jobs, svc = _env(tmp_path)
     db.execute(

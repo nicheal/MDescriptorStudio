@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mdescriptor_studio_backend.analysis.umap_numpy import fit_umap
+from mdescriptor_studio_backend.analysis.umap_numpy import _knn_indices_and_distances, fit_umap
 
 
 def _blobs(n: int = 300, d: int = 10, seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
@@ -63,3 +63,32 @@ def test_separable_blobs_preserve_local_structure() -> None:
     x, _ = _blobs()
     coords = _fit(x)
     assert trustworthiness(x, coords, n_neighbors=10) > 0.9
+
+
+def test_knn_search_checkpoints_so_a_long_one_stays_cancellable() -> None:
+    """Cancellation is checked inside the progress callback. A pass that never
+    calls it cannot be stopped, and this one is O(n^2*D) over the whole
+    selection set."""
+    x = np.random.default_rng(3).normal(size=(8000, 2)).astype(np.float32)
+    seen: list[float] = []
+    _knn_indices_and_distances(x, 10, "euclidean", progress=lambda fraction, _m: seen.append(fraction))
+    assert len(seen) > 4
+    assert seen[0] > 0.05 and seen[-1] == pytest.approx(0.14)
+    assert all(left <= right for left, right in zip(seen, seen[1:]))
+
+
+def test_shared_feature_offset_does_not_reorder_neighbours() -> None:
+    """A common shift changes no euclidean distance, yet rebuilding distances
+    as |a|^2 + |b|^2 - 2ab gives float32 away exactly in the low-order bits
+    that separate near-duplicate rows -- which is what descriptor matrices of
+    similar configurations look like. The neighbourhoods UMAP builds its graph
+    from must not depend on where the feature origin sits."""
+    from scipy.spatial.distance import cdist
+
+    rng = np.random.default_rng(11)
+    x = (rng.normal(size=(600, 96)) + 2000.0).astype(np.float32)
+    exact = np.argsort(cdist(x.astype(np.float64), x.astype(np.float64)), axis=1)[:, :11]
+    indices, _ = _knn_indices_and_distances(x, 10, "euclidean")
+    overlap = np.mean([len(set(row.tolist()) & set(known.tolist())) for row, known in zip(indices, exact)])
+    assert overlap > 0.98
+    assert (indices[:, 0] == np.arange(x.shape[0])).all(), "self must stay in column 0"

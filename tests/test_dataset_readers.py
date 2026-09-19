@@ -45,6 +45,43 @@ def test_extxyz_frame_without_header_line_fails(tmp_path: Path) -> None:
     assert exc.value.code == INVALID_DATASET
 
 
+def test_extxyz_non_finite_coordinate_fails_the_frame_read(tmp_path: Path) -> None:
+    # NaN encodes as a bare JSON token the renderer's JSON.parse rejects, so a
+    # frame carrying one would hang the request instead of answering it.
+    path = tmp_path / "nan.xyz"
+    path.write_text(
+        '2\nLattice="10 0 0 0 10 0 0 0 10" Properties=species:S:1:pos:R:3\n'
+        "Ga 0 0 0\nAs nan 1 1\n",
+        encoding="utf-8",
+    )
+    adapter = create_adapter(path)
+    with pytest.raises(AppError) as exc:
+        adapter.get_frame(0)
+    assert exc.value.code == INVALID_DATASET
+    assert "row 1: non-finite position" in str(exc.value)
+
+
+def test_extxyz_resolves_species_tokens_and_refuses_to_guess(tmp_path: Path) -> None:
+    """An unresolvable token used to land on Z=0, which the radii table then
+    promoted to hydrogen — a misread column silently relabelled the whole
+    structure. Numeric charges and case variants are still accepted."""
+    def read(body: str):
+        path = tmp_path / f"{abs(hash(body))}.xyz"
+        path.write_text(
+            '1\nLattice="10 0 0 0 10 0 0 0 10" Properties=species:S:1:pos:R:3\n' + body,
+            encoding="utf-8",
+        )
+        return create_adapter(path).get_frame(0)
+
+    assert read("Si 0 0 0\n").numbers.tolist() == [14]
+    assert read("si 0 0 0\n").numbers.tolist() == [14]
+    assert read("14 0 0 0\n").numbers.tolist() == [14]
+    with pytest.raises(AppError) as exc:
+        read("Xx 0 0 0\n")
+    assert exc.value.code == INVALID_DATASET
+    assert "unknown species" in str(exc.value)
+
+
 def test_builtin_formats_are_registered() -> None:
     assert {"deepmd", "extxyz"}.issubset(set(reader_formats()))
 

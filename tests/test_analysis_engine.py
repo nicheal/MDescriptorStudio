@@ -16,7 +16,7 @@ from mdescriptor_studio_backend.analysis.algorithms.kernel import kernel
 from mdescriptor_studio_backend.analysis.algorithms.pairs import acquisition, compare, coverage, drift, mantel, overlap
 from mdescriptor_studio_backend.analysis.algorithms.pca import pca
 from mdescriptor_studio_backend.analysis.algorithms.sensitivity import perturbation_sensitivity, sensitivity
-from mdescriptor_studio_backend.analysis.algorithms.tsne import tsne
+from mdescriptor_studio_backend.analysis.algorithms.tsne import MAX_ITERATIONS, tsne
 from mdescriptor_studio_backend.analysis.algorithms.umap import umap
 from mdescriptor_studio_backend.analysis.clustering import cluster, outlier
 from mdescriptor_studio_backend.analysis.metrics import effective_dimension, feature_variance, local_diversity, neighbors, pairwise, similarity, trajectory
@@ -300,6 +300,28 @@ def test_tsne_adapts_default_perplexity_for_small_inputs() -> None:
     values = np.arange(8, dtype=np.float64).reshape(4, 2)
     result = tsne(StructureDescriptorMatrix(values, np.arange(4)), {"max_iter": 250})
     assert result["preview"]["parameters"]["perplexity"] == 3.0
+
+
+def test_tsne_caps_iterations_it_cannot_report_progress_for() -> None:
+    """sklearn optimises without a callback, so iteration count is the only
+    bound on how long the job runs before it can be cancelled."""
+    values = np.arange(12, dtype=np.float64).reshape(6, 2)
+    result = tsne(StructureDescriptorMatrix(values, np.arange(6)), {"max_iter": 100_000})
+    assert result["preview"]["parameters"]["max_iter"] == MAX_ITERATIONS
+    assert any("max_iter reduced" in warning for warning in result["warnings"])
+
+
+def test_single_feature_matrix_runs_do_not_crash_unstructured() -> None:
+    """One descriptor is a thin but legitimate input: the projection either
+    returns finite coordinates or says so with a structured analysis error."""
+    values = np.arange(5, dtype=np.float64).reshape(5, 1)
+    samples = StructureDescriptorMatrix(values, np.arange(5))
+    coords = umap(samples, {"n_neighbors": 3})["arrays"]["coords"]
+    assert coords.shape == (5, 2)
+    assert np.isfinite(coords).all()
+    with pytest.raises(AppError) as exc:
+        tsne(samples, {"perplexity": 2.0})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
 
 
 def test_compare_reports_geometry_and_neighbor_consistency(samples: StructureDescriptorMatrix) -> None:

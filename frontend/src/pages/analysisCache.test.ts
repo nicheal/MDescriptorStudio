@@ -25,4 +25,15 @@ describe("analysis cache", () => {
     expect(cache.size).toBe(0);
     expect(cache.bytes).toBe(0);
   });
+
+  it("replaces a selection without re-walking the payload", () => {
+    const cache = createAnalysisCache({ maxEntries: 2, maxBytes: 100_000 });
+    cache.set("a", value(10));
+    const before = cache.bytes;
+    cache.setSelectedIndices("a", [1, 2, 3]);
+    expect(cache.get("a")?.selectedIndices).toEqual([1, 2, 3]);
+    // three numbers accounted for exactly, the walked payload left alone
+    expect(cache.bytes).toBe(before + 24);
+    expect(() => cache.setSelectedIndices("absent", [1])).not.toThrow();
+  });
 });

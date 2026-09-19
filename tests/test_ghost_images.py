@@ -83,3 +83,12 @@ def test_empty_and_degenerate_inputs() -> None:
     assert periodic_boundary_ghosts([], np.zeros((0, 3)), _cubic(5.0)) == []
     # singular cell has no well-defined images
     assert periodic_boundary_ghosts(["C"], np.array([[0.0, 0.0, 0.0]]), np.zeros((3, 3))) == []
+
+
+def test_degenerate_axis_yields_no_images_instead_of_freezing() -> None:
+    """A cell vector short of a fraction of the cutoff needs ~2.4 billion image
+    shifts on that axis. The enumeration must give up, not run into the next
+    century holding an RPC worker thread."""
+    cell = np.diag([10.0, 10.0, 1e-9])
+    pos = np.array([[1.0, 1.0, 0.0], [9.0, 9.0, 0.0]])
+    assert periodic_boundary_ghosts(["O", "H"], pos, cell) == []

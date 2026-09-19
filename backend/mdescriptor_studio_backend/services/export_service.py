@@ -1,16 +1,9 @@
-"""Analysis service responsibilities split by concern.
-
-The :class:`AnalysisService` facade inherits these mixins; each file owns one
-responsibility (data loading, preview shaping, artifacts/export or job
-execution) so the request surface stays free of numerical and filesystem
-details.
-"""
+"""Export jobs and the writers for selection, report and dataset formats."""
 
 from __future__ import annotations
 
 import csv
 import json
-import uuid
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +16,7 @@ from ..security import (
     open_text_for_write,
     validate_local_path,
 )
-from .analysis_helpers import ANALYSIS_ALGORITHM_VERSION, _ANALYSIS_SCHEMA_VERSION, _NOW
+from .analysis_helpers import ANALYSIS_ALGORITHM_VERSION, _NOW
 
 
 def _cancellable_frames(adapter, frames: list[int], ctx):
@@ -31,6 +24,23 @@ def _cancellable_frames(adapter, frames: list[int], ctx):
     for frame_index in frames:
         ctx.check_cancelled()
         yield adapter.get_frame(frame_index)
+
+
+def _identity_records(samples, chosen: list[int]) -> list[dict]:
+    """One row per exported sample, keyed by its index in the analysis.
+
+    Frame and sample id come from the same identity table previews use: an
+    atom-level run has several samples sharing one frame, and its ids are not
+    ``frame:<index>``.
+    """
+    return [
+        {
+            "sample_index": index,
+            "frame": int(samples.frame[index]),
+            "sample_id": samples.sample_ids[index],
+        }
+        for index in chosen
+    ]
 
 
 class AnalysisExportMixin:
@@ -79,26 +89,16 @@ class AnalysisExportMixin:
         cache_key = self._analysis_cache_key("export", input_ids, canonical)
 
         with self._submit_lock:
-            cached = self.db.query_one("SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED'", (cache_key,))
-            if cached and self._artifact_is_complete(cached):
-                return {"job_id": None, "analysis_id": cached["id"], "cache": {"existing_analysis_id": cached["id"], "cache_key": cache_key}}
-            active = self.db.query_one(
-                "SELECT * FROM analysis_runs WHERE cache_key = ? AND status IN ('QUEUED', 'RUNNING') ORDER BY created_at DESC LIMIT 1",
-                (cache_key,),
+            analysis_id, early, created = self._claim_analysis_row(
+                analysis_type="export",
+                cache_key=cache_key,
+                canonical_params=canonical,
+                input_ids=input_ids,
+                primary_run_id=run["id"],
+                dataset_ids=[run["dataset_id"]],
             )
-            if active:
-                job = self.db.query_one(
-                    "SELECT id FROM jobs WHERE analysis_run_id = ? AND status IN ('QUEUED', 'RUNNING') ORDER BY created_at DESC LIMIT 1",
-                    (active["id"],),
-                )
-                if job:
-                    return {"job_id": job["id"], "analysis_id": active["id"], "cache": {"existing_analysis_id": active["id"], "status": active["status"], "cache_key": cache_key}}
-            analysis_id = active["id"] if active else f"ana_{uuid.uuid4().hex[:12]}"
-            if not active:
-                self.db.execute(
-                    "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at, input_run_ids_json, dataset_ids_json, cache_key, schema_version, algorithm_version, updated_at) VALUES (?, ?, 'export', ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)",
-                    (analysis_id, run["id"], json.dumps(canonical, ensure_ascii=False, sort_keys=True), _NOW(), json.dumps(input_ids), json.dumps([run["dataset_id"]]), cache_key, _ANALYSIS_SCHEMA_VERSION, ANALYSIS_ALGORITHM_VERSION, _NOW()),
-                )
+            if early is not None:
+                return early
 
             def runner(ctx):
                 artifact_path: Path | None = None
@@ -133,12 +133,12 @@ class AnalysisExportMixin:
                     # Keep failed runs atomic: a committed artifact must
                     # never outlive the run row that failed to settle.
                     if artifact_path is not None:
-                        self._rmtree_quiet(artifact_path)
+                        self._artifacts.remove_quiet(artifact_path)
                     raise
             try:
                 job_id = self.jobs.submit("analysis.export", runner, dataset_id=run["dataset_id"], analysis_run_id=analysis_id)
             except Exception:
-                if not active:
+                if created:
                     self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
                 raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
@@ -174,7 +174,12 @@ class AnalysisExportMixin:
         # this is essential for frame-scoped runs whose only sample may be
         # dataset frame 7 (or any other non-zero frame).
         samples = self._load_samples(run, {"mode": mode}, "export")
-        frames = sorted({int(samples.frame[i]) for i in selected if 0 <= i < samples.n_samples}) if selected else sorted({int(frame) for frame in samples.frame})
+        chosen = (
+            sorted({int(i) for i in selected if 0 <= int(i) < samples.n_samples})
+            if selected
+            else list(range(samples.n_samples))
+        )
+        frames = sorted({int(samples.frame[i]) for i in chosen})
         frames = [frame for frame in frames if 0 <= frame < count]
         if not frames:
             raise AppError(EXPORT_FAILED, "export selection is empty")
@@ -184,7 +189,7 @@ class AnalysisExportMixin:
             raise AppError(EXPORT_FAILED, "export output must be an absolute local path") from exc
         if export_format == "json":
             target.parent.mkdir(parents=True, exist_ok=True)
-            records = [{"sample_index": i, "frame": frame, "sample_id": f"frame:{frame}"} for i, frame in enumerate(frames)]
+            records = _identity_records(samples, chosen)
             ensure_no_reparse_points(target.parent)
             with open_text_for_write(target) as fh:
                 json.dump({"dataset_id": dataset["id"], "run_id": run["id"], "format": dataset["format"], "records": records}, fh, ensure_ascii=False, indent=2)
@@ -195,8 +200,8 @@ class AnalysisExportMixin:
             with open_text_for_write(target, newline="") as fh:
                 writer = csv.DictWriter(fh, fieldnames=["sample_index", "frame", "sample_id"])
                 writer.writeheader()
-                for i, frame in enumerate(frames):
-                    writer.writerow({"sample_index": i, "frame": frame, "sample_id": f"frame:{frame}"})
+                for record in _identity_records(samples, chosen):
+                    writer.writerow(record)
             return target
         if export_format == "extxyz":
             write_extxyz(target, _cancellable_frames(adapter, frames, ctx))
@@ -222,14 +227,14 @@ class AnalysisExportMixin:
         curve: dict[str, list] = {"samples": [], "coverage_radius": [], "mean_residual": []}
         try:
             if analysis_row.get("result_path"):
-                root = self._managed_artifact_path(str(analysis_row["id"]), analysis_row.get("result_path"))
+                root = self._artifacts.managed_path(str(analysis_row["id"]), analysis_row.get("result_path"))
                 manifest = self._json_load(analysis_row.get("artifact_manifest_json"), {})
                 files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
                 for name, key in (("coverage_radius_curve", "coverage_radius"), ("coverage_mean_curve", "mean_residual"), ("coverage_r2_curve", "coverage_r2")):
                     meta = files.get(name)
                     if not isinstance(meta, dict):
                         continue
-                    path = self._artifact_file(root, meta.get("path"))
+                    path = self._artifacts.artifact_file(root, meta.get("path"))
                     if path is not None and path.is_file():
                         curve[key] = np.load(path, mmap_mode="r", allow_pickle=False).tolist()
                 curve["samples"] = list(range(1, len(curve["coverage_radius"]) + 1))

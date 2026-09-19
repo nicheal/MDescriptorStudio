@@ -135,14 +135,17 @@ class JobService:
             raise AppError("BUSY", "job queue is full", public_message="Backend is busy; try again shortly.")
         inserted = False
         try:
+            # Published before the row exists: cancel() reads the row and the
+            # context separately, and a QUEUED row with no context yet would
+            # answer "cannot cancel" for the width of an INSERT.
+            with self._lock:
+                self._contexts[job_id] = JobContext(self, job_id)
             self.db.execute(
                 "INSERT INTO jobs (id, job_type, dataset_id, descriptor_run_id, analysis_run_id, status, progress, created_at)"
                 " VALUES (?, ?, ?, ?, ?, 'QUEUED', 0, ?)",
                 (job_id, job_type, dataset_id, descriptor_run_id, analysis_run_id, _NOW()),
             )
             inserted = True
-            with self._lock:
-                self._contexts[job_id] = JobContext(self, job_id)
             self._pools[_category(job_type)].submit(self._run, job_id, job_type, runner)
             return job_id
         except Exception:
@@ -342,7 +345,10 @@ class JobService:
             args.append(params["status"])
         if cond:
             sql += " WHERE " + " AND ".join(cond)
-        sql += " ORDER BY created_at DESC LIMIT 200"
+        # rowid breaks created_at ties: the timestamp only has second
+        # resolution, so a batch submitted in one second would reorder itself
+        # between refreshes (_queue_positions does the same).
+        sql += " ORDER BY created_at DESC, rowid DESC LIMIT 200"
         rows = self.db.query(sql, tuple(args))
         positions = self._queue_positions()
         for row in rows:

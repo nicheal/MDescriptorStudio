@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Callable
 
 import numpy as np
 
@@ -177,8 +177,10 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
         cls = _safe_import("sklearn.cluster", "scikit-learn").KMeans
         model = cls(n_clusters=min(k, n), random_state=_seed(params), n_init=10).fit(x)
         selected_list = []
-        for center in model.cluster_centers_:
-            members = np.flatnonzero(model.labels_ == len(selected_list))
+        for label, center in enumerate(model.cluster_centers_):
+            # KMeans can leave a cluster empty, so the label a centre owns is
+            # its own index, not however many representatives exist so far.
+            members = np.flatnonzero(model.labels_ == label)
             if len(members):
                 distances = ((x[members] - center) ** 2).sum(axis=1)
                 selected_list.append(int(members[int(np.argmin(distances))]))

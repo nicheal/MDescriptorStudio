@@ -48,6 +48,19 @@ export function createAnalysisCache(options: { maxEntries?: number; maxBytes?: n
       bytes += entry.bytes;
       trim();
     },
+    /** Replace only the selection, without re-walking the payload.
+     *
+     * A cached projection can carry 20k points across 18 fields; re-estimating
+     * that on every click cost tens of milliseconds to record a change in a
+     * list that is orders of magnitude smaller. Its exact size is tracked
+     * separately so the byte total stays honest.
+     */
+    setSelectedIndices(key: string, indices: number[]): void {
+      const entry = entries.get(key);
+      if (!entry) return;
+      bytes += (indices.length - entry.value.selectedIndices.length) * 8;
+      entry.value = { ...entry.value, selectedIndices: indices };
+    },
     delete(key: string): void {
       const previous = entries.get(key);
       if (!previous) return;

@@ -7,6 +7,7 @@ import { ConfigProvider, App as AntApp } from "antd";
 import enUS from "antd/locale/en_US";
 import zhCN from "antd/locale/zh_CN";
 import App from "./App";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { theme } from "./theme";
 import { useI18n } from "./i18n";
 
@@ -16,7 +17,9 @@ function LocalizedApp() {
   return (
     <ConfigProvider theme={theme} locale={lang === "zh" ? zhCN : enUS}>
       <AntApp>
-        <App />
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
       </AntApp>
     </ConfigProvider>
   );

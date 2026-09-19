@@ -106,6 +106,19 @@ export const activeDataset = (st: WorkspaceState): DatasetMeta | undefined =>
   st.datasets.find((d) => d.id === st.activeDatasetId);
 
 /**
+ * The active dataset, subscribed field by field.
+ *
+ * Reading the whole store to find it (`activeDataset(useWorkspace())`) makes
+ * the caller re-render on every unrelated write, including the job.progress
+ * ticks that fire many times a second while a descriptor run is going.
+ */
+export function useActiveDataset(): DatasetMeta | undefined {
+  const datasets = useWorkspace((st) => st.datasets);
+  const activeDatasetId = useWorkspace((st) => st.activeDatasetId);
+  return datasets.find((d) => d.id === activeDatasetId);
+}
+
+/**
  * Restore the persisted active descriptor run before the pages render
  * (backend.ready path). Analysis.refresh validates it against the completed
  * runs and falls back to the first one when it no longer exists.

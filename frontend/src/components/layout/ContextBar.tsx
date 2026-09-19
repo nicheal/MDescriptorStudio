@@ -5,7 +5,7 @@ import { App as AntApp, Button, Dropdown, Space, Tag, Tooltip, Typography } from
 import { CheckmarkCircle16Filled, MoreHorizontal16Regular } from "@fluentui/react-icons";
 import { ipc } from "../../ipc/client";
 import { RenameDatasetModal, useDatasetDelete } from "../datasetActions";
-import { activeDataset, useWorkspace } from "../../stores/workspace";
+import { useActiveDataset, useWorkspace } from "../../stores/workspace";
 import { formatLabel } from "../../util/format";
 import { useT } from "../../i18n";
 
@@ -35,8 +35,7 @@ export default function ContextBar() {
   const confirmDelete = useDatasetDelete();
   const [renameOpen, setRenameOpen] = useState(false);
   const { t } = useT();
-  const st = useWorkspace();
-  const d = activeDataset(st);
+  const d = useActiveDataset();
   if (!d) {
     return (
       <div style={{ padding: "10px 24px", background: "#FFFFFF", borderBottom: "1px solid #EAECF0" }}>

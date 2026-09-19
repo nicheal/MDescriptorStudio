@@ -15,7 +15,10 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
     case "projection":
       return [p.projection, p.mode, p.preprocess, p.projection === "tsne" ? p.tsnePerplexity : "", p.viewId ?? "full"].join("|");
     case "similarity":
-      return [p.similarityMode, p.mode, p.k, p.similarityMode === "query" ? String(p.queryIndex) : "", p.viewId ?? "full"].join("|");
+      // Pairwise similarity submits no k (it correlates every pair), so k must
+      // not participate in its key: moving the slider would otherwise look like
+      // a different analysis and re-run an identical one.
+      return [p.similarityMode, p.mode, p.similarityMode === "pairwise" ? "" : p.k, p.similarityMode === "query" ? String(p.queryIndex) : "", p.viewId ?? "full"].join("|");
     case "clusters":
       return [p.clusterAlgorithm, p.nClusters, p.mode, p.viewId ?? "full"].join("|");
     case "outliers":

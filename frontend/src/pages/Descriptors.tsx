@@ -17,7 +17,7 @@ import {
 } from "antd";
 import { Info16Regular } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
-import { activeDataset, useWorkspace } from "../stores/workspace";
+import { useActiveDataset } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
 import { collectDefaults, SchemaField, speciesToNumbers, type ParamValues } from "../components/SchemaForm";
 import { useT } from "../i18n";
@@ -116,8 +116,7 @@ const DEFAULT_OUTPUT_DTYPE = "float32";
 
 export default function Descriptors() {
   const { message } = AntApp.useApp();
-  const st = useWorkspace();
-  const d = activeDataset(st);
+  const d = useActiveDataset();
   const { t } = useT();
   const [list, setList] = useState<DescriptorInfo[]>([]);
   const [schemas, setSchemas] = useState<Record<string, DescriptorSchema>>({});

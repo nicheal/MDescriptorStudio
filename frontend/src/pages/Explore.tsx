@@ -11,16 +11,16 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { waitForSuccessfulJob } from "../stores/jobs";
-import { activeDataset, useWorkspace } from "../stores/workspace";
+import { useActiveDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import { forceArrowGeometry, frameMaxForce } from "../util/forces";
 import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, virialSummary } from "../util/structure";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
-import { parseViewerAtoms } from "../util/viewerAtoms";
-import { STRUCTURE_VIEWER_BACKGROUND, load3Dmol } from "../viz/StructureViewer";
+import { neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
+import { STRUCTURE_VIEWER_BACKGROUND, addUnitCell, load3Dmol } from "../viz/StructureViewer";
 import { createExploreFrameLoader, type ExploreFrameLoader } from "./exploreFrameLoader";
-import type { ClickedAtom, ViewerAtom, ViewerModel } from "../util/viewerAtoms";
+import type { ClickedAtom, ViewerModel } from "../util/viewerAtoms";
 import type { DatasetHealth, DatasetView, FramePayload, HealthFindings } from "../types/protocol";
 
 const DEFAULT_BOND_CUTOFF = 2.4;
@@ -49,23 +49,6 @@ function clampBondCutoff(value: number): number {
   return Math.max(MIN_BOND_CUTOFF, Math.min(MAX_BOND_CUTOFF, value));
 }
 
-function neighborsWithinCutoff(
-  atoms: ViewerAtom[],
-  selectedAtom: number,
-  cutoff: number,
-): { index: number; distance: number; parent?: number }[] {
-  const center = atoms[selectedAtom];
-  if (!center) return [];
-  return atoms
-    .map((atom, index) => ({
-      index,
-      parent: atom.parent,
-      distance: Math.sqrt((atom.x - center.x) ** 2 + (atom.y - center.y) ** 2 + (atom.z - center.z) ** 2),
-    }))
-    .filter(({ index, distance }) => index !== selectedAtom && distance > 1e-6 && distance <= cutoff)
-    .sort((left, right) => left.distance - right.distance);
-}
-
 export async function loadExploreHealth(
   datasetId: string,
   requestStatistics: (datasetId: string) => Promise<ExploreStatisticsResponse>,
@@ -84,8 +67,13 @@ export async function loadExploreHealth(
 }
 
 export default function Explore() {
-  const st = useWorkspace();
-  const d = activeDataset(st);
+  const d = useActiveDataset();
+  const statsTick = useWorkspace((st) => st.statsTick);
+  const selectedSample = useWorkspace((st) => st.selectedSample);
+  const setSelectedSample = useWorkspace((st) => st.setSelectedSample);
+  const activeFrameIndex = useWorkspace((st) => st.activeFrameIndex);
+  const setActiveFrame = useWorkspace((st) => st.setActiveFrame);
+  const activeDescriptorRunId = useWorkspace((st) => st.activeDescriptorRunId);
   const datasetId = d?.id;
   const { t } = useT();
   const [frame, setFrame] = useState<FramePayload | null>(null);
@@ -136,7 +124,6 @@ export default function Explore() {
   const fetchedGhostCutoffRef = useRef(0);
 
   const total = d?.number_of_frames ?? 0;
-  const selectedSample = st.selectedSample;
   const selectedAtom = selectedSample
     && selectedSample.datasetId === d?.id
     && selectedSample.frame === frame?.index
@@ -227,7 +214,7 @@ export default function Explore() {
     return () => {
       disposed = true;
     };
-  }, [datasetId, st.statsTick]);
+  }, [datasetId, statsTick]);
 
   // Dataset views, for the inspector "Views" row: membership is stored on the
   // view (frame indices), so the frame's views are found by reverse lookup.
@@ -250,7 +237,7 @@ export default function Explore() {
     };
   }, [d?.id]);
 
-  const idx = frame?.index ?? st.activeFrameIndex;
+  const idx = frame?.index ?? activeFrameIndex;
   // checks that flag the frame currently shown in the viewer
   const flaggedChecks = useMemo(() => {
     if (!healthFindings) return [] as string[];
@@ -283,13 +270,13 @@ export default function Explore() {
   const selectAtom = (atomIndex: number) => {
     if (!d) return;
     if (atomIndex === selectedAtom) {
-      st.setSelectedSample(null);
+      setSelectedSample(null);
       return;
     }
     setShowDistancePair(false);
-    st.setSelectedSample({
+    setSelectedSample({
       datasetId: d.id,
-      ...(st.activeDescriptorRunId ? { runId: st.activeDescriptorRunId } : {}),
+      ...(activeDescriptorRunId ? { runId: activeDescriptorRunId } : {}),
       mode: "atom",
       frame: idx,
       atom: atomIndex,
@@ -329,7 +316,7 @@ export default function Explore() {
       setShowDistancePair(false);
       return;
     }
-    st.setSelectedSample(null);
+    setSelectedSample(null);
     setShowDistancePair(true);
   };
 
@@ -354,7 +341,7 @@ export default function Explore() {
           // periodic-padding extent needed by an active local shell.
           fetchedGhostCutoffRef.current = requestCutoff;
           setFrame(f);
-          st.setActiveFrame(idx);
+          setActiveFrame(idx);
           setJumpTo(null);
         },
         onError: (error) => console.error(error),
@@ -371,7 +358,7 @@ export default function Explore() {
     fetchedGhostCutoffRef.current = 0;
     setFrame(null);
     setShowDistancePair(false);
-    if (d && total > 0) void fetchFrame(st.activeFrameIndex || 0);
+    if (d && total > 0) void fetchFrame(activeFrameIndex || 0);
     return () => frameLoaderRef.current!.invalidate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [d?.id]);
@@ -381,10 +368,10 @@ export default function Explore() {
   // already lands on the pointer, and frame===null defers to the reset above.
   useEffect(() => {
     if (!d || loading || !frame) return;
-    if (st.activeFrameIndex === frame.index) return;
-    void fetchFrame(st.activeFrameIndex);
+    if (activeFrameIndex === frame.index) return;
+    void fetchFrame(activeFrameIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [st.activeFrameIndex, loading]);
+  }, [activeFrameIndex, loading]);
 
   // A local shell may need periodic images farther out than the bond display
   // cutoff. Fetch that larger xyz padding only while the shell is active.
@@ -521,31 +508,7 @@ export default function Explore() {
         v.addLine({ start: a, end: b, color: HEALTH_RED, opacity: 0.9, linewidth: 3, dashed: true });
       }
     }
-    // unit cell wireframe (12 edges) for periodic frames; cell is row-major a1,a2,a3
-    if (frame.cell && frame.cell.length === 9) {
-      const A = frame.cell;
-      const p = (i: number, j: number, k: number) => ({
-        x: i * A[0] + j * A[3] + k * A[6],
-        y: i * A[1] + j * A[4] + k * A[7],
-        z: i * A[2] + j * A[5] + k * A[8],
-      });
-      const edges: [number, number, number, number, number, number][] = [
-        [0, 0, 0, 1, 0, 0], [0, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 1],
-        [1, 1, 1, 0, 1, 1], [1, 1, 1, 1, 0, 1], [1, 1, 1, 1, 1, 0],
-        [1, 0, 0, 1, 1, 0], [1, 0, 0, 1, 0, 1],
-        [0, 1, 0, 1, 1, 0], [0, 1, 0, 0, 1, 1],
-        [0, 0, 1, 1, 0, 1], [0, 0, 1, 0, 1, 1],
-      ];
-      for (const [i1, j1, k1, i2, j2, k2] of edges) {
-        v.addLine({
-          start: p(i1, j1, k1),
-          end: p(i2, j2, k2),
-          color: "#0F6CBD",
-          opacity: 0.9,
-          linewidth: 2,
-        });
-      }
-    }
+    addUnitCell(v, frame.cell, { opacity: 0.9, linewidth: 2 });
     // Click-to-select: real atoms report their Atom Table index; a displayed
     // periodic image reports its real-atom parent. Registered before render()
     // so 3Dmol builds the picking intersection shapes.

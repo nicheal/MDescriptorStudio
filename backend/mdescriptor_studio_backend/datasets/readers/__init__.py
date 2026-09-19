@@ -1,8 +1,9 @@
 """Reader registrations for the built-in dataset formats.
 
-A reader is any :class:`~datasets.base.DatasetAdapter`: ``metadata()``,
-``read()`` and ``iterate_frames()`` are the stable names the service layer
-uses. Supporting LAMMPS/VASP/ASE therefore means adding one
+A reader is any :class:`~datasets.base.DatasetAdapter`; the service layer drives
+them through ``scan()``, ``get_frame()`` and ``iter_frames()`` (``metadata()``,
+``read()`` and ``iterate_frames()`` are the compatibility spellings the plugin
+vocabulary keeps). Supporting LAMMPS/VASP/ASE therefore means adding one
 :func:`..registry.register_reader` call here, not another ``if format == ...``
 branch in the callers.
 """

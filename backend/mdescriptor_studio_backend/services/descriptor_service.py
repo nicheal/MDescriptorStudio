@@ -54,7 +54,13 @@ _MODEL_SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 
 
 def _process_rss_bytes() -> int | None:
-    """Return the current process resident set size when the OS exposes it."""
+    """Resident memory as the OS reports it, for the per-run peak.
+
+    Windows answers with the current working set, so sampling and taking the
+    max measures this compute. POSIX `ru_maxrss` is already the lifetime high
+    water mark of the whole process, so on Linux/macOS `memory_peak_bytes` is
+    an upper bound that includes startup imports, not this run's own cost.
+    """
     try:
         if os.name == "nt":
             import ctypes

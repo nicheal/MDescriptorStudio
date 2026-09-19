@@ -129,7 +129,11 @@ def _preprocess(x: np.ndarray, params: dict, default: str) -> tuple[np.ndarray, 
         keep = np.ones(x.shape[1], dtype=bool)
         scale = np.ones(x.shape[1], dtype=np.float64)
     if mode == "raw":
-        return x[:, keep], warnings, keep
+        # Fancy indexing with an all-True mask would copy a matrix that is
+        # already the one the caller wanted. (The centred copy above stays:
+        # np.var(x) is not bitwise equal to (x - x.mean(0)).var(0), and
+        # standardized results are cached by their exact bytes.)
+        return (x if bool(keep.all()) else x[:, keep]), warnings, keep
     if mode == "center":
         return centered[:, keep], warnings, keep
     return centered[:, keep] / np.where(scale[keep] > 0, scale[keep], 1.0), warnings, keep
@@ -416,6 +420,9 @@ def _cross_k_nearest(
     k_eff = min(max(int(k), 1), reference.shape[0])
     distances = np.full((query.shape[0], k_eff), np.inf, dtype=np.float64)
     indices = np.full((query.shape[0], k_eff), -1, dtype=np.int64)
+    # One import lookup per (query x reference) block would repeat a
+    # warmup-gated call tens of thousands of times.
+    cdist = _safe_import("scipy.spatial.distance", "scipy").cdist
     for start in range(0, query.shape[0], query_chunk):
         stop = min(start + query_chunk, query.shape[0])
         query_block = query[start:stop]
@@ -425,9 +432,9 @@ def _cross_k_nearest(
         for ref_start in range(0, reference.shape[0], reference_chunk):
             ref_block = reference[ref_start : ref_start + reference_chunk]
             if metric == "euclidean":
-                block = _safe_import("scipy.spatial.distance", "scipy").cdist(query_block, ref_block, metric="euclidean")
+                block = cdist(query_block, ref_block, metric="euclidean")
             elif metric == "manhattan":
-                block = _safe_import("scipy.spatial.distance", "scipy").cdist(query_block, ref_block, metric="cityblock")
+                block = cdist(query_block, ref_block, metric="cityblock")
             else:
                 ref_norm = np.linalg.norm(ref_block, axis=1)
                 similarity = (query_block @ ref_block.T) / np.maximum(query_norm * ref_norm[None, :], 1e-15)

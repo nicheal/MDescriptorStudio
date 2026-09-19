@@ -5,6 +5,10 @@ from __future__ import annotations
 import numpy as np
 
 DEFAULT_BOND_CUTOFF = 2.4
+# How many images along one axis a bond cutoff can genuinely require. Beyond
+# this the lattice vector is shorter than a fraction of the cutoff, which is a
+# numerically degenerate direction rather than a periodic one worth rendering.
+MAX_IMAGES_PER_AXIS = 4
 
 
 def periodic_boundary_ghosts(
@@ -41,13 +45,21 @@ def periodic_boundary_ghosts(
     # displacement with norm <= cutoff.  The extra one accounts for the
     # wrapped fractional separation between two atoms. This keeps local-shell
     # visualization correct when the cutoff spans more than one unit cell.
-    shift_limits = [max(1, int(np.ceil(cutoff * np.linalg.norm(a_inv[:, axis]))) + 1) for axis in range(3)]
+    limits: list[int] = []
+    for axis in range(3):
+        limit = max(1, int(np.ceil(cutoff * np.linalg.norm(a_inv[:, axis]))) + 1)
+        if limit > MAX_IMAGES_PER_AXIS:
+            # A cell vector this short relative to the cutoff makes the shift
+            # count explode into the billions, freezing the request thread for
+            # a picture no real system produces. Draw no images instead.
+            return []
+        limits.append(limit)
     shifts = np.array(
         [
             (dx, dy, dz)
-            for dx in range(-shift_limits[0], shift_limits[0] + 1)
-            for dy in range(-shift_limits[1], shift_limits[1] + 1)
-            for dz in range(-shift_limits[2], shift_limits[2] + 1)
+            for dx in range(-limits[0], limits[0] + 1)
+            for dy in range(-limits[1], limits[1] + 1)
+            for dz in range(-limits[2], limits[2] + 1)
             if (dx, dy, dz) != (0, 0, 0)
         ],
         dtype=np.float64,

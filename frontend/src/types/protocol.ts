@@ -387,11 +387,3 @@ export interface PcaPayload {
   y_label: string;
 }
 
-export interface PcaAnalysisResponse {
-  job_id: string | null;
-  analysis_id: string;
-  cache: {
-    existing_analysis_id: string;
-    status?: "QUEUED" | "RUNNING" | "COMPLETED";
-  } | null;
-}

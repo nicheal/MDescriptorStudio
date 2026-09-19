@@ -1,10 +1,4 @@
-"""Analysis service responsibilities split by concern.
-
-The :class:`AnalysisService` facade inherits these mixins; each file owns one
-responsibility (data loading, preview shaping, artifacts/export or job
-execution) so the request surface stays free of numerical and filesystem
-details.
-"""
+"""Loading descriptor results and building sample matrices for analysis."""
 
 from __future__ import annotations
 
@@ -22,9 +16,8 @@ from ..errors import (
     INVALID_PARAMS,
     RESULT_INCOMPATIBLE,
 )
-from ..security import UnsafePathError, ensure_no_reparse_points, validate_local_path
+from ..security import UnsafePathError, ensure_no_reparse_points
 from .analysis_helpers import (
-    COMPOSITE_BLOCKS,
     PHYSICAL_BLOCKS,
     _cell_parameters,
     _composition_matrix,
@@ -36,7 +29,6 @@ from .analysis_helpers import (
 
 class AnalysisDataMixin:
     """Descriptor-result loading and sample-matrix construction."""
-    COMPOSITE_BLOCKS = COMPOSITE_BLOCKS
     _PHYSICAL_BLOCKS = PHYSICAL_BLOCKS
 
     def _result_root(self, row: dict) -> Path:
@@ -176,22 +168,11 @@ class AnalysisDataMixin:
         if self.datasets is None:
             return
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (row["dataset_id"],))
-        if dataset is None:
-            return
-        refresh = getattr(self.datasets, "refresh_if_changed", None)
-        if callable(refresh):
-            refresh(dataset)
-            return
-        from ..datasets import compute_fingerprint
-
-        try:
-            source = validate_local_path(dataset["source_path"], field="dataset source path")
-            current = compute_fingerprint(source, dataset["number_of_frames"], use_cache=False)
-        except (OSError, TypeError, ValueError, UnsafePathError) as exc:
-            raise AppError(RESULT_INCOMPATIBLE, "dataset source is unavailable") from exc
-        if current != dataset["fingerprint"]:
-            self.datasets._mark_runs_stale(row["dataset_id"], f"source fingerprint changed ({dataset['fingerprint']} -> {current})")
-            raise AppError(ANALYSIS_STALE, f"run {row['id']} is stale because the source dataset changed", {"run_id": row["id"], "dataset_id": row["dataset_id"]})
+        if dataset is not None:
+            # DatasetService.refresh_if_changed owns the fingerprint comparison:
+            # it also migrates v1 fingerprints and marks the linked runs stale,
+            # so re-deriving it here only drifted from the real check.
+            self.datasets.refresh_if_changed(dataset)
 
     def _usable_view(self, view_id: str, dataset_id: str) -> dict:
         view = self.db.query_one("SELECT * FROM dataset_views WHERE id = ?", (view_id,))

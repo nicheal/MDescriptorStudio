@@ -109,7 +109,7 @@ class EngineAdapter:
 
     # -- batch conversion (design doc §10/§11) ----------------------------
     @staticmethod
-    def to_structure_batch(frames, ids: tuple[str, ...] | None = None) -> md.StructureBatch:
+    def to_structure_batch(frames) -> md.StructureBatch:
         """frames: sequence of datasets.base.DatasetFrame -> engine batch.
 
         Isolated frames must carry a zero cell and pbc=(0,0,0); periodic frames
@@ -129,8 +129,7 @@ class EngineAdapter:
         )
         cells = np.stack([np.asarray(f.cell, dtype=np.float64) for f in frames])
         pbc = np.stack([np.asarray(f.pbc, dtype=bool) for f in frames])
-        if ids is None:
-            ids = tuple(f.id if f.id else f"frame_{i}" for i, f in enumerate(frames))
+        ids = tuple(f.id if f.id else f"frame_{i}" for i, f in enumerate(frames))
         try:
             return md.StructureBatch(
                 numbers=numbers,

@@ -41,6 +41,33 @@ from ..security import UnsafePathError, escape_like
 log = logging.getLogger(__name__)
 
 
+# Every analysis_runs column except preview_json. analysis.list is the history
+# endpoint the UI polls, and its docstring promises not to load large arrays:
+# preview_json is a per-row blob of up to tens of megabytes, and 500 rows of it
+# would be materialised twice inside Database's single write lock — the lock
+# job.get and job.cancel need on their reserved lane. A column a later migration
+# adds is therefore deliberately absent from this list until it is asked for.
+_LIST_COLUMNS = (
+    "id",
+    "descriptor_run_id",
+    "analysis_type",
+    "status",
+    "result_path",
+    "created_at",
+    "finished_at",
+    "params_json",
+    "input_run_ids_json",
+    "dataset_ids_json",
+    "cache_key",
+    "schema_version",
+    "algorithm_version",
+    "preprocessing_json",
+    "warnings_json",
+    "artifact_manifest_json",
+    "stale_reason",
+    "updated_at",
+)
+
 ANALYSIS_METHOD_CATALOG = ANALYSIS_REGISTRY.catalog()
 # These methods deliberately normalize parameters before submission. They stay
 # explicit and must not be replaced by the generated pass-through methods.
@@ -89,7 +116,7 @@ class AnalysisService(
     def list(self, params: dict) -> list[dict]:
         """List analysis metadata without loading any large array."""
         params = params or {}
-        sql = "SELECT * FROM analysis_runs"
+        sql = f"SELECT {', '.join(_LIST_COLUMNS)} FROM analysis_runs"
         conditions: list[str] = []
         args: list[object] = []
         if params.get("run_id"):
@@ -118,12 +145,12 @@ class AnalysisService(
         if row["status"] in ("QUEUED", "RUNNING"):
             raise AppError(RESULT_INCOMPATIBLE, f"analysis {analysis_id} is {row['status']}")
         try:
-            artifact_path = self._managed_artifact_path(str(analysis_id), row.get("result_path")) if row.get("result_path") else None
+            artifact_path = self._artifacts.managed_path(str(analysis_id), row.get("result_path")) if row.get("result_path") else None
         except (TypeError, ValueError, UnsafePathError) as exc:
             raise AppError(ARTIFACT_INVALID, "stored analysis artifact path is invalid") from exc
         self.db.execute("DELETE FROM jobs WHERE analysis_run_id = ?", (analysis_id,))
         self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
-        self._rmtree_quiet(artifact_path)
+        self._artifacts.remove_quiet(artifact_path)
         return {"ok": True, "analysis_id": analysis_id}
 
     def preview(self, params: dict) -> dict:
@@ -170,10 +197,10 @@ class AnalysisService(
         if not isinstance(file_meta, dict):
             raise AppError(ANALYSIS_INPUT_INVALID, f"array {name!r} is not present in analysis artifact")
         try:
-            root = self._managed_artifact_path(str(row["id"]), row.get("result_path"))
+            root = self._artifacts.managed_path(str(row["id"]), row.get("result_path"))
         except (TypeError, ValueError, UnsafePathError) as exc:
             raise AppError(ARTIFACT_INVALID, "stored analysis artifact path is invalid") from exc
-        path = self._artifact_file(root, file_meta.get("path"))
+        path = self._artifacts.artifact_file(root, file_meta.get("path"))
         if path is None or not path.is_file():
             raise AppError(ARTIFACT_INVALID, "missing analysis artifact array")
         try:

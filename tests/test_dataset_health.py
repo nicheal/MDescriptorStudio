@@ -108,6 +108,30 @@ def test_health_deepmd_degenerate_box(tmp_path: Path) -> None:
     assert stats["periodicity"]["fully_periodic"] is True
 
 
+def test_health_survives_non_finite_forces(tmp_path: Path) -> None:
+    """A single NaN force used to fail the whole statistics job: np.histogram
+    refuses to pick a range over NaN, so the dataset came back as "invalid or
+    unavailable" with no health panel at all. Array sources (DeepMD, native)
+    have no text-parser finite check in front of them."""
+    d = tmp_path / "nanforce"
+    (d / "set.000").mkdir(parents=True)
+    (d / "type_map.raw").write_text("Ga As", encoding="utf-8")
+    (d / "type.raw").write_text("0 1", encoding="utf-8")
+    forces = np.zeros((3, 2, 3))
+    forces[0, 0, 0] = np.nan
+    np.save(d / "set.000" / "coord.npy", np.zeros((3, 2, 3)))
+    np.save(d / "set.000" / "box.npy", np.stack([np.eye(3) * 5.0] * 3))
+    np.save(d / "set.000" / "energy.npy", np.array([-1.0, -1.0, -1.0]))
+    np.save(d / "set.000" / "force.npy", forces)
+    stats = compute_statistics(create_adapter(d))
+    assert stats["structures"] == 3
+    assert stats["force_magnitude_summary"]["max"] == 0.0
+    # the NaN magnitude and the NaN per-frame max drop out, the rest survives:
+    # 6 atom magnitudes minus 1, and 3 frame maxima minus 1
+    assert sum(stats["force_magnitude"]["counts"]) == forces.shape[0] * forces.shape[1] - 1
+    assert sum(stats["max_force"]["counts"]) == forces.shape[0] - 1
+
+
 def test_health_nopbc_not_flagged(tmp_path: Path) -> None:
     """Zero boxes throughout (nopbc set) are a legit isolated system, not an
     invalid cell."""

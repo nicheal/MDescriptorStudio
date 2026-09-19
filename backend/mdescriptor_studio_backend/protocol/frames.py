@@ -12,7 +12,13 @@ MAX_REQUEST_ID = (1 << 53) - 1
 
 
 def encode(frame: dict) -> str:
-    return json.dumps(frame, ensure_ascii=False, separators=(",", ":"), default=str)
+    # allow_nan=False is a protocol requirement, not a style preference: the
+    # default emits bare NaN/Infinity tokens, which the Rust bridge forwards
+    # verbatim but JSON.parse in the renderer rejects. The frame is dropped
+    # there, so the awaiting request would never be answered and never fail.
+    return json.dumps(
+        frame, ensure_ascii=False, separators=(",", ":"), default=str, allow_nan=False
+    )
 
 
 def parse_request(line: str) -> tuple[int | None, str, dict]:
@@ -54,6 +60,9 @@ def response_ok(request_id: int | None, result) -> dict:
 
 
 def response_err(request_id: int | None, err: AppError) -> dict:
+    # Deliberately not err.details: the developer diagnosis can quote a path,
+    # and the renderer is not a trusted recipient. Server._handle logs it
+    # against err.error_id, which is the reference the user is shown.
     return {
         "protocol_version": PROTOCOL_VERSION,
         "id": request_id,

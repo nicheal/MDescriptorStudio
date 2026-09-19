@@ -168,7 +168,18 @@ class ExtXYZAdapter(DatasetAdapter):
                     raise AppError(
                         INVALID_DATASET, f"frame {index} row {row}: malformed atom line ({exc})"
                     ) from exc
-        numbers = np.array([_SYMBOL_TO_Z.get(s, 0) for s in species], dtype=np.int64)
+            for what, array in (("position", positions), ("force", forces)):
+                if array is None:
+                    continue
+                bad_rows = np.flatnonzero((~np.isfinite(array)).any(axis=1))
+                if bad_rows.size:
+                    raise AppError(
+                        INVALID_DATASET, f"frame {index} row {int(bad_rows[0])}: non-finite {what}"
+                    )
+        numbers = np.array(
+            [_atomic_number(s, f"frame {index} row {row}") for row, s in enumerate(species)],
+            dtype=np.int64,
+        )
         lattice = meta.get("lattice")
         cell = lattice.reshape(3, 3) if lattice is not None else np.zeros((3, 3))
         periodic = bool(np.abs(cell).sum() > 1e-8)
@@ -196,6 +207,33 @@ def _readline_bounded(stream) -> str:
     return line
 
 
+def _atomic_number(symbol: str, where: str) -> int:
+    """Resolve a species token instead of guessing at it.
+
+    An unresolvable token used to become Z=0, which the radii table then
+    promoted to hydrogen: a Properties column misread as species silently
+    described every atom as H and skewed contact detection.
+    """
+    z = _SYMBOL_TO_Z.get(symbol) or _SYMBOL_TO_Z.get(symbol.capitalize())
+    if z is None and symbol.isdigit():
+        z = int(symbol)  # writers that store the nuclear charge directly
+    if not z:
+        raise AppError(INVALID_DATASET, f"{where}: unknown species {symbol!r}")
+    return int(z)
+
+
+def _finite(value, what: str):
+    """Reject NaN/Infinity where they appear instead of where they are read.
+
+    A non-finite number cannot be encoded into an IPC frame the renderer can
+    parse, and it means the structure is unusable rather than merely missing
+    data, so it must not reach statistics, previews or the descriptor engine.
+    """
+    if not np.isfinite(value).all():
+        raise AppError(INVALID_DATASET, f"extXYZ {what} is not a finite number")
+    return value
+
+
 def _parse_comment(comment: str) -> dict:
     meta: dict = {"lattice": None, "energy": None, "virial": None, "columns": None}
     lattice = None
@@ -204,7 +242,7 @@ def _parse_comment(comment: str) -> dict:
         key = m.group(1) or m.group(3)
         value = m.group(2) if m.group(1) else m.group(4)
         if key == "Lattice":
-            lattice = np.fromstring(value.strip(), sep=" ", dtype=np.float64)
+            lattice = _finite(np.fromstring(value.strip(), sep=" ", dtype=np.float64), "Lattice")
             if lattice.size > 9:
                 raise AppError(INVALID_DATASET, "extXYZ lattice contains too many values")
         elif key == "pbc":
@@ -213,9 +251,9 @@ def _parse_comment(comment: str) -> dict:
                 raise AppError(INVALID_DATASET, "extXYZ pbc must contain exactly three flags")
             pbc = tuple(v.upper() == "T" for v in values)
         elif key == "energy":
-            meta["energy"] = float(value)
+            meta["energy"] = _finite(float(value), "energy")
         elif key == "virial":
-            meta["virial"] = np.fromstring(value.strip(), sep=" ", dtype=np.float64)
+            meta["virial"] = _finite(np.fromstring(value.strip(), sep=" ", dtype=np.float64), "virial")
             if meta["virial"].size != 9:
                 raise AppError(INVALID_DATASET, "extXYZ virial must contain exactly nine values")
         elif key == "Properties":

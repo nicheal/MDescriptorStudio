@@ -22,6 +22,9 @@ from ..errors import AppError, INVALID_DATASET
 from ..security import ensure_no_reparse_points, open_text_for_write
 from .deepmd_symbols import _Z_TO_SYMBOL
 
+# Root files that make a directory a DeepMD system (plus any set.* directory).
+_DEEPMD_ROOT_FILES = ("type.raw", "type_map.raw", "nopbc")
+
 
 def _symbols(frame) -> list[str]:
     return [_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in np.asarray(frame.numbers, dtype=np.int64)]
@@ -76,6 +79,21 @@ def write_deepmd(path: Path, frames: Iterable) -> int:
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
     ensure_no_reparse_points(path)
+    # dpdata merges every set.* it finds and reads the label arrays
+    # positionally, so leftovers from an earlier export would be silently
+    # stitched into this one: a smaller second selection would reload with the
+    # old frame count and mismatched labels.
+    stale = sorted(
+        item.name
+        for item in path.iterdir()
+        if item.name.startswith("set.") or item.name in _DEEPMD_ROOT_FILES
+    )
+    if stale:
+        raise AppError(
+            INVALID_DATASET,
+            f"DeepMD destination already contains {', '.join(stale[:3])};"
+            " export into an empty directory",
+        )
     frame_list = list(frames)
     if not frame_list:
         raise AppError(INVALID_DATASET, "nothing to write: the view contains no frames")

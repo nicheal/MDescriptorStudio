@@ -4,10 +4,10 @@
  * run layer and module orchestration — and nothing else.
  */
 import type { ReactNode } from "react";
-import { Button, Collapse, Empty, InputNumber, Modal, Select, Space, Table, Tag, Typography } from "antd";
-import { ArrowSync16Regular } from "@fluentui/react-icons";
+import { Button, Collapse, Empty, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Typography } from "antd";
+import { ArrowDownload16Regular, ArrowSync16Regular } from "@fluentui/react-icons";
 import { useT } from "../i18n";
-import { OVERVIEW_KIND_LABELS, type AnalysisParams, type ProjectionName } from "../features/analysis";
+import { OVERVIEW_KIND_LABELS, SAMPLING_LABELS, type AnalysisParams, type ProjectionName } from "../features/analysis";
 import type { PcaMode } from "../stores/workspace";
 import type {
   AnalysisPreview,
@@ -234,4 +234,97 @@ export function AnalysisMethodGuideModal({ guide, open, onClose }: { guide: Anal
 export function ProjectionControls({ projection, setProjection, mode, setMode, preprocess, onPreprocessChange, tsnePerplexity, setTsnePerplexity, markOptions, cachedParam }: { projection: ProjectionName; setProjection: (value: ProjectionName) => void; mode: PcaMode; setMode: (value: PcaMode) => void; preprocess: string; onPreprocessChange: (value: string) => void; tsnePerplexity: number; setTsnePerplexity: (value: number) => void; markOptions: (param: string, options: CacheOption[]) => CacheOption[]; cachedParam: (param: keyof AnalysisParams) => boolean }) {
   const { t } = useT();
   return <Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={projection} onChange={setProjection} options={markOptions("projection", [{ value: "pca", label: "PCA" }, { value: "umap", label: "UMAP" }, { value: "tsne", label: "t-SNE" }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /><Typography.Text>{t("Preprocess")}</Typography.Text><Select value={preprocess} onChange={onPreprocessChange} options={markOptions("preprocess", [{ value: "raw", label: t("Raw scale") }, { value: "center", label: t("Centered") }, { value: "standardized", label: t("Standardized") }])} />{projection === "tsne" && <><ParamLabel label={t("Perplexity")} cached={cachedParam("tsnePerplexity")} /><InputNumber min={2} step={1} value={tsnePerplexity} onChange={(value) => setTsnePerplexity(value ?? 30)} /></>}</Space>;
+}
+
+export interface SamplingQuota {
+  groups: { group: string; structures: number; quota: number }[];
+  n_candidates: number;
+}
+
+/** Grouped-FPS element budget, shown only when it can apply. */
+export function SamplingQuotaPreview({ quota, busy }: { quota: SamplingQuota | null; busy: boolean }) {
+  const { t } = useT();
+  return (
+    <div style={{ marginTop: 12 }} aria-busy={busy}>
+      <Typography.Text type="secondary">{t("Sampling quota preview (√N per element set)")}</Typography.Text>
+      {busy ? <Spin size="small" style={{ marginLeft: 8 }} /> : quota && quota.groups.length ? (
+        <Table
+          size="small"
+          style={{ marginTop: 8, maxWidth: 480 }}
+          rowKey="group"
+          pagination={false}
+          dataSource={quota.groups}
+          columns={[
+            { title: t("Element set"), dataIndex: "group" },
+            { title: t("Structures"), dataIndex: "structures", align: "right" as const, render: (value: number) => value.toLocaleString() },
+            { title: t("Sampling quota"), dataIndex: "quota", align: "right" as const },
+          ]}
+        />
+      ) : !busy ? <Typography.Text type="secondary" style={{ marginLeft: 8 }}>{t("Element metadata is unavailable for this run")}</Typography.Text> : null}
+    </div>
+  );
+}
+
+export function SamplingExportCard({ format, onFormat, destination, onChoose, onExport }: {
+  format: string;
+  onFormat: (value: string) => void;
+  destination: string;
+  onChoose: () => void;
+  onExport: () => void;
+}) {
+  const { t } = useT();
+  return (
+    <section className="analysis-card">
+      <SectionHeading title={t("EXPORT SELECTED SET")} meta={t("Source data is never modified")} />
+      <Space.Compact style={{ width: "100%" }}>
+        <Select value={format} onChange={onFormat} options={["json", "csv", "extxyz", "deepmd", "indices", "report"].map((value) => ({ value, label: value.toUpperCase() }))} style={{ width: 120 }} />
+        <Input readOnly placeholder={t("Choose an export destination")} value={destination} aria-label={t("Export destination")} />
+        <Button onClick={onChoose}>{t("Choose…")}</Button>
+        <Button icon={<ArrowDownload16Regular />} onClick={onExport}>{t("Export")}</Button>
+      </Space.Compact>
+    </section>
+  );
+}
+
+/** Sampling method row: algorithm, budget and the FPS knobs that apply to it.
+ *
+ * Takes the memoised parameter object plus one setter table instead of 25
+ * positional props, so the JSX below stays identical to what the page used to
+ * render inline.
+ */
+export function SamplingControls({ params, setters, warmStartRuns, quota, quotaBusy, markOptions, cachedParam }: {
+  params: AnalysisParams;
+  setters: {
+    samplingAlgorithm: (value: string) => void;
+    nSamples: (value: number) => void;
+    mode: (value: PcaMode) => void;
+    uncertaintyK: (value: number) => void;
+    samplingStrategy: (value: string) => void;
+    samplingScaling: (value: string) => void;
+    samplingBlocks: (value: string[]) => void;
+    samplingBudgetMode: (value: string) => void;
+    samplingCoverage: (value: number) => void;
+    samplingMinDistance: (value: number) => void;
+    samplingExistingRunId: (value: string | null) => void;
+  };
+  warmStartRuns: RunRow[];
+  quota: SamplingQuota | null;
+  quotaBusy: boolean;
+  markOptions: (param: string, options: CacheOption[]) => CacheOption[];
+  cachedParam: (param: keyof AnalysisParams) => boolean;
+}) {
+  const { t, tr } = useT();
+  const {
+    samplingAlgorithm, nSamples, mode, uncertaintyK, samplingStrategy, samplingScaling,
+    samplingBlocks, samplingBudgetMode, samplingCoverage, samplingMinDistance, samplingExistingRunId,
+  } = params;
+  const {
+    samplingAlgorithm: setSamplingAlgorithm, nSamples: setNSamples, mode: setMode,
+    uncertaintyK: setUncertaintyK, samplingStrategy: setSamplingStrategy, samplingScaling: setSamplingScaling,
+    samplingBlocks: setSamplingBlocks, samplingBudgetMode: setSamplingBudgetMode,
+    samplingCoverage: setSamplingCoverage, samplingMinDistance: setSamplingMinDistance,
+    samplingExistingRunId: setSamplingExistingRunId,
+  } = setters;
+  return <><Space wrap><Typography.Text>{t("Method")}</Typography.Text><Select value={samplingAlgorithm} onChange={setSamplingAlgorithm} options={markOptions("samplingAlgorithm", ["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"].map((value) => ({ value, label: tr(SAMPLING_LABELS[value] ?? { en: value, zh: value }) })))} /><ParamLabel label={t("Maximum samples")} cached={cachedParam("nSamples")} /><InputNumber min={1} value={nSamples} onChange={(value) => setNSamples(value ?? 1000)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom") }])} />{samplingAlgorithm === "uncertainty_diversity" && <><ParamLabel label="kNN" cached={cachedParam("uncertaintyK")} /><InputNumber min={2} value={uncertaintyK} onChange={(value) => setUncertaintyK(value ?? 8)} /></>}{samplingAlgorithm === "fps" && <><ParamLabel label={t("Strategy")} cached={cachedParam("samplingStrategy")} /><Select value={samplingStrategy} onChange={setSamplingStrategy} options={markOptions("samplingStrategy", [{ value: "global", label: t("Global FPS") }, { value: "grouped", label: t("Grouped FPS") }])} /><ParamLabel label={t("Feature scaling")} cached={cachedParam("samplingScaling")} /><Select value={samplingScaling} onChange={setSamplingScaling} options={markOptions("samplingScaling", [{ value: "robust", label: t("Robust") }, { value: "standardized", label: t("Standardized") }, { value: "raw", label: t("Raw") }])} /><ParamLabel label={t("Sampling space")} cached={cachedParam("samplingBlocks")} /><Select mode="multiple" allowClear value={samplingBlocks} onChange={(value) => setSamplingBlocks(value ?? [])} style={{ minWidth: 240 }} placeholder={t("Descriptor only")} options={[{"value":"descriptor","label":t("Descriptor")},{"value":"descriptor_summary","label":t("Descriptor summary")},{"value":"lattice","label":t("Lattice")},{"value":"composition","label":t("Composition")},{"value":"energy","label":t("Energy")},{"value":"force","label":t("Force statistics")}]} /><ParamLabel label={t("Sample budget")} cached={cachedParam("samplingBudgetMode")} /><Select value={samplingBudgetMode} onChange={setSamplingBudgetMode} options={markOptions("samplingBudgetMode", [{ value: "count", label: t("Fixed sample count") }, { value: "coverage", label: t("Target coverage") }])} />{samplingBudgetMode === "coverage" && <><ParamLabel label={t("Target coverage")} cached={cachedParam("samplingCoverage")} /><InputNumber min={1} max={99} value={samplingCoverage} onChange={(value) => setSamplingCoverage(Math.min(99, Math.max(1, Math.round(value ?? 95))))} addonAfter="%" /></>}<ParamLabel label={t("Min descriptor distance")} cached={cachedParam("samplingMinDistance")} /><InputNumber min={0} step={0.001} value={samplingMinDistance} onChange={(value) => setSamplingMinDistance(Math.max(0, value ?? 0))} /><Typography.Text type="secondary">{t("Initialization: Center")}</Typography.Text><ParamLabel label={t("Existing dataset")} cached={cachedParam("samplingExistingRunId")} /><Select allowClear placeholder={t("None")} value={samplingExistingRunId} onChange={(value) => setSamplingExistingRunId(value ?? null)} style={{ minWidth: 180 }} options={warmStartRuns.map((run) => ({ value: run.id, label: `${run.descriptor_name} · ${run.dataset_name ?? run.dataset_id}` }))} /></>}</Space>
+            {samplingAlgorithm === "fps" && samplingStrategy === "grouped" && <SamplingQuotaPreview quota={quota} busy={quotaBusy} />}</>;
 }

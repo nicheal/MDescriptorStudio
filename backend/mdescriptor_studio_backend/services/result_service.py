@@ -26,6 +26,25 @@ class ResultService:
         self.db = db
         self.data_dir = Path(data_dir or db.path.parent).resolve(strict=False)
 
+    def sweep_abandoned(self) -> None:
+        """Reclaim directories no row can ever point at again.
+
+        A run that failed while writing leaves result_path NULL, so neither
+        result.remove nor dataset.remove can reach the directory it created, and
+        a hard exit mid-commit leaves an analysis staging directory behind. Both
+        are unreachable by construction, so startup is the only safe moment to
+        delete them: no job is running yet and no live row references them.
+        """
+        for table, root in (("descriptor_runs", "results"), ("analysis_runs", "analysis")):
+            for row in self.db.query(
+                f"SELECT id FROM {table} WHERE result_path IS NULL AND status IN ('FAILED', 'CANCELLED')"
+            ):
+                remove_managed_tree(self.data_dir / root / row["id"])
+        staging_root = self.data_dir / "analysis"
+        if staging_root.is_dir():
+            for staging in staging_root.glob(".*.tmp-*"):
+                remove_managed_tree(staging)
+
     def _managed_result_path(self, run_id: str, stored: object) -> Path:
         if not _ARTIFACT_ID_RE.fullmatch(run_id or "") or not str(run_id).startswith("run_"):
             raise UnsafePathError("invalid descriptor run id")

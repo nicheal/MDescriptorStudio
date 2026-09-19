@@ -10,9 +10,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import frames
-from ..errors import INVALID_PARAMS, AppError
+from ..errors import INTERNAL_ERROR, INVALID_PARAMS, AppError
 
 log = logging.getLogger(__name__)
+
+
+def _request_too_large() -> AppError:
+    return AppError(INVALID_PARAMS, "frame exceeds 8 MB limit", public_message="Request is too large.")
 
 
 class Server:
@@ -45,10 +49,37 @@ class Server:
         self._write(frames.event_frame(name, data))
 
     def _write(self, frame: dict) -> None:
-        line = frames.encode(frame)
+        line = self._encode(frame)
         with self._write_lock:
             sys.stdout.write(line + "\n")
             sys.stdout.flush()
+
+    def _encode(self, frame: dict) -> str:
+        """Encode a frame into something the renderer is guaranteed to accept.
+
+        Silence is the one answer this protocol must never give: the renderer
+        waits on the request id, so a result that cannot be encoded (a
+        non-finite number) or that overflows the bridge's line cap is reported
+        as an error for the same request instead of being dropped.
+        """
+        try:
+            line = frames.encode(frame)
+        except ValueError:
+            log.exception("frame is not JSON-encodable")
+        else:
+            if len(line.encode("utf-8")) <= frames.MAX_LINE_BYTES:
+                return line
+            log.error(
+                "response frame is %d bytes, over the %d byte protocol limit",
+                len(line),
+                frames.MAX_LINE_BYTES,
+            )
+        return frames.encode(
+            frames.response_err(
+                frame.get("id"),
+                AppError(INTERNAL_ERROR, "result could not be sent as a protocol frame"),
+            )
+        )
 
     # -- input loop ----------------------------------------------------------
     def serve_forever(self) -> None:
@@ -82,12 +113,7 @@ class Server:
             while oversized and raw and not raw.endswith(newline):
                 raw = stream.readline(frames.MAX_LINE_BYTES + 1)
             if oversized:
-                error = AppError(
-                    INVALID_PARAMS,
-                    "frame exceeds 8 MB limit",
-                    public_message="Request is too large.",
-                )
-                self._write(frames.response_err(None, error))
+                self._write(frames.response_err(None, _request_too_large()))
                 continue
             if not self._consume_frame(raw):
                 break
@@ -124,18 +150,20 @@ class Server:
                 raw += b"\n"
                 if not self._consume_frame(raw):
                     return "eof"
+            if len(pending) > frames.MAX_LINE_BYTES:
+                # The blocking loop bounds a line by asking readline() for at
+                # most MAX+1 bytes; this loop accumulates by hand, so an
+                # unterminated line would grow without limit. Report it and keep
+                # the tail, which is where the next frame boundary still may be.
+                self._write(frames.response_err(None, _request_too_large()))
+                pending = pending[frames.MAX_LINE_BYTES:]
         return "eof"
 
     def _consume_frame(self, raw) -> bool:
         """Process one complete frame; False means the input loop must stop."""
         oversized = len(raw) - 1 > frames.MAX_LINE_BYTES
         if oversized:
-            error = AppError(
-                INVALID_PARAMS,
-                "frame exceeds 8 MB limit",
-                public_message="Request is too large.",
-            )
-            self._write(frames.response_err(None, error))
+            self._write(frames.response_err(None, _request_too_large()))
             return True
         line = raw.decode("utf-8", errors="replace").strip() if isinstance(raw, bytes) else raw.strip()
         if not line:
@@ -173,6 +201,14 @@ class Server:
                 result = handler(params)
                 self._write(frames.response_ok(vid, result))
             except AppError as exc:
+                if exc.details:
+                    # response_err() deliberately omits this, so the log is the
+                    # only place the structured diagnosis survives. error_id is
+                    # what the user sees, and joins the two.
+                    log.warning(
+                        "%s failed as %s (%s): %s %s",
+                        method, exc.code, exc.error_id, exc.message, exc.details,
+                    )
                 self._write(frames.response_err(vid, exc))
             except Exception as exc:  # noqa: BLE001 - top-level guard
                 log.exception("unhandled error in %s", method)

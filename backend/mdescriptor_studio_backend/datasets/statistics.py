@@ -45,8 +45,20 @@ _SHORT_CONTACT_PAIR_BATCH = 1_000_000
 HEALTH_FINDINGS_CAP = 5000
 
 
+def _finite(values: list | np.ndarray) -> np.ndarray:
+    """Drop NaN/Infinity before binning or summarising.
+
+    np.histogram turns a single NaN into a ValueError that fails the whole
+    statistics job, and a summary built from NaN publishes bounds the IPC
+    frame cannot carry. Sources that store arrays (DeepMD, native) reach here
+    without the finite check the text parsers apply.
+    """
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    return arr[np.isfinite(arr)]
+
+
 def _hist(values: list | np.ndarray) -> dict | None:
-    arr = np.asarray(values, dtype=np.float64)
+    arr = _finite(values)
     if arr.size == 0:
         return None
     counts, edges = np.histogram(arr, bins=BINS)
@@ -57,7 +69,7 @@ def _hist(values: list | np.ndarray) -> dict | None:
 
 
 def _summary(values: list | np.ndarray) -> dict | None:
-    arr = np.asarray(values, dtype=np.float64)
+    arr = _finite(values)
     if arr.size == 0:
         return None
     return {

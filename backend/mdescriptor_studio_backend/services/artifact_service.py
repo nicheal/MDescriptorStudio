@@ -1,15 +1,10 @@
-"""Analysis service responsibilities split by concern.
-
-The :class:`AnalysisService` facade inherits these mixins; each file owns one
-responsibility (data loading, preview shaping, artifacts/export or job
-execution) so the request surface stays free of numerical and filesystem
-details.
-"""
+"""Artifact commit, lookup and removal for analysis results."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -23,8 +18,11 @@ from ..errors import (
     RESULT_INCOMPATIBLE,
 )
 from ..security import UnsafePathError, open_text_for_write
-from .analysis_artifact_store import AnalysisArtifactStore
-from .analysis_helpers import ANALYSIS_ALGORITHM_VERSION
+from .analysis_helpers import (
+    ANALYSIS_ALGORITHM_VERSION,
+    _ANALYSIS_SCHEMA_VERSION,
+    _NOW,
+)
 
 
 class AnalysisArtifactMixin:
@@ -71,6 +69,84 @@ class AnalysisArtifactMixin:
         with open_text_for_write(out_dir / "pca.json") as fh:
             json.dump(payload, fh, ensure_ascii=False)
 
+    def _claim_analysis_row(
+        self,
+        *,
+        analysis_type: str,
+        cache_key: str,
+        canonical_params: dict,
+        input_ids: list[str],
+        primary_run_id: str,
+        dataset_ids: list[str],
+        preprocessing: dict | None = None,
+    ) -> tuple[str, dict | None, bool]:
+        """Reuse a cached or in-flight analysis, else insert its QUEUED row.
+
+        Call inside ``self._submit_lock``: the read-then-insert is what stops two
+        requests for the same cache key from running the same analysis twice.
+        Returns ``(analysis_id, early_result, created)``: a non-None
+        ``early_result`` is the answer the caller must return instead of
+        submitting work, and ``created`` says this call inserted the row, which
+        is what entitles a submit failure to delete it again.
+        """
+        cached = self.db.query_one(
+            "SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED'"
+            " ORDER BY created_at DESC LIMIT 1",
+            (cache_key,),
+        )
+        if cached and self._artifacts.is_complete(cached):
+            return cached["id"], {
+                "job_id": None,
+                "analysis_id": cached["id"],
+                "cache": {"existing_analysis_id": cached["id"], "cache_key": cache_key},
+            }, False
+        active = self.db.query_one(
+            "SELECT * FROM analysis_runs WHERE cache_key = ? AND status IN ('QUEUED', 'RUNNING')"
+            " ORDER BY created_at DESC LIMIT 1",
+            (cache_key,),
+        )
+        if active:
+            job = self.db.query_one(
+                "SELECT id FROM jobs WHERE analysis_run_id = ? AND status IN ('QUEUED', 'RUNNING')"
+                " ORDER BY created_at DESC LIMIT 1",
+                (active["id"],),
+            )
+            if job:
+                return active["id"], {
+                    "job_id": job["id"],
+                    "analysis_id": active["id"],
+                    "cache": {
+                        "existing_analysis_id": active["id"],
+                        "status": active["status"],
+                        "cache_key": cache_key,
+                    },
+                }, False
+            # An abandoned non-terminal row: the runner re-claims it below.
+            return active["id"], None, False
+        analysis_id = f"ana_{uuid.uuid4().hex[:12]}"
+        now = _NOW()
+        self.db.execute(
+            "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status,"
+            " created_at, input_run_ids_json, dataset_ids_json, cache_key, schema_version,"
+            " algorithm_version, preprocessing_json, warnings_json, preview_json, updated_at)"
+            " VALUES (?, ?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, '[]', '{}', ?)",
+            (
+                analysis_id,
+                primary_run_id,
+                analysis_type,
+                json.dumps(canonical_params, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                now,
+                json.dumps(input_ids, ensure_ascii=False),
+                json.dumps(dataset_ids, ensure_ascii=False),
+                cache_key,
+                _ANALYSIS_SCHEMA_VERSION,
+                ANALYSIS_ALGORITHM_VERSION,
+                json.dumps(preprocessing, ensure_ascii=False) if preprocessing is not None else None,
+                now,
+            ),
+        )
+        return analysis_id, None, True
+
     def _analysis_row(self, analysis_id: str | None) -> dict:
         if not analysis_id:
             raise AppError(INVALID_PARAMS, "'analysis_id' is required")
@@ -98,18 +174,8 @@ class AnalysisArtifactMixin:
         # only _usable_run rejects stale descriptor inputs for new work.
         if row.get("status") not in ("COMPLETED", "STALE"):
             raise AppError(RESULT_INCOMPATIBLE, f"analysis {row['id']} is {row['status']}")
-        if not self._artifact_is_complete(row):
+        if not self._artifacts.is_complete(row):
             raise AppError(ARTIFACT_INVALID, f"analysis {row['id']} has no complete artifact")
-
-    def _managed_artifact_path(self, analysis_id: str, stored: object) -> Path:
-        return self._artifacts.managed_path(analysis_id, stored)
-
-    @staticmethod
-    def _artifact_file(root: Path, raw_name: object) -> Path | None:
-        return AnalysisArtifactStore.artifact_file(root, raw_name)
-
-    def _artifact_is_complete(self, row: dict) -> bool:
-        return self._artifacts.is_complete(row)
 
     @staticmethod
     def _json_load(raw, fallback):
@@ -155,14 +221,14 @@ class AnalysisArtifactMixin:
         files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
         arrays = {}
         try:
-            root = self._managed_artifact_path(str(row.get("id") or ""), row.get("result_path"))
+            root = self._artifacts.managed_path(str(row.get("id") or ""), row.get("result_path"))
         except (TypeError, ValueError, UnsafePathError):
             return []
         for name in ("coords", "indices", "labels", "scores", "distances", "similarity", "selected_indices"):
             meta = files.get(name)
             if isinstance(meta, dict):
                 try:
-                    target = self._artifact_file(root, meta.get("path"))
+                    target = self._artifacts.artifact_file(root, meta.get("path"))
                     if target is None:
                         continue
                     arrays[name] = np.load(target, mmap_mode="r", allow_pickle=False)
@@ -196,9 +262,6 @@ class AnalysisArtifactMixin:
         if isinstance(value, np.floating):
             return float(value)
         return value
-
-    def _rmtree_quiet(self, path: Path | None) -> None:
-        self._artifacts.remove_quiet(path)
 
 
 __all__ = ["AnalysisArtifactMixin"]

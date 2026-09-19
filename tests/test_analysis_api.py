@@ -14,8 +14,10 @@ from mdescriptor_studio_backend.analysis.algorithms.pca import pca
 from mdescriptor_studio_backend.analysis.metrics import neighbors, similarity
 from mdescriptor_studio_backend.datasets.base import DatasetFrame
 from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, ANALYSIS_STALE, AppError
-from mdescriptor_studio_backend.services.analysis_service import AnalysisService
+from mdescriptor_studio_backend.services.analysis_service import _LIST_COLUMNS, AnalysisService
 from mdescriptor_studio_backend.services.dataset_service import DatasetService
+from mdescriptor_studio_backend.services.export_service import _identity_records
+from mdescriptor_studio_backend.services import preview_service
 from mdescriptor_studio_backend.services.result_service import ResultService
 from mdescriptor_studio_backend.storage.database import Database
 
@@ -303,7 +305,20 @@ def test_generic_analysis_is_cached_and_chunked(tmp_path: Path) -> None:
     listed = service.list({"analysis_type": "kmeans"})
     assert listed[0]["id"] == first["analysis_id"]
     assert listed[0]["parameters"]["n_clusters"] == 3
+    assert "preview_json" not in listed[0] and "preview" not in listed[0]
     db.close()
+
+
+def test_list_columns_keep_up_with_the_analysis_runs_schema(tmp_path: Path) -> None:
+    """_LIST_COLUMNS exists to leave the preview_json blob behind. It must not
+    also fall behind a migration that adds a column, which would drop that
+    column from the history endpoint in silence."""
+    db = Database(tmp_path / "database.sqlite")
+    try:
+        columns = {row["name"] for row in db.query("PRAGMA table_info(analysis_runs)")}
+        assert columns - {"preview_json"} == set(_LIST_COLUMNS)
+    finally:
+        db.close()
 
 
 def test_feature_variance_persists_full_schema_and_invalid_warning(tmp_path: Path) -> None:
@@ -420,6 +435,28 @@ def test_generic_pca_pads_the_second_coordinate_for_one_feature(tmp_path: Path) 
     db.close()
 
 
+def test_projection_preview_table_and_scatter_cover_the_same_samples(tmp_path: Path, monkeypatch) -> None:
+    """Past the preview cap the scatter strides across all points; the table has
+    to stride identically, or the two halves of one preview describe different
+    samples and a click on a row highlights an unrelated point."""
+    monkeypatch.setattr(preview_service, "_MAX_PREVIEW_POINTS", 3)
+    db, _jobs, service = _service(tmp_path)
+    samples = StructureDescriptorMatrix(
+        np.arange(20, dtype=np.float64).reshape(10, 2),
+        np.arange(10),
+        sample_ids=[f"frame:{i}" for i in range(10)],
+    )
+    result = {
+        "arrays": {"coords": np.arange(20, dtype=np.float64).reshape(10, 2), "labels": np.arange(10)},
+        "preview": {"kind": "projection"},
+    }
+    preview = service._build_preview(result, samples, "pca")
+    assert len(preview["points"]) == 3
+    assert preview["total_points"] == 10
+    assert [point["i"] for point in preview["points"]] == [row["i"] for row in preview["rows"]]
+    db.close()
+
+
 def test_similarity_preview_resolves_neighbor_indices_to_neighbor_identity(tmp_path: Path) -> None:
     db, _jobs, service = _service(tmp_path)
     values = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 2.0], [10.0, 0.0]])
@@ -508,7 +545,31 @@ def test_frame_scoped_export_resolves_selected_sample_to_actual_frame(tmp_path: 
     output = service._write_export(run, [0], "json", "structure", tmp_path / "export.json", _Context())
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert [record["frame"] for record in payload["records"]] == [7]
+    assert [record["sample_index"] for record in payload["records"]] == [0]
     db.close()
+
+
+def test_identity_records_are_keyed_on_the_sample_not_frame_order() -> None:
+    """`indices` exports sample indices, so the JSON/CSV sample_index must mean
+    the same thing. Enumerating the deduped frame list relabelled every record
+    and collapsed atom-level samples that share a frame."""
+    samples = StructureDescriptorMatrix(
+        np.zeros((4, 2)),
+        np.array([10, 11, 12, 13]),
+        sample_ids=[f"frame:{frame}" for frame in (10, 11, 12, 13)],
+    )
+    records = _identity_records(samples, [2, 3])
+    assert [record["sample_index"] for record in records] == [2, 3]
+    assert [record["frame"] for record in records] == [12, 13]
+
+    atoms = StructureDescriptorMatrix(
+        np.zeros((2, 2)),
+        np.array([7, 7]),
+        sample_ids=["frame:7:row:0", "frame:7:row:1"],
+    )
+    atoms_out = _identity_records(atoms, [0, 1])
+    assert [record["sample_id"] for record in atoms_out] == ["frame:7:row:0", "frame:7:row:1"]
+    assert [record["frame"] for record in atoms_out] == [7, 7]
 
 
 def test_structural_perturbation_service_recomputes_descriptor_sweep(tmp_path: Path) -> None:

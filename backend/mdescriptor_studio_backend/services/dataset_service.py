@@ -123,7 +123,7 @@ class DatasetService:
             raise AppError(DATASET_NOT_FOUND, f"dataset {dataset_id} does not exist")
         return row
 
-    def _meta(self, row: dict, fingerprint_valid: bool | None = None) -> dict:
+    def _meta(self, row: dict) -> dict:
         try:
             source = validate_local_path(row["source_path"], field="dataset source path")
         except (TypeError, UnsafePathError):
@@ -167,7 +167,7 @@ class DatasetService:
             "file_size": row["file_size"],
             "created_at": row["created_at"],
             "last_scan_at": row["last_scan_at"],
-            "cache_valid": False if legacy or current is None else (fingerprint_valid if fingerprint_valid is not None else current == row["fingerprint"]),
+            "cache_valid": False if legacy or current is None else current == row["fingerprint"],
             "fingerprint_status": (
                 "MIGRATING"
                 if legacy
@@ -433,7 +433,7 @@ class DatasetService:
         return {str(item) for item in value} if isinstance(value, list) else set()
 
     def _managed_artifact_path(self, kind: str, artifact_id: str, stored: object) -> Path:
-        if not _ARTIFACT_ID_RE.fullmatch(artifact_id) or not artifact_id.startswith(("run_", "ana_")):
+        if not _ARTIFACT_ID_RE.fullmatch(artifact_id):
             raise UnsafePathError("invalid artifact id")
         return validate_managed_path(self.data_dir / kind, stored, artifact_id)
 

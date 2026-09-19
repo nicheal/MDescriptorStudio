@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Callable
 
 import numpy as np
 
@@ -77,6 +77,10 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
     """
     ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params, "standardized")
     metric = str(params.get("metric") or "euclidean")
+    # Two phases share one bar: the kNN scan gets the first half, the greedy
+    # acquisition the second. Handing the scan the raw callback would run the
+    # progress to 100% and then start the loop over at 0%.
+    scan_progress = (lambda fraction, message: progress(0.5 * fraction, message)) if progress else None
     acquisition_method = str(params.get("acquisition_method") or params.get("algorithm") or "novelty_fps").lower()
     if acquisition_method in ("uncertainty", "uncertainty_diversity", "knn_uncertainty"):
         uncertainty_k = min(_int_param(params, "uncertainty_k", 8, 2), ref.shape[0])
@@ -87,7 +91,7 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
             _int_param(params, "chunk_size", 2048, 1),
             _int_param(params, "reference_chunk_size", 2048, 1),
             uncertainty_k,
-            progress,
+            scan_progress,
         )
         nearest = neighbor_indices[:, 0]
         novelty = neighbor_distances[:, 0]
@@ -101,7 +105,7 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
             metric,
             _int_param(params, "chunk_size", 2048, 1),
             _int_param(params, "reference_chunk_size", 2048, 1),
-            progress,
+            scan_progress,
         )
         uncertainty = novelty.copy()
         acquisition_method = "novelty_fps"
@@ -136,7 +140,7 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
         acquisition_score[selected_local] = -1.0
         selected_local.append(int(np.argmax(acquisition_score)))
         if progress and (step % 50 == 0 or step == target - 1):
-            progress(step / max(target, 1), f"{acquisition_method} acquisition")
+            progress(0.5 + 0.5 * (step + 1) / max(target, 1), f"{acquisition_method} acquisition")
     selected = pool[np.asarray(selected_local, dtype=np.int64)]
     full_scores = np.zeros(qry.shape[0], dtype=np.float64)
     full_uncertainty = np.zeros(qry.shape[0], dtype=np.float64)
@@ -216,7 +220,10 @@ def mantel(left: DescriptorMatrix, right: DescriptorMatrix, params: dict, progre
         progress(0.05, "computing Mantel statistic")
     for index in range(permutations):
         permutation = rng.permutation(b.shape[0])
-        permuted_pairs = _pairwise_matrix(b[permutation], metric)[triangle]
+        # Reordering the samples only reorders the entries of the distance
+        # matrix that was already built; recomputing it costs O(n^2*D) per
+        # permutation for an identical result.
+        permuted_pairs = right_matrix[permutation[triangle[0]], permutation[triangle[1]]]
         null[index] = statistic_fn(left_pairs, permuted_pairs)
         if progress and (index % 25 == 0 or index == permutations - 1):
             progress(0.05 + 0.9 * (index + 1) / permutations, "running Mantel permutations")

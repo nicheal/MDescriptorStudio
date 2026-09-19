@@ -129,6 +129,15 @@ class DeepMDAdapter(DatasetAdapter):
             )
         type_raw = np.asarray(data["atom_types"], dtype=np.int64).reshape(-1)
         self.natoms = int(type_raw.size)
+        if type_raw.size and (type_raw.min() < 0 or type_raw.max() >= len(z_by_type)):
+            # dpdata hands back whatever type.raw contained; indexing with it
+            # would raise a bare IndexError that the job layer can only report
+            # as an internal failure for what is really a broken set.
+            raise AppError(
+                INVALID_DATASET,
+                f"type.raw holds atom types outside the {len(z_by_type)} entries"
+                f" of type_map.raw: {int(type_raw.min())}..{int(type_raw.max())}",
+            )
         self.numbers = np.asarray([z_by_type[t] for t in type_raw], dtype=np.int64)
 
         self._coords = data["coords"]

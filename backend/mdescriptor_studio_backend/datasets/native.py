@@ -103,6 +103,12 @@ def frame_geometry(
     if pos.ndim != 2 or pos.shape[1] != 3:
         return None
     num = np.ascontiguousarray(numbers, dtype=np.int64)
+    if pos.shape[0] != num.size:
+        # The C core reads 3 * num.size doubles out of pos; a mismatched pair
+        # would read past the buffer. None means "use the scipy reference".
+        return None
+    if np.asarray(pbc).size != 3:
+        return None
     cel = np.ascontiguousarray(cell, dtype=np.float64).reshape(9)
     pbc8 = np.ascontiguousarray(pbc, dtype=np.uint8)
     table = np.ascontiguousarray(radii_table, dtype=np.float64)

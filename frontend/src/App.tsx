@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, type ReactNode } from "react";
-import { App as AntApp } from "antd";
+import { App as AntApp, Button } from "antd";
 import {
   Grid16Regular,
   Image16Regular,
@@ -13,6 +13,7 @@ import StatusBar from "./components/layout/StatusBar";
 import RightRail from "./components/layout/RightRail";
 import TitleBar from "./components/layout/TitleBar";
 import HealthFindingsDrawer from "./components/HealthFindingsDrawer";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { ipc } from "./ipc/client";
 import { useWorkspace, hydrateActiveRun } from "./stores/workspace";
 import { hydrateAnalysisUi } from "./features/analysis";
@@ -48,14 +49,27 @@ export default function App() {
   const {
     backendStatus,
     setBackendReady,
+    setBackendStarting,
     setBackendError,
     setDatasets,
     setActiveDataset,
-    activeDatasetId,
     page,
     setPage,
   } = useWorkspace();
   const { t } = useT();
+
+  const restartBackend = useCallback(async () => {
+    setBackendStarting();
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("backend_restart");
+      // The backend.ready frame the new process emits reaches the listener
+      // registered at startup, so nothing else has to be re-armed.
+    } catch (error) {
+      console.error(error);
+      setBackendError();
+    }
+  }, [setBackendStarting, setBackendError]);
 
   const refreshDatasets = useCallback(async () => {
     try {
@@ -176,8 +190,13 @@ export default function App() {
             }}
           />
           <div style={{ color: "#616161" }}>
-            {backendStatus === "starting" ? t("Starting backend…") : t("Backend exited. Restart the app.")}
+            {backendStatus === "starting" ? t("Starting backend…") : t("Backend process exited.")}
           </div>
+          {backendStatus === "error" && (
+            <Button type="primary" onClick={() => void restartBackend()}>
+              {t("Restart the backend")}
+            </Button>
+          )}
         </div>
       </div>
     );
@@ -233,13 +252,17 @@ export default function App() {
                 padding: "12px 24px 16px",
               }}
             >
-              <Suspense fallback={<PageLoading />}>
-                {page === "overview" && <Overview />}
-                {page === "explore" && <Explore />}
-                {page === "descriptors" && <Descriptors />}
-                {page === "results" && <Results />}
-                {page === "analysis" && <Analysis />}
-              </Suspense>
+              {/* A page that throws on render must not take the shell, the rail
+                  or the status bar down with it. */}
+              <ErrorBoundary>
+                <Suspense fallback={<PageLoading />}>
+                  {page === "overview" && <Overview />}
+                  {page === "explore" && <Explore />}
+                  {page === "descriptors" && <Descriptors />}
+                  {page === "results" && <Results />}
+                  {page === "analysis" && <Analysis />}
+                </Suspense>
+              </ErrorBoundary>
             </div>
             <RightRail />
           </div>
@@ -247,7 +270,6 @@ export default function App() {
       </div>
       <StatusBar />
       <HealthFindingsDrawer />
-      <span style={{ display: "none" }}>{activeDatasetId}</span>
     </div>
   );
 }

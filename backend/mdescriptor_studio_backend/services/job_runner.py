@@ -1,15 +1,8 @@
-"""Analysis service responsibilities split by concern.
-
-The :class:`AnalysisService` facade inherits these mixins; each file owns one
-responsibility (data loading, preview shaping, artifacts/export or job
-execution) so the request surface stays free of numerical and filesystem
-details.
-"""
+"""Job execution for analyses: submission, the analysis runner and the sweep."""
 
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import replace
 from pathlib import Path
 
@@ -29,8 +22,6 @@ from ..errors import (
     JOB_CANCELLED,
 )
 from .analysis_helpers import (
-    ANALYSIS_ALGORITHM_VERSION,
-    _ANALYSIS_SCHEMA_VERSION,
     _NOW,
     _block_names,
 )
@@ -122,47 +113,17 @@ class AnalysisRunMixin:
         canonical_params = self._canonical_params(params)
         cache_key = self._analysis_cache_key(analysis_type, input_ids, canonical_params)
         with self._submit_lock:
-            cached = self.db.query_one(
-                "SELECT * FROM analysis_runs WHERE cache_key = ? AND status = 'COMPLETED' ORDER BY created_at DESC LIMIT 1",
-                (cache_key,),
+            analysis_id, early, created = self._claim_analysis_row(
+                analysis_type=analysis_type,
+                cache_key=cache_key,
+                canonical_params=canonical_params,
+                input_ids=input_ids,
+                primary_run_id=run_rows[0]["id"],
+                dataset_ids=sorted({row["dataset_id"] for row in run_rows}),
+                preprocessing={"preprocess": params.get("preprocess"), "scaling": params.get("scaling")},
             )
-            if cached and self._artifact_is_complete(cached):
-                return {"job_id": None, "analysis_id": cached["id"], "cache": {"existing_analysis_id": cached["id"], "cache_key": cache_key}}
-            active = self.db.query_one(
-                "SELECT * FROM analysis_runs WHERE cache_key = ? AND status IN ('QUEUED', 'RUNNING') ORDER BY created_at DESC LIMIT 1",
-                (cache_key,),
-            )
-            analysis_id = active["id"] if active else f"ana_{uuid.uuid4().hex[:12]}"
-            if active:
-                job = self.db.query_one(
-                    "SELECT id FROM jobs WHERE analysis_run_id = ? AND status IN ('QUEUED', 'RUNNING') ORDER BY created_at DESC LIMIT 1",
-                    (analysis_id,),
-                )
-                if job:
-                    return {"job_id": job["id"], "analysis_id": analysis_id, "cache": {"existing_analysis_id": analysis_id, "status": active["status"], "cache_key": cache_key}}
-            primary = run_rows[0]
-            now = _NOW()
-            if not active:
-                self.db.execute(
-                    "INSERT INTO analysis_runs (id, descriptor_run_id, analysis_type, params_json, status, created_at, input_run_ids_json, dataset_ids_json, cache_key, schema_version, algorithm_version, preprocessing_json, warnings_json, preview_json, updated_at)"
-                    " VALUES (?, ?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        analysis_id,
-                        primary["id"],
-                        analysis_type,
-                        json.dumps(canonical_params, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-                        now,
-                        json.dumps(input_ids, ensure_ascii=False),
-                        json.dumps(sorted({r["dataset_id"] for r in run_rows}), ensure_ascii=False),
-                        cache_key,
-                        _ANALYSIS_SCHEMA_VERSION,
-                        ANALYSIS_ALGORITHM_VERSION,
-                        json.dumps({"preprocess": params.get("preprocess"), "scaling": params.get("scaling")}, ensure_ascii=False),
-                        json.dumps([], ensure_ascii=False),
-                        json.dumps({}, ensure_ascii=False),
-                        now,
-                    ),
-                )
+            if early is not None:
+                return early
 
             def runner(ctx):
                 artifact_path: Path | None = None
@@ -239,17 +200,17 @@ class AnalysisRunMixin:
                     # Keep failed runs atomic: a committed artifact must
                     # never outlive the run row that failed to settle.
                     if artifact_path is not None:
-                        self._rmtree_quiet(artifact_path)
+                        self._artifacts.remove_quiet(artifact_path)
                     raise
             try:
                 job_id = self.jobs.submit(
                     f"analysis.{analysis_type}",
                     runner,
-                    dataset_id=primary["dataset_id"],
+                    dataset_id=run_rows[0]["dataset_id"],
                     analysis_run_id=analysis_id,
                 )
             except Exception:
-                if not active:
+                if created:
                     self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
                 raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
@@ -289,7 +250,7 @@ class AnalysisRunMixin:
         )
         if changed == 1:
             return
-        self._rmtree_quiet(artifact_path)
+        self._artifacts.remove_quiet(artifact_path)
         raise AppError(JOB_CANCELLED, f"analysis run {analysis_id} was cancelled")
 
     def _apply_thread_limit(self) -> None:

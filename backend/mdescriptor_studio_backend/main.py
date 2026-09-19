@@ -30,6 +30,9 @@ from .storage.database import Database
 
 log = logging.getLogger(__name__)
 
+# Bumped when an analysis payload changes shape in a way old clients cannot read.
+ANALYSIS_API_VERSION = 1
+
 _ALLOWED_SETTINGS = {
     "workspace.activeDatasetId",
     "workspace.activeDescriptorRunId",
@@ -66,7 +69,7 @@ def build_methods(jobs, datasets, views, frame_service, descriptors, results, an
             "mdescriptor_api_version": engine_info.get("api_version"),
             "mdescriptor_baseline_version": engine_info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": engine_info.get("descriptor_info_schema_version"),
-            "analysis_api_version": 1,
+            "analysis_api_version": ANALYSIS_API_VERSION,
             "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
             "analysis_dependencies": {
                 name: _dependency_version(name)
@@ -170,6 +173,9 @@ def main() -> int:
     views = DatasetViewService(datasets)
     frame_service = DatasetFrameService(datasets)
     results = ResultService(db, root)
+    # JobService has already settled the rows a crash left non-terminal, so the
+    # directories those runs abandoned are now unreachable and reclaimable.
+    results.sweep_abandoned()
     descriptors = DescriptorService(
         db, adapter, jobs, datasets, root, info.get("version", "unknown")
     )
@@ -209,7 +215,7 @@ def main() -> int:
             "mdescriptor_api_version": info.get("api_version"),
             "mdescriptor_baseline_version": info.get("baseline_version"),
             "mdescriptor_descriptor_info_schema_version": info.get("descriptor_info_schema_version"),
-            "analysis_api_version": 1,
+            "analysis_api_version": ANALYSIS_API_VERSION,
             "analysis_algorithm_version": ANALYSIS_ALGORITHM_VERSION,
         },
     )
