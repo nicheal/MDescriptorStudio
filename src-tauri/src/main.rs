@@ -3,7 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::HashSet;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -22,6 +22,46 @@ const BACKEND_EVENT: &str = "backend-message";
 const BACKEND_EXIT_EVENT: &str = "backend-exit";
 const MAIN_WEBVIEW: &str = "main";
 const EMBEDDED_BUNDLE_SHA256: Option<&str> = option_env!("MDS_BACKEND_BUNDLE_SHA256");
+
+// A release build runs with the Windows GUI subsystem, where stdout and stderr
+// are detached: without these files the only evidence that the shell refused to
+// spawn a backend, or dropped a protocol frame, is a spinner the user cannot
+// describe. They live under the same app-local root as the sidecar's temp dir.
+const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+
+fn app_root() -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    let root = PathBuf::from(
+        std::env::var_os("LOCALAPPDATA")
+            .ok_or_else(|| "LOCALAPPDATA is unavailable".to_string())?,
+    )
+    .join("MDescriptorStudio");
+    #[cfg(not(target_os = "windows"))]
+    let root = std::env::temp_dir().join("MDescriptorStudio");
+    Ok(root)
+}
+
+fn log_file(name: &str) -> Option<File> {
+    let path = app_root().ok()?.join("logs").join(name);
+    fs::create_dir_all(path.parent()?).ok()?;
+    // Restarts append, and the newest run is the one being debugged, so the
+    // file is restarted at the size cap instead of growing without bound.
+    if fs::metadata(&path)
+        .map(|meta| meta.len() > MAX_LOG_BYTES)
+        .unwrap_or(false)
+    {
+        let _ = fs::remove_file(&path);
+    }
+    OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+fn log_line(message: &str) {
+    #[cfg(debug_assertions)]
+    eprintln!("{message}");
+    if let Some(mut file) = log_file("shell.log") {
+        let _ = writeln!(file, "{message}");
+    }
+}
 
 // Request ids only need to be unique among pending requests, which are
 // cleared on restart, so a monotonic counter cannot collide within a run.
@@ -154,6 +194,8 @@ fn kill_backend(state: &BackendState) {
             {
                 if std::time::Instant::now() > deadline {
                     let _ = child.kill();
+                    // kill() without wait() leaves the entry unreaped on unix.
+                    let _ = child.wait();
                     break;
                 }
                 thread::sleep(std::time::Duration::from_millis(10));
@@ -174,7 +216,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
     let (mut command, label) = match backend_command() {
         Ok(command) => command,
         Err(error) => {
-            eprintln!("backend command rejected: {error}");
+            log_line(&format!("backend command rejected: {error}"));
             let _ = app.emit_to(
                 EventTarget::webview_window(MAIN_WEBVIEW),
                 BACKEND_EXIT_EVENT,
@@ -184,15 +226,20 @@ fn spawn_backend(app: &tauri::AppHandle) {
         }
     };
     hide_backend_console(&mut command);
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    println!("spawning backend ({label})");
+    // A sidecar that dies during import or unpacking does so before its own
+    // logging exists, and Stdio::null() threw that traceback away: the user saw
+    // "offline" and the shell had nothing to show. Its stderr now lands in a
+    // file next to the shell's own diagnostics.
+    command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(
+        log_file("sidecar-stderr.log")
+            .map(Stdio::from)
+            .unwrap_or(Stdio::null()),
+    );
+    log_line(&format!("spawning backend ({label})"));
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            eprintln!("backend spawn failed: {error}");
+            log_line(&format!("backend spawn failed: {error}"));
             let _ = app.emit_to(
                 EventTarget::webview_window(MAIN_WEBVIEW),
                 BACKEND_EXIT_EVENT,
@@ -213,7 +260,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
                 Ok(Some(bytes)) => match String::from_utf8(bytes) {
                     Ok(line) => line.trim_end_matches(['\r', '\n']).to_string(),
                     Err(_) => {
-                        eprintln!("backend emitted non-UTF-8 output; frame skipped");
+                        log_line("backend emitted non-UTF-8 output; frame skipped");
                         continue;
                     }
                 },
@@ -223,7 +270,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
                     // stream stays frame-aligned. The sidecar is alive and every
                     // other request still needs this channel, so drop the one
                     // oversized frame instead of tearing the link down.
-                    eprintln!("backend output rejected: {error}; frame skipped");
+                    log_line(&format!("backend output rejected: {error}; frame skipped"));
                     continue;
                 }
             };
@@ -242,6 +289,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
                     // here blocks on its next write and is orphaned for the rest
                     // of the session, because kill_backend() now finds None.
                     let _ = child.kill();
+                    let _ = child.wait();
                 }
                 true
             } else {
@@ -268,11 +316,11 @@ fn spawn_backend(app: &tauri::AppHandle) {
 
 fn route_backend_line(handle: &tauri::AppHandle, line: String) {
     let Ok(frame) = serde_json::from_str::<Value>(&line) else {
-        eprintln!("backend emitted a non-JSON frame");
+        log_line("backend emitted a non-JSON frame");
         return;
     };
     if frame.get("protocol_version").and_then(Value::as_u64) != Some(PROTOCOL_VERSION) {
-        eprintln!("backend emitted an unsupported protocol frame");
+        log_line("backend emitted an unsupported protocol frame");
         return;
     }
 
@@ -291,7 +339,7 @@ fn route_backend_line(handle: &tauri::AppHandle, line: String) {
     }
 
     let Some(id) = frame.get("id").and_then(Value::as_u64) else {
-        eprintln!("backend emitted an unaddressed frame");
+        log_line("backend emitted an unaddressed frame");
         return;
     };
     let is_pending = handle
@@ -401,16 +449,7 @@ fn hide_backend_console(command: &mut Command) {
 fn hide_backend_console(_command: &mut Command) {}
 
 fn backend_temp_dir() -> Result<PathBuf, String> {
-    #[cfg(target_os = "windows")]
-    let root = PathBuf::from(
-        std::env::var_os("LOCALAPPDATA")
-            .ok_or_else(|| "LOCALAPPDATA is unavailable".to_string())?,
-    )
-    .join("MDescriptorStudio");
-    #[cfg(not(target_os = "windows"))]
-    let root = std::env::temp_dir().join("MDescriptorStudio");
-
-    let temp_dir = root.join("backend-temp");
+    let temp_dir = app_root()?.join("backend-temp");
     fs::create_dir_all(&temp_dir).map_err(|error| {
         format!(
             "could not create backend temp directory {}: {error}",

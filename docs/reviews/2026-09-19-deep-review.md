@@ -154,9 +154,9 @@
 2. **mock 不实现任何校验/错误语义**，边界行为与真侧车系统性相反：未知 dataset id → `stats:null`（真侧车 `DATASET_NOT_FOUND`）；未知 check → 空 rows（真侧车 `INVALID_PARAMS`）；未知 `job.get` id → **凭空造一条永远 RUNNING 的行**（`preview.tsx:1096-1114`），拼错的 job id 在 e2e 里表现为"转圈"而不是失败；未知 `descriptor.describe` → 悄悄回落 `MOCK_DESCRIPTORS[0]`（DPA4 的 schema！）；`analysis.*` 提交完全无视参数（`:1247`）。所有错误码分支在 e2e 里等于没被测过。 ◑
 3. **mock handler 抛异常时不产生响应帧**（`preview.tsx:1464-1475`）→ 请求永久悬挂，以 30 s Playwright 超时收场并指向错的文件；真侧车 `Server` 对 handler 异常一律回错误帧。 ◑
 4. **发布包可以静默丢掉原生加速核**：`build_native.ps1:31-34` 找不到编译器 `exit 0`，`prepare_sidecar.ps1:11-12` 只看 `$LASTEXITCODE`，`backend/backend.spec:48-52` 用 `os.path.exists` 决定是否打包，`_native/` 又被 `.gitignore` 排除，`release.yml` 之后没有任何"DLL 在包里"的断言。叠加 `clean_command_environment`（`main.rs:368-378`）**未剥 `MDS_DISABLE_NATIVE`**（`native.py:59` 会读）→ 用户机器残留一个环境变量就能让出厂包退回 scipy 路径，即第四节第 2 条。 ◑
-5. **Rust 侧失败原因进了不存在的 stderr**：release 是 `windows_subsystem="windows"`，`eprintln!`（`:177,195,216,226,271,275,294`）无去处；子进程 `stderr(Stdio::null())`（`:190`）丢掉 PyInstaller/导入期 traceback（发生在 `backend.log` 建立之前）。用户只看到"backend 离线"+ 必然再失败的重启按钮。附带：`kill()` 后从不 `wait()`（`:156,:244`）→ 非 Windows 每次重启泄漏一个僵尸；`backend_temp_dir()`（`:400-418`）只建不清。 ◑
+5. **Rust 侧失败原因进了不存在的 stderr**：release 是 `windows_subsystem="windows"`，`eprintln!`（`:177,195,216,226,271,275,294`）无去处；子进程 `stderr(Stdio::null())`（`:190`）丢掉 PyInstaller/导入期 traceback（发生在 `backend.log` 建立之前）。用户只看到"backend 离线"+ 必然再失败的重启按钮。附带：`kill()` 后从不 `wait()`（`:156,:244`）→ 非 Windows 每次重启泄漏一个僵尸；`backend_temp_dir()`（`:400-418`）只建不清。 ✅（第十二批：shell 诊断与子进程 stderr 落盘到 `%LOCALAPPDATA%/MDescriptorStudio/logs/`，2 MB 轮转；两处 kill 后补 `wait()`；`app_root()` 成为唯一 owner。仍在：UI 不显示日志路径，temp 目录只建不清。）
 6. **`verify_known_issues.py` 的守卫自己会死锁**：`:205-217` 的 45 s deadline 只在 `readline()` 返回后才检查，而 issue #1 的表现恰是子进程零输出 → 父进程永久阻塞、`finally` 的 kill 不执行，只由 workflow 的 45 分钟超时兜底。已知抱怨的"没人跑它 + main() 恒返回 0"两半已修（现 `:504-513` 会返回 1，`test_known_issues_gate.py` 与 workflow 在跑）。 ◑
-7. **benchmark 的计时与内存指标不可信**：`run_benchmarks.py:197` 在 `import numpy`（`:35`）之后才 `setdefault("OMP_NUM_THREADS")`——实测对已加载的 BLAS 完全是空操作（3000³ matmul 0.100s→0.101s；import 前设 1 线程才是 0.813s）；`:160` `repeat=1 if samples>4000` 把冷启动单次当结果，还输出假的 `spread_seconds=[t,t]`；`peak_rss_mb`(`:67`) 计算后从未进任何输出行，`rss_high_water_mb`(`:68`) 其实只是末次 RSS，而 `README.md:36-37` 与 docstring `:9-10` 都按字面在解释它们。 ◑
+7. **benchmark 的计时与内存指标不可信**：`run_benchmarks.py:197` 在 `import numpy`（`:35`）之后才 `setdefault("OMP_NUM_THREADS")`——实测对已加载的 BLAS 完全是空操作（3000³ matmul 0.100s→0.101s；import 前设 1 线程才是 0.813s）；`:160` `repeat=1 if samples>4000` 把冷启动单次当结果，还输出假的 `spread_seconds=[t,t]`；`peak_rss_mb`(`:67`) 计算后从未进任何输出行，`rss_high_water_mb`(`:68`) 其实只是末次 RSS，而 `README.md:36-37` 与 docstring `:9-10` 都按字面在解释它们。 ✅（第十二批：线程变量移到 import 之前并记进 `results.json`；每行带 `repeats`、单次运行的 `spread_seconds` 改成 null；`peak_rss_mb` 更名 `rss_growth_mb` 并真的进行。README 的内存一节本来就写对了，改的是键名。）
 8. 手抄常量：`_MAX_PREVIEW_POINTS = 20_000`（`analysis_helpers.py:18`）与 `feature_variance_schema:2`/`feature_correlation_schema:3`/`schema_version:2|3` 被手抄进 `preview.tsx:1194,1228,1238,527,559`——缓存身份依赖它们，后端 bump 而 mock 不动时历史恢复语义悄悄分叉，且不在 `test_wire_contract_parity.py` 射程内。
 
 ---
@@ -326,8 +326,14 @@
 
 没做的，以及原因（都不是忘了）：**四-7**（可视化树 memo）——`PlotFrame` 的 `data`/`layout` 每次渲染都是新建字面量，只 `React.memo` 组件不钉数据等于不做，真做要改十几个视图的构造方式，而这一条至今只有静态推断、没有一次实测渲染耗时支撑，先测再说；**四-4 的后半**（health findings 每次打开非物理 tab 为 ≤1000 帧重做最近邻）——修它要把 per-frame `min_distance` 存进 cached stats，等于给 stats 结构加字段，要么 bump `stats_version`（代价：所有数据集重扫一遍），要么让旧缓存缺字段时退回现算（两份语义）。这两条都该你权衡，我没替你选；**四-9** Explore 原子表分页、`preview_service` 的 points/rows 合并按原样等你定调；**三-5**（outliers 面板提交 `k` 却没有 `k` 控件）需要一个产品判断：加控件还是把 `k` 固定下来。
 
+### 第十二批（第五节 5 与 7：让失败与测量都能被读到，`3db228c`+ Rust shell）
+
+**benchmark（`3db228c`）**：`OMP_NUM_THREADS` 移到 `import numpy` 之前（BLAS 在库加载时就定好线程数，之后 setdefault 是空操作），并把实际值写进 `results.json`；每行新增 `repeats`，只跑一次的用例 `spread_seconds` 改为 `null`（原来打印 `[t, t]` 看起来像测过离散度）；算了却从没输出的 `peak_rss_mb` 改名 `rss_growth_mb` 并真的进各行。README 的"如何读内存列"一节原本描述正确，跟着改的是键名。`--quick` 跑通（11 行，engine 0.3.3）。
+
+**Rust shell**：release 是 GUI 子系统，`eprintln!` 无处可去，子进程 stderr 又是 `Stdio::null()` —— 导入期/PyInstaller 崩溃发生在 `backend.log` 建立之前，于是用户只剩"离线 + 必然再失败的重启按钮"。现在 shell 的九条诊断写进 `%LOCALAPPDATA%\MDescriptorStudio\logs\shell.log`，sidecar 的 stderr 写进同目录的 `sidecar-stderr.log`，两者超过 2 MB 在下次打开时重启；两处 `kill()` 之后补 `wait()`（非 Windows 不再每次重启泄漏一个僵尸）；`backend_temp_dir()` 里内联的 root 计算提为 `app_root()` 唯一 owner。**没做**：UI 仍不告诉用户日志在哪（要改事件负载 + 前端 + mock，不成比例），temp 目录仍只建不清（并发实例下删除有风险）。cargo 2 passed，`cargo fmt --check` 对新增代码干净（文件里另有 6 处既有偏差，仓库没有 fmt 门禁，未顺手重排）。
+
 ### 剩余清单（按"要不要你先定调"分）
 
-第 4 步的五条口径已经在第十批落地（提案与落地差异见 `2026-09-20-science-semantics-decisions.md`）；第 5、6 步（性能与结构收敛）除上一节列出的四项之外也已在第十一批落地。
+第 4 步的五条口径已经在第十批落地（提案与落地差异见 `2026-09-20-science-semantics-decisions.md`）；第 5、6 步（性能与结构收敛）除上一节列出的四项之外已在第十一批落地，第五节的 5 与 7 在第十二批。
 
-还需要你定调的：Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）；outliers 面板的 `k`（加控件还是固定住）；health findings 的 `min_distance` 要不要进 cached stats（进 = 选 `stats_version` bump 还是双读）。第五节里没动的两条：`五-5`（release 版 Rust 的失败原因进了不存在的 stderr、`kill()` 后不 `wait()`）与 `五-7`（benchmark 的线程/重复/内存指标不可信）。
+还需要你定调的：Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）；outliers 面板的 `k`（加控件还是固定住）；health findings 的 `min_distance` 要不要进 cached stats（进 = 选 `stats_version` bump 还是双读）。第五节剩下的 1/2/3/4/6 都已在第三、五、八、九批收口，只有 `verify_known_issues.py` 的 45 s 死锁半边仍开着（要引入线程或 select 读子进程，属独立一改）。
