@@ -154,7 +154,7 @@
 2. **mock 不实现任何校验/错误语义**，边界行为与真侧车系统性相反：未知 dataset id → `stats:null`（真侧车 `DATASET_NOT_FOUND`）；未知 check → 空 rows（真侧车 `INVALID_PARAMS`）；未知 `job.get` id → **凭空造一条永远 RUNNING 的行**（`preview.tsx:1096-1114`），拼错的 job id 在 e2e 里表现为"转圈"而不是失败；未知 `descriptor.describe` → 悄悄回落 `MOCK_DESCRIPTORS[0]`（DPA4 的 schema！）；`analysis.*` 提交完全无视参数（`:1247`）。所有错误码分支在 e2e 里等于没被测过。 ◑
 3. **mock handler 抛异常时不产生响应帧**（`preview.tsx:1464-1475`）→ 请求永久悬挂，以 30 s Playwright 超时收场并指向错的文件；真侧车 `Server` 对 handler 异常一律回错误帧。 ◑
 4. **发布包可以静默丢掉原生加速核**：`build_native.ps1:31-34` 找不到编译器 `exit 0`，`prepare_sidecar.ps1:11-12` 只看 `$LASTEXITCODE`，`backend/backend.spec:48-52` 用 `os.path.exists` 决定是否打包，`_native/` 又被 `.gitignore` 排除，`release.yml` 之后没有任何"DLL 在包里"的断言。叠加 `clean_command_environment`（`main.rs:368-378`）**未剥 `MDS_DISABLE_NATIVE`**（`native.py:59` 会读）→ 用户机器残留一个环境变量就能让出厂包退回 scipy 路径，即第四节第 2 条。 ◑
-5. **Rust 侧失败原因进了不存在的 stderr**：release 是 `windows_subsystem="windows"`，`eprintln!`（`:177,195,216,226,271,275,294`）无去处；子进程 `stderr(Stdio::null())`（`:190`）丢掉 PyInstaller/导入期 traceback（发生在 `backend.log` 建立之前）。用户只看到"backend 离线"+ 必然再失败的重启按钮。附带：`kill()` 后从不 `wait()`（`:156,:244`）→ 非 Windows 每次重启泄漏一个僵尸；`backend_temp_dir()`（`:400-418`）只建不清。 ✅（第十二批：shell 诊断与子进程 stderr 落盘到 `%LOCALAPPDATA%/MDescriptorStudio/logs/`，2 MB 轮转；两处 kill 后补 `wait()`；`app_root()` 成为唯一 owner。仍在：UI 不显示日志路径，temp 目录只建不清。）
+5. **Rust 侧失败原因进了不存在的 stderr**：release 是 `windows_subsystem="windows"`，`eprintln!`（`:177,195,216,226,271,275,294`）无去处；子进程 `stderr(Stdio::null())`（`:190`）丢掉 PyInstaller/导入期 traceback（发生在 `backend.log` 建立之前）。用户只看到"backend 离线"+ 必然再失败的重启按钮。附带：`kill()` 后从不 `wait()`（`:156,:244`）→ 非 Windows 每次重启泄漏一个僵尸；`backend_temp_dir()`（`:400-418`）只建不清。 ✅（第十二批：shell 诊断与子进程 stderr 落盘到 `%LOCALAPPDATA%/MDescriptorStudio/logs/`，2 MB 轮转；两处 kill 后补 `wait()`；`app_root()` 成为唯一 owner。UI 的日志路径在 `fdfaf52` 补上，temp 目录的过期清理在第十四批 —— 这条到此关闭。）
 6. **`verify_known_issues.py` 的守卫自己会死锁**：`:205-217` 的 45 s deadline 只在 `readline()` 返回后才检查，而 issue #1 的表现恰是子进程零输出 → 父进程永久阻塞、`finally` 的 kill 不执行，只由 workflow 的 45 分钟超时兜底。已知抱怨的"没人跑它 + main() 恒返回 0"两半已修（现 `:504-513` 会返回 1，`test_known_issues_gate.py` 与 workflow 在跑）。 ◑
 7. **benchmark 的计时与内存指标不可信**：`run_benchmarks.py:197` 在 `import numpy`（`:35`）之后才 `setdefault("OMP_NUM_THREADS")`——实测对已加载的 BLAS 完全是空操作（3000³ matmul 0.100s→0.101s；import 前设 1 线程才是 0.813s）；`:160` `repeat=1 if samples>4000` 把冷启动单次当结果，还输出假的 `spread_seconds=[t,t]`；`peak_rss_mb`(`:67`) 计算后从未进任何输出行，`rss_high_water_mb`(`:68`) 其实只是末次 RSS，而 `README.md:36-37` 与 docstring `:9-10` 都按字面在解释它们。 ✅（第十二批：线程变量移到 import 之前并记进 `results.json`；每行带 `repeats`、单次运行的 `spread_seconds` 改成 null；`peak_rss_mb` 更名 `rss_growth_mb` 并真的进行。README 的内存一节本来就写对了，改的是键名。）
 8. 手抄常量：`_MAX_PREVIEW_POINTS = 20_000`（`analysis_helpers.py:18`）与 `feature_variance_schema:2`/`feature_correlation_schema:3`/`schema_version:2|3` 被手抄进 `preview.tsx:1194,1228,1238,527,559`——缓存身份依赖它们，后端 bump 而 mock 不动时历史恢复语义悄悄分叉，且不在 `test_wire_contract_parity.py` 射程内。
@@ -340,10 +340,22 @@
 
 **四-7 实测**：把 dev mock 的投影预览临时放大到后端自己的上限规模（20k 点），Playwright + `PerformanceObserver("longtask")` 量点选：**click → 两帧后 49/86/84/250/56 ms，长任务 81 ms**。这数不支持"加 memo"：`Analysis.tsx:1045` 的 `plot` 已在 useMemo 内，三个 handler 都是点选中保持稳定的 useCallback，真的变化是 `selectedIndices` —— 它就是 trace 里 `selectedpoints` 的输入。那 50–250 ms 是 Plotly 给 20k 点重排选区的必要开销。同时记下本审阅自己两处过期描述：第四节第 8 条（trajectoryView）与"投影面板零 memo"都早已不成立。实验未留下改动：mock 已还原、临时 spec 已删（`git diff` 空）。
 
+### 第十四批（剩余清单里"不需要定调"的五条尾巴）
+
+验证：**pytest 343 passed / 1 skipped**（+1）、**vitest 149**、**eslint + `tsc -b` 干净**、**Playwright 39 passed**、**cargo 3 passed**（+1）。金标 keys 无变化（这三处都在响应形状之下）。
+
+| 内容 | 实测 |
+| --- | --- |
+| `element_counts` 的累加形状从"每元素一条结构列表"改成"值 → 出现次数"的稀疏 `Counter`，直方图只读后者；padding 语义不变，`tests/test_datasets.py` 为此加了一条 | 25 万结构 × 12 元素（tracemalloc 峰值）：**100.2 MB → 9.1 MB**；`compute_statistics` 输出逐字段相等。审阅原来写的"可达数百 MB"数量级偏高，这里是实测值 |
+| `_utf8_len`：验长度不再构造字节串（`_readline_bounded` 与每帧字节求和两处） | 单条原子行 93.4 ns → 68.8 ns；`str.isascii` 读的是对象上的编码标志，所以那条超限的 1.6 MB 行从 218 µs 变成 0.2 µs。端到端（180 帧 / 1.4 MB 解析）0.097 → 0.094 s，在噪声里 —— 这条的真实收益是"最坏一行不再分配整块"，不是吞吐 |
+| scipy 回退路径不再把同一帧准备两遍（wrap + 逆矩阵 + cKDTree 提为 `_geometry_input`，两个消费者共用） | 2000 原子/帧：`_frame_geometry` **36.0 → 35.3 ms**（−2%）；128 原子帧在噪声里。参考实现的统计输出与改前逐字段相等（同一进程内新旧模块对拍） |
+| `Explore.tsx` 渲染体内新建的查找表 | **不成立**：`frameAtoms`/`forceArrows` 早已在 `useMemo` 内（第十三批四-7 实测时顺手读到）。删掉这条，未改代码 |
+| `backend-temp` 只建不清：shell 每次建目录时扫一遍，把 24 小时没被写过的条目删掉（尽力而为，删不掉的留着） | 24 小时是唯一在"可能有并发实例"前提下还能成立的说法：活着的 sidecar 反复写自己的 scratch，被崩溃留下的才会静默。cargo **3 passed**（+1）；把阈值调成 0 注入 → 新增那条失败，证明它不是空跑 |
+
 ### 剩余清单（按"要不要你先定调"分）
 
-第 4 步的五条口径在第十批落地（提案与差异见 `2026-09-20-science-semantics-decisions.md`），第 5、6 步在第十一批，第五节的 5 与 7 在第十二批，你定调的四件与四-7 的实测在第十三批。
+第 4 步的五条口径在第十批落地（提案与差异见 `2026-09-20-science-semantics-decisions.md`），第 5、6 步在第十一批，第五节的 5 与 7 在第十二批，你定调的四件与四-7 的实测在第十三批，不需要定调的五条尾巴在第十四批。
 
 还需要你定调的只剩一件：**`preview_service` 的 points/rows 重复** —— 同一批 ≤20k 记录以两个键、两套字段名发两遍（`points` 用 `label/cluster`，`rows` 用 `labels/cluster_labels`），`rows` 是前端 DataTable 在读的字段，所以合并成一份必然改变响应形状（要动前端读法、mock 与金标）。
 
-剩下的是不需要定调、但也要单独验证的小尾巴：`statistics.py` 的 `element_counts` 用无界 Python int 列表（高熵合金大集合下可达数百 MB）、`extxyz.py` 每行 1–2 次 UTF-8 编码只为验长度、scipy 回退里同一帧两遍 `_prepared_points`、`Explore.tsx` 渲染体内新建的查找表、`backend-temp` 只建不清。审阅这边到此见底；再往下是新功能或发布侧的事。
+审阅这边到此见底；再往下是新功能或发布侧的事。
