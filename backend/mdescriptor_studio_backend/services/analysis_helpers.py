@@ -28,8 +28,12 @@ _ANALYSIS_SCHEMA_VERSION = 1
 # Bumped whenever a stored result would be wrong under the new code, because it
 # is part of every analysis cache key (see _analysis_cache_key): the 2026-09-20
 # science-semantics batch (cross-dataset scale, zero-variance tolerance,
-# coordination vs max_neighbors, affine strain) invalidated every run at once.
-ANALYSIS_ALGORITHM_VERSION = "studio-analysis-5"
+# coordination vs max_neighbors, affine strain) invalidated every run at once;
+# studio-analysis-6 is the pass-4 semantics batch (one owner for "this feature
+# carries nothing", the acquisition diversity ruler, the Mahalanobis rank guard),
+# which change which samples and features a stored result is *about* rather than
+# how it is laid out - so the per-analysis schema_version numbers below stay.
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-6"
 _MAX_PREVIEW_POINTS = 20_000
 # Written into the canonical parameters of the two feature analyses, so bumping
 # one invalidates that analysis' stored results without touching the others.

@@ -1243,7 +1243,7 @@ const METHODS: Record<string, Handler> = {
     mdescriptor_baseline_version: "2",
     mdescriptor_descriptor_info_schema_version: 3,
     analysis_api_version: 1,
-    analysis_algorithm_version: "studio-analysis-5",
+    analysis_algorithm_version: "studio-analysis-6",
     analysis_dependencies: { "scikit-learn": "1.7.2", hdbscan: "0.8.40" },
     data_dir: "C:\\Users\\preview\\AppData\\Roaming\\mdescriptor-studio",
     cpu_threads: 16,
