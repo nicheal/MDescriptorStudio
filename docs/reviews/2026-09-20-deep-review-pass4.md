@@ -3,7 +3,7 @@
 范围：全仓。基线 `7d5605f`（第三轮第 15 批收尾）。本轮是**新一次审阅**，不是上一份报告的续批。
 方法：5 个审阅 agent 分片（算法层 / 服务层 / 解析与协议 / 前端页面 / 状态与 mock），外加散装前端文件、`benchmark/`、`scripts/`、测试与 CI。每条候选结论经我重新读码或实测后才进入下面的清单。
 
-环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。
+环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。第 4、5 批与第 6 批一部分落地后的当前门禁：pytest 366 passed / 1 skipped；vitest 199；Playwright 40；tsc / eslint 干净（cargo 本轮未跑）。
 
 ## 已落地
 
@@ -24,6 +24,12 @@
 | `6ba8823` | B-4 Mahalanobis 报出它实际张量到的维度，并且 n=1 时结构化拒绝（原先 `pinv` 抛 `LinAlgError` 把整个作业打死） | 打分表达式逐字未变，363 通过、无一条既有期望被改动；`LinAlgError: SVD did not converge` 是对 `_preprocess` 留下的那个矩阵实测出来的 |
 | `d84ead3` | B-6 acquisition 的多样性项改在循环前定尺，`pick_scores` 因此单调不增，`scores` 与末次 pick 逐值相等 | 40 seed × 3 组参数：120 次运行里 100 次上升（报告原 fixture 118 次）→ 0 次；把 running-ptp 那行放回去，测试直接把上升的 trace 打在消息里 |
 | `546187e` | `ANALYSIS_ALGORITHM_VERSION` → "studio-analysis-6"（B-3/B-4/B-6 三处改数），mock 由词表门禁同步 | pytest 363 / vitest 198；两个站点少改一个，门禁当场点名 |
+| `0905ff1` | B-1：drift 面板补上 Granularity 控件：drift 面板补上 Granularity 控件，`restore` 终于回答 drift 行 | 新 Playwright 用例（第一次碰 Granularity）；删掉那一行控件它就红 |
+| `7498086` | S4 删掉 `metadata()/read()/iterate_frames()` 插件词汇三件套（`services/` 里零生产者，`read()` 会把 25 万帧 list 化） | pytest 363；两个自证式测试改成测真契约 |
+| `bab2fd9` | C-10 `BUSY` 成为 `errors.py` 声明的码，公共消息进 `_PUBLIC_MESSAGES` 一处 | 消息逐字不变；词表门禁从此数得到它 |
+| `918ebbd` | C-12 `preprocessing_json` 两个写点收敛成 `_preprocessing(params)`，落定不再丢 `scaling` | 撤回旧写法测试点名 `scaling` |
+| `baafdec` | C-11 导出记录「写了多少条」而不是「被给了多少个下标」：`_write_export` 返回 `(path, written)` | `[2,2,7,7,7]` 的 indices 导出写 2 行、记 2 |
+| `f5916a2` | C-13 `_group_labels_cache` 成为真 LRU，key 类型不再谎报三元组 | 命中后再塞 1 条即证：撤掉 touch，被刚用过的键先被丢 |
 
 ## 待修（已核实，按批排列）
 
@@ -46,13 +52,10 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 ### 第 5 批 · 语义变更 —— `ANALYSIS_ALGORITHM_VERSION` 已在 `546187e` 过到 "6"
 
 原定「整批一次 bump」，实际提前收尾：B-3 / B-4 / B-6 已经改了缓存结果所描述的
-样本，让它们继续被旧结果命中不是选项。所以下面剩下三条，落地时要**各自**判断是
-否改数、要不要再一次 bump，而不是假设额度还剩着：B-1（纯前端，不改后端数字）、
-B-5（会改采样结果）、D-8（取决于选哪一半，见第 4 批那一行）。
+样本，让它们继续被旧结果命中不是选项。所以下面每条落地时要**各自**判断是否改数、要不要再一次 bump，而不是假设额度还剩着。B-1 已由 `0905ff1` 按「给面板加控件」落地（而不是摘掉绿点），它不改后端数字；剩下两条：B-5 会改采样结果，真要落地得再谈一次失效；D-8 取决于选哪一半，见第 4 批那一行。
 
 | # | 位置 | 问题 | 已有测量 |
 | --- | --- | --- | --- |
-| B-1 | `identity.ts` 第二半 + `restore.ts` + `Analysis.tsx:1292` | `c87f006` 只补了键；drift 面板是唯一没有 Granularity 控件的跨集面板，且 `restore` 对 drift 返回 `{}`，历史加载不回填粒度。于是别处动 `mode` 会让绿点静默消失，屏幕上无控件可解释或复原 —— 与第 13 批 outliers/`k` 同形，当时解法是给面板加控件 | — |
 | B-5 | `sampling/engine.py:175-191` vs `:96-102` | P1-14 第二半没落地、memo 也没定调：FPS 那支有 `scaling_mode`/`fit_scaling`/`apply_scaling`，cluster 直接 `.fit(x)` 原始值。混合单位矩阵（能量 eV + 维里 + 体积 Å³）上「代表样本」几乎完全沿最宽那一列选，`:201` 的 `_visual_pca(x)` 画的还是同一个原始空间，两张 sampling 卡不可比。`submission.ts` 又只在 fps 时发 `scaling`，屏幕上没人说明空间变了 | 两列 1:1000 的矩阵可复现选择由宽列主导 |
 | D-8 | `statistics.py` | 若改成流式（而非只改表头），随这批一起过 | — |
 
@@ -74,10 +77,6 @@ B-5（会改采样结果）、D-8（取决于选哪一半，见第 4 批那一�
 | C-7 | `preview.tsx:405-416` | `mockRecordAnalysisRow` 硬编码单 `descriptor_run_id`、默认单 inputRun/单 dataset，而 `analysis.drift`/`sensitivity`/`compare`/`mantel` 不覆盖默认 —— 尽管 `ANALYSIS_RUN_PARAMS` 正在校验它们带两个 run。于是 e2e 看到的每条 `analysis.list` 都是生产不会产出的形状，依赖它的两个前端判据只吃过退化输入 |
 | C-8 | `preview.tsx:52,101,218,272` vs `statistics.py:578` | mock 广告真后端永远报不出的能力：`energy.per_atom: true`，而 `statistics.py` 硬编码 `"per_atom": False`、无任何读者产出逐原子能量属性。`Overview.tsx:265` 正好渲染它 → 真 sidecar 那列永远 `—`，mock 每次预览都 ✓。**乐观方向的错误证据** |
 | C-9 | `preview.tsx` 的 `stats` 无 `stats_version`；`protocol.ts:75-78` 声明必在 | 类型注释断言「到得了 UI 的 payload 一定带它」，mock 回的 `stats` 却没这个键，也缺 `health_findings.nonphysical_distances`。`STATS: Record<string, unknown>` 故意无类型所以 `tsc` 看不见，金标契约只记 3 键信封。同一测试文件已镜像另外三个兄弟常量。更省的做法：把 mock 的 `STATS` 标成 `Record<string, Stats>` 让 `tsc` 去数剩下的洞 |
-| C-10 | `errors.py` vs `protocol/server.py:189,223`、`mdescriptor_adapter.py:121,144` | `BUSY` 只作为字面量存在（`errors.py` 里没定义），而 `stores/jobs.ts:162` 在它上面分支；第 5 批门禁按 `{vars(errors) 里的大写常量}` 算「后端会发的码集」，字面量对它隐形 → mock 无法被绑到 `BUSY`，拼错的码也能上线并退化成 "Request failed." |
-| C-11 | `export_service.py:141,150,156` vs `:181,204-208` | 存下来的 `selected_count` 是调用方原始列表长度，而写文件用 `sorted(set(...))`、按范围过滤、结构级写者还按唯一帧折叠 → 一条记录能说「选了 500 个」而文件里 312 行/180 结构。同文件 `_write_sampling_report` 已经是对的 |
-| C-12 | `job_runner.py:128` vs `:195` | 同一个 `preprocessing_json` 两个写点且已漂移：QUEUED 行写 `{preprocess, scaling}`，落定改写成 `{preprocess}` —— 对复合 FPS，`scaling` 是真定义采样空间的参数 |
-| C-13 | `analysis_service.py:125-127` + `analysis_loader.py:118,151-153` | `_group_labels_cache` 注释写「tiny LRU」，实现是不重排 + `pop(next(iter())))` 的 FIFO（刚跑完的作业要的那条可能正是被丢的），且声明的 key 类型（3 元组）与实际（4 元组）不符 |
 | C-15 | `jobs.ts:23-50` + `JobsDrawer.tsx:70` | ui-review 与 state-review 各自独立报出同一处：`JOB_TYPE_PAIRS` 是 `registry.ts` 那张表的第二份手抄，漏了 UI 自己会提交的 `analysis.mantel`、`analysis.perturbation_sensitivity`、`dataset.view.materialize`（直接打印方法名），第四条是**错的**而非缺失：`analysis.acquisition` 固定标 "Novelty acquisition"，而同一 method 也可能带 `acquisition_method: "uncertainty_diversity"` —— 这个区分提交侧已知，是 `trackJob(jobId, method)` 扔掉了 |
 | C-16 | `benchmark/run_benchmarks.py:187-206` | `storage` 的 read 行报 `mb_per_second`，实测 **4 452 / 4 476 MB/s**，write 只有 265–300 MB/s —— 同一文件连读三次测的是页缓存不是存储带宽。README 的措辞勉强算诚实，但一张 MB/s 表会被论文当 I/O 数字引用（要投 CPC/JOSS 的那份）。在行里和 README 标明 cache-warm 即可；绕开缓存要 Windows admin 权限，不成比例 |
 | C-17 | `job_runner.py:_input_ids` | 对 `run_ids` 无长度上限：一次提交带 N 个 id 就有 N 次 `SELECT * FROM descriptor_runs`、N 次 `feature_space_signature`，且 `input_ids` 会被拼进缓存身份。第 4 批把每 id 一次的数据集探针收成每次提交一次之后，剩下的按 N 线性项都在这里 —— 是个契约问题（要不要设上限、上限是多少、超了报什么码），不是性能问题 |
@@ -86,7 +85,6 @@ B-5（会改采样结果）、D-8（取决于选哪一半，见第 4 批那一�
 | E-7 | `preview_service.py:146-147` + `featureVariance.tsx:225` | 后端 `result["warnings"]` 只在 `analysis_type == "feature_variance"` 时抄进 preview，也只有这一个面板渲染它 → `_preprocess` 丢掉的非有限/零方差列、"pairwise matrix limited to 400 deterministic samples"、trajectory 的 MAD 回落告警、local diversity 的邻居表溢出提示全到不了界面；`DataTable` 还把 `warnings` 显式过滤掉。**注意这条会动响应形状**（preview 多一个键），需重生成金标 keys 并单独说明 |
 | E-8 | `RightRail.tsx:147-197` + `Explore.tsx:55-70` + `Overview.tsx:32-65` + `HealthFindingsDrawer.tsx:76-90` | 「取统计 → 等作业 → 再取一次」四份实现且已漂移：只有 RightRail/HealthFindingsDrawer 等完调 `refetchDatasets()`，所以 Explore/Overview 重算后数据集那一行（`dataset_service.py:635` 重写 `number_of_frames`/`fingerprint`/`last_scan_at`）还是旧的；`loadExploreHealth` 已抽出并单测但另外三处没收进去。次要：rail 的 `rescan()` 自己请求一次后又 `bumpStatsTick()` 触发自己的 mount effect → 多一次往返 + 一帧七行健康项全空 |
 | Q5 | `preview.tsx` 的 METHODS 表 | 7 个前端真发的 RPC 没有 handler（`descriptor.submit`、`job.cancel`、`analysis.delete`、`dataset.remove`、`dataset.rename`、`dataset.view.materialize`、`analysis.fps_quota`），拿到的是 `NO_HANDLER` —— 真后端永远不会发的码。于是 e2e 建不出描述符 run、也走不到任何拒绝/失败分支。**定调：补 `descriptor.submit` 与 `dataset.remove`，其余五个在门禁里显式列例外并写明理由** |
-| S4 | `datasets/base.py:56-66` + `datasets/readers/` | `metadata()`/`iterate_frames()`/`read()` 这组「插件词汇」在 `services/` 里没有生产者，只有自证式测试在调，`read()` 还会把 25 万帧一次性 list 化。第 4 批以完全相同理由删过 `DescriptorMatrix.granularity`。**已定调删除** |
 | D4' | `dataset_view_service.py:295,333`、`export_service.py:134`、`security.py:145-152` | 导出/物化目标路径在 RPC 线程查「存在就拒」，几分钟后由作业以 `O_CREAT\|O_WRONLY\|O_TRUNC`（无 `O_EXCL`）写：用户在此期间自建的同名文件被静默截断；两次同时提交同一路径能穿过检查互相插；`materialize` 完全没去重。**定调：`O_EXCL` 占位 + runner 复查，不新增 overwrite 参数** |
 
 ## 反证记录（不要再报）
