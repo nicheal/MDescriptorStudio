@@ -58,6 +58,23 @@ test("cross-dataset analysis selects compatible runs and a saved dataset view", 
   await expect(page.locator(".analysis-metric").filter({ hasText: "Feature scale" })).toContainText("standardized");
 });
 
+test("browser preview lets the drift module choose its granularity", async ({ page }) => {
+  // Drift compares whichever of the two matrices its runs share, so granularity
+  // is one of its own inputs and its cache identity moves with it. Until the
+  // panel had a control, changing the mode elsewhere silently moved the
+  // reference points with nothing on screen to explain or undo it.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Coverage & Novelty", "Dataset Drift");
+  await expect(page.getByText("Cross-dataset analysis", { exact: true })).toBeVisible();
+
+  await expect(page.getByText("Granularity", { exact: true })).toBeVisible();
+  await page.locator(".analysis-controls .ant-select").last().click();
+  await page.getByText("Atom / local", { exact: true }).last().click();
+  await expect(page.locator(".ant-select-selection-item").filter({ hasText: "Atom / local" })).toBeVisible();
+});
+
 test("dataset split entry exposes deterministic ratios and seed", async ({ page }) => {
   await page.goto("/preview.html");
   await page.locator(".dataset-item .dataset-item-actions").first().click();

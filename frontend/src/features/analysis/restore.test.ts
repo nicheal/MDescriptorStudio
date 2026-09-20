@@ -40,6 +40,16 @@ describe("restoring controls from a stored analysis row", () => {
     expect(restore("overview", "unknown_module", {})).toEqual({});
   });
 
+  it("restores the granularity a drift row was measured on", () => {
+    // Drift is the cross-dataset module whose own controls include which matrix
+    // it compares, and its identity key moves with `mode`: restoring a row
+    // without it left the panel showing the other matrix's points under a
+    // reference run that had been compared on this one.
+    expect(restore("overview", "drift", { mode: "atom" })).toEqual({ mode: "atom" });
+    expect(restore("overview", "drift", {})).toEqual({ mode: "structure" });
+    expect(restore("overview", "drift", { mode: "electrons" })).toEqual({ mode: "structure" });
+  });
+
   it("maps the algorithm names older rows wrote", () => {
     expect(restore("clusters", "cluster", { algorithm: "hierarchical" })).toMatchObject({ clusterAlgorithm: "agglomerative" });
     expect(restore("outliers", "outlier", { algorithm: "iForest" })).toMatchObject({ outlierAlgorithm: "isolation_forest" });

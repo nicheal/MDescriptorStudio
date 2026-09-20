@@ -180,6 +180,11 @@ function restoreOverview(analysisType: string, p: Record<string, unknown>, curre
         perturbationStructures: intAt(p.max_structures, 64, 1),
         perturbationMetric: text(p.metric) || "euclidean",
       };
+    case "drift":
+      // The reference/query pair is owned by the module target and a row cannot
+      // restore it, but `mode` decides which matrix the two runs are compared
+      // on, the panel shows it as Granularity, and the identity key carries it.
+      return { mode: mode(p.mode) };
     default:
       return {};
   }
