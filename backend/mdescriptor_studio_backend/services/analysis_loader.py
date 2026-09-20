@@ -220,7 +220,11 @@ class AnalysisDataMixin:
             raise AppError(ANALYSIS_INPUT_INVALID, "descriptor result contains NaN or Inf")
         check()
         offsets = self._row_offsets(row)
-        meta = self._result_metadata(row)
+        # load_values went through ResultService.get, which has already read and
+        # parsed metadata.json and put it on the row; re-reading it here meant a
+        # second path validation, a second open and a second parse of the same
+        # file on every sample load.
+        meta = row["metadata"]
         requested_mode = str(params.get("mode") or "structure")
         if requested_mode not in ("structure", "atom"):
             raise AppError(ANALYSIS_INPUT_INVALID, "mode must be structure or atom")

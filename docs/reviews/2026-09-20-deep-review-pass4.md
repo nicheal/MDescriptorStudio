@@ -20,7 +20,7 @@
 
 | # | 位置 | 问题 | 已有测量 |
 | --- | --- | --- | --- |
-| D-2 | `preview_service.py:67-70,123,131-138` | 每个点把 9 个 `_PREVIEW_ARRAY_KEYS` 各 `np.asarray` 两遍（`.ndim` + `len`）再逐个标量取；也是「生产者哪天给 list 而非 ndarray 就退化成二次方」的唯一入口 | 20k 点 × 9 数组：`_build_preview` 83 ms，其中光 `.ndim` 检查 19 ms。改为循环外转一次 + 列 `.tolist()` 后 zip |
+| D-2 | `preview_service.py:67-70,123,131-138` | 每个点把 9 个 `_PREVIEW_ARRAY_KEYS` 各 `np.asarray` 两遍（`.ndim` + `len`）再逐个标量取；也是「生产者哪天给 list 而非 ndarray 就退化成二次方」的唯一入口 | **已改，但收益远小于报告**：20 000 点 × 9 列实测 172.7 ms → 163.4 ms，只有 **5 %**，不是原报的 19 ms/83 ms（23 %）。保留的理由是它更简单、消除了二次方隐患，不是性能。cProfile 显示这函数真正的大头是末尾那句对整体重走的 `_json_safe`（约 80 % 运行时）。**故意没动**：把它换成「只净化算法自己那几个标量、信任循环构造」能拿约 2×，代价是一条看不见的不变量——而 `preview_json` 现在以 `allow_nan=False` 落盘，漏网的 numpy 值会让作业当场失败而不是写坏行，所以那条全局遍历已不是唯一防线。要做的话这是一个独立决定。 |
 | D-3 | `metrics/__init__.py:365-372`、`_common.py:661-672` | 第 11 批把邻居搜索搬出 Python 后，local diversity 还剩两个逐原子循环；无元素过滤时（`sample_indices = np.arange(n)`）CSR 重建 100 % 白做 | 20 000 原子 × ~60 邻居：226 ms → 向量化 12 ms；5 000 原子 81 → 4 ms |
 | D-4 | `analysis_loader.py:200,216` | `_load_samples` 已拿到 `load_values` 解析好的 `row["metadata"]`，却又调 `_result_metadata(row)` 重开重解析同一文件（多一次 `validate_local_path` + 重走 rep 检查）。`result.heatmap`（Explore 原子表逐帧调）为了 `scope`/`frame_index` 两列付全额解析 | patch `Path.read_text` 计数：单次 PCA metadata.json 读 2 次，只需 1 次 |
 | D-5 | `analysis_loader.py:156-175` ← `job_runner.py:59` | `_usable_run` 每个输入 run 验一次新鲜度，`_assert_dataset_current` 无缓存地走 `compute_fingerprint(use_cache=False)`（全目录遍历 + 32 MB 采样哈希 + 3 次 walk）。**一个**数据集上的多 run sensitivity/compare 付 N 遍，外加每 run 一次 `SELECT * FROM datasets`，全在 RPC 线程；`_input_ids` 对 `run_ids` 无长度上限 | 计数版：3 run 提交 → 数据集探针 3、`descriptor_runs` SELECT 6、metadata 解析 6。单次墙钟未测 |
@@ -43,6 +43,11 @@
 | D-8 | `statistics.py` | 若改成流式（而非只改表头），随这批一起过 | — |
 
 已随第 2 批落地的语义变更：A-2 pbc 拼写 + `FINGERPRINT_VERSION` v3→v4。
+
+### 第 4 批落地时对本报告的两处自我修正
+
+1. **第 1 批的 A-1 修复自己引入了一次热路径回退，第 4 批量出来并修掉。** 把 `finite_or_none` 放进 `_json_safe` 后，净化函数对每个叶子多一次 Python 调用；cProfile 在 20 000 点 × 9 列上数到 420 000 次调用，约占该函数运行时 35 %。现在规则仍由 `datasets.statistics.finite_or_none` 表述（`frame_force_max`、`frame_energy_per_atom` 用它），但 `_json_safe` 里内联成一次 `math.isfinite`，注释指明是同一条规则。教训：给一个被遍历全树的函数加"每叶子一次调用"就是加常数开销，必须在加它的那批里量一次。
+2. **`_load_samples` 的 metadata 二次解析（D-4）顺带让 `AnalysisPreviewMixin._result_metadata` 变成死代码**，已删除，并清掉它留下的三个 import。同一批还修掉第 1 批在 `artifact_service.py` 留下的一个**重复 import**（同一条 `from ..datasets.statistics import finite_or_none` 出现两次）——自查 diff 抓到的，不是 agent 报的。
 
 ### 第 6 批 · 契约与工具诚实
 
