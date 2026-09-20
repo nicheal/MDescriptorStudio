@@ -13,23 +13,31 @@
 | `707e470` | 数据可信性：非有限值永久毒化已存结果、`descriptor.submit` 不验产物、`result.list` 缺 tie-break、pairwise 最小值恒为 0、mock 词表门禁看不见 `dataset.view.*`、近乎常量的列让 `feature_variance` 崩 | pytest 348（+5），三条门禁反向验证 |
 | `4bfa042` | 解析器：pbc 拼写（随 `FINGERPRINT_VERSION` v3→v4）、UTF-8 BOM、DeepMD 尺寸门重复计数、Python 数字宽容漏进线上格式、`get_frame` 物种二次遍历 | pytest 352（+4），四条逐个撤改动→测试红→复原 |
 | `5b312f4` | 前端诚实：trajectory 阈值少抄后端守卫、结构预览造样本下标、恢复的失败作业码当消息、三条英文界面无文本、`describeError` 最后一处手抄 | vitest 198（+3）、Playwright 39 |
+| `ff3f69f` | D-2 预览点构造里重复的 `np.asarray` 摘出（实测只 5 %，不是报告的 23 %）；D-4 `metadata.json` 每次加载只读一遍，顺带让 `_result_metadata` 成死代码并删掉 | pytest 353，两处各自撤改动→测试红 |
+| `d072c4a` | D-3 local diversity 剩下两个逐原子循环之一：CSR 邻居表搬出 Python，且无元素过滤时不再重建 | 20 000 原子 226 ms → 12 ms |
+| `b986a1e` | D-6 `ARTIFACT_ARRAYS` 收到「视图真读的数组」，并补上反向门禁 | 一次打开少 1.2 MB JSON 与六次往返 |
+| `dd247b9` | B-8 Mantel 的 Spearman 秩只算一次；B-9 drift 不再把同两个矩阵预处理两遍，且 MMD 阶段终于可取消 | 上限 2 000 样本 629.6 s → 54.8 s（9–19×），Pearson 逐位不变；drift 进度检查点 1 → 4，输出逐位不变 |
+| `a361576` | D-5 一次提交只探一次数据集新鲜度（探针集合归调用方所有，不跨请求缓存） | 3 个探针 → 1；单次探针冷 26.3 ms / 热 3.3 ms |
+| `a82b352` | D-7 trajectory 可见窗口统计进 memo，四次排序变两次 | node 重放 10 万帧 102.9 ms → 50.5 ms，输出逐字段相同 |
+| `453253b` | C-5 一次列目录共享已验证前缀；并为 `is_reparse_point` 建第一批真 junction 用例 | 探针 106 → 12、`scan()` 2.1 ms → 1.1 ms；把检查改成「只看叶子」会让三条新测试全红 |
 
 ## 待修（已核实，按批排列）
 
-### 第 4 批 · 热路径（结果须逐位不变，不 bump）
+### 第 4 批 · 热路径（结果须逐位不变，不 bump）—— 只剩 D-8
+
+七条里六条进仓（上表 `ff3f69f`…`453253b`）。「逐位不变所以不 bump」这条线是守住了的：
+Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —— 换成凝聚索引 gather 后
+实测 0.6–0.8×（更慢），并在 1e-17 上改数，两头好处都没有。
+
+一条热路径**故意不做**：`preview_service._build_preview` 末尾那句对整体重走的
+`_json_safe` 约占该函数 80 % 运行时，换成「只净化算法自己那几个标量、信任循环构造」
+能拿约 2×，代价是一条看不见的不变量；而 `preview_json` 现在以 `allow_nan=False`
+落盘，漏网的 numpy 值会让作业当场失败而不是写坏行，所以那条全局遍历已不是唯一防线。
+要做的话这是一个独立决定。
 
 | # | 位置 | 问题 | 已有测量 |
 | --- | --- | --- | --- |
-| D-2 | `preview_service.py:67-70,123,131-138` | 每个点把 9 个 `_PREVIEW_ARRAY_KEYS` 各 `np.asarray` 两遍（`.ndim` + `len`）再逐个标量取；也是「生产者哪天给 list 而非 ndarray 就退化成二次方」的唯一入口 | **已改，但收益远小于报告**：20 000 点 × 9 列实测 172.7 ms → 163.4 ms，只有 **5 %**，不是原报的 19 ms/83 ms（23 %）。保留的理由是它更简单、消除了二次方隐患，不是性能。cProfile 显示这函数真正的大头是末尾那句对整体重走的 `_json_safe`（约 80 % 运行时）。**故意没动**：把它换成「只净化算法自己那几个标量、信任循环构造」能拿约 2×，代价是一条看不见的不变量——而 `preview_json` 现在以 `allow_nan=False` 落盘，漏网的 numpy 值会让作业当场失败而不是写坏行，所以那条全局遍历已不是唯一防线。要做的话这是一个独立决定。 |
-| D-3 | `metrics/__init__.py:365-372`、`_common.py:661-672` | 第 11 批把邻居搜索搬出 Python 后，local diversity 还剩两个逐原子循环；无元素过滤时（`sample_indices = np.arange(n)`）CSR 重建 100 % 白做 | 20 000 原子 × ~60 邻居：226 ms → 向量化 12 ms；5 000 原子 81 → 4 ms |
-| D-4 | `analysis_loader.py:200,216` | `_load_samples` 已拿到 `load_values` 解析好的 `row["metadata"]`，却又调 `_result_metadata(row)` 重开重解析同一文件（多一次 `validate_local_path` + 重走 rep 检查）。`result.heatmap`（Explore 原子表逐帧调）为了 `scope`/`frame_index` 两列付全额解析 | patch `Path.read_text` 计数：单次 PCA metadata.json 读 2 次，只需 1 次 |
-| D-5 | `analysis_loader.py:156-175` ← `job_runner.py:59` | `_usable_run` 每个输入 run 验一次新鲜度，`_assert_dataset_current` 无缓存地走 `compute_fingerprint(use_cache=False)`（全目录遍历 + 32 MB 采样哈希 + 3 次 walk）。**一个**数据集上的多 run sensitivity/compare 付 N 遍，外加每 run 一次 `SELECT * FROM datasets`，全在 RPC 线程；`_input_ids` 对 `run_ids` 无长度上限 | 计数版：3 run 提交 → 数据集探针 3、`descriptor_runs` SELECT 6、metadata 解析 6。单次墙钟未测 |
-| D-6 | `registry.ts:123-139` | 文件自己的注释把契约写成「每个视图真正读到的数组」，6 条违反它：`local_diversity` 取 `coords`/`sample_indices`/`labels`（`LocalView` 只用 `coordination` + `neighbor_distances`）；`mantel`/`kernel`/`perturbation_sensitivity` 各带一个没人读的 `sample_indices`；`sampling` 对所有非 FPS 算法取三条 FPS 覆盖曲线。`AnalysisResultVisualization` 用 `loading` 门住整个面板，所以每个没人读的名字都直接加在白屏时间里 | 现有门禁只查正向（列出的必须存在于 manifest），需补反向：表里的名字必须出现在该 kind 的渲染代码里 |
-| D-7 | `trajectoryView.tsx:116-135,299-312` | 渲染体内每次 `setRange` 重算 8 组派生值，尤其 `box` 四次 `quantile()` 各复制并排序一遍可见区投影，而 antd `Slider` 每次 mouse-move 都触发；上游 memo 帮不上（工作在它们下游） | node 重放：2 万帧 `box` 13.5 ms + marker 1.9 ms；10 万帧 78 + 8.8 + 1.7 ≈ 90 ms，未含 Plotly。**与第 13 批否决的「投影面板点选 memo」是不同路径**，那条测的是 `selectedpoints` 的必要开销 |
 | D-8 | `statistics.py` 的 `force_magnitudes` 累加 + 末尾 `np.concatenate` | 为一个精确中位数把全数据集每原子力幅值留在内存：峰值 8 B × 总原子数再乘一份 concatenate。该模块里唯一与它自己「streaming statistics」表头矛盾处 | 先确认有没有人依赖精确中位数；否则改表头说明这一处刻意全量驻留 |
-| B-8 | `pairs.py:234-240` | Spearman Mantel 每置换重算 `rankdata`。对称矩阵同步行列置换保持非对角元素多重集，`rankdata(permuted) == rankdata(right)[inv]` 精确成立（含并列，已验 5 个随机置换 + 一个带并列的矩阵） | 600 样本/179 700 对 → 44.2 ms/置换（默认 999 = 44 s）；上限 2000/1 999 000 → 629 ms/置换 = **10.5 分钟**。同规模 Pearson 4.3/66.7 ms。秩只算一次约 10× |
-| B-9 | `pairs.py:324,326` | `drift` 先调 `coverage(...)`（内部已跑 `_preprocess_reference_query`，进度到 1.0），再自己把同两个矩阵预处理一遍（第三、四份 float64 全量拷贝），然后做 MMD/协方差 —— 那段完全不碰 `progress`，而 `check_cancelled` 只在 `progress` 里触发（`job_runner.py:285`），于是进度钉在「完成」、主重阶段不可取消 | — |
-| C-5 | `security.py:70-81`，调用点 `deepmd.py:79-86`、`:182-185` | `ensure_no_reparse_points` 对每个叶子把整条路径重走一遍，每段 6 类探针。`fingerprint._files:63,67` 用的就是「只查叶子」 | 1010 文件的树：**57 976 次探针 = 57.4/文件**，60 KB 数据 980 ms；端到端 4 042 文件 → 构造 3.7 s + `scan()` 3.8 s。**这是安全检查的覆盖面变更**：改之前必须先有真 junction 用例证明只查叶子仍能拒掉 |
 
 ### 第 5 批 · 语义变更，一次 `ANALYSIS_ALGORITHM_VERSION` bump（S2 已定调）
 
@@ -44,10 +52,11 @@
 
 已随第 2 批落地的语义变更：A-2 pbc 拼写 + `FINGERPRINT_VERSION` v3→v4。
 
-### 第 4 批落地时对本报告的两处自我修正
+### 第 4 批落地时对本报告的三处自我修正
 
 1. **第 1 批的 A-1 修复自己引入了一次热路径回退，第 4 批量出来并修掉。** 把 `finite_or_none` 放进 `_json_safe` 后，净化函数对每个叶子多一次 Python 调用；cProfile 在 20 000 点 × 9 列上数到 420 000 次调用，约占该函数运行时 35 %。现在规则仍由 `datasets.statistics.finite_or_none` 表述（`frame_force_max`、`frame_energy_per_atom` 用它），但 `_json_safe` 里内联成一次 `math.isfinite`，注释指明是同一条规则。教训：给一个被遍历全树的函数加"每叶子一次调用"就是加常数开销，必须在加它的那批里量一次。
 2. **`_load_samples` 的 metadata 二次解析（D-4）顺带让 `AnalysisPreviewMixin._result_metadata` 变成死代码**，已删除，并清掉它留下的三个 import。同一批还修掉第 1 批在 `artifact_service.py` 留下的一个**重复 import**（同一条 `from ..datasets.statistics import finite_or_none` 出现两次）——自查 diff 抓到的，不是 agent 报的。
+3. **D-5 的「全在 RPC 线程」是错的。** `job_runner._run_analysis` 跑在作业自己的线程上，不在 RPC 线程；探针次数（3 → 1）与代价（冷 26.3 ms / 热 3.3 ms）都成立，线程归属不成立，落地时按实测写法纠正。同一条 finding 里的「`_input_ids` 对 `run_ids` 无长度上限」是真的，但它是个契约问题而不是探针问题，留在第 6 批。
 
 ### 第 6 批 · 契约与工具诚实
 
@@ -65,6 +74,7 @@
 | C-13 | `analysis_service.py:125-127` + `analysis_loader.py:118,151-153` | `_group_labels_cache` 注释写「tiny LRU」，实现是不重排 + `pop(next(iter())))` 的 FIFO（刚跑完的作业要的那条可能正是被丢的），且声明的 key 类型（3 元组）与实际（4 元组）不符 |
 | C-15 | `jobs.ts:23-50` + `JobsDrawer.tsx:70` | ui-review 与 state-review 各自独立报出同一处：`JOB_TYPE_PAIRS` 是 `registry.ts` 那张表的第二份手抄，漏了 UI 自己会提交的 `analysis.mantel`、`analysis.perturbation_sensitivity`、`dataset.view.materialize`（直接打印方法名），第四条是**错的**而非缺失：`analysis.acquisition` 固定标 "Novelty acquisition"，而同一 method 也可能带 `acquisition_method: "uncertainty_diversity"` —— 这个区分提交侧已知，是 `trackJob(jobId, method)` 扔掉了 |
 | C-16 | `benchmark/run_benchmarks.py:187-206` | `storage` 的 read 行报 `mb_per_second`，实测 **4 452 / 4 476 MB/s**，write 只有 265–300 MB/s —— 同一文件连读三次测的是页缓存不是存储带宽。README 的措辞勉强算诚实，但一张 MB/s 表会被论文当 I/O 数字引用（要投 CPC/JOSS 的那份）。在行里和 README 标明 cache-warm 即可；绕开缓存要 Windows admin 权限，不成比例 |
+| C-17 | `job_runner.py:_input_ids` | 对 `run_ids` 无长度上限：一次提交带 N 个 id 就有 N 次 `SELECT * FROM descriptor_runs`、N 次 `feature_space_signature`，且 `input_ids` 会被拼进缓存身份。第 4 批把每 id 一次的数据集探针收成每次提交一次之后，剩下的按 N 线性项都在这里 —— 是个契约问题（要不要设上限、上限是多少、超了报什么码），不是性能问题 |
 | E-2 | `analysis_service.py:249-251` + `Analysis.tsx:469,478,483` | `truncated` 只在 `ndim == 2` 时才可能为真，而加载器除 trajectory/effective_dimension 外取一块就 `break`。Mantel/Compare 于是画「全域均匀抽样的前 40 %」—— 有偏子集被当作关联强度，旁边 "Pairs" 写完整数量；property 面板在原子模式常年只覆盖 2 万样本而 KPI 写 "Samples"；同面板散点是跨全域 stride 的，两者描述的不是同一批样本。**S3 定调：如实标注** —— 后端对一维也报 `truncated`，前端把行不足并进 `narrowedArrays` 语义并显示「前 2 万 / N」 |
 | E-5 | `Explore.tsx:384-389` + `exploreFrameLoader.ts:45` | 外部跳转被在飞的取帧吞掉：健康抽屉点一行设 `activeFrameIndex` 并切到 Explore，内部请求还在飞时 effect 因 `loading` bail，而它提交时 `onFrame` 里 `setActiveFrame(idx)` 把外部跳转覆写回它本来在取的那帧 —— 抽屉说「预览第 100 帧」，屏幕停在第 6 帧且无报错。loader 的代际守卫是对的，缺的是重放被跳过的那次导航 |
 | E-7 | `preview_service.py:146-147` + `featureVariance.tsx:225` | 后端 `result["warnings"]` 只在 `analysis_type == "feature_variance"` 时抄进 preview，也只有这一个面板渲染它 → `_preprocess` 丢掉的非有限/零方差列、"pairwise matrix limited to 400 deterministic samples"、trajectory 的 MAD 回落告警、local diversity 的邻居表溢出提示全到不了界面；`DataTable` 还把 `warnings` 显式过滤掉。**注意这条会动响应形状**（preview 多一个键），需重生成金标 keys 并单独说明 |
