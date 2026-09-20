@@ -400,6 +400,7 @@ export default function Analysis() {
     setSelectedIndices([]);
     setInspectedPoint(null);
     setSelectedFrame(null);
+    setSelectedFrameBusy(false);
     setSecondRun(null);
     setOverviewArrays({});
     setLoadingAnalysisId(null);
@@ -425,7 +426,12 @@ export default function Analysis() {
 
   useEffect(() => {
     if (!pointDataset || !selectedPoint) {
+      // A request still in flight when the selection disappears will not report
+      // its result (its cleanup has already set `disposed`), so nothing else
+      // ever clears this - and the inspector then shows a loading line for a
+      // structure that is no longer pending at all.
       setSelectedFrame(null);
+      setSelectedFrameBusy(false);
       return;
     }
     let disposed = false;

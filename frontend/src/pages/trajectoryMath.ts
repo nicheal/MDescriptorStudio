@@ -24,6 +24,14 @@ export const MAD_SIGMA = 1.4826;
  * Event threshold over descriptor-space step distances.
  * `mad` is robust against one dominant jump, `zscore` is not, and
  * `percentile` reads the sensitivity as "top k percent of frames".
+ *
+ * The `mad` branch needs a non-zero spread. Every frame recorded twice, a
+ * quantized descriptor or rejected Monte Carlo steps drive the MAD to zero, and
+ * `median + k * 0` is just the median - which flags about half the trajectory as
+ * events. The backend falls back to `mean + k * std` and warns when it does
+ * (see _trajectory_threshold); mirroring only the formula without that guard
+ * made the panel's transitions, event rate and threshold describe an analysis
+ * that was never run.
  */
 export function trajectoryThreshold(steps: number[], stats: StepStats, method: EventMethod, sensitivity: number): number {
   if (method === "percentile") {
@@ -34,8 +42,9 @@ export function trajectoryThreshold(steps: number[], stats: StepStats, method: E
     const upper = Math.ceil(position);
     return lower === upper ? sorted[lower] : sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
   }
-  if (method === "zscore") return stats.mean + sensitivity * stats.std;
-  return stats.median + sensitivity * MAD_SIGMA * stats.mad;
+  const robustSigma = MAD_SIGMA * stats.mad;
+  if (method === "mad" && robustSigma > 0) return stats.median + sensitivity * robustSigma;
+  return stats.mean + sensitivity * stats.std;
 }
 
 export function stepStats(steps: number[]): StepStats {

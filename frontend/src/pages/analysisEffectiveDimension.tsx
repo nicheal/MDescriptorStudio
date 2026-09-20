@@ -100,7 +100,7 @@ export function EffectiveDimensionChart({ preview, arrays }: { preview: Analysis
   };
   const participationRatio = finiteNumber(preview.participation_ratio);
   const prLabel = (
-    <Tooltip title={t("Participation ratio definition")} placement="top">
+    <Tooltip title={t("Participation Ratio = (sum of eigenvalues)^2 / sum of squared eigenvalues: how many principal directions the variance is spread over. It can be fractional and is not a count of PCA components.")} placement="top">
       <span className="analysis-metric-label" tabIndex={0}>
         {t("PR effective dimension")} <Info16Regular aria-hidden="true" />
       </span>
@@ -111,7 +111,7 @@ export function EffectiveDimensionChart({ preview, arrays }: { preview: Analysis
     .filter((component): component is number => component != null && component >= 1 && component > shownComponentCount);
   const conclusion = participationRatio != null && featureCount != null && pcaFeatureCount != null
     && componentThreshold(preview, "0.9") != null && componentThreshold(preview, "0.95") != null && componentThreshold(preview, "0.99") != null
-    ? t("Effective dimension conclusion", {
+    ? t("Variance is concentrated in this dataset: of {featureCount} original features, the {pcaFeatureCount} that entered the PCA are explained 90%, 95% and 99% of their total variance by the first {pc90}, {pc95} and {pc99} components, and the participation-ratio effective dimension is {participationRatio}. These figures are computed on {scaling} preprocessing and are not an optimal component count for a downstream model.", {
         featureCount: formatCount(featureCount),
         pcaFeatureCount: formatCount(pcaFeatureCount),
         pc90: formatCount(componentThreshold(preview, "0.9")),
@@ -135,7 +135,7 @@ export function EffectiveDimensionChart({ preview, arrays }: { preview: Analysis
       <span><Typography.Text type="secondary">{t("PCA features")}: </Typography.Text><Typography.Text strong>{pcaFeatureCount == null ? "—" : `${formatCount(pcaFeatureCount)} / ${formatCount(featureCount)}`}</Typography.Text></span>
       <span><Typography.Text type="secondary">{t("Components")}: </Typography.Text><Typography.Text strong>{formatCount(declaredComponentCount)}</Typography.Text></span>
     </div>
-    <Typography.Text type="secondary" className="analysis-spectrum-note">{t("Threshold dimension explanation")}</Typography.Text>
+    <Typography.Text type="secondary" className="analysis-spectrum-note">{t("The threshold dimension is the number of principal components needed to reach that share of the total variance; the denominator is the number of features that actually entered the PCA.")}</Typography.Text>
     <div className="analysis-spectrum-toolbar">
       <Space wrap size={8}>
         <Typography.Text strong>{t("Spectrum range")}</Typography.Text>

@@ -562,8 +562,11 @@ export const zhDict: Record<string, string> = {
   "90% effective dimension": "90% 有效维度",
   "95% effective dimension": "95% 有效维度",
   "99% effective dimension": "99% 有效维度",
-  "Participation ratio definition": "Participation Ratio（参与比）= (Σλᵢ)² / Σλᵢ²。它衡量方差分布在多少个主方向上；可以是小数，不是 PCA 主成分数。",
-  "Threshold dimension explanation": "阈值维度是达到指定累计解释方差所需的主成分数；斜杠后的分母是实际进入 PCA 的特征数。",
+  // The key is the English text in this dictionary, so a key that is a label
+  // rather than the sentence has no English at all: translateKey returns the key
+  // verbatim and interpolate drops every value a "template" has no braces for.
+  "Participation Ratio = (sum of eigenvalues)^2 / sum of squared eigenvalues: how many principal directions the variance is spread over. It can be fractional and is not a count of PCA components.": "Participation Ratio（参与比）= (Σλᵢ)² / Σλᵢ²。它衡量方差分布在多少个主方向上；可以是小数，不是 PCA 主成分数。",
+  "The threshold dimension is the number of principal components needed to reach that share of the total variance; the denominator is the number of features that actually entered the PCA.": "阈值维度是达到指定累计解释方差所需的主成分数；斜杠后的分母是实际进入 PCA 的特征数。",
   "PCA method details": "PCA 方法详情",
   "PCA preprocessing": "PCA 预处理",
   "Correlation basis": "相关矩阵基准",
@@ -587,7 +590,7 @@ export const zhDict: Record<string, string> = {
   "Some threshold markers are outside the selected range.": "部分阈值标记不在当前范围内。",
   "Bars show the single-component explained variance ratio and the orange line shows the cumulative explained variance ratio.": "蓝柱表示单主成分解释方差率，橙线表示累计解释方差率。",
   "When more than 320 components are selected, the chart samples evenly for rendering while preserving the selected range.": "选择超过 320 个主成分时，图表会在保留所选范围的前提下等距抽样显示。",
-  "Effective dimension conclusion": "当前数据集呈现明显的方差集中倾向：{featureCount} 个原始特征中，进入 PCA 的 {pcaFeatureCount} 个特征由前 {pc90}、{pc95}、{pc99} 个主成分分别解释 90%、95%、99% 的总方差；PR 有效维度为 {participationRatio}。这些指标基于 {scaling} 预处理，不代表下游模型的最优主成分数。",
+  "Variance is concentrated in this dataset: of {featureCount} original features, the {pcaFeatureCount} that entered the PCA are explained 90%, 95% and 99% of their total variance by the first {pc90}, {pc95} and {pc99} components, and the participation-ratio effective dimension is {participationRatio}. These figures are computed on {scaling} preprocessing and are not an optimal component count for a downstream model.": "当前数据集呈现明显的方差集中倾向：{featureCount} 个原始特征中，进入 PCA 的 {pcaFeatureCount} 个特征由前 {pc90}、{pc95}、{pc99} 个主成分分别解释 90%、95%、99% 的总方差；PR 有效维度为 {participationRatio}。这些指标基于 {scaling} 预处理，不代表下游模型的最优主成分数。",
   "Explained and cumulative descriptor variance by component": "各主成分的解释方差与累计方差",
   "Component": "主成分",
   "At least two trajectory points are needed for visualization.": "可视化至少需要两个轨迹点。",
@@ -696,6 +699,10 @@ export const zhDict: Record<string, string> = {
   "Mean baseline: R² {r2}, RMSE {rmse}, MAE {mae}": "均值基线：R² {r2}，RMSE {rmse}，MAE {mae}",
   "{strength} property encoding": "{strength}属性编码能力",
   "strong": "强",
+  // encoding_strength arrives lower-cased from correlation.py and reaches t()
+  // through a variable, so a missing entry here shows an English word inside an
+  // otherwise Chinese sentence rather than failing anywhere visible.
+  "moderate": "中等",
   "weak": "弱",
   "unknown": "未知",
   "Strong multivariate predictability with moderate single-feature association indicates distributed encoding across descriptor dimensions.": "整体多维预测能力强，而单特征关联中等，说明属性信息分布在多个描述符维度中。",

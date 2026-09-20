@@ -9,8 +9,28 @@ const STEPS = [1, 1, 1, 1, 1, 1, 1, 1, 1, 21];
 describe("trajectoryThreshold", () => {
   const stats = stepStats(STEPS);
 
-  it("uses median + k * 1.4826 * MAD for the robust default", () => {
-    expect(trajectoryThreshold(STEPS, stats, "mad", 3)).toBeCloseTo(stats.median + 3 * MAD_SIGMA * stats.mad, 12);
+  it("uses median + k * 1.4826 * MAD when the steps have a MAD", () => {
+    // STEPS is nine 1s and one 21, so its MAD is exactly 0 - the degenerate case
+    // below. Spread the steps out to exercise the robust formula itself.
+    const spread = [1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 30];
+    const robust = stepStats(spread);
+    expect(robust.mad).toBeGreaterThan(0);
+    expect(trajectoryThreshold(spread, robust, "mad", 3)).toBeCloseTo(robust.median + 3 * MAD_SIGMA * robust.mad, 12);
+    expect(spread.filter((value) => value > trajectoryThreshold(spread, robust, "mad", 3))).toEqual([30]);
+  });
+
+  it("falls back to mean + k * sigma when the MAD is zero, as the backend does", () => {
+    // Half the steps identical drives the MAD to 0, and `median + k * 0` is just
+    // the median: about half the trajectory then reads as events. The backend
+    // refuses that and uses the standard deviation instead, warning that it did.
+    // This fixture has exactly that shape, and the old mirror of the formula
+    // without the guard reported a transition the analysis never detected.
+    expect(stats.mad).toBe(0);
+    expect(trajectoryThreshold(STEPS, stats, "mad", 3)).toBeCloseTo(stats.mean + 3 * stats.std, 12);
+    expect(trajectoryThreshold(STEPS, stats, "mad", 3)).not.toBeCloseTo(stats.median, 12);
+    // z-score always takes that branch, so the two agree here.
+    expect(trajectoryThreshold(STEPS, stats, "mad", 3))
+      .toBeCloseTo(trajectoryThreshold(STEPS, stats, "zscore", 3), 12);
   });
 
   it("uses mean + k * sigma for the z-score variant", () => {
@@ -27,9 +47,8 @@ describe("trajectoryThreshold", () => {
     expect(trajectoryThreshold(STEPS, stats, "percentile", 90)).toBe(Number.POSITIVE_INFINITY);
   });
 
-  it("leaves one dominant jump as the only transition under the MAD threshold", () => {
-    const threshold = trajectoryThreshold(STEPS, stats, "mad", 3);
-    expect(STEPS.filter((value) => value > threshold)).toEqual([21]);
+  it("returns no threshold for an empty step series", () => {
+    expect(trajectoryThreshold([], stepStats([]), "percentile", 1)).toBe(Number.POSITIVE_INFINITY);
   });
 });
 

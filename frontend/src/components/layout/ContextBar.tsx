@@ -7,6 +7,7 @@ import { ipc } from "../../ipc/client";
 import { RenameDatasetModal, useDatasetDelete } from "../datasetActions";
 import { useActiveDataset, useWorkspace } from "../../stores/workspace";
 import { formatLabel } from "../../util/format";
+import { describeError } from "../../util/errors";
 import { useT } from "../../i18n";
 
 function PropertyChip({ label, ok }: { label: string; ok: boolean }) {
@@ -118,9 +119,12 @@ export default function ContextBar() {
                       useWorkspace.getState().bumpStatsTick();
                       message.info(t("Statistics refreshed"));
                     })
-                    .catch((e: { code: string; message: string }) =>
-                      message.error(`${e.code}: ${e.message}`),
-                    );
+                    // describeError, not a hand-built `${code}: ${message}`: that
+                    // is the format the shared helper exists to own, and the two
+                    // fields it adds are the error_id that joins this complaint to
+                    // a backend log line. It also survives a rejection that is not
+                    // an ErrorFrame, which used to render "undefined: undefined".
+                    .catch((e) => message.error(describeError(e, "DATASET", "could not refresh statistics")));
                 }
               },
             }}

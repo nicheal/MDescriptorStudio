@@ -76,11 +76,46 @@ describe("zh dictionary completeness", () => {
     expect(missing, `missing zh translations for: ${missing.join(" | ")}`).toEqual([]);
   });
 
+  it("translates the values a dynamic key can take", () => {
+    // t(variable) cannot be scanned, so every value a site can produce is listed
+    // here instead. encoding_strength is emitted lower-cased by the backend
+    // (correlation.py), and a miss renders an English word inside a Chinese
+    // sentence rather than failing anywhere visible.
+    expect(["strong", "moderate", "weak", "unknown"].every((value) => value in zhDict)).toBe(true);
+  });
+
+  it("gives every interpolated key the placeholders its translation needs", () => {
+    // The English text *is* the key, so a key that is a label rather than the
+    // sentence has no English at all: translateKey returns the key verbatim and
+    // interpolate silently drops every value because the "template" has no {}.
+    // A zh translation carrying a placeholder the key lacks is the same defect.
+    const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort();
+    const offenders = Object.entries(zhDict)
+      .filter(([, value]) => typeof value === "string")
+      .map(([key, value]) => [key, placeholders(key), placeholders(value as string)] as const)
+      .filter(([, inKey, inValue]) => inValue.some((name) => !inKey.includes(name)))
+      .map(([key, , inValue]) => `${key} <- {${inValue.join("}, {")}}`);
+    expect(offenders, `translations reference variables their key lacks: ${offenders.join(" | ")}`).toEqual([]);
+  });
+
   it("resolves keys per language with {var} interpolation", async () => {
     const { translateKey } = await import("./index");
     expect(translateKey("en", "{n} structures", { n: 5 })).toBe("5 structures");
     expect(translateKey("zh", "{n} structures", { n: 5 })).toBe("5 个结构");
     expect(translateKey("en", "Refresh")).toBe("Refresh");
     expect(translateKey("zh", "Refresh")).toBe("刷新");
+    // The sentence-shaped keys are the English text; a label-shaped key would
+    // show the label and drop the values, which is what this pins against.
+    const conclusion = translateKey(
+      "en",
+      "Variance is concentrated in this dataset: of {featureCount} original features, the {pcaFeatureCount} that entered the PCA are explained 90%, 95% and 99% of their total variance by the first {pc90}, {pc95} and {pc99} components, and the participation-ratio effective dimension is {participationRatio}. These figures are computed on {scaling} preprocessing and are not an optimal component count for a downstream model.",
+      {
+        featureCount: "256", pcaFeatureCount: "128", pc90: "3", pc95: "5", pc99: "9",
+        participationRatio: "6.4", scaling: "standardized",
+      },
+    );
+    expect(conclusion).toContain("256");
+    expect(conclusion).toContain("6.4");
+    expect(conclusion).not.toContain("{featureCount}");
   });
 });

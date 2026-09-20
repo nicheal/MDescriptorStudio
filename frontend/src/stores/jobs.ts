@@ -273,7 +273,12 @@ export function fromJobRow(row: JobRow): JobState {
     completed: row.completed,
     total: row.total,
     message: row.message,
-    error: row.error ? { code: row.error, message: row.error } : null,
+    // job_service persists only the error *code* on the row (the human sentence
+    // travels on the job.finished event), so `row.error` cannot also be the
+    // message: a job that failed while the drawer was closed read
+    // "INTERNAL_ERROR: INTERNAL_ERROR" while the same job watched live read the
+    // real sentence. watchJob, two functions above, already falls back this way.
+    error: row.error ? { code: row.error, message: row.message ?? row.error } : null,
     created_at: row.created_at,
     // live events never carry a position; dropping the key (vs. setting
     // undefined) keeps mergeJobRows from clobbering a persisted value
