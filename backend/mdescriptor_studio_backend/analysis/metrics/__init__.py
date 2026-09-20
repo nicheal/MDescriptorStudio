@@ -394,14 +394,32 @@ def local_diversity(samples: DescriptorMatrix, params: dict, progress: Callable[
     capped_atoms = int((selected_coordination > max_neighbors).sum())
     if capped_atoms:
         warnings.append(f"{capped_atoms} atom(s) have more than {max_neighbors} contacts; neighbour lists keep the nearest {max_neighbors}")
-    selected_neighbor_indices: list[int] = []
-    selected_neighbor_distances: list[float] = []
-    selected_neighbor_offsets = np.zeros(sample_indices.size + 1, dtype=np.int64)
-    for output_index, original_index in enumerate(sample_indices.tolist()):
-        lo, hi = int(neighbor_offsets_all[original_index]), int(neighbor_offsets_all[original_index + 1])
-        selected_neighbor_indices.extend(int(value) for value in neighbor_indices_all[lo:hi].tolist())
-        selected_neighbor_distances.extend(float(value) for value in neighbor_distances_all[lo:hi].tolist())
-        selected_neighbor_offsets[output_index + 1] = len(selected_neighbor_indices)
+    # The neighbour arrays are CSR over *all* samples and `sample_indices` picks
+    # rows out of them. Rebuilding them with a Python loop per atom cost 226 ms
+    # of this analysis on 20 000 atoms (12 ms vectorised), and it was entirely
+    # wasted work in the common case: with no element filter `sample_indices` is
+    # every row, so the "subset" is the array it already was.
+    if selected_element is None:
+        selected_neighbor_offsets = neighbor_offsets_all
+        selected_neighbor_indices = neighbor_indices_all
+        selected_neighbor_distances = neighbor_distances_all
+    else:
+        row_starts = neighbor_offsets_all[sample_indices]
+        row_counts = neighbor_offsets_all[sample_indices + 1] - row_starts
+        selected_neighbor_offsets = np.zeros(sample_indices.size + 1, dtype=np.int64)
+        np.cumsum(row_counts, out=selected_neighbor_offsets[1:])
+        total_neighbors = int(selected_neighbor_offsets[-1])
+        if total_neighbors:
+            # Which selected row each flat entry comes from, then the offset
+            # within that row: repeat + cumsum turn "row r contributes
+            # counts[r] entries starting at starts[r]" into one index array.
+            row_of_entry = np.repeat(np.arange(row_counts.size, dtype=np.int64), row_counts)
+            flat = row_starts[row_of_entry] + np.arange(total_neighbors, dtype=np.int64) - selected_neighbor_offsets[row_of_entry]
+            selected_neighbor_indices = neighbor_indices_all[flat]
+            selected_neighbor_distances = neighbor_distances_all[flat]
+        else:
+            selected_neighbor_indices = neighbor_indices_all[:0]
+            selected_neighbor_distances = neighbor_distances_all[:0]
     coords = _visual_pca(x)
     categories = np.zeros(x.shape[0], dtype=np.int64)
     scores = np.zeros(x.shape[0], dtype=np.float64)

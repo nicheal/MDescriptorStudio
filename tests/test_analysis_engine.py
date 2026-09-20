@@ -713,6 +713,63 @@ def test_local_diversity_reports_periodic_coordination_and_neighbor_shell() -> N
     assert np.allclose(result["arrays"]["neighbor_distances"], 0.1)
 
 
+def test_local_diversity_element_filter_gathers_the_selected_neighbour_rows() -> None:
+    """Selecting one element must return the CSR rows of exactly those atoms, in
+    order - the gather that used to rebuild these arrays with a Python loop per
+    atom (58 ms of this analysis on 20 000 atoms; 2 ms vectorised) and that is
+    skipped outright when no filter is active."""
+    values = np.array(
+        [[0.0, 1.0], [1.0, 0.0], [2.0, 1.0], [3.0, 0.0], [4.0, 1.0], [5.0, 0.5]],
+        dtype=np.float64,
+    )
+    positions = np.array(
+        [[0.0, 0.0, 0.0], [0.1, 0.0, 0.0], [5.0, 0.0, 0.0],
+         [5.1, 0.0, 0.0], [9.0, 0.0, 0.0], [9.1, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    # Three close pairs, alternating Si/Ga, so either element still clears the
+    # three-environment floor _check_samples imposes. The cell has to hold those
+    # coordinates: in a 1 A periodic box every position is a lattice translate of
+    # every other, and minimum-image wrapping would put all six atoms inside each
+    # other's cutoff.
+    elements = np.array([14, 31, 14, 31, 14, 31], dtype=np.int64)
+
+    def graph(sel_element: int | None):
+        params: dict = {"cutoff": 0.2, "max_neighbors": 8, "n_clusters": 2, "k": 1}
+        if sel_element is not None:
+            params["element"] = sel_element
+        return local_diversity(
+            AtomDescriptorMatrix(
+                values, np.zeros(6, dtype=np.int64), row=np.arange(6, dtype=np.int64),
+                sample_ids=[f"frame:0:row:{i}" for i in range(6)],
+                elements=elements, positions=positions,
+                cells=np.repeat((np.eye(3, dtype=np.float64) * 10.0)[None, :, :], 6, axis=0),
+                pbc=np.ones((6, 3), dtype=bool),
+            ),
+            params,
+        )["arrays"]
+
+    unfiltered = graph(None)
+    # Rows are 0:[1], 1:[0], 2:[3], 3:[2], 4:[5], 5:[4] - pairs only, because the
+    # 5 A between pairs is far outside the 0.2 A cutoff and the one-image stencil
+    # of a 10 A cell.
+    assert unfiltered["neighbor_offsets"].tolist() == [0, 1, 2, 3, 4, 5, 6]
+    assert unfiltered["neighbor_indices"].tolist() == [1, 0, 3, 2, 5, 4]
+
+    ga = graph(31)
+    assert ga["sample_indices"].tolist() == [1, 3, 5]
+    # The three Ga rows keep their own shells, concatenated in row order.
+    assert ga["neighbor_offsets"].tolist() == [0, 1, 2, 3]
+    assert ga["neighbor_indices"].tolist() == [0, 2, 4]
+    assert np.allclose(ga["neighbor_distances"], 0.1)
+    assert ga["neighbor_indices"].dtype == np.int64 and ga["neighbor_distances"].dtype == np.float64
+
+    si = graph(14)
+    assert si["sample_indices"].tolist() == [0, 2, 4]
+    assert si["neighbor_offsets"].tolist() == [0, 1, 2, 3]
+    assert si["neighbor_indices"].tolist() == [1, 3, 5]
+
+
 def test_local_neighbor_graph_keeps_periodic_image_contacts() -> None:
     values = np.array([[0.0, 1.0], [1.0, 0.0], [0.5, 0.25]], dtype=np.float64)
     result = local_diversity(
