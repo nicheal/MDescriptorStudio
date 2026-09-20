@@ -131,14 +131,14 @@ class AnalysisExportMixin:
                 try:
                     self._mark_run_running(analysis_id)
                     ctx.progress(0, 1, "writing export")
-                    path = self._write_export(run, selected, export_format, mode, Path(target), ctx, report_analysis, view_id)
+                    path, written = self._write_export(run, selected, export_format, mode, Path(target), ctx, report_analysis, view_id)
                     artifact_path, manifest = self._commit_artifact(
                         analysis_id,
                         "export",
                         input_ids,
                         canonical,
                         {"arrays": {}, "warnings": [], "export_path": str(path)},
-                        {"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)},
+                        {"kind": "export", "format": export_format, "output_path": str(path), "selected_count": written},
                         ctx,
                     )
                     self._complete_analysis_run(
@@ -147,13 +147,13 @@ class AnalysisExportMixin:
                             "result_path": str(artifact_path),
                             "finished_at": _NOW(),
                             "artifact_manifest_json": json.dumps(manifest),
-                            "preview_json": json.dumps({"kind": "export", "format": export_format, "output_path": str(path), "selected_count": len(selected)}),
+                            "preview_json": json.dumps({"kind": "export", "format": export_format, "output_path": str(path), "selected_count": written}),
                             "updated_at": _NOW(),
                         },
                         artifact_path,
                     )
                     ctx.progress(1, 1, "export complete")
-                    return {"analysis_id": analysis_id, "output_path": str(path), "selected_count": len(selected)}
+                    return {"analysis_id": analysis_id, "output_path": str(path), "selected_count": written}
 
                 except BaseException:
                     # Keep failed runs atomic: a committed artifact must
@@ -169,7 +169,16 @@ class AnalysisExportMixin:
                 raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
-    def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None, view_id: str | None = None) -> Path:
+    def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None, view_id: str | None = None) -> tuple[Path, int]:
+        """Write the export and report how many entries the file actually holds.
+
+        The caller records that number rather than the length of the request:
+        each format normalises the selection differently - indices and report
+        dedupe, json and csv drop out-of-range samples, extxyz and DeepMD fold
+        samples into the frames they came from - so a row saying "selected 500"
+        beside a 312-line file described a list nobody wrote (deep review
+        pass 4, C-11).
+        """
         # Sample-index and provenance exports need neither the dataset service
         # nor a frame resolution, so they short-circuit before any loading.
         if export_format == "indices":
@@ -180,14 +189,15 @@ class AnalysisExportMixin:
             with open_text_for_write(target) as fh:
                 for index in sorted(set(int(i) for i in selected)):
                     fh.write(f"{index}\n")
-            return target
+            return target, len({int(i) for i in selected})
         if export_format == "report":
             if not selected:
                 raise AppError(EXPORT_FAILED, "export selection is empty")
             target.parent.mkdir(parents=True, exist_ok=True)
             ensure_no_reparse_points(target.parent)
-            self._write_sampling_report(run, report_analysis or {}, sorted(set(int(i) for i in selected)), target)
-            return target
+            chosen = sorted(set(int(i) for i in selected))
+            self._write_sampling_report(run, report_analysis or {}, chosen, target)
+            return target, len(chosen)
         if self.datasets is None:
             raise AppError(EXPORT_FAILED, "dataset service is unavailable")
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run["dataset_id"],))
@@ -220,7 +230,7 @@ class AnalysisExportMixin:
             ensure_no_reparse_points(target.parent)
             with open_text_for_write(target) as fh:
                 json.dump({"dataset_id": dataset["id"], "run_id": run["id"], "format": dataset["format"], "records": records}, fh, ensure_ascii=False, indent=2)
-            return target
+            return target, len(records)
         if export_format == "csv":
             target.parent.mkdir(parents=True, exist_ok=True)
             ensure_no_reparse_points(target.parent)
@@ -229,16 +239,16 @@ class AnalysisExportMixin:
                 writer.writeheader()
                 for record in _identity_records(samples, chosen):
                     writer.writerow(record)
-            return target
+            return target, len(chosen)
         if export_format == "extxyz":
             write_extxyz(target, _cancellable_frames(adapter, frames, ctx))
-            return target
+            return target, len(frames)
         if dataset["format"] != "deepmd":
             raise AppError(EXPORT_FAILED, "DeepMD export requires a DeepMD source dataset")
         if target.exists() and not target.is_dir():
             raise AppError(EXPORT_FAILED, "DeepMD export requires a directory destination")
         write_deepmd(target, _cancellable_frames(adapter, frames, ctx))
-        return target
+        return target, len(frames)
 
     def _write_sampling_report(self, run: dict, analysis_row: dict, selected: list[int], target: Path) -> None:
         """Write the reprovenance JSON for a sampling selection.

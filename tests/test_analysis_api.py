@@ -827,10 +827,29 @@ def test_frame_scoped_export_resolves_selected_sample_to_actual_frame(tmp_path: 
 
     service.datasets = _Datasets()
     run = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_export_frame'")
-    output = service._write_export(run, [0], "json", "structure", tmp_path / "export.json", _Context())
+    output, written = service._write_export(run, [0], "json", "structure", tmp_path / "export.json", _Context())
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert [record["frame"] for record in payload["records"]] == [7]
     assert [record["sample_index"] for record in payload["records"]] == [0]
+    assert written == len(payload["records"]), "the count must be the file's, not the request's"
+    db.close()
+
+
+def test_export_reports_the_entries_it_wrote_not_the_selection_it_was_given(tmp_path: Path) -> None:
+    # A selection can repeat an index, ask for samples outside the run, or name
+    # several samples of one frame; every format folds those differently, and the
+    # row used to record `len(selected)` regardless - so an export could claim
+    # "500 selected" beside a file with 312 lines (deep review pass 4, C-11).
+    db, jobs, service = _service(tmp_path)
+    target = tmp_path / "indices.txt"
+
+    path, written = service._write_export(
+        db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_1'"), [2, 2, 7, 7, 7], "indices", "structure", target, _Context()
+    )
+    lines = path.read_text(encoding="utf-8").split()
+
+    assert lines == ["2", "7"]
+    assert written == len(lines), "the recorded count is what the file holds"
     db.close()
 
 
