@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from ..datasets import compute_fingerprint
+from ..datasets.deepmd_symbols import _SYMBOL_TO_Z
 from ..errors import (
     AppError,
     DATASET_NOT_FOUND,
@@ -38,6 +39,39 @@ from .job_service import JobService
 from .analysis_helpers import _NOW
 
 log = logging.getLogger(__name__)
+
+
+def _species_numbers(key: str, value: object) -> list[int]:
+    """Atomic numbers for a `species` parameter, given names or numbers.
+
+    The Studio used to hand-copy a symbol->Z table into the form and drop what
+    its copy did not know (it stopped at uranium), so a dataset containing
+    Np..Og silently computed with a shorter species list than the screen showed.
+    `datasets.deepmd_symbols` is the only table here, and an unknown symbol is a
+    configuration error instead of a missing element.
+    """
+    if not isinstance(value, list) or not value:
+        raise AppError(
+            DESCRIPTOR_CONFIGURATION_ERROR,
+            f"parameter {key}: expected a non-empty list of element symbols or atomic numbers",
+            {"parameter": key},
+        )
+    numbers: list[int] = []
+    for item in value:
+        if isinstance(item, int) and not isinstance(item, bool):
+            numbers.append(item)
+            continue
+        if isinstance(item, str):
+            resolved = _SYMBOL_TO_Z.get(item) or _SYMBOL_TO_Z.get(item.capitalize())
+            if resolved is not None:
+                numbers.append(resolved)
+                continue
+        raise AppError(
+            DESCRIPTOR_CONFIGURATION_ERROR,
+            f"parameter {key}: {item!r} is neither an element symbol nor an atomic number",
+            {"parameter": key},
+        )
+    return numbers
 
 _VALIDATE_TYPES = {"integer", "number", "boolean", "string", "enum", "array", "object", "model", "species"}
 
@@ -345,6 +379,13 @@ class DescriptorService:
                     f"unknown parameter {key!r} for {schema['name']}",
                     {"parameter": key},
                 )
+            if spec[key].get("type") == "species":
+                # Names are what the form holds and what a parameter file reads
+                # best; atomic numbers are what the engine wants. Resolving here
+                # keeps `datasets.deepmd_symbols` the only symbol table in the
+                # product and stores the numbers either way.
+                value = _species_numbers(key, value)
+                parameters[key] = value
             self._check_value(key, spec[key], value)
         for key, meta in spec.items():
             if meta.get("required") and key not in parameters:

@@ -11,7 +11,12 @@ import pytest
 from mdescriptor_studio_backend.datasets import compute_fingerprint
 from mdescriptor_studio_backend.datasets.extxyz import ExtXYZAdapter
 from mdescriptor_studio_backend.datasets.fingerprint import FINGERPRINT_VERSION
-from mdescriptor_studio_backend.errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
+from mdescriptor_studio_backend.errors import (
+    AppError,
+    DESCRIPTOR_CONFIGURATION_ERROR,
+    INVALID_PARAMS,
+    RESULT_INCOMPATIBLE,
+)
 from mdescriptor_studio_backend.protocol.frames import parse_request, response_err
 from mdescriptor_studio_backend.security import UnsafePathError, validate_local_path
 from mdescriptor_studio_backend.services.analysis_service import AnalysisService
@@ -143,3 +148,19 @@ def test_descriptor_schema_rejects_nonfinite_or_out_of_range_values() -> None:
         service._check_value("max_rank", {"type": "integer", "minimum": 0, "maximum": 5}, 6)
     with pytest.raises(AppError):
         service._check_value("model", {"type": "model"}, r"\\server\share\model.pt")
+
+
+def test_species_parameters_resolve_names_through_the_one_symbol_table() -> None:
+    """The form converted symbols itself with a table that stopped at uranium and
+    `filter`ed away whatever it did not know, so a Ga/Pu dataset submitted a
+    shorter species list than the screen showed - and nothing said so."""
+    service = object.__new__(DescriptorService)
+    schema = {"name": "soap", "parameters": {"species": {"type": "species"}}}
+
+    parameters = {"species": ["Ga", "Pu", 33]}
+    service._validate_parameters(schema, parameters)
+    assert parameters["species"] == [31, 94, 33]
+
+    with pytest.raises(AppError) as refused:
+        service._validate_parameters(schema, {"species": ["Xx"]})
+    assert refused.value.code == DESCRIPTOR_CONFIGURATION_ERROR

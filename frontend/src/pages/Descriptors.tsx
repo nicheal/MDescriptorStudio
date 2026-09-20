@@ -19,7 +19,7 @@ import { Info16Regular } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { useActiveDataset } from "../stores/workspace";
 import { trackJob, watchJob } from "../stores/jobs";
-import { collectDefaults, SchemaField, speciesToNumbers, type ParamValues } from "../components/SchemaForm";
+import { collectDefaults, SchemaField, type ParamValues } from "../components/SchemaForm";
 import { useT } from "../i18n";
 import type { DescriptorInfo, DescriptorSchema } from "../types/protocol";
 import { describeError } from "../util/errors";
@@ -202,11 +202,10 @@ export default function Descriptors() {
 
   const submit = async () => {
     if (!schema || !selected) return;
+    // Element symbols go out as they are: the sidecar resolves them with the
+    // product's only symbol table (a hand copy here silently dropped every
+    // element past uranium).
     const params: ParamValues = { ...values };
-    // species multi-select holds symbols -> engine wants atomic numbers
-    if (schema.parameters.species && Array.isArray(params.species)) {
-      params.species = speciesToNumbers(params.species as string[]);
-    }
     setSubmitting(true);
     try {
       const submitRequest = {
