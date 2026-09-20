@@ -322,6 +322,25 @@ def _safe_correlation(a: np.ndarray, b: np.ndarray) -> float:
     value = float(np.corrcoef(a, b)[0, 1])
     return value if np.isfinite(value) else 0.0
 
+def _correlation_of_ranks(a: np.ndarray, b: np.ndarray) -> float:
+    """Pearson over vectors that have already been ranked, for Spearman loops.
+
+    Spearman's rho *is* the Pearson correlation of average-method ranks, and on
+    continuous and tie-heavy inputs `spearmanr(x, y)` and
+    `pearson(rankdata(x), rankdata(y))` agree bit for bit. The fallback is
+    deliberately _rank_correlation's, not _safe_correlation's: two constant
+    vectors are NaN in scipy (and so 0.0 here), whereas _safe_correlation would
+    call an equal pair of them 1.0.
+    """
+    a = np.asarray(a, dtype=np.float64).reshape(-1)
+    b = np.asarray(b, dtype=np.float64).reshape(-1)
+    if a.size != b.size or a.size < 2:
+        return 0.0
+    if not (np.std(a) > 0.0 and np.std(b) > 0.0):
+        return 0.0
+    value = float(np.corrcoef(a, b)[0, 1])
+    return value if np.isfinite(value) else 0.0
+
 def _rank_correlation(a: np.ndarray, b: np.ndarray) -> float:
     stats = _safe_import("scipy.stats", "scipy")
     value = float(stats.spearmanr(np.asarray(a), np.asarray(b)).statistic)

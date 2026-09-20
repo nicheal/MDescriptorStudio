@@ -8,10 +8,27 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, AppError
 from ..models import DescriptorMatrix
-from ._common import _aligned_space_metrics, _bounded_indices, _check_samples, _cross_k_nearest, _cross_nearest, _effective_dimension_metrics, _float_param, _int_param, _joint_projection, _nearest_distances, _pairwise_matrix, _preprocess, _preprocess_reference_query, _rank_correlation, _reference_query_preprocess, _safe_correlation, _safe_import, _seed, _visual_pca
+from ._common import _aligned_space_metrics, _bounded_indices, _check_samples, _correlation_of_ranks, _cross_k_nearest, _cross_nearest, _effective_dimension_metrics, _float_param, _int_param, _joint_projection, _nearest_distances, _pairwise_matrix, _preprocess, _preprocess_reference_query, _reference_query_preprocess, _safe_correlation, _safe_import, _seed, _visual_pca
 
 def coverage(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params)
+    return _coverage(ref, qry, warnings, keep, params, progress)
+
+
+def _coverage(
+    ref: np.ndarray,
+    qry: np.ndarray,
+    warnings: list[str],
+    keep: np.ndarray,
+    params: dict,
+    progress: Callable[[float, str], None] | None = None,
+) -> dict:
+    """Coverage over an already-preprocessed reference/query pair.
+
+    ``drift`` shares this preprocessing: taking the whole pipeline again made a
+    second copy of both matrices and a second centre/scale pass for statistics
+    that have to be measured on the same coordinates.
+    """
     metric = str(params.get("metric") or "euclidean")
     _check_samples(ref, 1)
     _check_samples(qry, 1)
@@ -224,20 +241,38 @@ def mantel(left: DescriptorMatrix, right: DescriptorMatrix, params: dict, progre
     triangle = np.triu_indices(sample_indices.size, 1)
     left_pairs = left_matrix[triangle]
     right_pairs = right_matrix[triangle]
-    statistic_fn = _safe_correlation if method == "pearson" else _rank_correlation
-    observed = float(statistic_fn(left_pairs, right_pairs))
+    size = int(sample_indices.size)
+    rows, columns = triangle
+    if method == "pearson":
+        left_stat, right_grid, stat_fn = left_pairs, right_matrix, _safe_correlation
+    else:
+        # Spearman's rho is the Pearson correlation of average-method ranks, and
+        # reordering the samples only relabels the pairs - the multiset of
+        # off-diagonal distances is untouched. So rank the pairs once and put the
+        # ranks back into a symmetric grid: the same single gather then yields
+        # the ranks of the permuted pairs, which is what ranking each permutation
+        # from scratch returned. Mirroring the upper triangle also makes the grid
+        # hold one value per unordered pair, unlike sklearn's euclidean gram
+        # trick, whose two triangles differ by up to 1.8e-15.
+        # Ranking ~180 000 pairs inside every permutation was the whole cost of
+        # the test: at the 2 000-sample cap, 999 permutations took 629.6 s and
+        # now take 54.8 s, and at 600 samples 43.8 s became 2.9 s.
+        rankdata = _safe_import("scipy.stats", "scipy").rankdata
+        ranks = np.zeros_like(right_matrix)
+        ranks[triangle] = rankdata(right_pairs)
+        left_stat, right_grid, stat_fn = rankdata(left_pairs), ranks + ranks.T, _correlation_of_ranks
+    observed = float(stat_fn(left_stat, right_grid[rows, columns]))
     permutations = min(_int_param(params, "permutations", 999, 1), 5_000)
     rng = np.random.default_rng(_seed(params))
     null = np.empty(permutations, dtype=np.float64)
     if progress:
         progress(0.05, "computing Mantel statistic")
     for index in range(permutations):
-        permutation = rng.permutation(b.shape[0])
-        # Reordering the samples only reorders the entries of the distance
-        # matrix that was already built; recomputing it costs O(n^2*D) per
-        # permutation for an identical result.
-        permuted_pairs = right_matrix[permutation[triangle[0]], permutation[triangle[1]]]
-        null[index] = statistic_fn(left_pairs, permuted_pairs)
+        permutation = rng.permutation(size)
+        # Reordering the samples only reorders the entries of the grid that was
+        # already built; recomputing distances costs O(n^2*D) per permutation for
+        # an identical result.
+        null[index] = float(stat_fn(left_stat, right_grid[permutation[rows], permutation[columns]]))
         if progress and (index % 25 == 0 or index == permutations - 1):
             progress(0.05 + 0.9 * (index + 1) / permutations, "running Mantel permutations")
     if alternative == "greater":
@@ -321,18 +356,27 @@ def drift(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict, pr
     drift_params = dict(params or {})
     if not drift_params.get("preprocess"):
         drift_params["preprocess"] = "standardized"
-    result = coverage(reference, query, drift_params, progress)
+    ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, drift_params)
+    # Two phases share one bar, and the second is not the cheap one: an n x n
+    # distance matrix for the bandwidth plus three kernel matrices.  Passing
+    # coverage the raw callback reported it as done and then ran the MMD phase
+    # without a single progress call - the only place cancellation is observed.
+    coverage_progress = (lambda fraction, message: progress(0.7 * fraction, message)) if progress else None
+    result = _coverage(ref, qry, warnings, keep, drift_params, coverage_progress)
     distances = result["arrays"]["distances"]
-    ref, qry, drift_warnings, _keep = _preprocess_reference_query(reference.values, query.values, drift_params)
     limit = min(_int_param(drift_params, "distribution_samples", 500, 20), 2_000)
     a = ref[_bounded_indices(ref.shape[0], limit)]
     b = qry[_bounded_indices(qry.shape[0], limit)]
     combined = np.vstack([a, b])
+    if progress:
+        progress(0.78, "estimating the MMD bandwidth")
     combined_distances = _pairwise_matrix(combined, "euclidean")
     nonzero = combined_distances[combined_distances > np.finfo(np.float64).eps]
     bandwidth = _float_param(drift_params, "bandwidth", float(np.median(nonzero)) if nonzero.size else 1.0, np.finfo(np.float64).eps)
     gamma = 1.0 / (2.0 * bandwidth * bandwidth)
     kernels = _safe_import("sklearn.metrics.pairwise", "scikit-learn")
+    if progress:
+        progress(0.88, "computing MMD")
     kxx = kernels.rbf_kernel(a, a, gamma=gamma)
     kyy = kernels.rbf_kernel(b, b, gamma=gamma)
     kxy = kernels.rbf_kernel(a, b, gamma=gamma)
@@ -341,13 +385,14 @@ def drift(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict, pr
     covariance_shift: float | None
     if a.shape[0] < 2 or b.shape[0] < 2:
         covariance_shift = None
-        drift_warnings.append("covariance shift requires at least two samples in both sets")
+        result["warnings"].append("covariance shift requires at least two samples in both sets")
     else:
         covariance_a = np.atleast_2d(np.cov(a, rowvar=False))
         covariance_b = np.atleast_2d(np.cov(b, rowvar=False))
         covariance_shift = float(np.linalg.norm(covariance_a - covariance_b) / max(np.linalg.norm(covariance_a), 1e-15))
     result["preview"] = {**result["preview"], "kind": "drift", "mean_distance": float(distances.mean()), "median_distance": float(np.median(distances)), "max_distance": float(distances.max()), "mmd": float(np.sqrt(mmd2)), "mmd_squared": mmd2, "bandwidth": bandwidth, "centroid_distance": centroid_distance, "covariance_shift": covariance_shift}
-    result["warnings"] = list(dict.fromkeys([*result.get("warnings", []), *drift_warnings]))
+    if progress:
+        progress(1.0, "drift complete")
     return result
 
 

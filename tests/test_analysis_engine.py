@@ -14,7 +14,7 @@ from mdescriptor_studio_backend.analysis import AtomDescriptorMatrix, StructureD
 from mdescriptor_studio_backend.analysis.algorithms.correlation import feature_correlation, property_correlation
 from mdescriptor_studio_backend.analysis.algorithms.kernel import kernel
 from mdescriptor_studio_backend.analysis.algorithms.pairs import acquisition, compare, coverage, drift, mantel, overlap
-from mdescriptor_studio_backend.analysis.algorithms._common import _local_neighbor_graph, _trajectory_threshold
+from mdescriptor_studio_backend.analysis.algorithms._common import _local_neighbor_graph, _rank_correlation, _safe_correlation, _trajectory_threshold
 from mdescriptor_studio_backend.analysis.algorithms.pca import pca
 from mdescriptor_studio_backend.analysis.algorithms.sensitivity import perturbation_sensitivity, sensitivity
 from mdescriptor_studio_backend.analysis.algorithms.tsne import MAX_ITERATIONS, tsne
@@ -615,6 +615,48 @@ def test_mantel_reports_observed_statistic_and_permutation_p_value(samples: Stru
     assert 0.0 <= result["preview"]["p_value"] <= 1.0
     assert result["arrays"]["null_distribution"].shape == (31,)
     assert result["arrays"]["left_pair_distances"].shape == result["arrays"]["right_pair_distances"].shape
+
+
+@pytest.mark.parametrize("method", ["pearson", "spearman"])
+def test_mantel_permutations_match_the_textbook_definition(samples: StructureDescriptorMatrix, method: str) -> None:
+    """Check the permutation loop against the definition, not against itself.
+
+    Spearman ranks the pair vector once and gathers ranks, and both methods
+    gather from a matrix instead of recomputing distances - the shortcut is the
+    entire speedup, so it needs an oracle that re-ranks and re-correlates every
+    permutation from scratch.  The grid here is rebuilt from the returned pair
+    vectors, which also pins that a permutation only relabels pairs and leaves
+    their multiset alone.
+    """
+    right = StructureDescriptorMatrix(
+        samples.values + 0.25 * np.roll(samples.values, 1, axis=1),
+        samples.frame,
+        sample_ids=samples.sample_ids,
+    )
+    params = {"method": method, "permutations": 23, "max_samples": 26, "seed": 7}
+    result = mantel(samples, right, params)
+    size = result["preview"]["sample_count"]
+    rows, columns = np.triu_indices(size, 1)
+    left_pairs = result["arrays"]["left_pair_distances"]
+    grid = np.zeros((size, size), dtype=np.float64)
+    grid[rows, columns] = result["arrays"]["right_pair_distances"]
+    grid[columns, rows] = grid[rows, columns]
+    correlate = _rank_correlation if method == "spearman" else _safe_correlation
+    rng = np.random.default_rng(params["seed"])
+    reference = []
+    for _ in range(params["permutations"]):
+        permutation = rng.permutation(size)
+        reference.append(correlate(left_pairs, grid[permutation[rows], permutation[columns]]))
+    reference = np.asarray(reference, dtype=np.float64)
+
+    observed = result["preview"]["statistic"]
+    # abs=1e-12 rather than exact: sklearn's euclidean gram trick is only
+    # symmetric to ~1e-15, and the Pearson branch gathers from that matrix.
+    assert observed == pytest.approx(correlate(left_pairs, grid[rows, columns]), abs=1e-12)
+    np.testing.assert_allclose(result["arrays"]["null_distribution"], reference, rtol=0.0, atol=1e-12)
+    assert result["preview"]["p_value"] == pytest.approx(
+        float((int((np.abs(reference) >= abs(observed)).sum()) + 1) / (params["permutations"] + 1)), abs=1e-12
+    )
 
 
 def test_structural_perturbation_sensitivity_returns_sorted_response_curves(samples: StructureDescriptorMatrix) -> None:
