@@ -22,6 +22,8 @@
 | `453253b` | C-5 一次列目录共享已验证前缀；并为 `is_reparse_point` 建第一批真 junction 用例 | 探针 106 → 12、`scan()` 2.1 ms → 1.1 ms；把检查改成「只看叶子」会让三条新测试全红 |
 | `0aeb2c4` | B-3 「这个特征有没有信息」只剩一个归属者：`feature_correlation` 与 `feature_variance` 都改判 `_meaningful_scale`，`variance_threshold` 默认从 1e-12（平方单位）归零 | 报告那组四列矩阵：旧规则删掉 4 列里的 3 列并让面板直接报 "at least two non-constant features are required"；两条规则各自恢复后测试逐名变红 |
 | `6ba8823` | B-4 Mahalanobis 报出它实际张量到的维度，并且 n=1 时结构化拒绝（原先 `pinv` 抛 `LinAlgError` 把整个作业打死） | 打分表达式逐字未变，363 通过、无一条既有期望被改动；`LinAlgError: SVD did not converge` 是对 `_preprocess` 留下的那个矩阵实测出来的 |
+| `d84ead3` | B-6 acquisition 的多样性项改在循环前定尺，`pick_scores` 因此单调不增，`scores` 与末次 pick 逐值相等 | 40 seed × 3 组参数：120 次运行里 100 次上升（报告原 fixture 118 次）→ 0 次；把 running-ptp 那行放回去，测试直接把上升的 trace 打在消息里 |
+| `546187e` | `ANALYSIS_ALGORITHM_VERSION` → "studio-analysis-6"（B-3/B-4/B-6 三处改数），mock 由词表门禁同步 | pytest 363 / vitest 198；两个站点少改一个，门禁当场点名 |
 
 ## 待修（已核实，按批排列）
 
@@ -41,13 +43,17 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 | --- | --- | --- | --- |
 | D-8 | `statistics.py` 的 `force_magnitudes` 累加 + 末尾 `np.concatenate` | 为一个精确中位数把全数据集每原子力幅值留在内存：峰值 8 B × 总原子数再乘一份 concatenate。该模块里唯一与它自己「streaming statistics」表头矛盾处 | 先确认有没有人依赖精确中位数；否则改表头说明这一处刻意全量驻留 |
 
-### 第 5 批 · 语义变更，一次 `ANALYSIS_ALGORITHM_VERSION` bump（S2 已定调）
+### 第 5 批 · 语义变更 —— `ANALYSIS_ALGORITHM_VERSION` 已在 `546187e` 过到 "6"
+
+原定「整批一次 bump」，实际提前收尾：B-3 / B-4 / B-6 已经改了缓存结果所描述的
+样本，让它们继续被旧结果命中不是选项。所以下面剩下三条，落地时要**各自**判断是
+否改数、要不要再一次 bump，而不是假设额度还剩着：B-1（纯前端，不改后端数字）、
+B-5（会改采样结果）、D-8（取决于选哪一半，见第 4 批那一行）。
 
 | # | 位置 | 问题 | 已有测量 |
 | --- | --- | --- | --- |
 | B-1 | `identity.ts` 第二半 + `restore.ts` + `Analysis.tsx:1292` | `c87f006` 只补了键；drift 面板是唯一没有 Granularity 控件的跨集面板，且 `restore` 对 drift 返回 `{}`，历史加载不回填粒度。于是别处动 `mode` 会让绿点静默消失，屏幕上无控件可解释或复原 —— 与第 13 批 outliers/`k` 同形，当时解法是给面板加控件 | — |
 | B-5 | `sampling/engine.py:175-191` vs `:96-102` | P1-14 第二半没落地、memo 也没定调：FPS 那支有 `scaling_mode`/`fit_scaling`/`apply_scaling`，cluster 直接 `.fit(x)` 原始值。混合单位矩阵（能量 eV + 维里 + 体积 Å³）上「代表样本」几乎完全沿最宽那一列选，`:201` 的 `_visual_pca(x)` 画的还是同一个原始空间，两张 sampling 卡不可比。`submission.ts` 又只在 fps 时发 `scaling`，屏幕上没人说明空间变了 | 两列 1:1000 的矩阵可复现选择由宽列主导 |
-| B-6 | `pairs.py:142-148` + `analysisVisualizations.tsx:236` | `pick_scores` 不单调：每步拿当前 `np.ptp(min_diversity)` 重新 min–max，范围随批次收缩，第 k 步与 k+1 步不在同一把尺上，而面板按选择顺序画成柱状图。memo 断言它单调并指定了要钉的测试，落地的 `tests/test_analysis_engine.py:454-486` 只查长度与有限性。`:156-160` 的 `full_scores` 除以 `nanmax` 却不减 min，是第三个公式 | 40 seed × 3 组参数：120 次运行里 **118 次出现上升**，例 `[1.0, 0.7695, 0.8158, 0.7263, …]` |
 | D-8 | `statistics.py` | 若改成流式（而非只改表头），随这批一起过 | — |
 
 已随第 2 批落地的语义变更：A-2 pbc 拼写 + `FINGERPRINT_VERSION` v3→v4。
