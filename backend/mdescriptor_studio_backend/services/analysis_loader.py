@@ -125,6 +125,12 @@ class AnalysisDataMixin:
         cache_key = (str(run_row["id"]), "atom" if samples.elements is not None else "structure") + tuple(str(part) for part in scope)
         cached = self._group_labels_cache.get(cache_key)
         if cached is not None and len(cached) == samples.n_samples:
+            # Dictionary order *is* the LRU order, but only if a hit moves its
+            # entry to the back - re-inserting is how that is done on a plain
+            # dict. Without it the eviction below dropped whatever had been
+            # inserted first, which can be the labels the job that just finished
+            # needed: a FIFO wearing an LRU's name.
+            self._group_labels_cache[cache_key] = self._group_labels_cache.pop(cache_key)
             return cached
         from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
 

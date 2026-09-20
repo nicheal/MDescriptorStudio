@@ -1146,6 +1146,33 @@ def test_element_group_labels_use_shared_element_sets(tmp_path: Path) -> None:
     db.close()
 
 
+def test_the_group_label_cache_evicts_the_least_recently_used(tmp_path: Path) -> None:
+    # The comment calls it a tiny LRU and the eviction popped `next(iter(...))`,
+    # which is insertion order - so nine scopes later the labels a tenth call had
+    # just reused were the first ones dropped. A hit now moves its entry to the
+    # back, which is what makes dictionary order the recency order.
+    frames = [
+        DatasetFrame(numbers=np.array([6, 6, 14, 14]), positions=np.zeros((4, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([6, 6, 6]), positions=np.zeros((3, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([14, 14]), positions=np.zeros((2, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+        DatasetFrame(numbers=np.array([6, 8, 14]), positions=np.zeros((3, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),
+    ]
+    db, _jobs, service = _grouped_service(tmp_path, frames)
+    run = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_grouped'")
+    samples = service._load_samples(run, {"mode": "structure"}, "fps")
+    cached_scopes = lambda: {entry[2] for entry in service._group_labels_cache}
+
+    service._element_group_labels(run, samples, ("kept", samples.n_samples))
+    for name in ("s0", "s1", "s2", "s3", "s4", "s5", "s6"):
+        service._element_group_labels(run, samples, (name, samples.n_samples))
+    assert len(cached_scopes()) == 8
+    service._element_group_labels(run, samples, ("kept", samples.n_samples))
+    service._element_group_labels(run, samples, ("s7", samples.n_samples))
+
+    assert cached_scopes() == {"kept", "s1", "s2", "s3", "s4", "s5", "s6", "s7"}, cached_scopes()
+    db.close()
+
+
 def test_grouped_fps_run_persists_allocation_and_rejects_missing_metadata(tmp_path: Path) -> None:
     frames = [
         DatasetFrame(numbers=np.array([6, 6, 14, 14]), positions=np.zeros((4, 3)), cell=np.zeros((3, 3)), pbc=np.zeros(3, dtype=bool)),

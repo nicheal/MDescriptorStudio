@@ -124,7 +124,10 @@ class AnalysisService(
         self._submit_lock = threading.Lock()
         # Element-set labels of completed runs are immutable; a tiny LRU keeps
         # the grouped-FPS quota preview cheap across parameter twiddling.
-        self._group_labels_cache: dict[tuple[str, str, str | None], np.ndarray] = {}
+        # The key is run id + matrix kind + the sample-set scope, of however many
+        # parts the scope has (view selection hash and size), so it is a tuple of
+        # strings rather than a fixed three.
+        self._group_labels_cache: dict[tuple[str, ...], np.ndarray] = {}
 
 
     # -- generic Analysis API -------------------------------------------------
