@@ -293,7 +293,13 @@
 
 需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
 
-剩下不需要定调的只有一件：mock 的 `analysis.*` 提交仍不读参数（模式/枚举/跨集特征空间一致性在 e2e 里依旧测不到）——那是工作量，不是决定。
+### 第九批（提交参数的校验 — `a67f752`）
+
+验证：**pytest 325 passed / 1 skipped**（新增 1 条门禁）、**vitest 144**、**eslint + `tsc -b` 干净**、**Playwright 37 passed**（新增 1 条，内含 17 个断言）。
+
+`refuseSubmit()` 把 `submit_generic` 在成 job 之前做的检查搬进 mock 的响应路径单点：run id 及其状态、跨集对的共享特征空间、sensitivity 的同描述符要求、视图作用域（存在、所属数据集、是否 stale，以及"成对提交还带单个 view_id"的歧义）、`mode`/`preprocess` 枚举、整数参数、export 的格式/路径/索引，全部用真后端的错误码。规则写成"每个方法需要哪些 run 参数"的表；`test_mock_backend_vocabulary.py` 现在会因为 mock 回答了一个表里没有的 `analysis.*` 路由而失败，也会因为表里写了 mock 不回答的路由而失败 —— 新模块无法绕过校验悄悄到来，这张表也无法烂掉。
+
+到这一步，第 5、6 步里"不需要定调"的部分已全部落地；剩下的都要你先定调（第 4 步五条口径、Explore 原子表分页、`preview_service` 的 points/rows 合并）。
 
 ### 第八批（截断要说出来 — `addacc4`）
 
