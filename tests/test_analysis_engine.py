@@ -486,11 +486,13 @@ def test_uncertainty_acquisition_exposes_knn_uncertainty_and_diversity(samples: 
 
 
 def test_acquisition_reports_the_score_that_drove_each_pick(samples: StructureDescriptorMatrix) -> None:
-    """`scores` is recomputed from the final min-diversity, so it is a
-    final-state ranking and need not decrease along selected_indices.  A user
-    auditing "why this one" therefore needs the objective value each pick
-    actually saw, and the per-sample estimates must not be pool-restricted
-    (deep review P1-17)."""
+    """`pick_scores` records the objective each pick actually saw, and that trace
+    is now non-increasing: both terms are normalised on a ruler fixed before the
+    loop, min-diversity can only shrink, and every step maximises a subset of what
+    the previous step could reach.  `scores` is the same formula evaluated once at
+    the end, so it answers a different question - but it agrees with the last pick
+    exactly, and the per-sample estimates must not be pool-restricted
+    (deep review P1-17; pass-4 B-6)."""
     # A query that shares no row with the reference: distances (and therefore
     # novelty/uncertainty) are strictly positive, so a zero in either array can
     # only come from a value that was dropped on the way out.
@@ -510,6 +512,9 @@ def test_acquisition_reports_the_score_that_drove_each_pick(samples: StructureDe
     # is exactly 1.0 -- proof the trace records the objective, not a post-hoc
     # recomputation.
     assert picks[0] == pytest.approx(1.0)
+    assert bool((np.diff(picks) <= 1e-12).all()), f"the objective each pick saw must not rise: {picks}"
+    assert float(picks[-1]) == pytest.approx(float(arrays["scores"][selected[-1]]), abs=1e-15)
+    assert bool((arrays["diversity"] <= 1.0).all())
 
     # Uncertainty and novelty are per-sample estimates: every query row has
     # one, whether or not it entered the candidate pool.

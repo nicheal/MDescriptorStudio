@@ -137,13 +137,15 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
     base_weight_name = "uncertainty_weight" if acquisition_method == "uncertainty_diversity" else "novelty_weight"
     base_weight = _float_param(params, base_weight_name, 0.65, 0.0, 1.0)
     selected_local = [int(np.argmax(normalized_base))]
-    # The objective value that *caused* each pick, kept in pick order.  The
-    # composite `scores` below is recomputed once from the final min_diversity
-    # and is deliberately not monotone in this order, so reporting only that
-    # made the panel contradict selected_indices (deep review P1-17).
+    # The objective value that *caused* each pick, kept in pick order.  Both
+    # terms now sit on a ruler fixed before the loop: re-dividing the diversity
+    # term by its own running ptp at every step put step k and step k+1 on
+    # different scales, so this list could rise while the panel plotted it as
+    # "why each sample was taken" (deep review P1-17; 118 of 120 measured runs).
     pick_scores = [float(normalized_base[selected_local[0]])]
     min_diversity = np.full(pool_size, np.inf, dtype=np.float64)
     acquisition_score = np.zeros(pool_size, dtype=np.float64)
+    diversity_scale = 0.0
     for step in range(1, target):
         last = qry[pool[selected_local[-1]]]
         delta = qry[pool] - last
@@ -157,8 +159,13 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
             denominator = np.maximum(pool_norm * max(last_norm, 1e-15), 1e-15)
             distances = np.maximum(1.0 - (qry[pool] @ last) / denominator, 0.0)
         min_diversity = np.minimum(min_diversity, distances)
-        diversity_scale = np.ptp(min_diversity[np.isfinite(min_diversity)]) if np.isfinite(min_diversity).any() else 0.0
-        normalized_diversity = (min_diversity - np.nanmin(min_diversity)) / max(float(diversity_scale), 1e-15)
+        if step == 1:
+            # The pool's radius around the first pick. min_diversity can only
+            # shrink from here, so this is the largest value the term will ever
+            # take - which is what makes one ruler, and a monotone pick list,
+            # possible.
+            diversity_scale = float(np.max(min_diversity))
+        normalized_diversity = min_diversity / max(diversity_scale, 1e-15)
         acquisition_score = base_weight * normalized_base + (1.0 - base_weight) * normalized_diversity
         acquisition_score[selected_local] = -1.0
         chosen = int(np.argmax(acquisition_score))
@@ -169,10 +176,9 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
     selected = pool[np.asarray(selected_local, dtype=np.int64)]
     full_scores = np.zeros(qry.shape[0], dtype=np.float64)
     full_diversity = np.zeros(qry.shape[0], dtype=np.float64)
-    if np.isfinite(min_diversity).any():
-        diversity_component = np.nan_to_num(min_diversity / max(float(np.nanmax(min_diversity[np.isfinite(min_diversity)])), 1e-15), posinf=0.0)
-    else:
-        diversity_component = np.zeros(pool_size, dtype=np.float64)
+    # The same ruler as the loop, so the score the panel colours by is the last
+    # value the loop maximised rather than a third normalisation of it.
+    diversity_component = min_diversity / max(diversity_scale, 1e-15) if target > 1 else np.zeros(pool_size, dtype=np.float64)
     full_diversity[pool] = diversity_component
     full_scores[pool] = base_weight * normalized_base + (1.0 - base_weight) * diversity_component
     arrays = {
