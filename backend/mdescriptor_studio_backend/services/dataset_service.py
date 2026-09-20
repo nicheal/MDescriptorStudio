@@ -20,7 +20,7 @@ from ..datasets import (
     is_versioned_fingerprint,
 )
 from ..datasets.fingerprint import FINGERPRINT_VERSION
-from ..datasets.statistics import STATS_VERSION, _frame_geometry, frame_force_max
+from ..datasets.statistics import STATS_VERSION, frame_force_max
 from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
 from ..errors import (
     AppError,
@@ -512,6 +512,9 @@ class DatasetService:
             if flag
         ]
         indices = list(cached.get("health_findings", {}).get(check) or [])
+        # Shortest distances recorded by the scan, parallel to the flagged frame
+        # indices below HEALTH_FINDINGS_CAP.
+        distances = list((cached.get("health_findings") or {}).get("nonphysical_distances") or [])
         limit = params.get("limit", FINDINGS_ROW_LIMIT)
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= FINDINGS_ROW_LIMIT:
             raise AppError(INVALID_PARAMS, f"'limit' must be an integer in [1, {FINDINGS_ROW_LIMIT}]")
@@ -520,7 +523,7 @@ class DatasetService:
         # non-physical tab (the check's metric); other tabs skip the NN pass
         want_min_distance = check == "nonphysical_structures"
         rows = []
-        for idx in indices[:limit]:
+        for position, idx in enumerate(indices[:limit]):
             try:
                 f = adapter.get_frame(idx)
             except Exception:  # noqa: BLE001 - unreadable frame: skip the row
@@ -534,11 +537,11 @@ class DatasetService:
                 "forces": f.forces is not None,
                 "virial": f.virial is not None,
             }
-            min_distance = None
-            if want_min_distance:
-                min_d, _ = _frame_geometry(f.positions, f.numbers, cell, f.pbc)
-                if min_d is not None:
-                    min_distance = round(float(min_d), 5)
+            min_distance = (
+                round(float(distances[position]), 5)
+                if want_min_distance and position < len(distances)
+                else None
+            )
             energy_per_atom = None
             if f.energy is not None:
                 energy_per_atom = round(float(f.energy) / max(len(symbols), 1), 5)

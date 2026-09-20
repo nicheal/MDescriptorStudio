@@ -23,7 +23,7 @@ if not _native.native_available():
     from scipy.spatial import cKDTree  # noqa: F401
 
 BINS = 40
-STATS_VERSION = 4
+STATS_VERSION = 5
 EXTREME_FORCE_EV_A = 50.0  # per-atom |F| above this flags the frame (health panel)
 # ‖ΣF‖ above this flags the frame (force-balance check; NepTrainKit's default
 # force_balance_threshold — DFT labels should be translationally balanced)
@@ -390,6 +390,8 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
     extreme_force = 0
     net_force = 0
     nonphysical = 0
+    # parallel to findings["nonphysical_structures"], capped with it below
+    nonphysical_distances: list[float] = []
     # frame indices flagged per health check (capped in the return payload)
     findings: dict[str, list[int]] = {
         "missing_values": [],
@@ -470,6 +472,14 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         if frame_nonphysical:
             nonphysical += 1
             findings["nonphysical_structures"].append(pos)
+            # The drawer shows the shortest distance of each flagged frame. It
+            # used to run the neighbour search again per row on every open, for
+            # what this pass already knows: a frame is only flagged from that
+            # distance, so it is never None here. Rounded, because the fused
+            # kernel and the scipy reference sum the squares in a different
+            # order - tests/test_native_stats.py compares the two build's stats
+            # for equality, and the drawer rounds to five digits anyway.
+            nonphysical_distances.append(round(float(min_d), 6))
         content_hash = _frame_hash(frame.numbers, frame.positions, cell)
         if content_hash in first_seen_hash:
             # extra copy beyond the first occurrence
@@ -566,5 +576,6 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         "health_findings": {
             "cap": HEALTH_FINDINGS_CAP,
             **{k: v[:HEALTH_FINDINGS_CAP] for k, v in findings.items()},
+            "nonphysical_distances": nonphysical_distances[:HEALTH_FINDINGS_CAP],
         },
     }

@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from make_fixtures import write_deepmd
 
@@ -176,6 +177,9 @@ def test_health_nonphysical_and_net_force(tmp_path: Path) -> None:
     assert health["net_force_threshold"] == 0.001
     # findings carry the original file positions behind the counts
     assert stats["health_findings"]["nonphysical_structures"] == [1]
+    # ...and the distance that got each one flagged, parallel to the indices:
+    # the drawer reads this instead of running the neighbour search per row.
+    assert stats["health_findings"]["nonphysical_distances"] == [pytest.approx(1.2)]
     assert stats["health_findings"]["net_force"] == [2]
     assert stats["health_findings"]["energy_anomaly"] == [1, 2]
     assert stats["health_findings"]["invalid_cell"] == []
