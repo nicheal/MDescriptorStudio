@@ -358,4 +358,6 @@
 
 还需要你定调的只剩一件：**`preview_service` 的 points/rows 重复** —— 同一批 ≤20k 记录以两个键、两套字段名发两遍（`points` 用 `label/cluster`，`rows` 用 `labels/cluster_labels`），`rows` 是前端 DataTable 在读的字段，所以合并成一份必然改变响应形状（要动前端读法、mock 与金标）。
 
+这条的实测分量（2026-09-20，合成 20k 样本、带 coords + labels + cluster_labels 的投影）：一份 preview 的 JSON 是 **3.9 MB**，其中 `points` 2.1 MB、`rows` 1.8 MB —— 两个列表是**同一批样本、同一个 `indices` 抽样、顺序一致**（逐条比对 `i/frame/sample_id` 全等），只差字段名和 `x/y`；`total_rows` 与 `total_points` 是同一个数。`_build_preview` 在这一例上花 150 ms：只有 coords 时 62 ms，加上两个 label 数组后 149 ms —— 多出的 87 ms 是给每个点补字段 + 为 `rows` 再走一遍同样的 20k 次 dict 构造。这份 blob 存在 SQLite 的 `preview_json` 列里（每个结果永久一份），并且只在 `analysis.get` 时整份过 IPC（列表响应按 `_ROW_SKIP_COLUMNS` 排除它）。合并后的形状问题只剩一个：DataTable 改读 `points`，于是表里会多出 x/y 两列、列名从 `labels` 变成 `label`。
+
 审阅这边到此见底；再往下是新功能或发布侧的事。
