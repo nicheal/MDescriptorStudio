@@ -543,6 +543,61 @@ def test_ulp_jitter_never_becomes_a_feature_axis() -> None:
     assert any("zero-variance feature" in warning for warning in result["warnings"])
 
 
+def test_a_column_too_narrow_to_bin_is_reported_not_fatal() -> None:
+    # The same 口径2 example column, but through feature_variance: np.histogram
+    # raises "Too many bins for data range" once a spread is a few ulps of its
+    # magnitude, and one such column used to fail the whole job with a numpy
+    # message naming neither the feature nor the cause - in the one panel whose
+    # contract is to report per-column faults.
+    rows = 500
+    signal = np.random.default_rng(4).normal(size=(rows, 2))
+    jitter = 1000.0 + np.arange(rows, dtype=np.float64) * np.spacing(1000.0)
+    matrix = StructureDescriptorMatrix(
+        np.hstack([signal, jitter[:, None], np.full((rows, 1), 7.0)]),
+        np.arange(rows, dtype=np.int64),
+        sample_ids=[f"frame:{index}" for index in range(rows)],
+    )
+
+    result = feature_variance(matrix, {})
+
+    edges = np.asarray(result["arrays"]["histogram_edges"], dtype=np.float64)
+    counts = np.asarray(result["arrays"]["histogram_counts"], dtype=np.int64)
+    assert edges.shape == (4, 33) and counts.shape == (4, 32)
+    assert bool(np.isfinite(edges).all()), "every edge must stay encodable"
+    assert bool(np.all(np.diff(edges, axis=1) > 0)), "no repeated edge"
+    assert counts.sum(axis=1).tolist() == [rows] * 4, "every sample lands in a bucket"
+    statuses = [record["status"] for record in result["preview"]["features"]]
+    assert statuses[0] == statuses[1] == "active", statuses
+    # Column 2 is the ulp jitter (ptp 5.7e-11, above constant_tolerance, so it
+    # is not "constant") and column 3 is exactly 7.0. Neither has room for 32
+    # finite bin edges; both are reported instead of killing the run.
+    assert statuses[2] == "near_zero", statuses
+    assert statuses[3] == "constant", statuses
+
+
+def test_pairwise_minimum_ignores_the_zero_diagonal() -> None:
+    # `distances.min()` over the whole square matrix is the diagonal: the panel's
+    # "Minimum" read 0.0 for every dataset and every metric, and "minimum pairwise
+    # distance = 0" is exactly what this panel is read for - two identical
+    # structures.
+    values = np.array([[0.0, 0.0], [5.0, 0.0], [0.0, 12.0], [7.0, 7.0]])
+    matrix = StructureDescriptorMatrix(
+        values, np.arange(4, dtype=np.int64), sample_ids=[f"frame:{index}" for index in range(4)]
+    )
+
+    result = pairwise(matrix, {"max_samples": 4, "metric": "euclidean"})
+
+    distances = np.asarray(result["arrays"]["distance_matrix"], dtype=np.float64)
+    truth = float(distances[np.triu_indices(4, 1)].min())
+    assert result["preview"]["distance_min"] == truth
+    assert result["preview"]["distance_min"] > 0.0
+    only = pairwise(
+        StructureDescriptorMatrix(values[:1], np.arange(1, dtype=np.int64), sample_ids=["frame:0"]),
+        {"max_samples": 4},
+    )
+    assert only["preview"]["distance_min"] is None, "one sample has no pairs to take a minimum of"
+
+
 def test_mantel_reports_observed_statistic_and_permutation_p_value(samples: StructureDescriptorMatrix) -> None:
     right = StructureDescriptorMatrix(
         samples.values.copy(),

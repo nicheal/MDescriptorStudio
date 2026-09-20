@@ -31,7 +31,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # Triple-quoted because the character class has to contain both quote styles.
 REQUEST_RE = r'''ipc\.request(?:<[^>]*>)?\(\s*["']([a-z_]+(?:\.[a-z_]+)+)["']'''
 ON_RE = r'''ipc\.on\(\s*["']([a-zA-Z_.]+)["']'''
-ROUTE_RE = r'^\s{2}"([a-z_]+(?:\.[a-z_]+))":'  # preview.tsx's request table keys
+# `(?:\.[a-z_]+)+`, not a single optional group: five of the mock's handlers are
+# `dataset.view.*`, and a one-dot pattern left them out of mock_methods() in both
+# directions - renaming or inventing one there passed this file silently, and the
+# vacuity guard below was already satisfied without them.
+ROUTE_RE = r'^\s{2}"([a-z_]+(?:\.[a-z_]+)+)":'  # preview.tsx's request table keys
 MOCK_EMIT_RE = r'mockEmit\(\s*"([a-zA-Z_.]+)"'
 EMIT_RE = r'''\.emit\(\s*["']([a-zA-Z_.]+)["']'''
 
@@ -108,6 +112,11 @@ def test_the_extraction_itself_is_not_vacuous():
     assert {"backend.ready", "job.progress", "job.finished"} <= frontend_listened_events()
     assert {"system.info", "dataset.list", "analysis.pca"} <= mock_methods(), mock_methods()
     assert "job.progress" in mock_events(), mock_events()
+    # And specifically for ROUTE_RE: five handlers live under `dataset.view.*`,
+    # which a pattern allowing one dot only could not see in either direction.
+    views = {name for name in mock_methods() if name.count(".") > 1}
+    assert {"dataset.view.create", "dataset.view.list", "dataset.view.remove",
+            "dataset.view.rename", "dataset.view.split"} <= views, views
 
 
 def test_registry_names_are_callable_rpc_names():

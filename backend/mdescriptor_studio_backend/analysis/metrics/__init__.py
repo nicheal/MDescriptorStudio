@@ -10,6 +10,27 @@ from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, App
 from ..models import DescriptorMatrix
 from ..algorithms._common import _as_float64, _bounded_indices, _check_samples, _effective_dimension_metrics, _float_param, _int_param, _local_neighbor_graph, _nearest_distances, _pairwise_matrix, _preprocess, _safe_import, _seed, _trajectory_threshold, _visual_pca, _visual_pca_components
 
+def _feature_histogram(values: np.ndarray, bins: int) -> tuple[np.ndarray, np.ndarray]:
+    """Bin one feature, or one centred bucket when it has no bin-able spread.
+
+    np.histogram raises "Too many bins for data range" once a column's spread is
+    a handful of ulps of its own magnitude: there are no `bins` distinct finite
+    edges inside it. Such a column is constant for every purpose the histogram
+    serves, and letting numpy fail there dropped the whole feature-variance job
+    over one column - with a message naming neither the feature nor the cause -
+    in the one panel whose contract is to report per-column faults instead.
+    """
+    try:
+        return np.histogram(values, bins=bins)
+    except ValueError:
+        low, high = float(values.min()), float(values.max())
+        pad = max(abs(low), abs(high)) * 1e-9 or 0.5
+        edges = np.linspace(low - pad, high + pad, bins + 1)
+        counts = np.zeros(bins, dtype=np.int64)
+        counts[bins // 2] = values.size
+        return counts, edges
+
+
 def neighbors(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     x, warnings, keep = _preprocess(samples.values, params, "raw")
     k = _int_param(params, "k", 10, 1)
@@ -56,6 +77,12 @@ def pairwise(samples: DescriptorMatrix, params: dict, progress: Callable[[float,
         progress(0.2, "building pairwise matrix")
     distances = _pairwise_matrix(x[indices], metric)
     similarity = 1.0 - distances if metric == "cosine" else 1.0 / (1.0 + distances)
+    # The matrix is square and its diagonal is zero by construction, so min over
+    # the whole thing is 0.0 for every dataset and every metric - and "minimum
+    # pairwise distance = 0" is exactly what this panel is read for: two
+    # structures that turn out to be identical. Take the pairs, the way
+    # _aligned_space_metrics already does.
+    pairs = distances[np.triu_indices(indices.size, 1)] if indices.size > 1 else np.empty(0)
     if progress:
         progress(1.0, "pairwise matrix complete")
     return {
@@ -69,7 +96,12 @@ def pairwise(samples: DescriptorMatrix, params: dict, progress: Callable[[float,
             "metric": metric,
             "sample_count": int(indices.size),
             "total_samples": int(x.shape[0]),
-            "distance_min": float(distances.min()),
+            # The matrix is square and its diagonal is zero by construction, so
+            # `distances.min()` reported 0.0 for every dataset and every metric -
+            # and "minimum pairwise distance = 0" is precisely what this panel is
+            # read for: two structures that are identical. Off-diagonal only, the
+            # way _aligned_space_metrics already takes them.
+            "distance_min": float(pairs.min()) if pairs.size else None,
             "distance_max": float(distances.max()),
         },
         "warnings": warnings,
@@ -192,7 +224,7 @@ def feature_variance(samples: DescriptorMatrix, params: dict, progress: Callable
 
             edges: np.ndarray
             counts: np.ndarray
-            counts, edges = np.histogram(finite_values, bins=histogram_bins)
+            counts, edges = _feature_histogram(finite_values, histogram_bins)
             histogram_counts[index] = counts.astype(np.int64, copy=False)
             histogram_edges[index] = edges.astype(np.float64, copy=False)
             sample_count_for_feature = min(count, distribution_capacity)

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..datasets.statistics import finite_or_none
 from ..errors import (
     ANALYSIS_INPUT_INVALID,
     ANALYSIS_NOT_FOUND,
@@ -17,6 +18,7 @@ from ..errors import (
     INVALID_PARAMS,
     RESULT_INCOMPATIBLE,
 )
+from ..datasets.statistics import finite_or_none
 from ..security import UnsafePathError, open_text_for_write
 from .analysis_helpers import (
     ANALYSIS_ALGORITHM_VERSION,
@@ -297,7 +299,12 @@ class AnalysisArtifactMixin:
         if isinstance(value, np.integer):
             return int(value)
         if isinstance(value, np.floating):
-            return float(value)
+            value = float(value)
+        # The name says "JSON", and the boundary it protects is not only the wire:
+        # see protocol.frames.finite_or_none for why a non-finite number must
+        # become None here rather than reach a `json.dumps` that would persist it.
+        if isinstance(value, float):
+            return finite_or_none(value)
         return value
 
 

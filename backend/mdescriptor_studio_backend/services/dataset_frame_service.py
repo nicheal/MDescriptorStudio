@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..datasets.ghosts import DEFAULT_BOND_CUTOFF, periodic_boundary_ghosts
-from ..datasets.statistics import frame_force_max
+from ..datasets.statistics import finite_or_none, frame_energy_per_atom, frame_force_max
 from ..errors import AppError, INVALID_DATASET, INVALID_PARAMS
 from .dataset_service import formula_of, symbol_of
 
@@ -69,11 +69,12 @@ class DatasetFrameService:
                 "f": None,
             }
             if f.forces is not None:
-                fx, fy, fz = (float(v) for v in f.forces[i])
-                entry.update(
-                    fx=round(fx, 5), fy=round(fy, 5), fz=round(fz, 5),
-                    f=round((fx * fx + fy * fy + fz * fz) ** 0.5, 5),
-                )
+                # A frame whose model returned NaN forces is still a structure
+                # worth drawing: report the components as absent rather than
+                # failing the whole read at `frames.encode(allow_nan=False)`.
+                fx, fy, fz = (finite_or_none(round(float(v), 5)) for v in f.forces[i])
+                magnitude = None if fx is None or fy is None or fz is None else round((fx * fx + fy * fy + fz * fz) ** 0.5, 5)
+                entry.update(fx=fx, fy=fy, fz=fz, f=magnitude)
             rows.append(entry)
         cell = np.asarray(f.cell)
         det = abs(float(np.linalg.det(cell)))
@@ -94,9 +95,7 @@ class DatasetFrameService:
         xyz_lines = [str(len(display_symbols)), header]
         for s, pos in zip(display_symbols, display_positions):
             xyz_lines.append(f"{s} {pos[0]:.6f} {pos[1]:.6f} {pos[2]:.6f}")
-        energy_per_atom = None
-        if f.energy is not None and symbols:
-            energy_per_atom = round(float(f.energy) / len(symbols), 6)
+        energy_per_atom = frame_energy_per_atom(f.energy, len(symbols))
         force_max = frame_force_max(f.forces) if f.forces is not None else None
         # row-major 3×3 as stored by the source (extxyz comment / deepmd set);
         # sign conventions differ between ecosystems, so the GUI shows it raw

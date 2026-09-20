@@ -163,11 +163,16 @@ class AnalysisRunMixin:
                         reference_samples=samples[0] if cross_dataset else None,
                     )
                     if analysis_type == "pca" and isinstance(preview.get("points"), list):
-                        frame_count = int(preview_samples.frame.max()) + 1 if preview_samples.frame.size else 1
-                        properties = self._frame_properties(run_rows[0], frame_count)
+                        frame_of = {int(point["frame"]) for point in preview["points"] if isinstance(point, dict) and "frame" in point}
+                        # The colour-by decorations are looked up by frame index,
+                        # so the frames present are the frames worth reading. This
+                        # used to pass `frame.max() + 1`: a view selecting frames
+                        # 10 and 11 of a 12 000-frame source decoded 12 frames, and
+                        # the extXYZ reader opens the source file once per frame.
+                        properties = self._frame_properties_by_frame(run_rows[0], sorted(frame_of))
                         preview["points"] = [
                             {**point, **properties[int(point["frame"])]}
-                            if isinstance(point, dict) and 0 <= int(point.get("frame", -1)) < len(properties)
+                            if isinstance(point, dict) and "frame" in point and int(point["frame"]) in properties
                             else point
                             for point in preview["points"]
                         ]
@@ -191,7 +196,11 @@ class AnalysisRunMixin:
                             "finished_at": _NOW(),
                             "warnings_json": json.dumps(result.get("warnings", []), ensure_ascii=False),
                             "artifact_manifest_json": json.dumps(manifest, ensure_ascii=False),
-                            "preview_json": json.dumps(preview, ensure_ascii=False),
+                            # allow_nan=False is the backstop, not the fix: the
+                            # preview is already sanitised. Writing a bare NaN
+                            # here would settle the row COMPLETED and then make
+                            # every later read of it fail to encode.
+                            "preview_json": json.dumps(preview, ensure_ascii=False, allow_nan=False),
                             "preprocessing_json": json.dumps({"preprocess": params.get("preprocess")}, ensure_ascii=False),
                             "updated_at": _NOW(),
                         },

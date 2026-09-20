@@ -296,7 +296,7 @@ class DatasetService:
             self.db.execute(
                 "INSERT INTO dataset_statistics (dataset_id, fingerprint, stats_json, created_at)"
                 " VALUES (?, ?, ?, ?)",
-                (ds_id, fingerprint, json.dumps(stats), _NOW()),
+                (ds_id, fingerprint, json.dumps(stats, allow_nan=False), _NOW()),
             )
             if lineage is not None:
                 self.db.execute(
@@ -629,7 +629,7 @@ class DatasetService:
                     " VALUES (?, ?, ?, ?)"
                     " ON CONFLICT(dataset_id) DO UPDATE SET fingerprint = excluded.fingerprint,"
                     " stats_json = excluded.stats_json, created_at = excluded.created_at",
-                    (ds_id, fingerprint, json.dumps(stats), _NOW()),
+                    (ds_id, fingerprint, json.dumps(stats, allow_nan=False), _NOW()),
                 )
                 self.db.execute(
                     "UPDATE datasets SET number_of_frames = ?, fingerprint = ?, last_scan_at = ? WHERE id = ?",

@@ -78,7 +78,11 @@ class ResultService:
             args.append(params["descriptor_name"])
         if cond:
             sql += " WHERE " + " AND ".join(cond)
-        sql += " ORDER BY r.created_at DESC LIMIT 500"
+        # rowid breaks created_at ties: the timestamp only has second resolution
+        # (`analysis_helpers._NOW`), so a batch of runs submitted inside one
+        # second otherwise ordered arbitrarily and could reshuffle between
+        # refreshes. Same rule job_service.list_jobs and analysis.list follow.
+        sql += " ORDER BY r.created_at DESC, r.rowid DESC LIMIT 500"
         rows = self.db.query(sql, tuple(args))
         for row in rows:
             # Keep the list response small: expose only the computed array

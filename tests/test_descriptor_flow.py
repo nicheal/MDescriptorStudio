@@ -109,6 +109,36 @@ def test_descriptor_registry_and_compute(tmp_path: Path) -> None:
             },
         )
         assert bad["error"]["code"] == "DESCRIPTOR_CONFIGURATION_ERROR"
+
+        # A COMPLETED row only proves the matrix was written once. Move the file
+        # away and the identical submit must recompute: answering with the
+        # vanished run id scheduled nothing, so the user got a "cached" answer
+        # whose every later read failed RESULT_INCOMPATIBLE - the same lesson
+        # `analysis.export` learnt about its own output file.
+        vanished = tmp_path / "results" / run_id
+        (vanished / "values.npy").unlink()
+        sub3 = bp.request(
+            108,
+            "descriptor.submit",
+            {
+                "dataset_id": ds_id,
+                "descriptor_name": "ACE",
+                "parameters": {"species": [31, 33], "N": 1},
+                "scope": "dataset",
+            },
+        )
+        assert sub3["result"]["cache"] is None, sub3["result"]
+        recomputed = wait_job(bp, sub3["result"]["job_id"], timeout=300)
+        assert recomputed["status"] == "COMPLETED", recomputed
+        new_run_id = recomputed["result"]["run_id"]
+        assert new_run_id != run_id
+        # The retired row must never answer a hit again either, or the two rows
+        # would take turns handing back a missing artifact.
+        again = bp.request(109, "descriptor.submit", {
+            "dataset_id": ds_id, "descriptor_name": "ACE",
+            "parameters": {"species": [31, 33], "N": 1}, "scope": "dataset",
+        })
+        assert again["result"]["cache"]["existing_run_id"] == new_run_id, again["result"]
     finally:
         assert bp.close() == 0
 

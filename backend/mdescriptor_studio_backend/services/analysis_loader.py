@@ -16,7 +16,7 @@ from ..errors import (
     INVALID_PARAMS,
     RESULT_INCOMPATIBLE,
 )
-from ..datasets.statistics import frame_force_max
+from ..datasets.statistics import frame_energy_per_atom, frame_force_max
 from ..security import UnsafePathError, ensure_no_reparse_points
 from .analysis_helpers import (
     CROSS_DATASET_TYPES,
@@ -56,32 +56,39 @@ class AnalysisDataMixin:
             return np.full(count, int(run_row.get("frame_index") or 0), dtype=np.int64)
         return np.arange(count, dtype=np.int64)
 
-    def _frame_properties(self, run_row: dict, n_points: int) -> list[dict]:
-        """Energy/force/volume per frame for color-by (aligned to frame index)."""
-        frame_scope = run_row["scope"] == "frame"
-        need = max(n_points, (run_row["frame_index"] + 1) if frame_scope else n_points)
-        props: list[dict] = [{"energy_per_atom": None, "force_max": None, "volume": None} for _ in range(need)]
+    def _frame_properties_by_frame(self, run_row: dict, frames: list[int]) -> dict[int, dict]:
+        """Energy/force/volume for the named frames only, keyed by frame index.
+
+        The callers want the decoration for the samples they actually have:
+        under a dataset view the highest frame index says nothing about how many
+        frames must be read, and `ExtXYZAdapter.get_frame` opens the source file
+        once per frame.
+        """
         dataset_row = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
-        if dataset_row is None:
-            return props
+        wanted = sorted({int(index) for index in frames})
+        if dataset_row is None or not wanted:
+            return {}
         adapter = self.datasets.adapter_for(dataset_row)
-        indices = [run_row["frame_index"]] if frame_scope else list(range(min(n_points, len(adapter))))
-        for i in indices:
+        readable = len(adapter)
+        props: dict[int, dict] = {}
+        for index in wanted:
+            # Unreadable and out-of-range frames stay absent, which the merge
+            # reports as "no properties for this point" - the same answer the
+            # old pre-filled list of None-valued entries gave.
+            if index < 0 or index >= readable:
+                continue
             try:
-                f = adapter.get_frame(i)
+                f = adapter.get_frame(index)
             except AppError:
                 continue
-            natoms = len(f.numbers)
-            entry = {
-                "energy_per_atom": f.energy / natoms if f.energy is not None and natoms else None,
-                "force_max": None,
+            props[index] = {
+                "energy_per_atom": frame_energy_per_atom(f.energy, len(f.numbers)),
+                "force_max": frame_force_max(f.forces),
                 "volume": None,
             }
-            entry["force_max"] = frame_force_max(f.forces)
             det = abs(float(np.linalg.det(np.asarray(f.cell))))
             if det > 1e-8:
-                entry["volume"] = round(det, 4)
-            props[i] = entry
+                props[index]["volume"] = round(det, 4)
         return props
 
     def _input_ids(self, analysis_type: str, params: dict) -> list[str]:

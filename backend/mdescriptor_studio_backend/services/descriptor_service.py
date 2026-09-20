@@ -85,6 +85,21 @@ _MAX_COMPUTE_INPUT_BYTES = 2 * 1024 * 1024 * 1024
 _MODEL_SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 
 
+def _artifact_present(result_path: object) -> bool:
+    """Whether a COMPLETED row's matrix and metadata are still on disk.
+
+    The row only proves the compute finished once. A moved or half-cleaned data
+    directory used to keep answering descriptor.submit with that run id and
+    schedule nothing, so the very next result.get failed RESULT_INCOMPATIBLE -
+    the same reason export re-claims a vanished file and the artifact store asks
+    is_complete before serving a hit.
+    """
+    if not result_path:
+        return False
+    root = Path(str(result_path))
+    return (root / "values.npy").is_file() and (root / "metadata.json").is_file()
+
+
 def _process_rss_bytes() -> int | None:
     """Resident memory as the OS reports it, for the per-run peak.
 
@@ -297,14 +312,20 @@ class DescriptorService:
         force = bool(params.get("force"))
         with self._submit_lock:
             hit = self.db.query_one(
-                "SELECT id FROM descriptor_runs WHERE cache_key = ? AND status = 'COMPLETED'",
+                "SELECT id, result_path FROM descriptor_runs WHERE cache_key = ? AND status = 'COMPLETED'",
                 (cache_key,),
             )
-            if hit and not force:
+            if hit and not force and _artifact_present(hit["result_path"]):
                 return {
                     "job_id": None,
                     "cache": {"existing_run_id": hit["id"], "cache_key": cache_key},
                 }
+            if hit and not _artifact_present(hit["result_path"]):
+                # The files are gone but the row still says COMPLETED. Retire the
+                # key so this row can never answer a cache hit again, and fall
+                # through: leaving it in place would let the recompute below
+                # produce a second row on one cache_key and keep flapping.
+                self.db.execute("UPDATE descriptor_runs SET cache_key = NULL WHERE id = ?", (hit["id"],))
             if not force:
                 # An identical compute may already be queued or running (double
                 # click, Overview + submit panel). Reuse the live job instead

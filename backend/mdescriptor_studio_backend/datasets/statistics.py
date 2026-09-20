@@ -347,15 +347,45 @@ def _int_hist(values: list[int]) -> dict | None:
     return {"edges": [round(e, 6) for e in edges], "counts": [int(c) for c in counts]}
 
 
+def finite_or_none(value: float | None) -> float | None:
+    """A number that can be stored and sent, or None. The owner of that rule.
+
+    `protocol.frames.encode` refuses a non-finite float rather than shipping a
+    bare `NaN` token the renderer's JSON.parse rejects, so a producer that
+    reaches the boundary with one has already lost the request. It is worse when
+    the value is *persisted* first: `json.dumps` writes `NaN` happily, and every
+    later read of that already-COMPLETED row then fails to encode - the result
+    stays unreadable forever while the row keeps claiming success. Reporting the
+    number as absent is the honest answer, and the UI already renders None as "—".
+    """
+    return None if value is not None and not bool(np.isfinite(value)) else value
+
+
 def frame_force_max(forces: np.ndarray | None) -> float | None:
     """Largest force magnitude on a frame, or None when it has none.
 
     The health findings and the PCA colour-by both report this number, and
     rounding in only one of them made the two views disagree in the last digit.
+    A frame whose forces are non-finite has no largest magnitude either: NaN
+    propagates through `norm().max()`, and persisting that makes the row
+    permanently unreadable.
     """
     if forces is None or not np.asarray(forces).size:
         return None
-    return round(float(np.linalg.norm(np.asarray(forces, dtype=np.float64), axis=1).max()), 5)
+    maximum = np.linalg.norm(np.asarray(forces, dtype=np.float64), axis=1).max()
+    return finite_or_none(round(float(maximum), 5))
+
+
+def frame_energy_per_atom(energy: float | None, natoms: int) -> float | None:
+    """Per-atom energy, or None when the frame has none or it is not a number.
+
+    Same rule and same reason as `frame_force_max`: the colour-by merge and the
+    frame inspector both derive this, and rounding in only one of them made those
+    two views disagree in the last digit.
+    """
+    if energy is None or not natoms:
+        return None
+    return finite_or_none(round(float(energy) / natoms, 6))
 
 
 def _frame_geometry(

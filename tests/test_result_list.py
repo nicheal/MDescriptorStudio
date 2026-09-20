@@ -39,6 +39,37 @@ def test_list_includes_shape_from_result_metadata(tmp_path: Path) -> None:
     assert len(rows[0]["feature_space_signature"]) == 64
 
 
+def test_list_orders_runs_submitted_in_the_same_second(tmp_path: Path) -> None:
+    # created_at only has second resolution (analysis_helpers._NOW), so a batch
+    # of runs submitted inside one second had an arbitrary order and could
+    # reshuffle between refreshes. job_service.list_jobs already breaks the tie
+    # with rowid; this is the same rule.
+    db = Database(tmp_path / "db.sqlite3")
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
+        " properties, periodicity, fingerprint, file_size, created_at, last_scan_at)"
+        " VALUES ('ds_1', 'd', 'deepmd', ?, 3, '[]', '{}', ?, 'fp', 0,"
+        " '2026-01-01T00:00:00+00:00', NULL)",
+        (str(tmp_path / "source.xyz"), '{"isolated": true, "fully_periodic": false}'),
+    )
+    for index in range(4):
+        run_dir = tmp_path / "results" / f"run_{index}"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metadata.json").write_text('{"shape": [2, 2]}', encoding="utf-8")
+        db.execute(
+            "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version,"
+            " parameters_json, scope, status, created_at, result_path)"
+            " VALUES (?, 'ds_1', 'ACE', 'test', '{}', 'dataset', 'COMPLETED',"
+            " '2026-01-01T00:00:00+00:00', ?)",
+            (f"run_{index}", str(run_dir)),
+        )
+
+    listed = [row["id"] for row in ResultService(db).list({"dataset_id": "ds_1"})]
+
+    assert listed == ["run_3", "run_2", "run_1", "run_0"], listed
+    db.close()
+
+
 def _insert_run(db: Database, run_id: str, run_dir: Path, columns: dict | None, metadata: str | None) -> None:
     if metadata is not None:
         run_dir.mkdir(parents=True, exist_ok=True)

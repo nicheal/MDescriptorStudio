@@ -20,6 +20,7 @@ from mdescriptor_studio_backend.errors import (
     RESULT_INCOMPATIBLE,
     AppError,
 )
+from mdescriptor_studio_backend.protocol import frames
 from mdescriptor_studio_backend.services.analysis_service import _LIST_COLUMNS, AnalysisService
 from mdescriptor_studio_backend.services.dataset_service import DatasetService
 from mdescriptor_studio_backend.services.job_runner import AnalysisRunMixin
@@ -609,6 +610,79 @@ def test_projection_preview_carries_one_list_for_scatter_and_table(tmp_path: Pat
     assert [(point["i"], point["x"], point["label"]) for point in preview["points"]] == [
         (0, 0.0, 0), (4, 8.0, 4), (9, 18.0, 9)
     ]
+    db.close()
+
+
+def test_frame_properties_reads_only_the_frames_the_preview_names(tmp_path: Path) -> None:
+    # The colour-by merge used to pass `frame.max() + 1` as a count, so a view
+    # selecting the last two frames of a long source decoded every frame before
+    # them - and the extXYZ reader opens the source file once per frame.
+    read: list[int] = []
+
+    class _Adapter:
+        def __len__(self) -> int:
+            return 12
+
+        def get_frame(self, index: int):
+            read.append(index)
+            return SimpleNamespace(
+                numbers=np.arange(4), energy=-8.0, forces=np.zeros((4, 3)), cell=np.eye(3) * 5.0
+            )
+
+    class _Datasets:
+        def adapter_for(self, _row):
+            return _Adapter()
+
+    db, _jobs, service = _service(tmp_path, datasets=_Datasets())
+    _dataset_and_view(db, [10, 11])
+    row = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_1'")
+
+    props = service._frame_properties_by_frame(row, [11, 10, 11])
+
+    assert read == [10, 11], "one read per distinct frame the preview actually names"
+    assert sorted(props) == [10, 11]
+    assert props[10] == {"energy_per_atom": -2.0, "force_max": 0.0, "volume": 125.0}
+    # Out of range and unreadable frames stay absent, so the merge reports them
+    # as undecorated points rather than inventing a value.
+    read.clear()
+    assert service._frame_properties_by_frame(row, [99]) == {}
+    assert read == []
+
+
+def test_a_non_finite_frame_value_leaves_the_stored_preview_readable(tmp_path: Path) -> None:
+    # One NaN force component used to be enough to make a COMPLETED result
+    # permanently unreadable: the colour-by merge ran after the preview was
+    # sanitised, `json.dumps` wrote a bare NaN token into preview_json, and every
+    # later read then died at frames.encode(allow_nan=False).
+    class _Adapter:
+        def __len__(self) -> int:
+            return 2
+
+        def get_frame(self, index: int):
+            forces = np.zeros((4, 3))
+            if index == 1:
+                forces[2, 0] = np.nan
+            return SimpleNamespace(
+                numbers=np.arange(4), energy=float("nan") if index == 1 else -8.0,
+                forces=forces, cell=np.eye(3) * 5.0,
+            )
+
+    class _Datasets:
+        def adapter_for(self, _row):
+            return _Adapter()
+
+    db, _jobs, service = _service(tmp_path, datasets=_Datasets())
+    _dataset_and_view(db, [0, 1])
+    row = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_1'")
+
+    props = service._frame_properties_by_frame(row, [0, 1])
+
+    assert props[0]["force_max"] == 0.0 and props[0]["energy_per_atom"] == -2.0
+    assert props[1]["force_max"] is None, "a frame with no finite maximum reports none"
+    assert props[1]["energy_per_atom"] is None
+    blob = json.dumps(service._json_safe({"points": [props[0], props[1]]}), ensure_ascii=False, allow_nan=False)
+    assert "NaN" not in blob and "Infinity" not in blob
+    frames.encode({"id": 1, "ok": True, "result": json.loads(blob)})
     db.close()
 
 
