@@ -20,6 +20,8 @@
 | `a361576` | D-5 一次提交只探一次数据集新鲜度（探针集合归调用方所有，不跨请求缓存） | 3 个探针 → 1；单次探针冷 26.3 ms / 热 3.3 ms |
 | `a82b352` | D-7 trajectory 可见窗口统计进 memo，四次排序变两次 | node 重放 10 万帧 102.9 ms → 50.5 ms，输出逐字段相同 |
 | `453253b` | C-5 一次列目录共享已验证前缀；并为 `is_reparse_point` 建第一批真 junction 用例 | 探针 106 → 12、`scan()` 2.1 ms → 1.1 ms；把检查改成「只看叶子」会让三条新测试全红 |
+| `0aeb2c4` | B-3 「这个特征有没有信息」只剩一个归属者：`feature_correlation` 与 `feature_variance` 都改判 `_meaningful_scale`，`variance_threshold` 默认从 1e-12（平方单位）归零 | 报告那组四列矩阵：旧规则删掉 4 列里的 3 列并让面板直接报 "at least two non-constant features are required"；两条规则各自恢复后测试逐名变红 |
+| `6ba8823` | B-4 Mahalanobis 报出它实际张量到的维度，并且 n=1 时结构化拒绝（原先 `pinv` 抛 `LinAlgError` 把整个作业打死） | 打分表达式逐字未变，363 通过、无一条既有期望被改动；`LinAlgError: SVD did not converge` 是对 `_preprocess` 留下的那个矩阵实测出来的 |
 
 ## 待修（已核实，按批排列）
 
@@ -44,8 +46,6 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 | # | 位置 | 问题 | 已有测量 |
 | --- | --- | --- | --- |
 | B-1 | `identity.ts` 第二半 + `restore.ts` + `Analysis.tsx:1292` | `c87f006` 只补了键；drift 面板是唯一没有 Granularity 控件的跨集面板，且 `restore` 对 drift 返回 `{}`，历史加载不回填粒度。于是别处动 `mode` 会让绿点静默消失，屏幕上无控件可解释或复原 —— 与第 13 批 outliers/`k` 同形，当时解法是给面板加控件 | — |
-| B-3 | `correlation.py:19-22` vs `metrics/__init__.py:91,215` | 口径 2 的「零方差一个归属者」漏了两个判定点且方向相反：`feature_correlation` 判**方差** `> 1e-12`（绝对、平方单位 = std > 1e-6），`feature_variance` 判 **ptp** `<= 1e-12`。于是相关面板静默删掉所有距离/PCA/coverage/sampling 都在用的低幅值真特征、还报成 "zero-variance"（假）；方差面板留着 `_preprocess` 会删的大幅舍入噪声并计入 `effective_nonzero_dimensions` | 矩阵 `[N(0,1), N(0,10), N(0,100), ±1e-8, 1e6+几个 ulp]`：`_meaningful_scale` 留 0–3 删 4；`feature_correlation` 报 "ignored 2 zero-variance feature(s)" 且再无一对引用特征 3 |
-| B-4 | `clustering/__init__.py:50-53,75-83` | Mahalanobis 无样本/秩守卫：`d ≥ n` 时 `np.cov`+`pinv` 把打分限制在样本张成空间，`+1e-10·I` 的脊被 pinv 直接截掉。Studio 常态 256 维 × 50–200 结构，永远在这个区间，面板照常报 `outlier_count` 不告警。`outlier()` 不调 `_check_samples`，n=1 走到全 NaN 协方差的 `pinv` → 未捕获 `LinAlgError`（knn/lof 正确回 `ANALYSIS_INSUFFICIENT_SAMPLES`） | n=50/d=60，一点沿别人不占的方向推到 500σ → 排名 **50/50（最后）**；同一路 n=400/d=20 → 排名 1/400。换 Ledoit–Wolf 属新增行为，本轮不做 |
 | B-5 | `sampling/engine.py:175-191` vs `:96-102` | P1-14 第二半没落地、memo 也没定调：FPS 那支有 `scaling_mode`/`fit_scaling`/`apply_scaling`，cluster 直接 `.fit(x)` 原始值。混合单位矩阵（能量 eV + 维里 + 体积 Å³）上「代表样本」几乎完全沿最宽那一列选，`:201` 的 `_visual_pca(x)` 画的还是同一个原始空间，两张 sampling 卡不可比。`submission.ts` 又只在 fps 时发 `scaling`，屏幕上没人说明空间变了 | 两列 1:1000 的矩阵可复现选择由宽列主导 |
 | B-6 | `pairs.py:142-148` + `analysisVisualizations.tsx:236` | `pick_scores` 不单调：每步拿当前 `np.ptp(min_diversity)` 重新 min–max，范围随批次收缩，第 k 步与 k+1 步不在同一把尺上，而面板按选择顺序画成柱状图。memo 断言它单调并指定了要钉的测试，落地的 `tests/test_analysis_engine.py:454-486` 只查长度与有限性。`:156-160` 的 `full_scores` 除以 `nanmax` 却不减 min，是第三个公式 | 40 seed × 3 组参数：120 次运行里 **118 次出现上升**，例 `[1.0, 0.7695, 0.8158, 0.7263, …]` |
 | D-8 | `statistics.py` | 若改成流式（而非只改表头），随这批一起过 | — |
@@ -87,6 +87,7 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 
 - **「`umap_numpy.py:197-203` 的斥力不是 UMAP 的梯度，导致远距簇塌缩」——不成立。** 对照本仓库自带的 umap-learn 源码 `src-tauri/resources/backend/_internal/umap/layouts.py:167-182`：`grad_coeff = 2γb; grad_coeff /= (0.001 + dist_squared) * (a * dist_squared**b + 1); grad_d = clip(grad_coeff * (current[d] - other[d])); current[d] += grad_d * alpha`，与仓库实现**逐字相同**；吸引力那条（`umap_numpy.py:182` ↔ `layouts.py:137-143`） likewise。真实存在的是两件事：(1) 批式近似的抽样制度差异（每 epoch 均匀抽边 × 固定负例数，而非 umap 按 `epochs_per_negative_sample` 的度数驱动时刻表；正例权重在 clip 之后才乘）——实现选择，需受控对比才能判断代价；(2) 唯一的质量门禁 `tests/test_umap_numpy.py::test_separable_blobs_preserve_local_structure` 只要求 `trustworthiness > 0.9` 且 blob 间距 σ=4，**看不见簇塌缩**。该修的是门禁，不是公式。
 - **「`novelty_fps` 也读 `uncertainty_k`，所以 `c87f006` 删错了」——不成立。** `pairs.py:86-87` 的 `if acquisition_method in ("uncertainty", "uncertainty_diversity", "knn_uncertainty"):` 在读取之前，novelty 分支走 `else` 且从不取名 `uncertainty_k`。删掉是错的删除，不是错的行为。
+- **「Mahalanobis 在 n=50/d=60 时，把一点沿别人不占的方向推到 500σ 会排名 50/50（最后）」——没复现。** 那个点本身把该方向写进了协方差（秩从 8 变 9），标准化后它仍是分数最高、仍是唯一被打上 outlier 的点。B-4 成立的部分是弱的那一半：50 个样本在 60 维上至多张成 49 个方向，面板照常报 `outlier_count` 而不说这件事 —— 已按实测落地（`6ba8823`，测试里连「仍被标出」一起钉住）。n=1 走 `pinv(NaN)` 抛 `LinAlgError` 是真的，两行脚本实测出来。
 - **「`dataset_view_service.py:295` 调了一个不存在的 `_export_destination`」——不成立。** 它定义在 `:286`，同一个类里。
 - `types.ts:85-88` 与 `:132-135` 重复声明 4 个字段：TS 允许且无害，改它只产噪声 diff。
 - `analysisChartKit.tsx` 的 `overviewLayout`/`layout`：8 与 55 处调用，是两种视图的默认值，不是重复。
