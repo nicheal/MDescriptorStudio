@@ -67,8 +67,8 @@ def _sign_canonical(matrix: np.ndarray) -> np.ndarray:
 
 def test_si_extxyz_fixture_is_readable() -> None:
     reader = create_adapter(FIXTURES / "Si.xyz")
-    assert reader.metadata().number_of_frames == 2
-    frames = reader.read()
+    assert reader.scan().number_of_frames == 2
+    frames = list(reader.iter_frames())
     assert [frame.index for frame in frames] == [0, 1]
     assert all(frame.numbers.tolist() == [14, 14] for frame in frames)
     assert frames[0].cell.shape == (3, 3)

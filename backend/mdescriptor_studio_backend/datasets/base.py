@@ -53,18 +53,6 @@ class DatasetAdapter(ABC):
         for i in range(len(self)):
             yield self.get_frame(i)
 
-    # -- reader interface spelling -------------------------------------
-    # The factory/plugin vocabulary uses metadata/iterate_frames/read; the
-    # historical scan/get_frame/iter_frames names remain the implementation.
-    def metadata(self) -> ScanMeta:
-        return self.scan()
-
-    def iterate_frames(self):
-        return self.iter_frames()
-
-    def read(self) -> list[DatasetFrame]:
-        return list(self.iter_frames())
-
 
 def detect_format(path: Path) -> str:
     if path.is_dir():

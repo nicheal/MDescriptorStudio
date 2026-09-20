@@ -183,19 +183,22 @@ def test_builtin_formats_are_registered() -> None:
     assert {"deepmd", "extxyz"}.issubset(set(reader_formats()))
 
 
-def test_reader_interface_exposes_metadata_and_frames() -> None:
+def test_reader_interface_exposes_scan_and_frames() -> None:
+    # One spelling for the reader contract: scan() counts, iter_frames() walks,
+    # and the two agree on the same frames. The adapter also used to carry
+    # metadata()/read()/iterate_frames() aliases that nothing in services ever
+    # called, so a new format could satisfy one spelling and break the other -
+    # and read() materialised every frame of a 250 000-frame source at once.
     reader = create_reader(DATA)
-    metadata = reader.metadata()
-    assert metadata.number_of_frames == len(reader)
-    frames = reader.read()
-    assert len(frames) == metadata.number_of_frames
-    assert [frame.index for frame in reader.iterate_frames()] == list(range(metadata.number_of_frames))
+    metadata = reader.scan()
+    frames = list(reader.iter_frames())
+    assert metadata.number_of_frames == len(reader) == len(frames)
+    assert [frame.index for frame in frames] == list(range(metadata.number_of_frames))
 
 
 def test_detection_path_uses_registry() -> None:
     adapter = create_adapter(DATA)
     assert adapter.format_name == "extxyz"
-    assert adapter.metadata().number_of_frames == adapter.scan().number_of_frames
 
 
 def test_new_reader_registration_needs_no_factory_branch(monkeypatch) -> None:
