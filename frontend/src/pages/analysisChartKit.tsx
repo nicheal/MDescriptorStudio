@@ -139,7 +139,12 @@ export function formatFixed(value: unknown, digits: number): string {
 
 export function quantile(values: number[], q: number): number | null {
   if (!values.length) return null;
-  const sorted = values.slice().sort((left, right) => left - right);
+  return sortedQuantile(values.slice().sort((left, right) => left - right), q);
+}
+
+/** Linear-interpolated quantile of an already ascending-sorted array. */
+export function sortedQuantile(sorted: number[], q: number): number | null {
+  if (!sorted.length) return null;
   const position = (sorted.length - 1) * q;
   const lower = Math.floor(position);
   const upper = Math.ceil(position);

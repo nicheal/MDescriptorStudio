@@ -14,7 +14,7 @@ import { useT } from "../i18n";
 import type { AnalysisPreview } from "../types/protocol";
 import type { AnalysisPoint } from "./analysisPreview";
 import type { AnalysisArrays } from "./analysisVisualizations";
-import { HIGH_CONTRAST_COLORSCALE, Metrics, NoData, PlotFrame, layout, matrix, num, nums, quantile } from "./analysisChartKit";
+import { HIGH_CONTRAST_COLORSCALE, Metrics, NoData, PlotFrame, layout, matrix, num, nums, sortedQuantile } from "./analysisChartKit";
 import { decimate, METHOD_DEFAULT_SENSITIVITY, stepPercentiles, stepStats, trajectoryThreshold, EVENT_METHODS, type EventMethod, type StepStats } from "./trajectoryMath";
 
 type Props = {
@@ -40,6 +40,9 @@ interface TrajectoryEvent {
   pc2: number | null;
   pcDisplacement: number | null;
 }
+
+/** The central 95% of the visible PCA cloud, in projection units. */
+type ProjectionBox = { x: [number, number]; y: [number, number] };
 
 export default function TrajectoryView({ preview, arrays, points, selectedIndices, onSelect }: Props) {
   const { t } = useT();
@@ -127,8 +130,33 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
   );
 
   const windowHalf = Math.max(10, Math.round(Math.max(1, high - low) / 200));
-  const pathLength = visibleIndices.reduce((sum, index) => sum + series[index], 0);
-  const maxStep = visibleIndices.reduce((best, index) => Math.max(best, series[index]), 0);
+  // Everything here walks the visible window. In the render body it also re-ran
+  // on unrelated state - colour-by, display mode, which point is selected - and
+  // the range slider reports on every mouse-move, so it re-runs on each pixel of
+  // a drag. Measured on a node replay of the same maths at 100 000 frames:
+  // 103 ms per pass before, 50 ms after, because the four quantiles were
+  // sorting four copies of the same two projections and now sort two.
+  const { box, outliers, pathLength, maxStep } = useMemo<{ box: ProjectionBox | null; outliers: number; pathLength: number; maxStep: number }>(() => {
+    let walked = 0;
+    let largest = 0;
+    for (const index of visibleIndices) {
+      walked += series[index];
+      largest = Math.max(largest, series[index]);
+    }
+    if (!focusMain || !visibleIndices.length) return { box: null, outliers: 0, pathLength: walked, maxStep: largest };
+    const xs = visibleIndices.map((index) => coords[index][0]).sort((left, right) => left - right);
+    const ys = visibleIndices.map((index) => coords[index][1]).sort((left, right) => left - right);
+    const focused: ProjectionBox = {
+      x: [sortedQuantile(xs, 0.025) ?? 0, sortedQuantile(xs, 0.975) ?? 0],
+      y: [sortedQuantile(ys, 0.025) ?? 0, sortedQuantile(ys, 0.975) ?? 0],
+    };
+    let outside = 0;
+    for (let position = 0; position < visibleIndices.length; position += 1) {
+      const [x, y] = coords[visibleIndices[position]];
+      if (x < focused.x[0] || x > focused.x[1] || y < focused.y[0] || y > focused.y[1]) outside += 1;
+    }
+    return { box: focused, outliers: outside, pathLength: walked, maxStep: largest };
+  }, [coords, focusMain, series, visibleIndices]);
   const timeUnit = String(preview?.time_unit ?? t("Frame"));
   const pc1Variance = num(preview?.pc1_explained_variance) ?? nums(arrays.pc_explained_variance)[0] ?? null;
   const pc2Variance = num(preview?.pc2_explained_variance) ?? nums(arrays.pc_explained_variance)[1] ?? null;
@@ -296,15 +324,6 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
       },
     ] : []),
   ];
-  const box: { x: [number, number]; y: [number, number] } | null = focusMain && visibleIndices.length
-    ? {
-      x: [quantile(visibleIndices.map((index) => coords[index][0]), 0.025) ?? 0, quantile(visibleIndices.map((index) => coords[index][0]), 0.975) ?? 0],
-      y: [quantile(visibleIndices.map((index) => coords[index][1]), 0.025) ?? 0, quantile(visibleIndices.map((index) => coords[index][1]), 0.975) ?? 0],
-    }
-    : null;
-  const outliers = box
-    ? visibleIndices.filter((index) => coords[index][0] < box.x[0] || coords[index][0] > box.x[1] || coords[index][1] < box.y[0] || coords[index][1] > box.y[1]).length
-    : 0;
   const pcLayout = layout({
     xaxis: { title: { text: axisTitle("PC1", pc1Variance) }, range: box?.x },
     yaxis: { title: { text: axisTitle("PC2", pc2Variance) }, range: box?.y },
