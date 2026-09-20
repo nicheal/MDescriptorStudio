@@ -15,7 +15,7 @@ from ..security import (
     remove_managed_tree,
     validate_managed_path,
 )
-from .analysis_helpers import MANAGED_ID_RE
+from .analysis_helpers import MANAGED_ID_RE, _MAX_CHUNK_VALUES
 
 log = logging.getLogger(__name__)
 
@@ -332,17 +332,20 @@ class ResultService:
             max_features = int(params.get("max_features", 256))
         except (TypeError, ValueError):
             max_features = 256
-        # The column bound is the only cap here: rows are the one structure's
-        # atoms, so a wide-frame reply is atoms x 256 values. It is not a
-        # "never stream the full matrix" guarantee - that was the claim, and the
-        # real backstop is Server._encode refusing an over-large frame rather
-        # than the row count. Callers that need a bound on atoms must ask for
-        # one; nothing does yet, because no view reads this method.
         max_features = max(1, min(max_features, 256))
         block = block[:, :max_features]
+        # The product is what has to be bounded: columns are capped above, and
+        # rows are the one structure's atoms, which a 1e6-atom frame happily
+        # exceeds. Without this the reply is refused by Server._encode and the
+        # caller gets an error frame instead of a page; with it the reply is
+        # always sendable, and `truncated` says atoms are missing.
+        allowed_atoms = max(1, _MAX_CHUNK_VALUES // block.shape[1])
+        truncated = int(block.shape[0]) > allowed_atoms
+        block = block[:allowed_atoms]
         return {
             "atomOffset": lo,
-            "atoms": list(range(lo, hi)),
+            "atoms": list(range(lo, lo + int(block.shape[0]))),
             "features": list(range(block.shape[1])),
             "values": [[round(float(v), 6) for v in r] for r in block.tolist()],
+            "truncated": truncated,
         }

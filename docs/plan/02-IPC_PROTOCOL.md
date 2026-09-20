@@ -75,7 +75,7 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `result.remove` | {run_id} → {ok}；级联删除该 run 的 analysis_runs 与关联 jobs 行，并尽力删除磁盘结果/分析目录；run 处于 QUEUED/RUNNING 时拒绝（`RESULT_INCOMPATIBLE`，先取消 job） | 否 |
 | `analysis.pca` | {run_id, mode?: "structure"\|"atom"} → {job_id, analysis_id, cache?}；同一 descriptor run + mode 的已完成 `pca.json` 直接命中缓存（`job_id: null`，`cache.existing_analysis_id`）；进行中的同键任务复用其 job；mode 缺省 structure（每帧一点，原子/配对行均值池化）；atom 模式每个原子/配对行一点并带 frame/atom 索引，超大结果均匀降采样至 ≤20k 点 | 否（缓存命中）/是（需计算） |
 | `result.get_pca` | {analysis_id} → pca.json 全文（points/explained_variance/x_label/y_label/mode，点数=帧数或原子行数，非大数组） | 否 |
-| `result.heatmap` | {run_id, frame_index, max_features?} → {atoms, features, values, atomOffset}；max_features 硬上限 256（§25） | 否 |
+| `result.heatmap` | {run_id, frame_index, max_features?} → {atoms, features, values, atomOffset, truncated}；max_features 硬上限 256（§25），行按协议值预算 `_MAX_CHUNK_VALUES/columns` 截断并在 `truncated` 声明，`atoms` 只列实际返回的行 | 否 |
 | `settings.get` | {key} → {key, value\|null}（settings 表 KV） | 否 |
 | `settings.set` | {key, value} → {ok} | 否 |
 | `job.list` / `job.get` / `job.cancel` | 见 §4 | 否 |

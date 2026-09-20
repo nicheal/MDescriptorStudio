@@ -16,6 +16,8 @@ from ..analysis import ANALYSIS_REGISTRY
 from ..analysis.sampling import group_sizes, sqrt_quota
 from .analysis_helpers import (
     ANALYSIS_ALGORITHM_VERSION,
+    FEATURE_CORRELATION_SCHEMA,
+    FEATURE_VARIANCE_SCHEMA,
     _ANALYSIS_SCHEMA_VERSION,
     _MAX_CHUNK_VALUES,
     _MAX_PREVIEW_POINTS,
@@ -278,13 +280,13 @@ class AnalysisService(
         # artifact. Keep this revision in the canonical parameters so old
         # feature-variance artifacts cannot be mistaken for the new schema,
         # without invalidating caches for unrelated analysis modules.
-        params = {**dict(params or {}), "feature_variance_schema": 2}
+        params = {**dict(params or {}), "feature_variance_schema": FEATURE_VARIANCE_SCHEMA}
         return self.submit_generic("feature_variance", params)
 
     def feature_correlation(self, params: dict) -> dict:
         params = dict(params or {})
         params["method"] = str(params.get("method") or "pearson").lower()
-        params["feature_correlation_schema"] = 3
+        params["feature_correlation_schema"] = FEATURE_CORRELATION_SCHEMA
         return self.submit_generic("feature_correlation", params)
 
     def property_correlation(self, params: dict) -> dict:

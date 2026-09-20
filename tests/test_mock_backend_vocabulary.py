@@ -20,7 +20,11 @@ from types import SimpleNamespace
 from mdescriptor_studio_backend.analysis import ANALYSIS_REGISTRY
 from mdescriptor_studio_backend.main import build_methods
 from mdescriptor_studio_backend.protocol import frames
-from mdescriptor_studio_backend.services.analysis_helpers import ANALYSIS_ALGORITHM_VERSION
+from mdescriptor_studio_backend.services.analysis_helpers import (
+    ANALYSIS_ALGORITHM_VERSION,
+    FEATURE_CORRELATION_SCHEMA,
+    FEATURE_VARIANCE_SCHEMA,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -147,6 +151,27 @@ def test_the_mock_speaks_the_current_protocol_version():
     )
     assert literals, "no protocol_version literal found in preview.tsx"
     assert set(literals) == {str(frames.PROTOCOL_VERSION)}, literals
+
+
+def test_the_mock_copies_the_current_analysis_schema_revisions():
+    # preview.tsx stamps these into its canned feature previews and into the
+    # analysis rows it records. They are part of the cache identity, so a mock
+    # that keeps an old number restores history under semantics the app would
+    # treat as a different analysis - and every e2e spec stays green.
+    text = (FRONTEND_SRC / "preview.tsx").read_text(encoding="utf-8")
+    for name, revision in (
+        ("feature_variance_schema", FEATURE_VARIANCE_SCHEMA),
+        ("feature_correlation_schema", FEATURE_CORRELATION_SCHEMA),
+    ):
+        literals = set(re.findall(rf"{name}:\s*(\d+)", text))
+        assert literals == {str(revision)}, f"preview.tsx {name}: {literals} != backend {revision}"
+    # The canned previews carry the same revision under their own field name.
+    for kind, revision in (
+        ("feature_variance", FEATURE_VARIANCE_SCHEMA),
+        ("feature_correlation", FEATURE_CORRELATION_SCHEMA),
+    ):
+        literals = set(re.findall(rf'kind: "{kind}",\s*schema_version: (\d+)', text))
+        assert literals == {str(revision)}, f"preview.tsx {kind} preview schema: {literals}"
 
 
 def test_the_mock_reports_the_current_analysis_algorithm_version():

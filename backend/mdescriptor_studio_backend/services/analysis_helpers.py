@@ -31,6 +31,12 @@ _ANALYSIS_SCHEMA_VERSION = 1
 # coordination vs max_neighbors, affine strain) invalidated every run at once.
 ANALYSIS_ALGORITHM_VERSION = "studio-analysis-5"
 _MAX_PREVIEW_POINTS = 20_000
+# Written into the canonical parameters of the two feature analyses, so bumping
+# one invalidates that analysis' stored results without touching the others.
+# frontend/src/preview.tsx copies both for the dev mock, and
+# test_mock_backend_vocabulary.py binds the copies.
+FEATURE_VARIANCE_SCHEMA = 2
+FEATURE_CORRELATION_SCHEMA = 3
 # Values one analysis.chunk reply may carry. A float64's shortest repr is at
 # most 24 characters (1.7976931348623157e+308), so this stays under the 8 MiB
 # frame cap with room for the row brackets and separators.

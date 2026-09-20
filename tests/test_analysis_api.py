@@ -656,6 +656,40 @@ def test_frame_scoped_atom_identity_uses_the_actual_frame_index(tmp_path: Path) 
     db.close()
 
 
+def test_heatmap_reply_stays_inside_the_protocol_value_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Columns are capped at 256 and rows are one structure's atoms, so the
+    product is what decides whether a reply can be sent at all: an oversized
+    frame used to come back as an encoder error rather than as a page."""
+    from mdescriptor_studio_backend.services import result_service
+
+    monkeypatch.setattr(result_service, "_MAX_CHUNK_VALUES", 6)
+    db, _jobs, service = _service(tmp_path)
+    result_dir = tmp_path / "results" / "run_wide"
+    result_dir.mkdir(parents=True)
+    values = np.arange(12, dtype=np.float32).reshape(4, 3)
+    np.save(result_dir / "values.npy", values)
+    np.save(result_dir / "row_offsets.npy", np.array([0, 4], dtype=np.int64))
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_wide", "level": "atom", "row_semantics": "atom", "shape": list(values.shape)}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, frame_index, status, created_at, result_path) VALUES ('run_wide', 'ds_1', 'SOAP', 'test', '{}',"
+        " 'frame', 7, 'COMPLETED', '2026-01-01T00:00:02+00:00', ?)",
+        (str(result_dir),),
+    )
+
+    reply = service.results.heatmap({"run_id": "run_wide", "frame_index": 7})
+
+    assert sum(len(row) for row in reply["values"]) <= 6
+    assert reply["truncated"] is True
+    # The atoms listed are exactly the rows sent, so the page is self-describing.
+    assert reply["atoms"] == [0, 1]
+    assert reply["values"] == values[:2].tolist()
+    db.close()
+
+
 def test_frame_scoped_export_resolves_selected_sample_to_actual_frame(tmp_path: Path) -> None:
     db, _jobs, service = _service(tmp_path)
     result_dir = tmp_path / "results" / "run_export_frame"
