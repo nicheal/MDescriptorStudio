@@ -57,7 +57,10 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
             : p.overviewAnalysis === "feature_correlation"
               ? `${p.featureCorrelationMethod}|${p.featureCorrelationThreshold}`
               : p.overviewAnalysis === "effective_dimension" ? p.effectiveDimensionPreprocess : "";
-      if (p.overviewAnalysis === "drift") return [p.overviewAnalysis, moduleParts, [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")].join("|");
+      // drift takes its own two views instead of the single-run scope, and its
+      // module contributes nothing else - but `mode` still decides whether the
+      // loader reads the atom or the structure matrix, so it belongs here.
+      if (p.overviewAnalysis === "drift") return [p.overviewAnalysis, p.mode, [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")].join("|");
       return [p.overviewAnalysis, moduleParts, p.viewId ?? "full"].join("|");
     }
     default:

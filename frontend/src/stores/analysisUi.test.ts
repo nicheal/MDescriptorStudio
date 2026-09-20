@@ -85,7 +85,10 @@ describe("buildParamsKey", () => {
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "feature_correlation", featureCorrelationMethod: "spearman", featureCorrelationThreshold: 0.9 })).toBe("feature_correlation|spearman|0.9|full");
     expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "effective_dimension", effectiveDimensionPreprocess: "standardized" })).toBe("effective_dimension|standardized|full");
     expect(buildParamsKey("coverage", baseParams)).toBe("coverage|structure|run-ref|full|run-query|view-query");
-    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "drift" })).toBe("drift||run-ref:full:run-query:view-query");
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "drift" })).toBe("drift|structure|run-ref:full:run-query:view-query");
+    // Drift is measured on whichever matrix `mode` selects, so the two granularities
+    // are two different answers - the same rule property_correlation already follows.
+    expect(buildParamsKey("overview", { ...baseParams, overviewAnalysis: "drift", mode: "atom" })).toBe("drift|atom|run-ref:full:run-query:view-query");
     // FPS keys its strategy, scaling, distance threshold, warm-start run,
     // composite blocks, and budget mode; other methods leave those blank.
     expect(buildParamsKey("sampling", baseParams)).toBe("fps|1000|structure||global:robust:0:none:descriptor:count|full");

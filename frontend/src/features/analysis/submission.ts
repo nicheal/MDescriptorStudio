@@ -49,7 +49,10 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
         // rather than a neighbourhood size.
         return { kind: "run", method: "analysis.pairwise", label: "Pairwise similarity", params: { metric: "cosine", preprocess: "raw", mode: p.mode, max_samples: 400, ...viewSuffix(p.viewId) } };
       }
-      const params = { k: p.k, query_index: p.queryIndex, metric: "cosine", preprocess: "raw", mode: p.mode, ...viewSuffix(p.viewId) };
+      // Only analysis.similarity reads query_index; the neighbour graph scores
+      // every row, so sending it there would make an unrelated query change look
+      // like a different analysis with no control on screen to move it back.
+      const params = { ...(p.similarityMode === "query" ? { query_index: p.queryIndex } : {}), k: p.k, metric: "cosine", preprocess: "raw", mode: p.mode, ...viewSuffix(p.viewId) };
       if (p.similarityMode === "all_neighbors") return { kind: "run", method: "analysis.neighbors", label: "Neighbor graph", params };
       return { kind: "run", method: "analysis.similarity", label: "Similarity", params };
     }
@@ -81,7 +84,9 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
             acquisition_method: p.samplingAlgorithm,
             novelty_weight: 0.65,
             uncertainty_weight: 0.65,
-            uncertainty_k: p.uncertaintyK,
+            // Only the uncertainty branch reads k; a novelty run that stored one
+            // would claim a parameter it never used.
+            ...(uncertainty ? { uncertainty_k: p.uncertaintyK } : {}),
           },
         };
       }
