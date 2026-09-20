@@ -17,6 +17,7 @@ verdict genuinely changed, update BOTH this table and the document in the same c
 from __future__ import annotations
 
 import json
+import queue
 import sys
 import threading
 import time
@@ -189,6 +190,43 @@ def deadlock_child() -> int:
     return 0
 
 
+def read_child_lines(stream, deadline: float) -> list[str]:
+    """Lines the child printed, giving up after `deadline` seconds.
+
+    The deadline cannot be checked inside the read loop: `readline()` blocks
+    forever when the child never writes, and never writing is exactly issue 1's
+    symptom, so the parent used to hang until the workflow's own timeout killed
+    the whole script and the cleanup in `finally` never ran. A reader thread
+    hands lines over a queue the main thread can time out on - the portable
+    option, since select() does not work on Windows pipes.
+    """
+    incoming: queue.Queue[str | None] = queue.Queue()
+
+    def pump() -> None:
+        for line in stream:
+            incoming.put(line.rstrip() if isinstance(line, str) else line.decode().rstrip())
+        incoming.put(None)
+
+    threading.Thread(target=pump, daemon=True).start()
+    lines: list[str] = []
+    started = time.monotonic()
+    while True:
+        remaining = deadline - (time.monotonic() - started)
+        if remaining <= 0:
+            lines.append("TIMEOUT_PARENT")
+            return lines
+        try:
+            line = incoming.get(timeout=remaining)
+        except queue.Empty:
+            lines.append("TIMEOUT_PARENT")
+            return lines
+        if line is None:
+            return lines
+        lines.append(line)
+        if "CHILD_END" in line:
+            return lines
+
+
 def check_deadlock() -> None:
     import subprocess
 
@@ -201,20 +239,9 @@ def check_deadlock() -> None:
         text=True,
     )
     # Deliberately keep child's stdin open for the whole run.
-    lines: list[str] = []
-    t0 = time.monotonic()
+    started = time.monotonic()
     try:
-        deadline = 45.0
-        while True:
-            line = child.stdout.readline()
-            if not line:
-                break
-            lines.append(line.rstrip())
-            if "CHILD_END" in line:
-                break
-            if time.monotonic() - t0 > deadline:
-                lines.append("TIMEOUT_PARENT")
-                break
+        lines = read_child_lines(child.stdout, 45.0)
     finally:
         if child.poll() is None:
             child.kill()
@@ -223,7 +250,7 @@ def check_deadlock() -> None:
         except Exception:
             pass
         child.wait(timeout=10)
-    elapsed = time.monotonic() - t0
+    elapsed = time.monotonic() - started
     done = [ln for ln in lines if ln.startswith("BUILD_DONE")]
     print("\n".join(lines[-6:]))
     if done and elapsed < 30:

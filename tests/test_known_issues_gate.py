@@ -50,3 +50,33 @@ def test_an_unrecorded_issue_is_drift(isolated):
     drift = isolated.drift_against_expectations()
     assert len(drift) == 9  # every other documented issue stayed silent
     assert all("no verdict recorded" in line for line in drift)
+
+
+def test_a_silent_child_hits_the_deadline_instead_of_hanging_the_script(monkeypatch) -> None:
+    """Issue 1's symptom is a child that prints nothing at all. The old loop
+    checked its deadline only after `readline()` returned, so the script hung and
+    the kill in `finally` never ran; only the workflow's 45 minute timeout
+    noticed. Reading through a queue gives the wait something to time out on."""
+    import os
+    import time
+
+    read_fd, write_fd = os.pipe()
+    silent = os.fdopen(read_fd, "r")
+    started = time.monotonic()
+    try:
+        assert vki.read_child_lines(silent, 0.5) == ["TIMEOUT_PARENT"]
+    finally:
+        # Closing the write end is what lets the reader thread see EOF; the read
+        # end is left to the process, because yanking it from under a blocked
+        # reader is how a test turns into a flake.
+        os.close(write_fd)
+    assert time.monotonic() - started < 5
+
+
+def test_child_output_is_read_up_to_the_end_marker() -> None:
+    import io
+
+    assert vki.read_child_lines(io.StringIO("BUILD_DONE elapsed=1\nCHILD_END\nlate\n"), 5) == [
+        "BUILD_DONE elapsed=1",
+        "CHILD_END",
+    ]
