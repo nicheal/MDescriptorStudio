@@ -291,3 +291,22 @@ def test_exporters_round_trip_through_the_readers(tmp_path: Path) -> None:
     assert len(exported) == 3
     for index in range(3):
         _assert_same_frame(frames[index], exported.get_frame(index))
+
+
+def test_element_histogram_pads_structures_that_lack_the_element(tmp_path: Path) -> None:
+    """`element_atom_counts` holds one value per structure, so a frame without
+    that element contributes a zero bin instead of being skipped. The running
+    accumulation is a sparse value -> count map, which must keep that rule."""
+    source = tmp_path / "mixed.xyz"
+    source.write_text(
+        '3\nProperties=species:S:1:pos:R:3\nGa 0 0 0\nGa 2 0 0\nGa 0 2 0\n'
+        '3\nProperties=species:S:1:pos:R:3\nGa 0 0 0\nAs 2 0 0\nAs 0 2 0\n',
+        encoding="utf-8",
+    )
+
+    stats = compute_statistics(create_adapter(source))
+
+    arsenic = stats["element_atom_counts"]["As"]
+    assert arsenic["edges"][0] == -0.5  # the zero bin exists
+    assert sum(arsenic["counts"]) == 2  # both structures are counted
+    assert arsenic["counts"][0] == 1 and max(arsenic["counts"]) == 1

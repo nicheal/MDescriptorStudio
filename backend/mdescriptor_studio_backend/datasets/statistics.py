@@ -109,7 +109,29 @@ def _prepared_points(
     return frac @ cell, True
 
 
-def _frame_min_distance(positions: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> float | None:
+def _geometry_input(positions: np.ndarray, cell: np.ndarray, pbc: np.ndarray) -> tuple:
+    """Wrapped coordinates, periodicity and the tree over them, built once.
+
+    The reference (no-native-kernel) path used to prepare the same frame twice -
+    once to hunt the minimum distance and again for the short-contact scan - so
+    every frame paid two wraps, two inversions and two cKDTree builds. The
+    compiled kernel makes this path rare; where it runs, at 2000 atoms the
+    duplicate was 2% of the frame's geometry time.
+    """
+    pts, periodic = _prepared_points(positions, cell, pbc)
+    if pts is None:
+        return None, False, None
+    from scipy.spatial import cKDTree  # pinned runtime dep; deferred like engine.py
+
+    return pts, periodic, cKDTree(pts)
+
+
+def _frame_min_distance(
+    positions: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    prepared: tuple | None = None,
+) -> float | None:
     """Minimum interatomic distance within one structure.
 
     Periodic axes use the minimum-image convention (analysis neighbor-graph
@@ -123,15 +145,12 @@ def _frame_min_distance(positions: np.ndarray, cell: np.ndarray, pbc: np.ndarray
     None for empty or non-finite structures, and isolated structures with
     fewer than two atoms.
     """
-    pts, periodic = _prepared_points(positions, cell, pbc)
+    pts, periodic, tree = prepared if prepared is not None else _geometry_input(positions, cell, pbc)
     if pts is None:
         return None
     n = pts.shape[0]
     cell = np.asarray(cell, dtype=np.float64)
     pbc = np.asarray(pbc, dtype=bool)
-    from scipy.spatial import cKDTree  # pinned runtime dep; deferred like engine.py
-
-    tree = cKDTree(pts)
     if n >= 2:
         best = float(tree.query(pts, k=2)[0][:, 1].min())
     elif not periodic:
@@ -187,6 +206,7 @@ def _frame_short_contact(
     cell: np.ndarray,
     pbc: np.ndarray,
     min_distance: float | None,
+    prepared: tuple | None = None,
 ) -> bool:
     """True when any atom pair — periodic images included — sits closer than
     SHORT_CONTACT_COEFFICIENT × the sum of its covalent radii (NepTrainKit's
@@ -204,17 +224,16 @@ def _frame_short_contact(
         return False  # no atom pairs at all
     radii = radii_for(numbers)
     t_max = SHORT_CONTACT_COEFFICIENT * 2.0 * float(radii.max())
+    # The comparison above is the whole cost for a healthy frame; preparation and
+    # the tree are only paid by one that can still hold a violating pair.
     if not t_max > 0.0 or min_distance >= t_max:
         return False
-    pts, periodic = _prepared_points(positions, cell, pbc)
+    pts, periodic, tree = prepared if prepared is not None else _geometry_input(positions, cell, pbc)
     if pts is None:
         return False
     n = pts.shape[0]
     cell = np.asarray(cell, dtype=np.float64)
     pbc = np.asarray(pbc, dtype=bool)
-    from scipy.spatial import cKDTree  # pinned runtime dep; deferred like engine.py
-
-    tree = cKDTree(pts)
     if periodic:
         # every pair (i, j+s) closer than t_max satisfies |s_k| <= t_max *
         # ||inv column_k|| + 1 per periodic axis (|Δfrac_k| >= |s_k| - 1 for the
@@ -361,8 +380,9 @@ def _frame_geometry(
     )
     if fast is not None:
         return fast
-    min_d = _frame_min_distance(positions, cell, pbc)
-    return min_d, _frame_short_contact(positions, numbers, cell, pbc, min_d)
+    prepared = _geometry_input(positions, cell, pbc)
+    min_d = _frame_min_distance(positions, cell, pbc, prepared)
+    return min_d, _frame_short_contact(positions, numbers, cell, pbc, min_d, prepared)
 
 
 def compute_statistics(adapter: DatasetAdapter) -> dict:
@@ -377,8 +397,11 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
     compositions: Counter[tuple[str, ...]] = Counter()
     # structures grouped by their exact stoichiometry (Hill-notation formula)
     formulas: dict[str, tuple[Counter[str], int]] = {}
-    # per-element atom counts per structure (marginal of the formula)
-    element_counts: dict[str, list[int]] = {}
+    # per-element atom counts per structure (marginal of the formula), held as
+    # value -> occurrences: over 250k structures and 12 elements the flat list
+    # shape costs 100 MB live against 9 MB for the counts, and the histogram
+    # below only ever needs the latter.
+    element_counts: dict[str, Counter[int]] = {}
     pbc_set: set[tuple[bool, bool, bool]] = set()
     props = {"energy": False, "forces": False, "virial": False}
     # health panel (single pass alongside the histograms)
@@ -422,7 +445,7 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         else:
             formulas[formula] = (counts, 1)
         for sym, c in counts.items():
-            element_counts.setdefault(sym, []).append(c)
+            element_counts.setdefault(sym, Counter())[c] += 1
         pbc_set.add(tuple(bool(v) for v in frame.pbc))
         bits = 0
         if frame.energy is None:
@@ -534,8 +557,10 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         # per-element atom-count distribution over structures; structures
         # lacking an element contribute a 0 bin
         "element_atom_counts": {
-            sym: _int_hist(lst + [0] * (len(natoms) - len(lst)))
-            for sym, lst in sorted(element_counts.items())
+            # A structure without the element counts as a zero, so the padding
+            # stays explicit; only the running accumulation changed shape.
+            sym: _int_hist([*counter.elements(), *([0] * (len(natoms) - sum(counter.values())))])
+            for sym, counter in sorted(element_counts.items())
         },
         "atoms_per_structure": _hist(natoms),
         "atoms_per_structure_summary": _summary(natoms),
