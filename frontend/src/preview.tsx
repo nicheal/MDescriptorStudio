@@ -398,6 +398,10 @@ function mockAnalysisSubmit(
 // Completed analysis rows the mock analysis.list serves; every submit
 // registers one so computed results stay restorable and visible in history.
 const mockAnalysisRows = new Map<string, Record<string, unknown>>();
+// Arrays belong to the analysis whose preview published them: one shared table
+// let `analysis.chunk` answer an old id with the newest result's arrays, which
+// is the opposite of what the sidecar does.
+const mockArtifactArrays = new Map<string, Record<string, unknown[]>>();
 function mockRecordAnalysisRow(id: string, type: string, parameters: Record<string, unknown> = {}, inputRunIds = ["run-dpa2"], datasetIds = ["ds-gaas"]) {
   mockAnalysisRows.set(id, {
     id,
@@ -1454,13 +1458,18 @@ const METHODS: Record<string, Handler> = {
     if (!row) throw new MockError("ANALYSIS_NOT_FOUND", `analysis ${id} does not exist`);
     mockLatestAnalysisId = id;
     mockLatestAnalysisKind = String(row.analysis_type);
-    return mockOverviewPreview();
+    const preview = mockOverviewPreview();
+    // Publish at the moment the preview is built, like a result page does.
+    mockArtifactArrays.set(id, mockAnalysisArrays);
+    return preview;
   },
   "analysis.chunk": (p) => {
     const id = String(p.analysis_id ?? "");
     if (!mockAnalysisRows.has(id)) throw new MockError("ANALYSIS_NOT_FOUND", `analysis ${id} does not exist`);
     const array = String(p.array ?? "");
-    const values = mockAnalysisArrays[array];
+    const arrays = mockArtifactArrays.get(id);
+    if (!arrays) throw new MockError("ANALYSIS_INPUT_INVALID", `analysis ${id} has published no artifact arrays; read its preview first`);
+    const values = arrays[array];
     if (!values) throw new MockError("ANALYSIS_INPUT_INVALID", `array '${array}' is not present in analysis artifact`);
     const offset = Math.max(0, Math.floor(Number(p.offset ?? 0) || 0));
     const limit = Math.min(20_000, Math.max(1, Math.floor(Number(p.limit ?? 2000) || 2000)));

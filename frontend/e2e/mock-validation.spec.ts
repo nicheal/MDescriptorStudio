@@ -21,6 +21,14 @@ const respond = (page: import("@playwright/test").Page, method: string, params: 
     [method, params] as [string, Record<string, unknown>],
   );
 
+// Fire a request the way a page does (submit + job events), ignoring the reply.
+const call = (page: import("@playwright/test").Page, method: string, params: Record<string, unknown>) =>
+  page.evaluate(
+    ([name, sent]) =>
+      (window as unknown as { __mdsMock?: { call: (m: string, p: Record<string, unknown>) => unknown } }).__mdsMock?.call(name, sent),
+    [method, params] as [string, Record<string, unknown>],
+  );
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/preview.html");
   await page.waitForFunction(() => Boolean(window.__mdsMock));
@@ -56,14 +64,9 @@ test("the preview mock refuses a bad request the way the sidecar does", async ({
 
 test("an unknown analysis array is refused, and a real one is not", async ({ page }) => {
   // The mock publishes an analysis' arrays while it builds that analysis'
-  // preview, like a result page does - so drive the same order here. (Keying
-  // them per analysis id, so one analysis cannot be served another's arrays,
-  // is still open.)
-  const call = (method: string, params: Record<string, unknown>) =>
-    page.evaluate(([name, sent]) => (window as unknown as { __mdsMock?: { call: (m: string, p: Record<string, unknown>) => unknown } }).__mdsMock?.call(name, sent), [method, params] as [string, Record<string, unknown>]);
-
-  await call("analysis.pairwise", { run_id: "run-dpa2" });
-  await call("analysis.preview", { analysis_id: "ana-mock-pairwise", limit: 20 });
+  // preview, like a result page does - so drive the same order here.
+  await call(page, "analysis.pairwise", { run_id: "run-dpa2" });
+  await call(page, "analysis.preview", { analysis_id: "ana-mock-pairwise", limit: 20 });
   const missing = await respond(page, "analysis.chunk", { analysis_id: "ana-mock-pairwise", array: "not_published" });
   expect(missing?.error?.code).toBe("ANALYSIS_INPUT_INVALID");
   const known = await respond(page, "analysis.chunk", { analysis_id: "ana-mock-pairwise", array: "similarity_matrix" });
@@ -148,19 +151,31 @@ test("acquisition publishes the pick trace the panel reads", async ({ page }) =>
   // an acquisition asks the backend for exactly that array. The mock publishes
   // an analysis' arrays while it builds that analysis' preview, like the panel
   // does, so drive the same order.
-  const call = (method: string, params: Record<string, unknown>) =>
-    page.evaluate(
-      ([name, sent]) =>
-        (window as unknown as { __mdsMock?: { call: (m: string, p: Record<string, unknown>) => unknown } }).__mdsMock?.call(name, sent),
-      [method, params] as [string, Record<string, unknown>],
-    );
-
-  await call("analysis.acquisition", { reference_run_id: "run-dpa2", query_run_id: "run-dpa2-si", n_samples: 8 });
-  await call("analysis.preview", { analysis_id: "ana-mock-acquisition", limit: 20 });
+  await call(page, "analysis.acquisition", { reference_run_id: "run-dpa2", query_run_id: "run-dpa2-si", n_samples: 8 });
+  await call(page, "analysis.preview", { analysis_id: "ana-mock-acquisition", limit: 20 });
 
   const chunk = await respond(page, "analysis.chunk", { analysis_id: "ana-mock-acquisition", array: "pick_scores" });
   expect(chunk?.error, JSON.stringify(chunk?.error)).toBeUndefined();
   const data = (chunk?.result as { data?: unknown[] }).data;
   expect(Array.isArray(data)).toBeTruthy();
   expect(data?.length).toBeGreaterThan(0);
+});
+
+test("an analysis' arrays belong to that analysis alone", async ({ page }) => {
+  // One shared array table used to let the newest result's payloads answer an
+  // older analysis id, which is the opposite of the sidecar's contract.
+  await call(page, "analysis.pairwise", { run_id: "run-dpa2" });
+  await call(page, "analysis.preview", { analysis_id: "ana-mock-pairwise", limit: 20 });
+  await call(page, "analysis.pca", { run_id: "run-dpa2" });
+  await call(page, "analysis.preview", { analysis_id: "ana-mock-pca", limit: 20 });
+
+  const wrong = await respond(page, "analysis.chunk", { analysis_id: "ana-mock-pca", array: "similarity_matrix" });
+  expect(wrong?.error?.code).toBe("ANALYSIS_INPUT_INVALID");
+  const right = await respond(page, "analysis.chunk", { analysis_id: "ana-mock-pairwise", array: "similarity_matrix" });
+  expect(right?.error, JSON.stringify(right?.error)).toBeUndefined();
+
+  // An analysis whose preview was never read has published nothing at all.
+  await call(page, "analysis.sampling", { run_id: "run-dpa2", algorithm: "fps", n_samples: 4 });
+  const unpublished = await respond(page, "analysis.chunk", { analysis_id: "ana-mock-sampling", array: "coords" });
+  expect(unpublished?.error?.code).toBe("ANALYSIS_INPUT_INVALID");
 });
