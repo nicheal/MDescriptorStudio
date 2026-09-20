@@ -163,13 +163,21 @@ return replace(frame, positions=center + (positions - center) * scale, cell=cell
 4. **口径 4 按推荐实现时不产生失效**，因此我建议它单独一个 commit、放在 bump 之前落地，先拿到 `selection_scores` 的前端降级路径。
 5. 每项都要在 `tests/test_analysis_engine.py` 里钉一条断言（这是第 4 步原本的要求），并且金标 keys 文件重生成一次。
 
-## 请逐条批
+## 批准结果与落地差异（`0e03be2`）
 
-- [ ] 口径 1：coverage 默认改 `standardized` + 生效尺度回写 preview + 进缓存身份 —— **建议批准**
-- [ ] 口径 2：零方差判据改为相对量级（1e-12×max(|mean|,1)）、六处共用一个 helper —— **建议批准**（float32 量化列不在本次覆盖范围，见正文）
-- [ ] 口径 3：`coordination = len(contacts)`，截断只作用于邻居行，preview 记 `coordination_truncated_atoms`，`Explore.tsx:783` 改读数组 —— **建议批准**
-- [ ] 口径 4：新增 `selection_scores` + `pool_mask`，`scores` 保留并标注 `score_semantics: "final_state"` —— **建议按"先加不改"批准**
-- [ ] 口径 5：strain 的 positions 与 cell 一律绕原点 —— **建议批准**
-- [ ] 附录两项（P1-13 MAD 退化、P1-18 FPS 距离）—— **建议一并批准**
+- [x] 口径 1：coverage 默认改 `standardized` + 生效尺度回写 preview —— **已落地**
+- [x] 口径 2：零方差判据改为相对量级（1e-12×max(|mean|,1)）、共用 `_meaningful_scale` —— **已落地**
+- [x] 口径 3：`coordination = len(contacts)`，截断只作用于邻居行 —— **已落地**
+- [x] 口径 4：新增 `pick_scores`，`uncertainty`/`novelty` 改为全样本数组 —— **已落地**
+- [x] 口径 5：strain 的 positions 与 cell 一律绕原点 —— **已落地**
+- [x] 附录两项（P1-13 MAD 退化、P1-18 FPS 距离）—— **已落地**
 
-批准后我按 4 → 1 → 2 → 3 → 5 → 附录 的顺序做（口径 4 不失效所以先走），最后一次性 bump 并跑 pytest / vitest / lint / tsc / Playwright / cargo。
+与提案的五处差异，都已写进代码与测试：
+
+1. **口径 1 的"进缓存身份"没有做**：让 `_canonical_params` 与算法层共用一份"每个方法的 preprocess 默认值"会变成第二个事实来源（正是本轮在修的那类问题）。现在默认值只有 `_common._reference_query_preprocess` 一个 owner，生效尺度由 preview 回写，历史结果的尺度因此可追溯；新提交仍不带 `preprocess`（UI 无需改动）。
+2. **口径 3 的 preview 字段名是 `coordination_capped_atoms`**（提案里写成 `coordination_truncated_atoms`），且它由 `coordination > max_neighbors` 推出，不需要新数组。
+3. **`Explore.tsx:783` 不需要改**：提案说它"读邻居表长度、必须跟着改"是错的。那里的 `selectedLocalNeighbors` 由 `neighborsWithinCutoff` 从当前帧自己算，从不被 `max_neighbors` 截断（`util/viewerAtoms.ts:110-125`），修完之后两边反而第一次一致。
+4. **口径 4 顺带修了同因的另一半**：`uncertainty`/`novelty` 以前只把候选池内的值写回全样本数组，池外一律 0.0 —— 面板的颜色条因此把池外样本画成"零不确定性"。现在导出的是完整数组，所以这一项**确实改变数值**，不再是提案里"不需要 bump"的那一项。另外没有引入 `pool_mask`：`candidate_pool` 已在 preview 里，UI 用 `pick_scores` 是否存在来切换图表就够了。
+5. **落地顺序**：口径 4 没有单独提前 commit，它和其他项在同一个 commit、同一次 bump 里 —— 它的数组是新增键，前端对历史结果按"数组缺失即回退旧图"处理（`analysisVisualizations.tsx` 的 `pickScores.length` 分支），所以历史 acquisition 结果仍然可读，只是没有新图。
+
+验证：**pytest 333 passed / 1 skipped**（+8 条：口径 1/2/3/4/5 各一条、MAD 回退一条、FPS 原点无关一条、mock 版本号门禁一条）、**vitest 144**、**eslint + `tsc -b` 干净**、**Playwright 38 passed**（+1 条：mock 为 acquisition 发布 `pick_scores`；Coverage 面板显示尺度的断言加在既有的 Data Coverage 用例里）、**cargo 2 passed**。`tests/data/backend-response-keys.json` 重新生成后无变化（顶层键未受影响）。

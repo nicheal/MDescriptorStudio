@@ -59,25 +59,25 @@
 `persistence.ts:14,24` 与 `workspace.ts:80-88` 都是 `void ipc.request(...)`；`server.py:41` `max_workers=4`，`_write_lock` 只串行化输出不串行化写库，`database.py:231-236` 是无条件 UPSERT（last commit wins）。按住步进器或连点两个模块 → 后发先至，重启后阈值/活动 tab 回滚。
 修复：`persistence.ts` 内按 key 串行化 + 约 200 ms 去抖。
 
-### P1-13 灵敏度事件阈值在 ≥50% 同值步长上退化成 median ○
+### P1-13 灵敏度事件阈值在 ≥50% 同值步长上退化成 median ✅
 `_common.py:247-256` 的 `robust_sigma = 1.4826*mad` 没有 mad==0 退化保护（消费方 `metrics/__init__.py:512-513`）。轨迹每帧记两次 / 描述符被量化 / MC 拒绝帧 → median=0、MAD=0、threshold=0 → `event_rate≈0.496`，且每条事件的 `threshold_ratio` 因 `event_threshold>0` 不成立而全为 `None`，UI 只剩一堆没有倍率的"事件"。
 修复：`robust_sigma` 非正时回退 `mean + sensitivity*std`，或对 threshold 加相对下限。
 
-### P1-14 同一面板、同一输入给出相反结论：preprocess 默认值不一致 ○
+### P1-14 同一面板、同一输入给出相反结论：preprocess 默认值不一致 ✅
 `pairs.py:14` coverage 默认 `"raw"`，`:33,78` overlap/acquisition 默认 `"standardized"`；`submission.ts:96-110` 不发送 preprocess，preview 也不回写（`pairs.py:29,51-62`）→ `job_runner.py:190` 存成 `{"preprocess": null}`，缓存结果无法回溯单位。实测：query 的有信息列整体 ×1000 → coverage 报 100% 覆盖，overlap 对同一对输入报 100% 全新。同层已有正确先例：`metrics/__init__.py:440-444` 把默认写回 params。另 `sampling/engine.py:171-181` cluster 在原始 x 上跑 KMeans，而 FPS 分支 `:98-101` 走 `fit_scaling`。
 
-### P1-15 零方差判据是绝对 eps，把纯舍入噪声当满权重信号轴 ○
+### P1-15 零方差判据是绝对 eps，把纯舍入噪声当满权重信号轴 ✅
 `_common.py:132` `keep = scale > np.finfo(float64).eps`，随后 `:148` 除以该尺度。某列在 1000.0 上只有几个 ulp 抖动（std≈2.4e-13）→ 被保留并标准化成 std=1.0，于是每个距离、PCA、UMAP、coverage 阈值都掺进与真实描述符等权重的噪声维（D_real=30 + 噪声 20 时约 40% 平方距离是噪声）。同一列在 `correlation.py:20-21`（方差>1e-12）、`metrics/__init__.py:91,215`（ptp≤1e-12）、`sampling/preprocessing.py:60-62`（eps）得到三种判决 → 面板之间对"有哪些特征"直接互相矛盾。
 修复：改成相对量级判据 `scale > tol*max(|mean|,1)`，四处共用一个 helper。
 
-### P1-16 配位数被显示预算静默削顶 ○
+### P1-16 配位数被显示预算静默削顶 ✅
 `_common.py:585-587` 先 `[:max_neighbors]` 再 `coordination[global_index] = len(ordered)`。实测 3000 原子、cutoff 3 Å、`max_neighbors=64` → mean==max==64、`neighbor_count` 恰等于 `3000*64`。密排金属在 6 Å 下配位可达 80–120，默认 128 也会封顶——一个物理解读量不应受 artifact 上限支配。
 修复：`coordination = len(contacts)`，截断只作用于 CSR 行；preview 加 `coordination_truncated_count`。
 
-### P1-17 acquisition 上报的 scores 不是驱动选择的那个目标 ○
+### P1-17 acquisition 上报的 scores 不是驱动选择的那个目标 ✅
 `pairs.py:137-141` 用逐步更新的 `normalized_diversity` 决策，`:148-154` 循环结束后用最终 `min_diversity` 重算 `full_scores`（池外点一律 0.0）。实测选 12 个：`[0.65,0.618,0.551,0.462,0.598,…]`，第 12 名分数高于第 6–10 名；用户按 scores 复核"为什么选它"会得到与 `selected_indices` 相反的结论。
 
-### P1-18 FPS 与邻居搜索用两套互相矛盾的平方距离算法 ○
+### P1-18 FPS 与邻居搜索用两套互相矛盾的平方距离算法 ✅
 `fps.py:202-218,270` 用展开式 `|a|²+|b|²−2ab`，而 `_common.py:388-392` 明确注释拒绝该恒等式（cancellation），`tests/test_umap_numpy.py:79-93` 还把这条不变量钉成了测试。实测（n=400,d=96，公共偏移 1e6、散布 1e-3，float64）：`argmax` 选中真值 1.8e-4 而非最大 3.0e-4，中位相对误差 80%，400 行排名全翻转。默认 `robust` 缩放会掩盖它，但 `scaling:"raw"` 是 UI 选项（`restore.ts:98`）。
 
 ### P1-19 `_aligned_space_metrics` 仍用"第 0 列即自身"排除自己——同文件已修好并有测试的那类 bug ✅
@@ -184,7 +184,7 @@
 1. 三个"结果错但界面说成功"的问题：P0-1（export 丢 view_id）、P0-3（warm-start FPS 视图不进缓存身份）、P0-4（原子行伪装成结构）。每个都补一条回归测试。
 2. P0-2（`if not arrays: return []`）、P1-5（`normalizePoints` 补三行）、P1-6（失败不写缓存）、P1-9（`cancelled` 分支 dispose）、P1-8（`recountRunning`）——都是一到数行的局部修复，收益立竿见影。
 3. 契约层：`_shape` 记录数组首行 keys + mock 回错误帧 + `handler` 包 try + `build_native.ps1` 缺编译器改 throw + 剥 `MDS_DISABLE_NATIVE`。这类修复一次性把"e2e 全绿但生产不对"的整面墙补齐。
-4. 科学口径类（P1-13…P1-19、strain 中心）需要一次集中决策：preprocess/scale 的默认值与回写、零方差判据、配位数与 `max_neighbors` 解耦、`scores` 语义。建议连同 `tests/test_analysis_engine.py` 一起钉。
+4. 科学口径类（P1-13…P1-19、strain 中心）需要一次集中决策：preprocess/scale 的默认值与回写、零方差判据、配位数与 `max_neighbors` 解耦、`scores` 语义。建议连同 `tests/test_analysis_engine.py` 一起钉。**已完成**：决策与落地见 `2026-09-20-science-semantics-decisions.md` 与第十批。
 5. 结构收敛（一次一个，各自独立提交）：指纹每请求算一次、cross 类型与数组名收成单一来源 + parity 测试、私有名越界改成公开只读 API、注释与实现逐条对齐或删注释、`result.heatmap`/`row_offsets_verified`/`granularity`/`_ANALYSIS_SCHEMA_VERSION`/`cache/` 这批"名存实亡"的按删或按用二选一。
 6. 性能：`statistics` scipy 回退分块查询、`_local_neighbor_graph` 加 progress/取消并去掉逐候选 norm、`_analysis_row` 列清单去掉 blob、`ARTIFACT_ARRAYS` 按真实消费者裁剪、`Analysis.tsx`/`trajectoryView.tsx` 的 memo、`Explore.tsx` 原子表分页。
 
@@ -303,6 +303,14 @@
 
 到这一步，第 5、6 步里"不需要定调"的部分已全部落地；剩下的都要你先定调（第 4 步五条口径、Explore 原子表分页、`preview_service` 的 points/rows 合并）。
 
+### 第十批（第 4 步：五条科学口径 + 两条数值 bug — `0e03be2`）
+
+验证：**pytest 333 passed / 1 skipped**（+8）、**vitest 144**、**eslint + `tsc -b` 干净**、**Playwright 38 passed**（+1）、**cargo 2 passed**。金标 keys 重生成后无变化。
+
+口径按 `2026-09-20-science-semantics-decisions.md` 批准，六项一起 bump 一次 `ANALYSIS_ALGORITHM_VERSION`（`studio-analysis-4` → `5`）：历史 run 不删、不标 STALE、仍可读，同参数再提交会重算一行。落地内容与提案的五处差异（字段名、`Explore.tsx` 其实不需要改、口径 4 因同因缺陷确实改数、未引入 `pool_mask`、未做"进缓存身份"）都记在那份文件的"批准结果与落地差异"一节里。
+
+诚实边界：**strain 的那半没有实测**。`_perturb_frame` 改成"cell 与 positions 同一个仿射映射"之后，新增的测试钉住的是分数坐标不变与平移无关性；"某类非平移不变描述符在旧写法下响应曲线被污染了多少"没测，因为那需要跑真实引擎。P1-18 的实测数字（中位相对误差 1.0、argmax 选错）是在合成数据上复现的，与真实描述符矩阵的分布不完全相同。
+
 ### 剩余清单（按"要不要你先定调"分）
 
-需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）——已整理成 `2026-09-20-science-semantics-decisions.md`，每项带现状代码证据、建议改法、失效影响与推荐默认；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
+第 4 步的五条口径已经在第十批落地（提案与落地差异见 `2026-09-20-science-semantics-decisions.md`）。还需要你定调的只剩两件：Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。第七节第 5、6 步里剩下的是性能与结构收敛类，各自都能直接做，只是需要单独验证。
