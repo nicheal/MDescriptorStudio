@@ -27,6 +27,9 @@ const TAB_KEYS: TabKey[] = ["overview", "projection", "similarity", "clusters", 
 const PROJECTION_NAMES: ProjectionName[] = ["pca", "umap", "tsne"];
 const OVERVIEW_ANALYSES: OverviewAnalysis[] = ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"];
 const COLOR_BY: ColorBy[] = ["none", "energy", "force_max", "volume"];
+// The three spellings the backend accepts; anything else in persisted state
+// would turn the next run into an ANALYSIS_INPUT_INVALID.
+const PREPROCESS_MODES = ["raw", "center", "standardized"];
 
 export function parseAnalysisView(raw: unknown): AnalysisView | null {
   if (typeof raw !== "string" || !raw) return null;
@@ -49,7 +52,7 @@ export function parseAnalysisView(raw: unknown): AnalysisView | null {
     overviewAnalysis: OVERVIEW_ANALYSES.includes(rec.overviewAnalysis as OverviewAnalysis) ? (rec.overviewAnalysis as OverviewAnalysis) : DEFAULT_ANALYSIS_VIEW.overviewAnalysis,
     coverageMode: rec.coverageMode === "overlap" ? "overlap" : "coverage",
     mode: rec.mode === "atom" ? "atom" : "structure",
-    preprocess: typeof rec.preprocess === "string" && rec.preprocess ? rec.preprocess : DEFAULT_ANALYSIS_VIEW.preprocess,
+    preprocess: PREPROCESS_MODES.includes(rec.preprocess as string) ? (rec.preprocess as string) : DEFAULT_ANALYSIS_VIEW.preprocess,
     effectiveDimensionPreprocess,
     colorBy: COLOR_BY.includes(rec.colorBy as ColorBy) ? (rec.colorBy as ColorBy) : DEFAULT_ANALYSIS_VIEW.colorBy,
     nearZeroThreshold,

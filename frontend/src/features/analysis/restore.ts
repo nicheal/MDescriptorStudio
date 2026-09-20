@@ -47,7 +47,11 @@ export function restoreAnalysisParams(input: RestoreInput): Partial<AnalysisPara
       return {
         projection,
         mode: mode(p.mode),
-        preprocess: ONE_OF(["raw", "center", "standardized"] as const, p.preprocess, "center"),
+        // The fallback has to be what the stored run actually used: umap and
+        // tsne take the matrix raw unless told otherwise, pca centres it. One
+        // shared "center" fallback labelled an old umap plot with a
+        // preprocessing step it never had.
+        preprocess: ONE_OF(["raw", "center", "standardized"] as const, p.preprocess, projection === "pca" ? "center" : "raw"),
         tsnePerplexity: intAt(p.perplexity, current.tsnePerplexity, 2),
       };
     }

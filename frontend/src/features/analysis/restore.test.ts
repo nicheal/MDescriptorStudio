@@ -32,6 +32,11 @@ describe("restoring controls from a stored analysis row", () => {
       clusterAlgorithm: "kmeans", nClusters: 6, mode: "structure",
     });
     expect(restore("projection", "pca", {})).toMatchObject({ preprocess: "center", tsnePerplexity: 30 });
+    // Rows written before the control existed ran on each algorithm's own
+    // default: umap and tsne take the matrix raw, pca centres it.
+    expect(restore("projection", "umap", {})).toMatchObject({ preprocess: "raw" });
+    expect(restore("projection", "tsne", {})).toMatchObject({ preprocess: "raw" });
+    expect(restore("projection", "umap", { preprocess: "standardized" })).toMatchObject({ preprocess: "standardized" });
     expect(restore("overview", "unknown_module", {})).toEqual({});
   });
 

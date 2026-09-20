@@ -135,6 +135,12 @@ describe("parseAnalysisView", () => {
     expect(parseAnalysisView(JSON.stringify({ ...persistedView, nearZeroThreshold: 2, lowVariationThreshold: -1 }))).toMatchObject({ nearZeroThreshold: 1, lowVariationThreshold: 1 });
   });
 
+  it("rejects a persisted preprocess the backend would refuse", () => {
+    expect(parseAnalysisView(JSON.stringify({ ...persistedView, preprocess: "banana" }))).toMatchObject({
+      preprocess: DEFAULT_ANALYSIS_VIEW.preprocess,
+    });
+  });
+
   it("falls back to defaults for unknown fields", () => {
     expect(parseAnalysisView(JSON.stringify({ ...persistedView, tab: "nope", projection: 3, mode: "quantum", preprocess: 0, colorBy: "rainbow", featureCorrelationMethod: "kendall" }))).toEqual({
       ...DEFAULT_ANALYSIS_VIEW,
