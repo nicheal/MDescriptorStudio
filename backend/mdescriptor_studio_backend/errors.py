@@ -16,6 +16,11 @@ MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
 DEVICE_UNAVAILABLE = "DEVICE_UNAVAILABLE"
 OUT_OF_MEMORY = "OUT_OF_MEMORY"
 JOB_CANCELLED = "JOB_CANCELLED"
+# Back-pressure, not a failure of the request: the two queue limits answer with
+# it and the renderer retries differently because of it (stores/jobs.ts). It used
+# to exist only as a string literal at each raise site, which made it invisible
+# to the gate that enumerates the codes the sidecar can send.
+BUSY = "BUSY"
 RESULT_INCOMPATIBLE = "RESULT_INCOMPATIBLE"
 INTERNAL_ERROR = "INTERNAL_ERROR"
 PROTOCOL_VERSION_MISMATCH = "PROTOCOL_VERSION_MISMATCH"
@@ -71,6 +76,7 @@ _PUBLIC_MESSAGES = {
     DEVICE_UNAVAILABLE: "The selected compute device is unavailable on this machine.",
     OUT_OF_MEMORY: "The operation needs more memory than is available.",
     JOB_CANCELLED: "The job was cancelled.",
+    BUSY: "Backend is busy; try again shortly.",
     RESULT_INCOMPATIBLE: "This result is not compatible with the requested operation.",
     INTERNAL_ERROR: "The backend failed to complete the request.",
     PROTOCOL_VERSION_MISMATCH: "The backend protocol version is incompatible.",

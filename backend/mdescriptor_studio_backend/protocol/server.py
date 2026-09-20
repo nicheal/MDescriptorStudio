@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import frames
-from ..errors import INTERNAL_ERROR, INVALID_PARAMS, AppError
+from ..errors import BUSY, INTERNAL_ERROR, INVALID_PARAMS, AppError
 
 log = logging.getLogger(__name__)
 
@@ -186,7 +186,7 @@ class Server:
 
     def _dispatch(self, vid, method, params, pool: ThreadPoolExecutor, slots: threading.BoundedSemaphore) -> bool:
         if not slots.acquire(blocking=False):
-            error = AppError("BUSY", "request queue is full", public_message="Backend is busy; try again shortly.")
+            error = AppError(BUSY, "request queue is full")
             self._write(frames.response_err(vid, error))
             return True
         try:

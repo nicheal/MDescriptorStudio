@@ -13,7 +13,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from ..errors import AppError, INVALID_PARAMS, JOB_CANCELLED, JOB_NOT_FOUND
+from ..errors import BUSY, AppError, INVALID_PARAMS, JOB_CANCELLED, JOB_NOT_FOUND
 from ..storage.database import Database
 from .analysis_helpers import _NOW
 
@@ -130,7 +130,7 @@ class JobService:
     ) -> str:
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         if not self._queue_slots.acquire(blocking=False):
-            raise AppError("BUSY", "job queue is full", public_message="Backend is busy; try again shortly.")
+            raise AppError(BUSY, "job queue is full")
         inserted = False
         try:
             # Published before the row exists: cancel() reads the row and the
