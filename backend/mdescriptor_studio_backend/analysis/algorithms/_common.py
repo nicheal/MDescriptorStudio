@@ -34,6 +34,10 @@ SCALE_RELATIVE_TOLERANCE = 1e-12
 # images over a frame is tens of megabytes and seconds, not gigabytes and never.
 _GRAPH_MAX_IMAGES_PER_AXIS = 8
 _GRAPH_MAX_TOTAL_IMAGES = 1024
+# Atoms per neighbour query block. A block is one scipy pass plus one progress
+# (and therefore cancellation) point: 4096 atoms at a dense cutoff is a few
+# hundred thousand pairs, which is also what bounds the temporary memory.
+_GRAPH_QUERY_BLOCK = 4096
 
 def warmup() -> dict[str, bool]:
     """Import optional numeric backends on the background warmup thread.
@@ -516,7 +520,12 @@ def _cross_k_nearest(
             progress(stop / max(query.shape[0], 1), "nearest-reference neighborhoods")
     return indices, distances
 
-def _local_neighbor_graph(samples: DescriptorMatrix, cutoff: float, max_neighbors: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+def _local_neighbor_graph(
+    samples: DescriptorMatrix,
+    cutoff: float,
+    max_neighbors: int,
+    report: Callable[[float, str], None] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Build a coordinate-aware local-environment graph.
 
     The returned CSR-like arrays use atom rows as vertices.  Periodic frames
@@ -525,9 +534,12 @@ def _local_neighbor_graph(samples: DescriptorMatrix, cutoff: float, max_neighbor
     index still points to the original atom.  CSR rows are emitted in global
     atom order even when frame rows are interleaved.
 
-    ``max_neighbors`` budgets the stored neighbour list only.  The coordination
-    row is the count of *all* contacts within the cutoff, because it is read as
-    a physical quantity while the list is read as a plot.
+    ``max_neighbors`` budgets only the stored neighbour list.  The coordination
+    row is the *global* contact count within the cutoff, because it is read as a
+    physical quantity while the list is read as a plot (deep review P1-16).
+
+    ``report`` is called between query blocks with a fraction of the neighbour
+    phase and is the only cancellation point this function has.
     """
     if samples.positions is None:
         return (
@@ -554,6 +566,7 @@ def _local_neighbor_graph(samples: DescriptorMatrix, cutoff: float, max_neighbor
     offsets = np.zeros(samples.n_samples + 1, dtype=np.int64)
     coordination = np.zeros(samples.n_samples, dtype=np.int64)
     warnings: list[str] = []
+    processed_atoms = 0
     frame_values = np.asarray(samples.frame, dtype=np.int64)
     for frame in np.unique(frame_values).tolist():
         members = np.flatnonzero(frame_values == int(frame))
@@ -608,40 +621,58 @@ def _local_neighbor_graph(samples: DescriptorMatrix, cutoff: float, max_neighbor
                 shifts.append(shift)
             shifts_array = np.asarray(shifts, dtype=np.float64)
             translated = (graph_positions[None, :, :] + shifts_array[:, None, :] @ frame_cell).reshape(-1, 3)
-            source_indices = np.tile(np.arange(members.size, dtype=np.int64), len(shifts))
             zero_shift_index = shift_tuples.index(tuple(0 for _ in periodic_axes))
             tree = cKDTree(translated)
         else:
             graph_positions = frame_positions
-            translated = graph_positions
-            source_indices = np.arange(members.size, dtype=np.int64)
             zero_shift_index = 0
             tree = cKDTree(frame_positions)
 
-        for local_index, center in enumerate(graph_positions):
-            candidates = tree.query_ball_point(center, cutoff)
-            contacts: list[tuple[int, float, int]] = []
-            for candidate in candidates:
-                source = int(source_indices[candidate])
-                shift_index = candidate // max(members.size, 1) if periodic else 0
-                if source == local_index and shift_index == zero_shift_index:
-                    continue
-                distance = float(np.linalg.norm(translated[candidate] - center))
-                if distance <= 1e-10:
-                    continue
-                # Do not collapse by ``source``: two different periodic image
-                # contacts of the same atom are distinct neighbors in a small
-                # unit cell (for example the six self-images of a cubic cell).
-                contacts.append((source, distance, int(candidate)))
-            global_index = int(members[local_index])
-            # The coordination number is the physical contact count; max_neighbors
-            # budgets only the stored neighbour list. Capping the number itself
-            # made dense environments report the budget as a material property
-            # (deep review P1-16: 3000 atoms at 3 Å pinned at mean == max).
-            coordination[global_index] = len(contacts)
-            ordered = sorted(contacts, key=lambda item: (item[1], item[0], item[2]))[:max_neighbors]
-            row_indices[global_index] = [int(members[source]) for source, _distance, _candidate in ordered]
-            row_distances[global_index] = [float(distance) for _source, distance, _candidate in ordered]
+        # One scipy pass per query block rather than a Python loop per candidate:
+        # query_ball_point no longer returns distances, and recomputing them with
+        # np.linalg.norm cost more than the search itself (1.6M norm calls and
+        # two thirds of the runtime on a 20k-atom frame).
+        atom_count = members.size
+        for block_start in range(0, atom_count, _GRAPH_QUERY_BLOCK):
+            stop = min(block_start + _GRAPH_QUERY_BLOCK, atom_count)
+            block_slice = slice(block_start, stop)
+            pairs = cKDTree(graph_positions[block_slice]).sparse_distance_matrix(
+                tree, cutoff, p=2.0, output_type="coo_matrix"
+            )
+            # `translated` is shift-major over the frame's atoms, so an image
+            # index decodes as shift * atom_count + source.
+            row = np.asarray(pairs.row, dtype=np.int64) + block_start
+            image = np.asarray(pairs.col, dtype=np.int64)
+            distance = np.asarray(pairs.data, dtype=np.float64)
+            source = image % atom_count
+            shift = image // atom_count
+            # Do not collapse by ``source``: two different periodic image
+            # contacts of the same atom are distinct neighbors in a small unit
+            # cell (for example the six self-images of a cubic cell).
+            contact = (distance > 1e-10) & ~((source == row) & (shift == zero_shift_index))
+            row, source, distance, image = (values[contact] for values in (row, source, distance, image))
+            # The stored order is part of the result: nearest first, ties broken
+            # by source atom and then by image index.
+            order = np.lexsort((image, source, distance, row))
+            row, source, distance = row[order], source[order], distance[order]
+            counts = np.bincount(row - block_start, minlength=stop - block_start)
+            starts = np.zeros(counts.size + 1, dtype=np.int64)
+            np.cumsum(counts, out=starts[1:])
+            for offset, local_index in enumerate(range(block_start, stop)):
+                lo, hi = int(starts[offset]), int(starts[offset + 1])
+                global_index = int(members[local_index])
+                # The coordination number is the physical contact count;
+                # max_neighbors budgets only the stored neighbour list. Capping
+                # the number itself made dense environments report the budget as
+                # a material property (deep review P1-16: 3000 atoms at 3 Å
+                # pinned at mean == max).
+                coordination[global_index] = hi - lo
+                kept = min(hi, lo + max_neighbors)
+                row_indices[global_index] = members[source[lo:kept]].tolist()
+                row_distances[global_index] = distance[lo:kept].tolist()
+            if report:
+                processed_atoms += stop - block_start
+                report(processed_atoms / max(samples.n_samples, 1), "building local neighbor graph")
 
     graph_indices: list[int] = []
     graph_distances: list[float] = []

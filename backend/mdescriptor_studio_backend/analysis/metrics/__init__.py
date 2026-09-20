@@ -336,7 +336,14 @@ def local_diversity(samples: DescriptorMatrix, params: dict, progress: Callable[
     elements = np.asarray(samples.elements if samples.elements is not None else np.zeros(x.shape[0]), dtype=np.int64)
     cutoff = _float_param(params, "cutoff", 3.0, 0.1)
     max_neighbors = _int_param(params, "max_neighbors", 128, 1)
-    coordination_all, neighbor_offsets_all, neighbor_indices_all, neighbor_distances_all, graph_warnings = _local_neighbor_graph(samples, cutoff, max_neighbors)
+    # The neighbour search is the slow phase of this analysis, and the only one
+    # whose length the user cannot guess from the sample count (cutoff and cell
+    # geometry decide it), so it gets its own part of the bar - and with it the
+    # runner's cooperative cancellation, which only happens inside progress.
+    graph_progress = (lambda fraction, message: progress(0.6 * fraction, message)) if progress else None
+    coordination_all, neighbor_offsets_all, neighbor_indices_all, neighbor_distances_all, graph_warnings = _local_neighbor_graph(
+        samples, cutoff, max_neighbors, graph_progress
+    )
     warnings.extend(graph_warnings)
     selected_element = params.get("element")
     if selected_element is not None:
@@ -409,7 +416,7 @@ def local_diversity(samples: DescriptorMatrix, params: dict, progress: Callable[
             "effective_dimension": effective_dimension,
         })
         if progress:
-            progress((group_index + 1) / max(len(np.unique(elements)), 1), "summarizing local environments")
+            progress(0.6 + 0.4 * (group_index + 1) / max(len(np.unique(elements)), 1), "summarizing local environments")
     return {
         "arrays": {
             "sample_indices": sample_indices,

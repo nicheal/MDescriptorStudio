@@ -561,3 +561,18 @@ def test_fps_pick_order_survives_a_large_common_feature_offset() -> None:
     )
     assert int(np.argmax(expanded)) != int(np.argmax(direct))
     assert np.median(np.abs(expanded - direct) / np.maximum(direct, 1e-30)) > 0.5
+
+
+def test_grouped_fps_reports_progress_inside_a_group() -> None:
+    """Progress is the runner's only cancellation point, and one group can be
+    the whole run: reporting once per group made a large group unstoppable."""
+    x = np.random.default_rng(2).normal(size=(60, 4))
+    reports: list[float] = []
+
+    grouped_farthest_point_sampling(
+        x, np.array(["a"] * 30 + ["b"] * 30), n_samples=24, progress=lambda fraction, _message: reports.append(fraction)
+    )
+
+    assert len(reports) > 2  # one per group would be two
+    assert reports == sorted(reports)  # a bar that goes backwards is broken
+    assert reports[-1] == pytest.approx(1.0)

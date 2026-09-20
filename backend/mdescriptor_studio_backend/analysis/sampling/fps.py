@@ -436,6 +436,15 @@ def grouped_farthest_point_sampling(
             # remaining groups would only add redundancy.
             stopped_by = _STOP_COVERAGE
             break
+        # A group can be the whole run, and progress is the only cancellation
+        # point the runner has, so hand the inner loop its share of the bar
+        # instead of reporting once per group.
+        group_start = filled
+        group_progress = (
+            (lambda fraction, message: progress((group_start + fraction * count) / max(int(quota.sum()), 1), message))
+            if progress
+            else None
+        )
         run = farthest_point_sampling(
             x[members],
             n_samples=count,
@@ -443,6 +452,7 @@ def grouped_farthest_point_sampling(
             initial=start_mode,
             selected_features=existing,
             seed=seed,
+            progress=group_progress,
         )
         if run.n_selected < count:
             stopped_by = _STOP_MIN_DISTANCE

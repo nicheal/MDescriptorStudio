@@ -14,7 +14,7 @@ from mdescriptor_studio_backend.analysis import AtomDescriptorMatrix, StructureD
 from mdescriptor_studio_backend.analysis.algorithms.correlation import feature_correlation, property_correlation
 from mdescriptor_studio_backend.analysis.algorithms.kernel import kernel
 from mdescriptor_studio_backend.analysis.algorithms.pairs import acquisition, compare, coverage, drift, mantel, overlap
-from mdescriptor_studio_backend.analysis.algorithms._common import _trajectory_threshold
+from mdescriptor_studio_backend.analysis.algorithms._common import _local_neighbor_graph, _trajectory_threshold
 from mdescriptor_studio_backend.analysis.algorithms.pca import pca
 from mdescriptor_studio_backend.analysis.algorithms.sensitivity import perturbation_sensitivity, sensitivity
 from mdescriptor_studio_backend.analysis.algorithms.tsne import MAX_ITERATIONS, tsne
@@ -793,3 +793,36 @@ def test_event_threshold_falls_back_when_the_mad_degenerates() -> None:
     assert any("fell back to mean" in warning for warning in warnings)
     # Asking for zscore directly is not a fallback and says so.
     assert _trajectory_threshold(steps, {"event_method": "zscore"})[4] == []
+
+
+def test_local_neighbor_graph_reports_progress_per_query_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The neighbour search is the slowest part of local diversity and progress
+    is the runner's only cancellation point, so it has to report as it goes and
+    hand back a bar that ends where the next phase starts."""
+    import mdescriptor_studio_backend.analysis.algorithms._common as common
+
+    monkeypatch.setattr(common, "_GRAPH_QUERY_BLOCK", 4)
+    rng = np.random.default_rng(4)
+    samples = AtomDescriptorMatrix(
+        rng.normal(size=(30, 3)),
+        np.zeros(30, dtype=np.int64),
+        row=np.arange(30, dtype=np.int64),
+        sample_ids=[f"frame:0:row:{i}" for i in range(30)],
+        elements=np.full(30, 14, dtype=np.int64),
+        positions=rng.random((30, 3)),
+    )
+    fractions: list[float] = []
+
+    _local_neighbor_graph(samples, 0.4, 128, lambda fraction, _message: fractions.append(fraction))
+
+    assert len(fractions) >= 8  # one per block of four atoms, not one per frame
+    assert fractions == sorted(fractions)
+    assert fractions[-1] == pytest.approx(1.0)
+
+    # Through the analysis, the graph keeps the first 60% of the job bar and the
+    # element summaries the rest, so neither phase claims the whole run.
+    reported: list[float] = []
+    local_diversity(samples, {"cutoff": 0.4, "n_clusters": 2, "k": 2}, lambda fraction, _m: reported.append(fraction))
+    assert reported == sorted(reported)
+    assert min(reported) < 0.6
+    assert max(reported) == pytest.approx(1.0)
