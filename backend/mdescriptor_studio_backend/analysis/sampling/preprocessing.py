@@ -20,6 +20,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from ..algorithms._common import _meaningful_scale
+
 SCALING_MODES = ("raw", "standardized", "robust")
 
 # IQR of a standard normal distribution: divides a raw IQR into sigma units.
@@ -57,9 +59,9 @@ def fit_scaling(x: np.ndarray, mode: str = "robust") -> tuple[FeatureScaling, li
         std = x.std(axis=0)
         # A degenerate IQR (more than half the samples share one value) carries
         # no reliable spread signal — the standard deviation is the fallback.
-        scale = np.where(iqr_spread > np.finfo(np.float64).eps, iqr_spread, std)
+        scale = np.where(_meaningful_scale(center, iqr_spread), iqr_spread, std)
     warnings: list[str] = []
-    constant = ~(scale > np.finfo(np.float64).eps)
+    constant = ~_meaningful_scale(center, scale)
     if bool(constant.any()):
         warnings.append(f"{int(constant.sum())} constant feature(s) carry no distance information")
     scale = np.where(constant, 1.0, scale)

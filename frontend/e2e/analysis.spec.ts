@@ -52,6 +52,10 @@ test("cross-dataset analysis selects compatible runs and a saved dataset view", 
   await expect(rows.nth(0)).toContainText("Training split · 9,984");
   await page.getByRole("button", { name: /Run Data Coverage/i }).click();
   await expect(page.getByText("DATASET COVERAGE", { exact: true })).toBeVisible({ timeout: 30_000 });
+  // The result states which scale its distances were measured on, because the
+  // request never said: the cross-dataset algorithms resolve and record it.
+  await expect(page.getByText("Feature scale", { exact: true })).toBeVisible();
+  await expect(page.locator(".analysis-metric").filter({ hasText: "Feature scale" })).toContainText("standardized");
 });
 
 test("dataset split entry exposes deterministic ratios and seed", async ({ page }) => {

@@ -8,10 +8,10 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, AppError
 from ..models import DescriptorMatrix
-from ._common import _aligned_space_metrics, _bounded_indices, _check_samples, _cross_k_nearest, _cross_nearest, _effective_dimension_metrics, _float_param, _int_param, _joint_projection, _nearest_distances, _pairwise_matrix, _preprocess, _preprocess_reference_query, _rank_correlation, _safe_correlation, _safe_import, _seed, _visual_pca
+from ._common import _aligned_space_metrics, _bounded_indices, _check_samples, _cross_k_nearest, _cross_nearest, _effective_dimension_metrics, _float_param, _int_param, _joint_projection, _nearest_distances, _pairwise_matrix, _preprocess, _preprocess_reference_query, _rank_correlation, _reference_query_preprocess, _safe_correlation, _safe_import, _seed, _visual_pca
 
 def coverage(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
-    ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params, "raw")
+    ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params)
     metric = str(params.get("metric") or "euclidean")
     _check_samples(ref, 1)
     _check_samples(qry, 1)
@@ -26,11 +26,11 @@ def coverage(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict,
     labels = np.where(distances <= q95, 0, np.where(distances <= q99, 1, 2)).astype(np.int64)
     arrays = {"nearest_indices": nearest, "distances": distances, "labels": labels}
     arrays.update(_joint_projection(ref, qry, min(_int_param(params, "projection_samples", 2_000, 50), 10_000)))
-    return {"arrays": arrays, "preview": {"kind": "coverage", "categories": ["covered", "marginal", "out_of_coverage"], "q95": q95, "q99": q99, "metric": metric, "covered": int((labels == 0).sum()), "marginal": int((labels == 1).sum()), "out_of_coverage": int((labels == 2).sum()), "mean_distance": float(distances.mean()), "median_distance": float(np.median(distances)), "max_distance": float(distances.max())}, "warnings": warnings, "feature_indices": np.flatnonzero(keep).astype(np.int64)}
+    return {"arrays": arrays, "preview": {"kind": "coverage", "preprocess": _reference_query_preprocess(params), "categories": ["covered", "marginal", "out_of_coverage"], "q95": q95, "q99": q99, "metric": metric, "covered": int((labels == 0).sum()), "marginal": int((labels == 1).sum()), "out_of_coverage": int((labels == 2).sum()), "mean_distance": float(distances.mean()), "median_distance": float(np.median(distances)), "max_distance": float(distances.max())}, "warnings": warnings, "feature_indices": np.flatnonzero(keep).astype(np.int64)}
 
 
 def overlap(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
-    ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params, "standardized")
+    ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params)
     metric = str(params.get("metric") or "euclidean")
     chunk = _int_param(params, "chunk_size", 2048, 1)
     reference_chunk = _int_param(params, "reference_chunk_size", 2048, 1)
@@ -50,6 +50,7 @@ def overlap(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict, 
         "arrays": arrays,
         "preview": {
             "kind": "overlap",
+            "preprocess": _reference_query_preprocess(params),
             "categories": ["near_duplicate", "highly_similar", "independent"],
             "metric": metric,
             "duplicate_threshold": duplicate_threshold,
@@ -75,7 +76,7 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
     descriptor-analysis application and does not silently run a force or
     energy model during acquisition.
     """
-    ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params, "standardized")
+    ref, qry, warnings, keep = _preprocess_reference_query(reference.values, query.values, params)
     metric = str(params.get("metric") or "euclidean")
     # Two phases share one bar: the kNN scan gets the first half, the greedy
     # acquisition the second. Handing the scan the raw callback would run the
@@ -119,6 +120,11 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
     base_weight_name = "uncertainty_weight" if acquisition_method == "uncertainty_diversity" else "novelty_weight"
     base_weight = _float_param(params, base_weight_name, 0.65, 0.0, 1.0)
     selected_local = [int(np.argmax(normalized_base))]
+    # The objective value that *caused* each pick, kept in pick order.  The
+    # composite `scores` below is recomputed once from the final min_diversity
+    # and is deliberately not monotone in this order, so reporting only that
+    # made the panel contradict selected_indices (deep review P1-17).
+    pick_scores = [float(normalized_base[selected_local[0]])]
     min_diversity = np.full(pool_size, np.inf, dtype=np.float64)
     acquisition_score = np.zeros(pool_size, dtype=np.float64)
     for step in range(1, target):
@@ -138,18 +144,18 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
         normalized_diversity = (min_diversity - np.nanmin(min_diversity)) / max(float(diversity_scale), 1e-15)
         acquisition_score = base_weight * normalized_base + (1.0 - base_weight) * normalized_diversity
         acquisition_score[selected_local] = -1.0
-        selected_local.append(int(np.argmax(acquisition_score)))
+        chosen = int(np.argmax(acquisition_score))
+        pick_scores.append(float(acquisition_score[chosen]))
+        selected_local.append(chosen)
         if progress and (step % 50 == 0 or step == target - 1):
             progress(0.5 + 0.5 * (step + 1) / max(target, 1), f"{acquisition_method} acquisition")
     selected = pool[np.asarray(selected_local, dtype=np.int64)]
     full_scores = np.zeros(qry.shape[0], dtype=np.float64)
-    full_uncertainty = np.zeros(qry.shape[0], dtype=np.float64)
     full_diversity = np.zeros(qry.shape[0], dtype=np.float64)
     if np.isfinite(min_diversity).any():
         diversity_component = np.nan_to_num(min_diversity / max(float(np.nanmax(min_diversity[np.isfinite(min_diversity)])), 1e-15), posinf=0.0)
     else:
         diversity_component = np.zeros(pool_size, dtype=np.float64)
-    full_uncertainty[pool] = uncertainty[pool]
     full_diversity[pool] = diversity_component
     full_scores[pool] = base_weight * normalized_base + (1.0 - base_weight) * diversity_component
     arrays = {
@@ -157,15 +163,22 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
         "nearest_indices": nearest,
         "distances": novelty,
         "novelty": novelty,
-        "uncertainty": full_uncertainty,
+        # Both uncertainty estimates exist for every query sample, so this is
+        # the full array rather than the pool's copy: scattering zeros outside
+        # the pool read as "these samples have no uncertainty" on the colour
+        # bar (deep review P1-17, the same root cause as `scores`).
+        "uncertainty": uncertainty,
         "diversity": full_diversity,
         "scores": full_scores,
+        # Aligned with selected_indices: the score at the moment of the pick.
+        "pick_scores": np.asarray(pick_scores, dtype=np.float64),
         "coords": _visual_pca(qry),
     }
     return {
         "arrays": arrays,
         "preview": {
             "kind": "acquisition",
+            "preprocess": _reference_query_preprocess(params),
             "algorithm": acquisition_method,
             "uncertainty_method": "knn_extrapolation" if acquisition_method == "uncertainty_diversity" else None,
             "selected_count": int(selected.size),
@@ -310,7 +323,7 @@ def drift(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict, pr
         drift_params["preprocess"] = "standardized"
     result = coverage(reference, query, drift_params, progress)
     distances = result["arrays"]["distances"]
-    ref, qry, drift_warnings, _keep = _preprocess_reference_query(reference.values, query.values, drift_params, "standardized")
+    ref, qry, drift_warnings, _keep = _preprocess_reference_query(reference.values, query.values, drift_params)
     limit = min(_int_param(drift_params, "distribution_samples", 500, 20), 2_000)
     a = ref[_bounded_indices(ref.shape[0], limit)]
     b = qry[_bounded_indices(qry.shape[0], limit)]

@@ -454,12 +454,18 @@ class AnalysisRunMixin:
         positions = np.asarray(frame.positions, dtype=np.float64)
         if perturbation == "jitter":
             return replace(frame, positions=positions + amplitude * jitter_vector)
-        center = positions.mean(axis=0, keepdims=True) if positions.size else np.zeros((1, 3), dtype=np.float64)
+        # A homogeneous strain is a single affine map, so the same scale has to
+        # act on the cell *and* on the positions about the same origin -- that
+        # is what keeps every atom's fractional coordinate (and therefore its
+        # relation to the periodic box) unchanged.  Scaling the positions about
+        # their centroid instead moved the cluster inside a box that grew
+        # elsewhere: an unintended rigid translation whose size depended on
+        # where the box origin happened to sit.
         scale = 1.0 + amplitude
         cell = np.asarray(frame.cell, dtype=np.float64)
         if cell.shape == (3, 3) and abs(float(np.linalg.det(cell))) > 1e-10:
             cell = cell * scale
-        return replace(frame, positions=center + (positions - center) * scale, cell=cell)
+        return replace(frame, positions=positions * scale, cell=cell)
 
     def _computed_structure_values(self, computed, frame_count: int) -> np.ndarray:
         values = np.asarray(computed.values, dtype=np.float64)

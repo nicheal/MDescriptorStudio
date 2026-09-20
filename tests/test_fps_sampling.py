@@ -27,6 +27,7 @@ from mdescriptor_studio_backend.analysis.sampling import (
     sqrt_quota,
 )
 from mdescriptor_studio_backend.analysis.sampling.engine import sampling
+from mdescriptor_studio_backend.analysis.sampling.fps import _sqdist_to_point
 from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, AppError
 
 
@@ -535,3 +536,28 @@ def test_engine_grouped_sampling_preview_encodes() -> None:
     # The preview is what crosses the wire: encode it for real, since the
     # protocol refuses (rather than stringifies) a non-finite number.
     assert json.loads(frames.encode(frames.response_ok(1, preview)))["result"] == preview
+
+
+def test_fps_pick_order_survives_a_large_common_feature_offset() -> None:
+    """Deep review P1-18: the sampler rebuilt its distances from
+    |a|² + |b|² - 2ab, which spends the float64 mantissa on the shared
+    magnitude and gives away the low-order bits that separate near-duplicate
+    structures.  Farthest-point order is a property of the geometry, so moving
+    the feature origin must not move a single pick."""
+    rng = np.random.default_rng(11)
+    tight = rng.normal(size=(400, 96)) * 1e-3 + 5.0
+    offset = tight + 1e6
+
+    assert farthest_point_sampling(tight, n_samples=12, initial="center").indices.tolist() == \
+        farthest_point_sampling(offset, n_samples=12, initial="center").indices.tolist()
+
+    # The identity really was the problem on this input: it puts a different row
+    # first, while explicit differences agree with scipy to full precision.
+    point = offset[0]
+    direct = _sqdist_to_point(offset, point)
+    expanded = np.maximum(
+        np.einsum("ij,ij->i", offset, offset) - 2.0 * (offset @ point) + float(point @ point),
+        0.0,
+    )
+    assert int(np.argmax(expanded)) != int(np.argmax(direct))
+    assert np.median(np.abs(expanded - direct) / np.maximum(direct, 1e-30)) > 0.5

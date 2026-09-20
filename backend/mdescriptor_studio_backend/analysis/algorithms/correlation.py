@@ -8,7 +8,7 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, AppError
 from ..models import DescriptorMatrix
-from ._common import _as_float64, _bounded_indices, _check_samples, _clustered_feature_order, _connected_component_count, _float_param, _int_param, _preprocess, _rank_correlation, _safe_correlation, _safe_import, _seed
+from ._common import _as_float64, _bounded_indices, _check_samples, _clustered_feature_order, _connected_component_count, _float_param, _int_param, _meaningful_scale, _preprocess, _rank_correlation, _safe_correlation, _safe_import, _seed
 
 def feature_correlation(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     x = _as_float64(samples.values)
@@ -109,7 +109,7 @@ def property_correlation(samples: DescriptorMatrix, params: dict, progress: Call
     if int(valid.sum()) < 3:
         raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "property correlation requires at least three finite targets")
     y = target[valid]
-    if float(y.std()) <= np.finfo(np.float64).eps:
+    if not bool(_meaningful_scale(y.mean(), y.std())):
         raise AppError(ANALYSIS_INPUT_INVALID, f"property {property_name!r} is constant")
     raw_x = _as_float64(samples.values[valid])
     x, warnings, keep = _preprocess(raw_x, {"preprocess": "standardized"}, "standardized")

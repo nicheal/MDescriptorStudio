@@ -10,7 +10,7 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, AppError
 from ..models import DescriptorMatrix
-from ._common import _aligned_space_metrics, _as_float64, _effective_dimension_metrics, _preprocess, _preprocess_reference_query
+from ._common import _aligned_space_metrics, _as_float64, _effective_dimension_metrics, _meaningful_scale, _preprocess, _preprocess_reference_query
 
 def sensitivity(runs: list[tuple[dict, DescriptorMatrix]], params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     if len(runs) < 2:
@@ -30,7 +30,6 @@ def sensitivity(runs: list[tuple[dict, DescriptorMatrix]], params: dict, progres
             baseline_sample.values,
             baseline_sample.values,
             params,
-            "standardized",
         )
     else:
         baseline_values, baseline_warnings, _baseline_keep = _preprocess(baseline_sample.values, params, "standardized")
@@ -52,7 +51,6 @@ def sensitivity(runs: list[tuple[dict, DescriptorMatrix]], params: dict, progres
                 baseline_sample.values,
                 sample.values,
                 params,
-                "standardized",
             )
             if i == 0:
                 values = baseline_values
@@ -142,7 +140,8 @@ def perturbation_sensitivity(
         # baseline-to-perturbed displacement from the response.
         keep = np.ones(base.shape[1], dtype=bool)
         warnings = list(baseline.warnings)
-        constant = scales <= np.finfo(np.float64).eps
+        meaningful = _meaningful_scale(means, scales)
+        constant = ~meaningful
         if bool(constant.any()) and mode != "raw":
             warnings.append(f"retained {int(constant.sum())} zero-variance baseline feature(s) with unit scale")
 
@@ -160,7 +159,7 @@ def perturbation_sensitivity(
             centered = used - means[keep]
             if mode == "center":
                 return centered
-            return centered / np.where(scales[keep] > np.finfo(np.float64).eps, scales[keep], 1.0)
+            return centered / np.where(meaningful[keep], scales[keep], 1.0)
 
         base_used = transform(base)
         metric = str(params.get("metric") or "euclidean")

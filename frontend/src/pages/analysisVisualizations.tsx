@@ -156,6 +156,11 @@ function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pi
   const radiusCurve = fps ? nums(arrays.coverage_radius_curve) : [];
   const meanCurve = fps ? nums(arrays.coverage_mean_curve) : [];
   const r2Curve = fps ? nums(arrays.coverage_r2_curve) : [];
+  // Acquisition: the objective value each pick actually saw.  `scores` is a
+  // final-state ranking and does not decrease along selected_indices, so it
+  // cannot answer "why this one" on its own (deep review P1-17).  Saved
+  // results predate the array and keep the distribution plot.
+  const pickScores = kind === "acquisition" && !fps ? nums(arrays.pick_scores) : [];
   const stopReason = fps
     ? preview?.stop_reason === "min_distance"
       ? t("Minimum descriptor distance")
@@ -227,8 +232,11 @@ function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pi
             { type: "scatter", mode: "lines", x: radiusCurve.map((_, index) => index + 1), y: radiusCurve, name: t("Coverage radius"), line: { color: "#0F6CBD", width: 2 } },
             { type: "scatter", mode: "lines", x: meanCurve.map((_, index) => index + 1), y: meanCurve, name: t("Mean residual"), line: { color: "#F7630C", width: 2, dash: "dot" } },
           ]} layout={layout({ xaxis: { title: { text: t("Selected samples") } }, yaxis: { title: { text: t("Descriptor distance") } }, showlegend: true })} />
+        : pickScores.length
+        ? <PlotFrame compact ariaLabel={t("Score at the moment of each pick")} data={[{ type: "bar", x: pickScores.map((_, index) => index + 1), y: pickScores, marker: { color: uncertaintyDriven ? "#D13438" : "#0F6CBD" } }]} layout={layout({ xaxis: { title: { text: t("Pick order") }, dtick: 1 }, yaxis: { title: { text: t("Score when picked") }, rangemode: "tozero" } })} />
         : <PlotFrame compact ariaLabel={t("Selection score distribution")} data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? uncertaintyDriven ? point.uncertainty ?? 0 : point.distance ?? 0 : point.x), marker: { color: uncertaintyDriven ? "#D13438" : "#8764B8" } }]} layout={layout({ xaxis: { title: { text: kind === "acquisition" ? uncertaintyDriven ? t("kNN extrapolation uncertainty") : t("Novelty distance") : t("PC1 distribution") } }, yaxis: { title: { text: t("Samples") } } })} />}
     </div>
+    {pickScores.length > 0 && <Typography.Text type="secondary">{t("Bars show the objective each pick maximised; the stored scores rank every candidate by the loop's final state.")}</Typography.Text>}
     {fps && r2Curve.length > 0 && <PlotFrame compact ariaLabel={t("Coverage R² curve")} data={[{ type: "scatter", mode: "lines", x: r2Curve.map((_, index) => index + 1), y: r2Curve, line: { color: "#107C10", width: 2 }, hovertemplate: `${t("Selected samples")}=%{x}<br>R²=%{y:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Selected samples") } }, yaxis: { title: { text: "R²" }, range: [0, 1] } })} />}
     {fps && typeof preview?.target_coverage === "number" && <Typography.Text type="secondary">{t("Stopped on target coverage of {percent}.", { percent: formatPercent(preview.target_coverage) })}</Typography.Text>}
     {fps && explained.length === 2 && <Typography.Text type="secondary">{t("FPS ran in the full scaled descriptor space; the plot is only a PC1–PC2 projection ({percent} variance).", { percent: formatPercent(explained[0] + explained[1]) })}</Typography.Text>}
@@ -556,6 +564,7 @@ function LocalView({ preview, arrays, points, selectedIndices, onSelect }: Pick<
       <PlotFrame compact ariaLabel={t("Coordination number distribution")} data={[{ type: "histogram", x: coordination, marker: { color: "#107C10" } }]} layout={layout({ xaxis: { title: { text: t("Coordination number") }, dtick: 1 }, yaxis: { title: { text: t("Atoms") } } })} />
     </div>
     {neighborDistances.length > 0 && <PlotFrame compact ariaLabel={t("Local neighbor distance distribution")} data={[{ type: "histogram", x: neighborDistances, marker: { color: "#F7630C" } }]} layout={layout({ xaxis: { title: { text: t("Neighbor distance (Å)") } }, yaxis: { title: { text: t("Neighbor pairs") } } })} />}
+    {num(preview?.coordination_capped_atoms) ? <Typography.Text type="secondary">{t("Atoms with more contacts than the neighbour list stores: {count}", { count: String(preview?.coordination_capped_atoms) })}</Typography.Text> : null}
     <DataTable rows={rows} />
   </>;
 }
@@ -657,9 +666,13 @@ function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
 }
 
 function coverageMetrics(preview: AnalysisPreview, t: (key: string) => string): { k: string; v: unknown }[] {
-  if (preview.kind === "overlap") return [{ k: t("Near duplicates"), v: preview.near_duplicates }, { k: t("Highly similar"), v: preview.highly_similar }, { k: t("Independent"), v: preview.independent }, { k: t("Overlap fraction"), v: preview.overlap_fraction }, { k: t("Mean distance"), v: preview.mean_distance }];
+  // Which scale the distances were measured on: the three cross-dataset
+  // methods share one default and record it (deep review P1-14).
+  const scale = typeof preview.preprocess === "string" ? preview.preprocess : undefined;
+  if (preview.kind === "overlap") return [{ k: t("Near duplicates"), v: preview.near_duplicates }, { k: t("Highly similar"), v: preview.highly_similar }, { k: t("Independent"), v: preview.independent }, { k: t("Overlap fraction"), v: preview.overlap_fraction }, { k: t("Mean distance"), v: preview.mean_distance }, { k: t("Feature scale"), v: scale }];
   const values = [{ k: t("Covered"), v: preview.covered }, { k: t("Marginal"), v: preview.marginal }, { k: t("Out of coverage"), v: preview.out_of_coverage }, { k: t("Mean distance"), v: preview.mean_distance }];
   if (preview.kind === "drift") values.push({ k: "MMD", v: preview.mmd }, { k: t("Centroid shift"), v: preview.centroid_distance }, { k: t("Covariance shift"), v: preview.covariance_shift });
+  values.push({ k: t("Feature scale"), v: scale });
   return values;
 }
 

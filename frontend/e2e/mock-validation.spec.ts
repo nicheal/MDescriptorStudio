@@ -142,3 +142,25 @@ test("a valid request still answers with a result, not an error", async ({ page 
     expect(reply?.result).toBeDefined();
   }
 });
+
+test("acquisition publishes the pick trace the panel reads", async ({ page }) => {
+  // ARTIFACT_ARRAYS["acquisition"] names pick_scores, so a result page loading
+  // an acquisition asks the backend for exactly that array. The mock publishes
+  // an analysis' arrays while it builds that analysis' preview, like the panel
+  // does, so drive the same order.
+  const call = (method: string, params: Record<string, unknown>) =>
+    page.evaluate(
+      ([name, sent]) =>
+        (window as unknown as { __mdsMock?: { call: (m: string, p: Record<string, unknown>) => unknown } }).__mdsMock?.call(name, sent),
+      [method, params] as [string, Record<string, unknown>],
+    );
+
+  await call("analysis.acquisition", { reference_run_id: "run-dpa2", query_run_id: "run-dpa2-si", n_samples: 8 });
+  await call("analysis.preview", { analysis_id: "ana-mock-acquisition", limit: 20 });
+
+  const chunk = await respond(page, "analysis.chunk", { analysis_id: "ana-mock-acquisition", array: "pick_scores" });
+  expect(chunk?.error, JSON.stringify(chunk?.error)).toBeUndefined();
+  const data = (chunk?.result as { data?: unknown[] }).data;
+  expect(Array.isArray(data)).toBeTruthy();
+  expect(data?.length).toBeGreaterThan(0);
+});

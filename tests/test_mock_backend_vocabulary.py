@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from mdescriptor_studio_backend.analysis import ANALYSIS_REGISTRY
 from mdescriptor_studio_backend.main import build_methods
 from mdescriptor_studio_backend.protocol import frames
+from mdescriptor_studio_backend.services.analysis_helpers import ANALYSIS_ALGORITHM_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -146,6 +147,18 @@ def test_the_mock_speaks_the_current_protocol_version():
     )
     assert literals, "no protocol_version literal found in preview.tsx"
     assert set(literals) == {str(frames.PROTOCOL_VERSION)}, literals
+
+
+def test_the_mock_reports_the_current_analysis_algorithm_version():
+    # The same argument for the number that decides whether a stored analysis
+    # result is still valid: the UI shows it, and an e2e run against a mock that
+    # still names the previous revision tests a cache the app would reject.
+    literals = _literals(
+        FRONTEND_SRC / "preview.tsx",
+        r'analysis_algorithm_version:\s*"([^"]+)"',
+    )
+    assert literals, "no analysis_algorithm_version literal found in preview.tsx"
+    assert literals == {ANALYSIS_ALGORITHM_VERSION}, literals
 
 
 def _mock_string_list(name: str) -> set[str]:

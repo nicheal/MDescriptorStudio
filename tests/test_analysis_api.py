@@ -22,6 +22,7 @@ from mdescriptor_studio_backend.errors import (
 )
 from mdescriptor_studio_backend.services.analysis_service import _LIST_COLUMNS, AnalysisService
 from mdescriptor_studio_backend.services.dataset_service import DatasetService
+from mdescriptor_studio_backend.services.job_runner import AnalysisRunMixin
 from mdescriptor_studio_backend.services.export_service import _cancellable_frames, _identity_records
 from mdescriptor_studio_backend.services import preview_service
 from mdescriptor_studio_backend.services.result_service import ResultService
@@ -1325,3 +1326,45 @@ def test_atom_level_run_without_offsets_refuses_structure_mode(tmp_path: Path) -
     flat = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_1'")
     assert service._load_samples(flat, {"mode": "structure"}, "fps").n_samples == 12
     db.close()
+
+
+def test_strain_perturbation_is_affine_about_the_cell_origin() -> None:
+    """A strain must not slide a structure inside its own box.
+
+    Cell and positions have to take the same affine map: that is what keeps
+    every fractional coordinate -- and therefore the structure's place in the
+    periodic box, which the descriptor sees -- unchanged by the perturbation.
+    Scaling the positions about their centroid while the cell grew about the
+    origin added a rigid translation that depended on where the origin sat.
+    """
+    cell = np.diag([10.0, 10.0, 10.0])
+    positions = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]])
+    frame = DatasetFrame(
+        numbers=np.array([14, 14, 14]),
+        positions=positions,
+        cell=cell,
+        pbc=np.ones(3, dtype=bool),
+    )
+
+    perturbed = AnalysisRunMixin._perturb_frame(frame, 0.1, "strain", np.zeros_like(positions))
+
+    assert np.allclose(perturbed.cell, cell * 1.1)
+    assert np.allclose(perturbed.positions, positions * 1.1)
+
+    # Straining must preserve where each atom sits *in the box*, whatever that
+    # box happens to contain: two copies that differ only by a translation
+    # inside the cell strain into the same fractional arrangement they started
+    # with, so the response curve measures the deformation and not the choice
+    # of origin.
+    shifted = DatasetFrame(
+        numbers=frame.numbers,
+        positions=positions + np.array([3.0, -2.0, 0.5]),
+        cell=cell,
+        pbc=frame.pbc,
+    )
+    for source in (frame, shifted):
+        strained = AnalysisRunMixin._perturb_frame(source, 0.1, "strain", np.zeros_like(positions))
+        assert np.allclose(
+            strained.positions @ np.linalg.inv(strained.cell),
+            source.positions @ np.linalg.inv(source.cell),
+        )

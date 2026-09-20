@@ -14,6 +14,7 @@ from mdescriptor_studio_backend.analysis import AtomDescriptorMatrix, StructureD
 from mdescriptor_studio_backend.analysis.algorithms.correlation import feature_correlation, property_correlation
 from mdescriptor_studio_backend.analysis.algorithms.kernel import kernel
 from mdescriptor_studio_backend.analysis.algorithms.pairs import acquisition, compare, coverage, drift, mantel, overlap
+from mdescriptor_studio_backend.analysis.algorithms._common import _trajectory_threshold
 from mdescriptor_studio_backend.analysis.algorithms.pca import pca
 from mdescriptor_studio_backend.analysis.algorithms.sensitivity import perturbation_sensitivity, sensitivity
 from mdescriptor_studio_backend.analysis.algorithms.tsne import MAX_ITERATIONS, tsne
@@ -450,6 +451,98 @@ def test_uncertainty_acquisition_exposes_knn_uncertainty_and_diversity(samples: 
     assert any("not model prediction variance" in warning for warning in result["warnings"])
 
 
+def test_acquisition_reports_the_score_that_drove_each_pick(samples: StructureDescriptorMatrix) -> None:
+    """`scores` is recomputed from the final min-diversity, so it is a
+    final-state ranking and need not decrease along selected_indices.  A user
+    auditing "why this one" therefore needs the objective value each pick
+    actually saw, and the per-sample estimates must not be pool-restricted
+    (deep review P1-17)."""
+    # A query that shares no row with the reference: distances (and therefore
+    # novelty/uncertainty) are strictly positive, so a zero in either array can
+    # only come from a value that was dropped on the way out.
+    query = StructureDescriptorMatrix(
+        samples.values + np.linspace(0.4, 0.9, samples.n_samples)[:, None],
+        samples.frame,
+        sample_ids=samples.sample_ids,
+    )
+    result = acquisition(samples, query, {"n_samples": 6, "pool_factor": 2.0})
+    arrays = result["arrays"]
+    picks = np.asarray(arrays["pick_scores"], dtype=np.float64)
+    selected = np.asarray(arrays["selected_indices"], dtype=np.int64)
+
+    assert len(picks) == len(selected) == 6
+    assert np.isfinite(picks).all()
+    # The seed pick maximises the min-max normalised base score, whose maximum
+    # is exactly 1.0 -- proof the trace records the objective, not a post-hoc
+    # recomputation.
+    assert picks[0] == pytest.approx(1.0)
+
+    # Uncertainty and novelty are per-sample estimates: every query row has
+    # one, whether or not it entered the candidate pool.
+    assert (arrays["uncertainty"] > 0.0).all()
+    assert (arrays["novelty"] > 0.0).all()
+    # `scores` stays pool-restricted and now has to be read that way: the pool
+    # here is 6 * 2 = 12 of 48 samples, so the rest are placeholders.
+    assert int((arrays["scores"] > 0.0).sum()) <= 12
+
+
+def test_cross_dataset_algorithms_share_one_scale_and_say_so(samples: StructureDescriptorMatrix) -> None:
+    """Deep review P1-14: coverage measured distances on the raw matrix while
+    overlap and acquisition standardised the same pair, so one panel could give
+    opposite verdicts for one input -- and no stored result recorded which
+    scale it had used."""
+    query_values = samples.values + 0.05
+    query = StructureDescriptorMatrix(query_values, samples.frame, sample_ids=samples.sample_ids)
+
+    scales = {
+        "coverage": coverage(samples, query, {})["preview"]["preprocess"],
+        "overlap": overlap(samples, query, {})["preview"]["preprocess"],
+        "acquisition": acquisition(samples, query, {"n_samples": 4})["preview"]["preprocess"],
+    }
+    assert scales == {"coverage": "standardized", "overlap": "standardized", "acquisition": "standardized"}
+
+    # The scale is not just a label: one column carrying different units (here
+    # a factor of 1000 applied to both sides) must not move a standardised
+    # comparison, while a raw one stretches with it.
+    factor = np.ones(samples.n_features)
+    factor[0] = 1000.0
+    both = coverage(
+        StructureDescriptorMatrix(samples.values * factor, samples.frame, sample_ids=samples.sample_ids),
+        StructureDescriptorMatrix(query_values * factor, samples.frame, sample_ids=samples.sample_ids),
+        {},
+    )["preview"]
+    assert both["mean_distance"] == pytest.approx(coverage(samples, query, {})["preview"]["mean_distance"], rel=1e-9)
+
+    raw = coverage(samples, query, {"preprocess": "raw"})["preview"]
+    raw_scaled = coverage(
+        StructureDescriptorMatrix(samples.values * factor, samples.frame, sample_ids=samples.sample_ids),
+        StructureDescriptorMatrix(query_values * factor, samples.frame, sample_ids=samples.sample_ids),
+        {"preprocess": "raw"},
+    )["preview"]
+    assert raw["preprocess"] == "raw"
+    assert raw_scaled["mean_distance"] > raw["mean_distance"] * 10
+
+
+def test_ulp_jitter_never_becomes_a_feature_axis() -> None:
+    """Deep review P1-15: a column that only jitters by a few float64 ulps
+    around 1000.0 passed the old eps test, was divided by its own scale, and
+    then carried as much weight in every distance as a real descriptor."""
+    rows = 40
+    signal = np.random.default_rng(5).normal(size=(rows, 3))
+    jitter = 1000.0 + np.arange(rows, dtype=np.float64) * np.spacing(1000.0)
+    assert float(jitter.std()) > np.finfo(np.float64).eps  # exactly what the old test let through
+    matrix = StructureDescriptorMatrix(
+        np.hstack([signal, jitter[:, None]]),
+        np.arange(rows, dtype=np.int64),
+        sample_ids=[f"frame:{index}" for index in range(rows)],
+    )
+
+    result = pca(matrix, {"preprocess": "standardized"})
+
+    assert result["feature_indices"].tolist() == [0, 1, 2]
+    assert any("zero-variance feature" in warning for warning in result["warnings"])
+
+
 def test_mantel_reports_observed_statistic_and_permutation_p_value(samples: StructureDescriptorMatrix) -> None:
     right = StructureDescriptorMatrix(
         samples.values.copy(),
@@ -502,6 +595,37 @@ def test_perturbation_response_keeps_constant_baseline_features() -> None:
         {"preprocess": "raw", "metric": "euclidean"},
     )
     assert np.allclose(result["arrays"]["response_matrix"], 1.0)
+
+
+def test_coordination_counts_contacts_the_neighbour_list_drops() -> None:
+    """Deep review P1-16: the coordination number used to be the length of the
+    `max_neighbors`-budgeted neighbour list, so a dense environment reported the
+    display budget as a physical property."""
+    centre = [0.0, 0.0, 0.0]
+    shell = [[0.1, 0, 0], [-0.1, 0, 0], [0, 0.1, 0], [0, -0.1, 0], [0, 0, 0.1], [0, 0, -0.1]]
+    positions = np.array([centre, *shell], dtype=np.float64)
+    result = local_diversity(
+        AtomDescriptorMatrix(
+            np.random.default_rng(7).normal(size=(7, 2)),
+            np.zeros(7, dtype=np.int64),
+            row=np.arange(7, dtype=np.int64),
+            sample_ids=[f"frame:0:row:{i}" for i in range(7)],
+            elements=np.full(7, 14, dtype=np.int64),
+            positions=positions,
+            cells=np.repeat(np.eye(3, dtype=np.float64)[None, :, :], 7, axis=0),
+            pbc=np.zeros((7, 3), dtype=bool),
+        ),
+        # 0.12 keeps the six shell atoms out of each other's shells, so only the
+        # centre has more contacts than the budget stores.
+        {"cutoff": 0.12, "max_neighbors": 2, "n_clusters": 2, "k": 1},
+    )
+
+    coordination = result["arrays"]["coordination"]
+    assert coordination.tolist() == [6, 1, 1, 1, 1, 1, 1]
+    offsets = np.asarray(result["arrays"]["neighbor_offsets"], dtype=np.int64)
+    assert np.diff(offsets).tolist() == [2, 1, 1, 1, 1, 1, 1]
+    assert result["preview"]["coordination_capped_atoms"] == 1
+    assert any("more than 2 contacts" in warning for warning in result["warnings"])
 
 
 def test_local_diversity_reports_periodic_coordination_and_neighbor_shell() -> None:
@@ -650,3 +774,22 @@ def test_neighbour_search_excludes_self_by_identity_not_by_position() -> None:
     for row, others in enumerate(many_indices.tolist()):
         assert row not in others
     assert np.isfinite(many_distances).all()
+
+
+def test_event_threshold_falls_back_when_the_mad_degenerates() -> None:
+    """Deep review P1-13: a trajectory that records every step twice (or a
+    quantized descriptor) has median == MAD == 0, and the MAD rule then flagged
+    about half of the steps as events -- with no threshold ratio attached,
+    because a threshold of zero makes the ratio meaningless."""
+    # Most steps identical, a handful of real jumps: the median lands on
+    # the repeated value and every deviation from it is also repeated.
+    steps = np.concatenate([np.zeros(30), np.full(10, 0.4)])
+
+    _method, _sensitivity, threshold, stats, warnings = _trajectory_threshold(steps, {})
+
+    assert stats["mad"] == 0.0
+    assert threshold == pytest.approx(float(steps.mean() + 3.0 * steps.std()))
+    assert threshold > steps.max()
+    assert any("fell back to mean" in warning for warning in warnings)
+    # Asking for zscore directly is not a fallback and says so.
+    assert _trajectory_threshold(steps, {"event_method": "zscore"})[4] == []

@@ -139,11 +139,18 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
             "analysis.perturbation_sensitivity",
             {"run_id": run_id, "perturbation": "jitter", "n_amplitudes": 2, "max_amplitude": 0.01, "max_structures": 2, "seed": 42},
         )
+        # Strain is the other perturbation the panel offers, and the only one
+        # that touches the cell: a job that merely completes proves the affine
+        # map did not push the structure out of its own box.
+        strain_id = run(
+            "analysis.perturbation_sensitivity",
+            {"run_id": run_id, "perturbation": "strain", "n_amplitudes": 3, "max_amplitude": 0.05, "max_structures": 2, "seed": 42},
+        )
 
         listed = bp.request(sequence, "analysis.list", {"run_id": run_id})
         sequence += 1
         assert listed["result"]
-        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (effective_id, "effective_dimension"), (trajectory_id, "trajectory"), (perturbation_id, "perturbation_sensitivity")):
+        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (effective_id, "effective_dimension"), (trajectory_id, "trajectory"), (perturbation_id, "perturbation_sensitivity"), (strain_id, "perturbation_sensitivity")):
             checked = bp.request(sequence, "analysis.get", {"analysis_id": analysis_id})
             sequence += 1
             assert checked["result"]["status"] == "COMPLETED"
@@ -152,6 +159,11 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
                 assert checked["result"]["preview"]["preprocess"] == "standardized"
                 assert checked["result"]["preview"]["pca_basis"] == "correlation"
                 assert checked["result"]["preview"]["pca_feature_count"] > 0
+            if kind == "acquisition":
+                # The cross-dataset algorithms state the scale they measured on:
+                # the request omits `preprocess`, so the answer has to carry the
+                # resolved default (deep review P1-14).
+                assert checked["result"]["preview"]["preprocess"] == "standardized"
             if kind == "perturbation_sensitivity":
                 # The response summarizes a sampled subset, so the artifact must
                 # expose how many structures were available, not just how many

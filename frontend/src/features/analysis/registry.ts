@@ -135,4 +135,5 @@ export const ARTIFACT_ARRAYS: Record<string, string[]> = {
   local_diversity: ["coords", "sample_indices", "labels", "coordination", "neighbor_distances"],
   kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
   sampling: ["coverage_radius_curve", "coverage_mean_curve", "coverage_r2_curve"],
+  acquisition: ["pick_scores"],
 };

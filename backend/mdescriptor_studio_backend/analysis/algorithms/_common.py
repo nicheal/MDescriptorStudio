@@ -23,6 +23,10 @@ _warmup_gate.set()
 
 _TRAJECTORY_EVENT_METHODS = ("mad", "zscore", "percentile")
 
+# Relative tolerance behind _meaningful_scale: a feature must spread by more
+# than this fraction of its own magnitude to count as carrying information.
+SCALE_RELATIVE_TOLERANCE = 1e-12
+
 # Bounds for the periodic image stencil in _local_neighbor_graph. A degenerate
 # cell wants ~1e6 images per axis and would freeze this runner past any
 # cancellation, but a merely *skewed* cell legitimately needs several images on
@@ -119,6 +123,22 @@ def _float_param(params: dict, name: str, default: float, minimum: float | None 
 def _seed(params: dict) -> int:
     return _int_param(params, "seed", 42, 0)
 
+def _meaningful_scale(centre: np.ndarray, scale: np.ndarray) -> np.ndarray:
+    """Features whose spread is more than rounding noise at their own size.
+
+    An absolute float64-eps test only rejects a *bitwise* constant column: a
+    feature that jitters by a few ulps around 1000.0 has std ~2.4e-13, passes
+    that test, and is then divided by its own scale -- which turns pure
+    rounding noise into a full-weight axis in every distance, PCA and coverage
+    threshold (deep review P1-15, where the same column also got three
+    different verdicts from three different tolerances).  One relative
+    tolerance, matching the magnitude of the ``constant_tolerance`` /
+    ``variance_threshold`` parameters already exposed to users, is now the
+    single owner of that judgement.
+    """
+    magnitude = np.maximum(np.abs(np.asarray(centre, dtype=np.float64)), 1.0)
+    return np.asarray(scale, dtype=np.float64) > SCALE_RELATIVE_TOLERANCE * magnitude
+
 def _preprocess(x: np.ndarray, params: dict, default: str) -> tuple[np.ndarray, list[str], np.ndarray]:
     x = _as_float64(x)
     mode = params.get("preprocess", default)
@@ -129,7 +149,7 @@ def _preprocess(x: np.ndarray, params: dict, default: str) -> tuple[np.ndarray, 
     centered = x - means
     variances = centered.var(axis=0)
     scale = np.sqrt(variances)
-    keep = scale > np.finfo(np.float64).eps
+    keep = _meaningful_scale(means, scale)
     if not bool(keep.all()):
         warnings.append(f"ignored {int((~keep).sum())} zero-variance feature(s)")
     # Keeping at least one column makes constant descriptors report a useful
@@ -230,13 +250,14 @@ def _visual_pca(x: np.ndarray) -> np.ndarray:
     """Fast deterministic two-dimensional PCA used only as a visual companion."""
     return _visual_pca_components(x)[0]
 
-def _trajectory_threshold(steps: np.ndarray, params: dict) -> tuple[str, float, float, dict[str, float]]:
+def _trajectory_threshold(steps: np.ndarray, params: dict) -> tuple[str, float, float, dict[str, float], list[str]]:
     """Event threshold over descriptor-space step distances.
 
     ``mad`` is the robust default (median + k * 1.4826 * MAD) because one large
     structural jump inflates the standard deviation and hides later events.
     ``zscore`` is offered for comparison and ``percentile`` reproduces a fixed
-    top fraction of frames.
+    top fraction of frames.  Returns any warnings the chosen method has to
+    report about itself.
     """
     method = str(params.get("event_method") or "mad").lower()
     if method not in _TRAJECTORY_EVENT_METHODS:
@@ -248,21 +269,31 @@ def _trajectory_threshold(steps: np.ndarray, params: dict) -> tuple[str, float, 
     mean = float(steps.mean())
     std = float(steps.std())
     robust_sigma = 1.4826 * mad
+    warnings: list[str] = []
     if method == "percentile":
         if sensitivity >= 50.0:
             raise AppError(ANALYSIS_INPUT_INVALID, "event_sensitivity must be below 50 for percentile detection")
         threshold = float(np.quantile(steps, 1.0 - sensitivity / 100.0))
-    elif method == "mad":
+    elif method == "mad" and robust_sigma > 0.0:
         threshold = median + sensitivity * robust_sigma
     else:
         threshold = mean + sensitivity * std
+        if method == "mad":
+            # Half the steps being identical (every frame recorded twice, a
+            # quantized descriptor, rejected Monte Carlo steps) drives the MAD
+            # to zero, and a threshold of "median + 0" then flags about half of
+            # the trajectory as events with no ratio to report.  The standard
+            # deviation still describes this data; say that it is what was used.
+            warnings.append(
+                "step distances have no median absolute deviation, so the event threshold fell back to mean + k * standard deviation"
+            )
     return method, sensitivity, threshold, {
         "median": median,
         "mad": mad,
         "robust_sigma": robust_sigma,
         "mean": mean,
         "std": std,
-    }
+    }, warnings
 
 def _effective_dimension_metrics(x: np.ndarray) -> tuple[float, dict[str, int]]:
     centered = _as_float64(x) - np.asarray(x, dtype=np.float64).mean(axis=0)
@@ -282,7 +313,7 @@ def _safe_correlation(a: np.ndarray, b: np.ndarray) -> float:
     b = np.asarray(b, dtype=np.float64).reshape(-1)
     if a.size != b.size or a.size < 2:
         return 0.0
-    if float(a.std()) <= np.finfo(np.float64).eps or float(b.std()) <= np.finfo(np.float64).eps:
+    if not bool(_meaningful_scale(np.array([a.mean(), b.mean()]), np.array([a.std(), b.std()])).all()):
         return 1.0 if np.allclose(a, b) else 0.0
     value = float(np.corrcoef(a, b)[0, 1])
     return value if np.isfinite(value) else 0.0
@@ -336,14 +367,30 @@ def _connected_component_count(edges: np.ndarray, size: int) -> int:
     involved = np.unique(edges)
     return len({find(int(index)) for index in involved.tolist()})
 
-def _preprocess_reference_query(reference: np.ndarray, query: np.ndarray, params: dict, default: str = "raw") -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray]:
+CROSS_SET_PREPROCESS_DEFAULT = "standardized"
+PREPROCESS_MODES = ("raw", "center", "standardized")
+
+def _reference_query_preprocess(params: dict) -> str:
+    """The scale every cross-dataset comparison runs on, resolved in one place.
+
+    Distances between two descriptor sets are not comparable when the features
+    carry mixed units and magnitudes, so the default standardises (deep review
+    P1-14: coverage used to default to raw while overlap and acquisition
+    standardised, and the same panel therefore gave opposite answers for one
+    input pair).  The algorithms read the value through here and their previews
+    record it, so a stored result states the scale it was computed on.
+    """
+    mode = params.get("preprocess") or CROSS_SET_PREPROCESS_DEFAULT
+    if mode not in PREPROCESS_MODES:
+        raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
+    return str(mode)
+
+def _preprocess_reference_query(reference: np.ndarray, query: np.ndarray, params: dict) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray]:
     reference = _as_float64(reference)
     query = _as_float64(query)
     if reference.shape[1] != query.shape[1]:
         raise AppError(ANALYSIS_INPUT_INVALID, "reference and query feature counts do not match")
-    mode = params.get("preprocess", default)
-    if mode not in ("raw", "center", "standardized"):
-        raise AppError(ANALYSIS_INPUT_INVALID, "preprocess must be raw, center, or standardized")
+    mode = _reference_query_preprocess(params)
     means = reference.mean(axis=0)
     centered_reference = reference - means
     scale = centered_reference.std(axis=0)
@@ -354,7 +401,7 @@ def _preprocess_reference_query(reference: np.ndarray, query: np.ndarray, params
     # unit scale so a reference-zero/query-nonzero displacement remains
     # measurable.
     keep = np.ones(reference.shape[1], dtype=bool)
-    constant = scale <= np.finfo(np.float64).eps
+    constant = ~_meaningful_scale(means, scale)
     warnings: list[str] = []
     if bool(constant.any()) and mode != "raw":
         warnings.append(f"retained {int(constant.sum())} reference-constant feature(s) with unit scale")
@@ -363,7 +410,7 @@ def _preprocess_reference_query(reference: np.ndarray, query: np.ndarray, params
     centered_query = query - means
     if mode == "center":
         return centered_reference, centered_query, warnings, keep
-    denominator = np.where(scale > np.finfo(np.float64).eps, scale, 1.0)
+    denominator = np.where(~constant, scale, 1.0)
     return centered_reference / denominator, centered_query / denominator, warnings, keep
 
 def _cross_nearest(reference: np.ndarray, query: np.ndarray, metric: str, query_chunk: int, reference_chunk: int, progress: Callable[[float, str], None] | None = None) -> tuple[np.ndarray, np.ndarray]:
@@ -477,6 +524,10 @@ def _local_neighbor_graph(samples: DescriptorMatrix, cutoff: float, max_neighbor
     retained, including repeated source indices for small cells; the stored
     index still points to the original atom.  CSR rows are emitted in global
     atom order even when frame rows are interleaved.
+
+    ``max_neighbors`` budgets the stored neighbour list only.  The coordination
+    row is the count of *all* contacts within the cutoff, because it is read as
+    a physical quantity while the list is read as a plot.
     """
     if samples.positions is None:
         return (
@@ -582,9 +633,13 @@ def _local_neighbor_graph(samples: DescriptorMatrix, cutoff: float, max_neighbor
                 # contacts of the same atom are distinct neighbors in a small
                 # unit cell (for example the six self-images of a cubic cell).
                 contacts.append((source, distance, int(candidate)))
-            ordered = sorted(contacts, key=lambda item: (item[1], item[0], item[2]))[:max_neighbors]
             global_index = int(members[local_index])
-            coordination[global_index] = len(ordered)
+            # The coordination number is the physical contact count; max_neighbors
+            # budgets only the stored neighbour list. Capping the number itself
+            # made dense environments report the budget as a material property
+            # (deep review P1-16: 3000 atoms at 3 Å pinned at mean == max).
+            coordination[global_index] = len(contacts)
+            ordered = sorted(contacts, key=lambda item: (item[1], item[0], item[2]))[:max_neighbors]
             row_indices[global_index] = [int(members[source]) for source, _distance, _candidate in ordered]
             row_distances[global_index] = [float(distance) for _source, distance, _candidate in ordered]
 

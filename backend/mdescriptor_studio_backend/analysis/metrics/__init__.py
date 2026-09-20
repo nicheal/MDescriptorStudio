@@ -350,6 +350,11 @@ def local_diversity(samples: DescriptorMatrix, params: dict, progress: Callable[
     else:
         sample_indices = np.arange(x.shape[0], dtype=np.int64)
     selected_coordination = coordination_all[sample_indices]
+    # The coordination number counts every contact; only the stored neighbour
+    # list is budgeted, so say plainly when the two differ (deep review P1-16).
+    capped_atoms = int((selected_coordination > max_neighbors).sum())
+    if capped_atoms:
+        warnings.append(f"{capped_atoms} atom(s) have more than {max_neighbors} contacts; neighbour lists keep the nearest {max_neighbors}")
     selected_neighbor_indices: list[int] = []
     selected_neighbor_distances: list[float] = []
     selected_neighbor_offsets = np.zeros(sample_indices.size + 1, dtype=np.int64)
@@ -427,6 +432,7 @@ def local_diversity(samples: DescriptorMatrix, params: dict, progress: Callable[
             "max_neighbors": max_neighbors,
             "mean_coordination": float(selected_coordination.mean()) if selected_coordination.size else 0.0,
             "max_coordination": int(selected_coordination.max()) if selected_coordination.size else 0,
+            "coordination_capped_atoms": capped_atoms,
             "neighbor_count": int(len(selected_neighbor_indices)),
             "neighbor_graph_available": bool(samples.positions is not None),
             "selected_element": selected_element,
@@ -509,7 +515,8 @@ def trajectory(samples: DescriptorMatrix, params: dict, progress: Callable[[floa
         time_unit = "frame"
     time_delta = np.diff(time_axis, prepend=time_axis[0])
     speed = np.divide(step_distance, time_delta, out=np.zeros_like(step_distance), where=time_delta > 0)
-    event_method, event_sensitivity, event_threshold, step_stats = _trajectory_threshold(deltas, params)
+    event_method, event_sensitivity, event_threshold, step_stats, threshold_warnings = _trajectory_threshold(deltas, params)
+    warnings.extend(threshold_warnings)
     event_indices = np.flatnonzero(step_distance > event_threshold)
     if progress:
         progress(1.0, "trajectory analysis complete")

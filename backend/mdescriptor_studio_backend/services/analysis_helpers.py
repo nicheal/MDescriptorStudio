@@ -25,7 +25,11 @@ MANAGED_ID_RE = re.compile(r"^(?:run|ana)_[A-Za-z0-9_-]{1,64}$")
 # reports. Only the middle one invalidates cached results - and it does so by
 # being written into the params keys feature_*_schema, not by this column.
 _ANALYSIS_SCHEMA_VERSION = 1
-ANALYSIS_ALGORITHM_VERSION = "studio-analysis-4"
+# Bumped whenever a stored result would be wrong under the new code, because it
+# is part of every analysis cache key (see _analysis_cache_key): the 2026-09-20
+# science-semantics batch (cross-dataset scale, zero-variance tolerance,
+# coordination vs max_neighbors, affine strain) invalidated every run at once.
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-5"
 _MAX_PREVIEW_POINTS = 20_000
 # Values one analysis.chunk reply may carry. A float64's shortest repr is at
 # most 24 characters (1.7976931348623157e+308), so this stays under the 8 MiB

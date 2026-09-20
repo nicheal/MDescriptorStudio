@@ -28,6 +28,7 @@ from typing import Callable
 
 import numpy as np
 
+from ..algorithms._common import _safe_import
 from .grouping import group_sizes, sqrt_quota, validate_group_labels
 
 INITIAL_MODES = ("center", "first", "random")
@@ -111,7 +112,6 @@ def farthest_point_sampling(
     rng = np.random.default_rng(seed)
     total_spread = _total_spread(x)
 
-    x_sq = np.einsum("ij,ij->i", x, x)
     if selected_features is not None:
         existing = _validate_matrix(selected_features, "selected_features")
         if existing.shape[1] != x.shape[1]:
@@ -120,7 +120,7 @@ def farthest_point_sampling(
             )
         # Warm start: the first pick is the candidate farthest from everything
         # the existing set already covers; ``initial`` does not apply.
-        d2 = _min_sqdist_to_set(x, x_sq, existing)
+        d2 = _min_sqdist_to_set(x, existing)
         if target_coverage is not None and _r2_coverage(d2, total_spread) >= target_coverage:
             # The existing set already explains the requested spread: adding
             # candidates would not buy coverage, so the honest answer is none.
@@ -128,8 +128,8 @@ def farthest_point_sampling(
         first = int(np.argmax(d2))
     else:
         d2 = None
-        first = _resolve_initial(x, x_sq, start_mode, rng)
-    return _run_loop(x, x_sq, d2, first, target, float(min_distance), int(n_samples), total_spread, target_coverage, progress)
+        first = _resolve_initial(x, start_mode, rng)
+    return _run_loop(x, d2, first, target, float(min_distance), int(n_samples), total_spread, target_coverage, progress)
 
 
 def _total_spread(x: np.ndarray) -> float:
@@ -185,7 +185,7 @@ def _check_initial(initial: str | int) -> str | int:
     raise ValueError(f"initial must be one of {', '.join(INITIAL_MODES)} or a structure index")
 
 
-def _resolve_initial(x: np.ndarray, x_sq: np.ndarray, initial: str | int, rng: np.random.Generator) -> int:
+def _resolve_initial(x: np.ndarray, initial: str | int, rng: np.random.Generator) -> int:
     if isinstance(initial, int):
         if initial >= x.shape[0]:
             raise ValueError(f"initial structure index {initial} is out of range for {x.shape[0]} structures")
@@ -193,34 +193,48 @@ def _resolve_initial(x: np.ndarray, x_sq: np.ndarray, initial: str | int, rng: n
     if initial == "center":
         # Nearest real structure to the descriptor-space centroid: deterministic,
         # order-independent for distinct data, and starts from typical environments.
-        return int(np.argmin(_sqdist_to_point(x, x_sq, x.mean(axis=0))))
+        return int(np.argmin(_sqdist_to_point(x, x.mean(axis=0))))
     if initial == "first":
         return 0
     return int(rng.integers(x.shape[0]))
 
 
-def _sqdist_to_point(x: np.ndarray, x_sq: np.ndarray, point: np.ndarray) -> np.ndarray:
-    # |x - p|² = |x|² - 2·x·p + |p|²: a BLAS mat-vec with O(N) memory instead
-    # of an O(N·D) temporary.  Clamping removes tiny negative rounding noise.
-    return np.maximum(x_sq - 2.0 * (x @ point) + float(point @ point), 0.0)
+def _sqdist_to_point(x: np.ndarray, point: np.ndarray) -> np.ndarray:
+    """Squared distance from every row of ``x`` to one point, in blocks.
+
+    Explicit differences, not |x|² - 2x·p + |p|²: the expanded identity spends
+    the float64 mantissa on the common magnitude and gives away exactly the
+    low-order bits that separate near-duplicate structures -- which is what
+    decides the next FPS pick.  Measured on 400 x 96 features offset by 1e6
+    with 1e-3 spread: median relative error 1.0, wrong argmax, and no
+    agreement at all with the true top-20 ranking.  `_common._cross_nearest`
+    refuses the same identity for the same reason, and
+    tests/test_umap_numpy.py pins that as an invariant.
+    """
+    out = np.empty(x.shape[0], dtype=np.float64)
+    for start in range(0, x.shape[0], _BLOCK):
+        stop = min(start + _BLOCK, x.shape[0])
+        delta = x[start:stop] - point
+        out[start:stop] = np.einsum("ij,ij->i", delta, delta)
+    return out
 
 
-def _min_sqdist_to_set(x: np.ndarray, x_sq: np.ndarray, existing: np.ndarray) -> np.ndarray:
+def _min_sqdist_to_set(x: np.ndarray, existing: np.ndarray) -> np.ndarray:
+    cdist = _safe_import("scipy.spatial.distance", "scipy").cdist
     d2 = np.full(x.shape[0], np.inf, dtype=np.float64)
     for ref_start in range(0, existing.shape[0], _BLOCK):
         ref = existing[ref_start : ref_start + _BLOCK]
-        ref_sq = np.einsum("ij,ij->i", ref, ref)
         for cand_start in range(0, x.shape[0], _BLOCK):
             cand_slice = slice(cand_start, cand_start + _BLOCK)
-            gram = x[cand_slice] @ ref.T
-            block = np.maximum(x_sq[cand_slice, None] + ref_sq - 2.0 * gram, 0.0)
+            # Same reason as above; scipy subtracts coordinates directly, so an
+            # identical row scores exactly zero.
+            block = cdist(x[cand_slice], ref, metric="sqeuclidean")
             np.minimum(d2[cand_slice], block.min(axis=1), out=d2[cand_slice])
     return d2
 
 
 def _run_loop(
     x: np.ndarray,
-    x_sq: np.ndarray,
     d2: np.ndarray | None,
     first: int,
     target: int,
@@ -238,7 +252,7 @@ def _run_loop(
     r2_curve = np.empty(target, dtype=np.float64)
 
     if d2 is None:
-        d2 = _sqdist_to_point(x, x_sq, x[first])
+        d2 = _sqdist_to_point(x, x[first])
         selection_distances[0] = 0.0
     else:
         selection_distances[0] = float(np.sqrt(max(d2[first], 0.0)))
@@ -267,7 +281,7 @@ def _run_loop(
             break
         indices[step] = nxt
         selection_distances[step] = nearest
-        np.minimum(d2, _sqdist_to_point(x, x_sq, x[nxt]), out=d2)
+        np.minimum(d2, _sqdist_to_point(x, x[nxt]), out=d2)
         d2[nxt] = -1.0
         radius_curve[step], mean_curve[step] = _residual_stats(d2)
         r2_curve[step] = _r2_coverage(d2, total_spread)
@@ -390,11 +404,10 @@ def grouped_farthest_point_sampling(
     else:
         existing = None
 
-    x_sq = np.einsum("ij,ij->i", x, x)
     total_spread = _total_spread(x)
     # Global residual tracker for the merged coverage curve: seeded from the
     # warm-start set so R(k) answers "distance to existing ∪ picked so far".
-    global_d2 = _min_sqdist_to_set(x, x_sq, existing) if existing is not None else np.full(n, np.inf, dtype=np.float64)
+    global_d2 = _min_sqdist_to_set(x, existing) if existing is not None else np.full(n, np.inf, dtype=np.float64)
     radius_curve = np.empty(quota.sum(), dtype=np.float64)
     mean_curve = np.empty(quota.sum(), dtype=np.float64)
     r2_curve = np.empty(quota.sum(), dtype=np.float64)
@@ -436,7 +449,7 @@ def grouped_farthest_point_sampling(
         picked_indices.append(members[run.indices])
         picked_distances.append(run.selection_distances)
         for index in picked_indices[-1].tolist():
-            np.minimum(global_d2, _sqdist_to_point(x, x_sq, x[index]), out=global_d2)
+            np.minimum(global_d2, _sqdist_to_point(x, x[index]), out=global_d2)
             radius_curve[filled], mean_curve[filled] = _residual_stats(global_d2)
             r2_curve[filled] = _r2_coverage(global_d2, total_spread)
             filled += 1
