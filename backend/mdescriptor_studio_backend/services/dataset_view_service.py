@@ -91,7 +91,9 @@ class DatasetViewService:
 
     def meta(self, row: dict) -> dict:
         dataset = self.datasets.row_or_raise(row["dataset_id"])
-        dataset_meta = self.datasets.meta(dataset)
+        return self._meta(row, dataset, self.datasets.meta(dataset))
+
+    def _meta(self, row: dict, dataset: dict, dataset_meta: dict) -> dict:
         indices = json.loads(row["frame_indices_json"])
         return {
             "id": row["id"],
@@ -162,7 +164,20 @@ class DatasetViewService:
             )
         else:
             rows = self.db.query("SELECT * FROM dataset_views ORDER BY created_at")
-        return [self.meta(row) for row in rows]
+        # One dataset meta per dataset, not per view: meta() recomputes the
+        # source fingerprint (a directory walk plus a 32 MB sample), so listing
+        # twenty views of one dataset used to pay for twenty of them.
+        resolved: dict[str, tuple[dict, dict]] = {}
+
+        def resolve(dataset_id: str) -> tuple[dict, dict]:
+            pair = resolved.get(dataset_id)
+            if pair is None:
+                dataset = self.datasets.row_or_raise(dataset_id)
+                pair = (dataset, self.datasets.meta(dataset))
+                resolved[dataset_id] = pair
+            return pair
+
+        return [self._meta(row, *resolve(row["dataset_id"])) for row in rows]
 
     def create(self, params: dict) -> dict:
         dataset = self.datasets.row_or_raise(params.get("dataset_id"))

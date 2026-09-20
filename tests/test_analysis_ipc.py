@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from make_fixtures import write_deepmd
 
 from conftest import BackendProcess, wait_job
+
+REGISTRY = Path(__file__).resolve().parents[1] / "frontend" / "src" / "features" / "analysis" / "registry.ts"
+
+
+def artifact_arrays_by_kind() -> dict[str, list[str]]:
+    """The frontend's fetch table, parsed: {preview kind: [array names]}.
+
+    Read from the TypeScript rather than restated here, because the point of the
+    assertion is that the two lists agree - a copy would drift the same way.
+    """
+    block = re.search(r"export const ARTIFACT_ARRAYS[^=]*=\s*\{(.*?)\n\};", REGISTRY.read_text(encoding="utf-8"), re.S)
+    assert block, "registry.ts no longer declares ARTIFACT_ARRAYS in one table"
+    entries = re.findall(r"(\w+):\s*\[(.*?)\]", block.group(1), re.S)
+    arrays = {kind: re.findall(r'"([^"]+)"', names) for kind, names in entries}
+    assert len(arrays) >= 10, arrays
+    return {kind: names for kind, names in arrays.items() if names}
 
 
 def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
@@ -204,6 +221,26 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
         sequence += 1
         assert pairwise["result"]["shape"] == [8, 8]
         assert len(pairwise["result"]["data"]) == 8
+
+        # Every array a result panel fetches has to exist in the artifact it
+        # fetches it from: frontend/src/features/analysis/registry.ts
+        # ARTIFACT_ARRAYS drives the request list and the panel's loading gate, so
+        # a renamed or optimistic name means that panel waits for a payload that
+        # never arrives - and no other test here would notice.
+        wanted = artifact_arrays_by_kind()
+        complete: set[str] = set()
+        for row in listed["result"]:
+            detail = bp.request(sequence, "analysis.get", {"analysis_id": row["id"]})
+            sequence += 1
+            result = detail["result"]
+            files = (result.get("artifact_manifest") or {}).get("files") or []
+            kind = str((result.get("preview") or {}).get("kind"))
+            if all(name in files for name in wanted.get(kind, [])):
+                complete.add(kind)
+        # A kind can be produced by several algorithms and only one of them
+        # publishes the array (the FPS coverage curves), so the claim is that
+        # every kind the panel knows about has *some* result that does.
+        assert set(wanted) <= complete, sorted(set(wanted) - complete)
 
         export_path = tmp_path / "analysis-subset.json"
         export_id = run("analysis.export", {"run_id": run_id, "indices": [0, 2], "mode": "structure", "format": "json", "output_path": str(export_path)})

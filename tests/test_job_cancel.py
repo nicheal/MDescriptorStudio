@@ -259,15 +259,46 @@ class _ViewDatasets:
         self.jobs = jobs
         self._adapter = adapter
         self._row_cache = db.query_one("SELECT * FROM datasets WHERE id = 'ds_m'")
+        self.meta_calls = 0
 
     def row_or_raise(self, dataset_id):
         return self._row_cache
 
     def meta(self, row):
+        self.meta_calls += 1
         return {"cache_valid": True}
 
     def adapter_for(self, row):
         return self._adapter
+
+
+def test_view_list_resolves_each_dataset_once(tmp_path: Path) -> None:
+    """DatasetViewService.meta() reaches through to the dataset fingerprint, which
+    is a directory walk plus a 32 MB sample: listing views used to pay for it
+    once per view, so the registry cost grew with how many views a dataset had."""
+    from mdescriptor_studio_backend.services.dataset_view_service import _INSERT_VIEW, DatasetViewService
+
+    db = Database(tmp_path / "database.sqlite")
+    now = "2026-01-01T00:00:00+00:00"
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
+        " properties, periodicity, fingerprint, created_at)"
+        " VALUES ('ds_m', 'src', 'extxyz', ?, 600, '[]', '[]', '[]', 'fp', ?)",
+        (str(tmp_path / "source.xyz"), now),
+    )
+    for index in range(3):
+        db.execute(
+            _INSERT_VIEW,
+            (f"view_{index}", "ds_m", f"v{index}", "selection", "[]", json.dumps([0, 1, 2]), "h", "fp", now, now),
+        )
+
+    datasets = _ViewDatasets(db, None, None)
+    metas = DatasetViewService(datasets).list({})
+
+    assert [meta["id"] for meta in metas] == ["view_0", "view_1", "view_2"]
+    assert datasets.meta_calls == 1
+    assert all(meta["stale"] is False for meta in metas)
+    db.close()
 
 
 class _SlowAdapter:
