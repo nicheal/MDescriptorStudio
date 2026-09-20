@@ -123,9 +123,9 @@
 ## 三、结构问题（屎山风险）
 
 1. **注释与实现不符已成风**，且比无注释更危险：`dataset_service.py:50-52`"the drawer pages through longer lists"（实为固定 `limit:1000` 单页，`total` 还被 `HEALTH_FINDINGS_CAP=5000` 污染，`dataset.findings` 根本没有 offset → 第 1001 条之后永久不可达，`HealthFindingsDrawer.tsx:281-282` 把截断值显示成 "of N frames"）；`result_service.py:336`"never stream the full matrix over IPC"（只限列 ≤256、不限行）；`analysis_service.py:210-233` 的"row-bounded and value-bounded"（只限行/列、不限总值数）；`job_runner.py:88-89`（见 P0-3）。
-2. **前后端两份算法目录且无 parity 测试**：`features/analysis/registry.ts` 与 `analysis/registry.py` 已不一致（`novelty_fps`/`uncertainty_diversity` 其实是 `acquisition_method` 取值而非分析类型）；后端新增名字只会静默变成历史条目的空导航。数组契约同理：`registry.ts:118-133` 声明的数组名与实际消费者严重脱节（见下节效率）。
+2. **前后端两份算法目录且无 parity 测试**：`features/analysis/registry.ts` 与 `analysis/registry.py` 已不一致（`novelty_fps`/`uncertainty_diversity` 其实是 `acquisition_method` 取值而非分析类型）；后端新增名字只会静默变成历史条目的空导航。数组契约同理：`registry.ts:118-133` 声明的数组名与实际消费者严重脱节（见下节效率）——裁剪与 parity 门禁见第十一批。
 3. **类型在说谎**：`types/protocol.ts:8` 声明 `details?`（后端故意不发）、`error_id` 全仓**零消费者**（后端 `_handle:215` 专门按它记日志）→ 实际呈现是 12 处手抄 `${code}: ${message}`（`Analysis.tsx:337,647,867,1084,1119`、`Descriptors.tsx:260`、`DescriptorResults.tsx:68,97` 等），用户手上没有任何可回报标识。`Stats` 的 `compositions?/health?/health_findings?` 可选性已被后端 `required` 判据（`dataset_service.py:481-493`）变成永不可能 → 由此产生死防御（`Overview.tsx:322,414`、`Explore.tsx:205`）和一条无防环的补救分支（`HealthFindingsDrawer.tsx:86-91`）。
-4. **同一条不变式多个 owner 且方向相反**：`nearZero ≤ lowVariation` 在 `analysisUiStore.ts:47-56` 是"抬高对方"、在 `Analysis.tsx:1303` 是"压回输入"、在 `navigation.ts:42` 与 `restore.ts:141` 各钳一次 → store 的抬升分支从 UI 路径**不可达**，只有直接调 store 的测试能触发（`stores/analysisUi.test.ts:254-259`）。`preprocess` 有四种口径：`navigation.ts:52` 是该函数里唯一不做白名单的枚举字段，`restore.ts:50` 一律回落 `"center"`（umap/tsne 实算 raw → 谎报），`navigation.ts:17` 默认又 `"raw"`。
+4. **同一条不变式多个 owner 且方向相反**：`nearZero ≤ lowVariation` 在 `analysisUiStore.ts:47-56` 是"抬高对方"、在 `Analysis.tsx:1303` 是"压回输入"、在 `navigation.ts:42` 与 `restore.ts:141` 各钳一次 → store 的抬升分支从 UI 路径**不可达**，只有直接调 store 的测试能触发（`stores/analysisUi.test.ts:254-259`）。`preprocess` 有四种口径：`navigation.ts:52` 是该函数里唯一不做白名单的枚举字段，`restore.ts:50` 一律回落 `"center"`（umap/tsne 实算 raw → 谎报），`navigation.ts:17` 默认又 `"raw"`——两处都在第十一批收口。
 5. **参数状态双份存储的具体泄漏**：`outliers` 的 `paramsKey` 含 `k`（`identity.ts:25`）、提交也用 `k`（`submission.ts:61`），但该面板根本没有 `k` 控件（`Analysis.tsx:1242` 只有算法/contamination/granularity）→ 在别的页改 k 后回来，绿点全部消失、Run 实际用新 k 算，而页面上没有任何控件能把 k 调回去。
 6. **模块边界靠下划线私有名维持**：见冗余表最后一行；`_meta` 的重指纹代价正是这样扩散出去的。
 7. `Analysis.tsx:19` 从 `features/analysis` barrel 取 `hydrateAnalysisUi`，把 registry/submission/restore 一并钉进启动 chunk，与 `:25-26` 的分块意图相反。分析 UI store 实现在 `features/analysis/`、测试在 `stores/`。
@@ -134,14 +134,14 @@
 
 ## 四、低效率
 
-1. **同一请求内把整份内容指纹算 2–3 遍**：`descriptor_service.py:217-219` → `dataset_service.py:668`（`use_cache=False`）、`:242` 同参再算、作业里 `:610-614` 第三遍；`dataset_service._meta:132-136` 在 legacy 分支算出的 `current` 两个分支都不使用；`dataset_view_service.py:68` 让 `list()` 与 `split()` 按视图行数放大 N+1。每次指纹是"整目录遍历 + 最多 32 MB 采样"（`fingerprint.py:146-154`）。前端已被迫绕开：`HealthFindingsDrawer.tsx:126-127` 注释明说切 tab 不能再问。 ◑
-2. **scipy 回退路径在大帧上必然 OOM**：`statistics.py:167-169` 一次性物化 `S×n×3`（去重后 S≤98）→ 实测量化 1e6 原子约 3.9 GB、1e7 约 25 GB+，而预检允许 1e7（`deepmd.py:25,38,66`），统计扫描本身无原子数闸门；C++ 核是逐 shift 流式（`mds_native.cpp:561-571`）。只在原生核缺失或 `MDS_DISABLE_NATIVE` 时触发——与下面第五条叠加成真风险。另 `:353` 对同一帧做两遍 `_prepared_points` + 两次 cKDTree。 ◑
-3. **邻居搜索又慢又不可取消**：`_common.py:570-589` 每原子 `query_ball_point` 后对每个候选单独 `np.linalg.norm`（cKDTree 排序时早算过），且整个函数没有 progress/取消点（取消只在 `job_runner.py:280` 的 progress 回调里生效，`metrics/__init__.py:339` 之前没有任何回调）。实测 20k 原子/60 Å 胞/6 Å cutoff：**104 s**、tracemalloc 峰值 294 MB，10 万原子约 8–10 分钟无法中断。`fps.py:426-433` 分组路径也没把 progress 传给每组 `farthest_point_sampling`（签名 `:84` 支持）。 ○
+1. **同一请求内把整份内容指纹算 2–3 遍**：`descriptor_service.py:217-219` → `dataset_service.py:668`（`use_cache=False`）、`:242` 同参再算、作业里 `:610-614` 第三遍；`dataset_service._meta:132-136` 在 legacy 分支算出的 `current` 两个分支都不使用；`dataset_view_service.py:68` 让 `list()` 与 `split()` 按视图行数放大 N+1。每次指纹是"整目录遍历 + 最多 32 MB 采样"（`fingerprint.py:146-154`）。前端已被迫绕开：`HealthFindingsDrawer.tsx:126-127` 注释明说切 tab 不能再问。 ✅
+2. **scipy 回退路径在大帧上必然 OOM**：`statistics.py:167-169` 一次性物化 `S×n×3`（去重后 S≤98）→ 实测量化 1e6 原子约 3.9 GB、1e7 约 25 GB+，而预检允许 1e7（`deepmd.py:25,38,66`），统计扫描本身无原子数闸门；C++ 核是逐 shift 流式（`mds_native.cpp:561-571`）。只在原生核缺失或 `MDS_DISABLE_NATIVE` 时触发——与下面第五条叠加成真风险。另 `:353` 对同一帧做两遍 `_prepared_points` + 两次 cKDTree。 ✅（第十一批；两处重复准备仍在）
+3. **邻居搜索又慢又不可取消**：`_common.py:570-589` 每原子 `query_ball_point` 后对每个候选单独 `np.linalg.norm`（cKDTree 排序时早算过），且整个函数没有 progress/取消点（取消只在 `job_runner.py:280` 的 progress 回调里生效，`metrics/__init__.py:339` 之前没有任何回调）。实测 20k 原子/60 Å 胞/6 Å cutoff：**104 s**、tracemalloc 峰值 294 MB，10 万原子约 8–10 分钟无法中断。`fps.py:426-433` 分组路径也没把 progress 传给每组 `farthest_point_sampling`（签名 `:84` 支持）。 ✅
 4. **`_analysis_row` 用 `SELECT *`**：`artifact_service.py:153` 在 `get/delete/preview/chunk` 每个热点请求里把可达数十 MB 的 `preview_json` 读出来再 `_json_load` 丢掉，而 `analysis_service.py:44-49` 的注释恰好说明了列表为什么要避开这个 blob；`chunk` 被前端按数组分页循环调用（`Analysis.tsx:462-476`）。 ◑（同类：`dataset_service.py:559-562` 每次打开抽屉为最多 1000 帧重做整趟最近邻，而统计遍历时已算过 `min_distance`，只在 `:509` 留了直方图。）
 5. **导出进度全程停在 0%**：`export_service.py:22-26` 的 `_cancellable_frames` 只 `check_cancelled()`、从不 `ctx.progress`，runner 仅 `:119` 报 0 / `:141` 报 1；"每 250 帧上报 + 取消"在 `dataset_service.py:267-274`、`:615-625`、`dataset_view_service.py:282-290` 各写一遍且写法略有差异——`dataset_view_service.py:283-284` 的注释还点名要"像 export_service 一样延迟取帧"，却只对齐了延迟、没对齐上报。
-6. **抓了没人读的数组，还等它们全部回来**：`registry.ts:118-133` 给 `local_diversity` 列 10 个数组，实际只有 `coordination`、`neighbor_distances` 被读（`analysisVisualizations.tsx:540-541`）；`pairwise_similarity` 的 `distance_matrix`、各处的 `sample_indices`、trajectory 的 `event_indices` 同理。`Analysis.tsx:435-497` 用 `Promise.all` 等全部，`overviewArraysBusy` 又是整面板 loading 门 → 打开结果先"Loading bounded analysis arrays…"数秒（邻接表上限 20k×128）再丢掉 80% 载荷。 ◑
+6. **抓了没人读的数组，还等它们全部回来**：`registry.ts:118-133` 给 `local_diversity` 列 10 个数组，实际只有 `coordination`、`neighbor_distances` 被读（`analysisVisualizations.tsx:540-541`）；`pairwise_similarity` 的 `distance_matrix`、各处的 `sample_indices`、trajectory 的 `event_indices` 同理。`Analysis.tsx:435-497` 用 `Promise.all` 等全部，`overviewArraysBusy` 又是整面板 loading 门 → 打开结果先"Loading bounded analysis arrays…"数秒（邻接表上限 20k×128）再丢掉 80% 载荷。 ✅
 7. **可视化树零 memo，一次点选重扫 20k×16**：`Analysis.tsx:1379-1394` 每次渲染新建 props 与内联 `onSelect`；派生计算全在函数体（`analysisVisualizations.tsx:389-400` 16 个 `nums()` 各扫至多 20k、`:295-300` 256²≈65k 单元、`:620-621` 6 个 20k map），`PlotFrame` 无 memo → 每次 job 心跳都重跑并给 Plotly 传新数组引用。 ◑
-8. **`trajectoryView.tsx` 的七个 useMemo 全部失效**：`:46-53` 在 render body 每次新建 `time/frames/series/coords/...` → `:54-117` 依赖恒变，拖 range slider（`onChange` 连发）就重跑 `stepPercentiles`（两次全量 argsort）+ events + visibleIndices。 ◑
+8. **`trajectoryView.tsx` 的七个 useMemo 全部失效**：`:46-53` 在 render body 每次新建 `time/frames/series/coords/...` → `:54-117` 依赖恒变，拖 range slider（`onChange` 连发）就重跑 `stepPercentiles`（两次全量 argsort）+ events + visibleIndices。 ✅（render body 的 views 已收进一个 useMemo）
 9. `Explore.tsx`：原子表 `pagination={false}` + `dataSource={frame.atom_rows}` 且后端每原子一行不截断（`dataset_frame_service.py:56-76`）→ 1 万原子即 9 万个 `<td>`，换帧卡主线程数秒（全站其它表都有上限）；`frameMaxForce(frame)` 在 render body（`:149`）未 memo 且 effect 里 `:471` 再算一遍；`util/structure.ts:102` 与 `Explore.tsx:86` 每次渲染新建查找表。 ◑
 10. 其他：`appUpdate.ts:79` 每个下载 chunk 写一次 store，而 `SettingsDrawer.tsx:28` 整店订阅 → 每个 chunk 重渲染整个抽屉；`SchemaForm.tsx:310-323` 的 `speciesToNumbers` 是手写的第二份元素表（止于 `U:92`，而全仓并无现成的 symbol→Z 表可复用），`.filter(n => n !== undefined)` 会把 Np–Og 静默丢掉、把 species 范围悄悄收窄；`statistics.py:368-370,411-412,514-517` 的 `element_counts` 用无界 Python int 列表并在汇总时整表复制（高熵合金 250k 帧可达数百 MB）；`extxyz.py:208-212,77-84` 对每条原子行做 1–2 次 UTF-8 编码仅为验证长度。
 11. `result.heatmap`（`result_service.py:330-343`）与 `analysis.chunk`（`analysis_service.py:210-233`）都缺**总值**预算：前者只限列 ≤256、行数无上限（1e6 原子帧 → 必 INTERNAL_ERROR），后者先 `chunk.tolist()` 物化再等 `Server._encode` 判 8 MB。前者目前无前端调用者、后者实际可达性已被复核降级（邻接是 CSR 一维；真问题是长一维数组被静默截断到 20000 而不告知）。
@@ -311,6 +311,23 @@
 
 诚实边界：**strain 的那半没有实测**。`_perturb_frame` 改成"cell 与 positions 同一个仿射映射"之后，新增的测试钉住的是分数坐标不变与平移无关性；"某类非平移不变描述符在旧写法下响应曲线被污染了多少"没测，因为那需要跑真实引擎。P1-18 的实测数字（中位相对误差 1.0、argmax 选错）是在合成数据上复现的，与真实描述符矩阵的分布不完全相同。
 
+### 第十一批（第 5–6 步：性能与结构收敛，`09f2cba`…`ec901cc`）
+
+验证：**pytest 339 passed / 1 skipped**（+6）、**vitest 145**（+1）、**eslint + `tsc -b` 干净**、**Playwright 38 passed**、**cargo 2 passed**。金标 keys 无变化。
+
+| 提交 | 内容 | 实测 |
+| --- | --- | --- |
+| `09f2cba` | 邻居搜索改成按 4096 原子分块的 `sparse_distance_matrix`，去掉每候选一次 `np.linalg.norm`（scipy 1.18 的 `query_ball_point` 不再返回距离，旧写法因此把距离在 Python 里重算了一遍）；graph 拿到作业条目前 60%，元素摘要占后 40%；分组 FPS 把 progress 传进内层循环 | 20k 原子/两轴 pbc：图构建 **9.3 s → 1.3 s**，整个分析 **12.4 s → 4.8 s**；10 万原子三轴 **33.9 s、26 个取消点**（报告原测 8–10 分钟不可中断）。结果逐位不变，未 bump 算法版本 |
+| `2d07819` | `result.heatmap` 按 `_MAX_CHUNK_VALUES/columns` 截断行并回 `truncated`，`atoms` 只列实际返回的行；协议文档同步。两个 per-analysis schema 修订号改成命名常量，并由 `test_mock_backend_vocabulary.py` 把 mock 的抄本钉住 | 门禁反向验证：改一个数 → 报出字段名失败 |
+| `db0954e` | `dataset.view.list` 每个数据集只解析一次 meta（旧写法每个视图重算一次指纹 = 目录遍历 + 32 MB 采样）。新门禁：解析 `registry.ts` 的 `ARTIFACT_ARRAYS`，逐个比对 IPC 全目录里每条已完成结果的 `artifact_manifest.files` | 注入一个不存在的数组名 → 门禁失败；真实表通过 |
+| `7de21f8` | `nearZero ≤ lowVariation` 收归 store 一处（面板不再把输入的数往回钳，因此 store 的"抬对方"分支第一次可达）；`SettingsDrawer` 改成逐字段订阅 | 下载进度从"每 chunk 重渲染整抽屉"降到"每整数百分比一次" |
+| `d9029ee` | 历史恢复时 projection 的 `preprocess` 回落改成各算法自己的默认（umap/tsne 是 raw，pca 是 center），旧 umap 行不再被标成一个它没做过的预处理；`parseAnalysisView` 最后一个不做白名单的枚举补上 | vitest 新增 1 条 + 3 断言 |
+| `ec901cc` | scipy 回退路径的最小距离搜索按 25 万行分块查询，`S×n×3` 临时量不再一次性物化 | 30 万原子/40 Å 三轴：峰值 traced memory **322 MB → 41 MB**，结果相同（0.0073），7.6 s vs 6.8 s |
+
+没做的，以及原因（都不是忘了）：**四-7**（可视化树 memo）——`PlotFrame` 的 `data`/`layout` 每次渲染都是新建字面量，只 `React.memo` 组件不钉数据等于不做，真做要改十几个视图的构造方式，而这一条至今只有静态推断、没有一次实测渲染耗时支撑，先测再说；**四-4 的后半**（health findings 每次打开非物理 tab 为 ≤1000 帧重做最近邻）——修它要把 per-frame `min_distance` 存进 cached stats，等于给 stats 结构加字段，要么 bump `stats_version`（代价：所有数据集重扫一遍），要么让旧缓存缺字段时退回现算（两份语义）。这两条都该你权衡，我没替你选；**四-9** Explore 原子表分页、`preview_service` 的 points/rows 合并按原样等你定调；**三-5**（outliers 面板提交 `k` 却没有 `k` 控件）需要一个产品判断：加控件还是把 `k` 固定下来。
+
 ### 剩余清单（按"要不要你先定调"分）
 
-第 4 步的五条口径已经在第十批落地（提案与落地差异见 `2026-09-20-science-semantics-decisions.md`）。还需要你定调的只剩两件：Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。第七节第 5、6 步里剩下的是性能与结构收敛类，各自都能直接做，只是需要单独验证。
+第 4 步的五条口径已经在第十批落地（提案与落地差异见 `2026-09-20-science-semantics-decisions.md`）；第 5、6 步（性能与结构收敛）除上一节列出的四项之外也已在第十一批落地。
+
+还需要你定调的：Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）；outliers 面板的 `k`（加控件还是固定住）；health findings 的 `min_distance` 要不要进 cached stats（进 = 选 `stats_version` bump 还是双读）。第五节里没动的两条：`五-5`（release 版 Rust 的失败原因进了不存在的 stderr、`kill()` 后不 `wait()`）与 `五-7`（benchmark 的线程/重复/内存指标不可信）。
