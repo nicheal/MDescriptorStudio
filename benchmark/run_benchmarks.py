@@ -32,6 +32,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
+# Before the imports below: BLAS picks its thread count when the library loads,
+# so pinning it after numpy arrives changes nothing (measured - a 3000^3 matmul
+# took 0.100 s with the variable set after `import numpy` and 0.813 s with one
+# thread set before it). Everything the harness measures must state it first.
+os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count() or 1))
+
 import numpy as np  # noqa: E402
 
 from mdescriptor_studio_backend.analysis import StructureDescriptorMatrix  # noqa: E402
@@ -63,8 +69,11 @@ def measure(runs, repeat=3):
     elapsed = statistics.median(times)
     return {
         "seconds": round(elapsed, 4),
-        "spread_seconds": [round(min(times), 4), round(max(times), 4)],
-        "peak_rss_mb": round(max(0, (after or 0) - (before or 0)) / 1e6, 1) if before and after else None,
+        # One number needs no interval, and pretending otherwise printed a
+        # convincing [t, t] for the large size classes, which only ever ran once.
+        "repeats": len(times),
+        "spread_seconds": [round(min(times), 4), round(max(times), 4)] if len(times) > 1 else None,
+        "rss_growth_mb": round(max(0, (after or 0) - (before or 0)) / 1e6, 1) if before and after else None,
         "rss_high_water_mb": round((after or 0) / 1e6, 1) or None,
         "result": result,
     }
@@ -115,7 +124,9 @@ def descriptor_suite(quick):
             "features": timing["result"],
             "seconds": timing["seconds"],
             "spread_seconds": timing["spread_seconds"],
+            "repeats": timing["repeats"],
             "rss_high_water_mb": timing["rss_high_water_mb"],
+            "rss_growth_mb": timing["rss_growth_mb"],
         })
     if not quick:
         # Thread scaling is the one number a reviewer of an MD tool will ask for.
@@ -133,7 +144,10 @@ def descriptor_suite(quick):
                 "structures_per_second": round(DESCRIPTOR_SCALES[1] / timing["seconds"], 1),
                 "seconds": timing["seconds"],
                 "spread_seconds": timing["spread_seconds"],
+                "repeats": timing["repeats"],
+                "num_threads": count,
                 "rss_high_water_mb": timing["rss_high_water_mb"],
+                "rss_growth_mb": timing["rss_growth_mb"],
             })
     return rows
 
@@ -162,8 +176,10 @@ def analysis_suite(quick):
                 "case": f"{label} · {samples} samples",
                 "seconds": timing["seconds"],
                 "spread_seconds": timing["spread_seconds"],
+                "repeats": timing["repeats"],
                 "samples_per_second": round(samples / timing["seconds"], 1),
                 "rss_high_water_mb": timing["rss_high_water_mb"],
+                "rss_growth_mb": timing["rss_growth_mb"],
             })
     return rows
 
@@ -181,8 +197,11 @@ def storage_suite(quick, tmp_dir):
             rows.append({
                 "case": f"{phase} {np.dtype(dtype).name} · {rows_count}x{features} ({megabytes:.0f} MB)",
                 "seconds": timing["seconds"],
+                "spread_seconds": timing["spread_seconds"],
+                "repeats": timing["repeats"],
                 "mb_per_second": round(megabytes / timing["seconds"], 1) if timing["seconds"] else None,
                 "rss_high_water_mb": timing["rss_high_water_mb"],
+                "rss_growth_mb": timing["rss_growth_mb"],
             })
     return rows
 
@@ -194,8 +213,13 @@ def main():
     arguments = parser.parse_args()
 
     started = datetime.now(timezone.utc)
-    os.environ.setdefault("OMP_NUM_THREADS", str(os.cpu_count() or 1))
-    results = {"started_at": started.isoformat(timespec="seconds"), "engine_version": None, "rows": []}
+    results = {
+        "started_at": started.isoformat(timespec="seconds"),
+        # The numbers below only mean something with the thread budget stated.
+        "omp_num_threads": os.environ.get("OMP_NUM_THREADS"),
+        "engine_version": None,
+        "rows": [],
+    }
     try:
         results["engine_version"] = EngineAdapter().runtime_info().get("version")
     except Exception as error:  # noqa: BLE001 - a missing engine must not hide the other suites

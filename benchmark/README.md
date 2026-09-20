@@ -34,9 +34,16 @@ device selection is covered by the descriptor-service tests instead.
 ## Reading the memory column
 
 `rss_high_water_mb` is the process working set after the run, and
-`peak_rss_mb` its growth during the measured calls. On Windows that is the
+`rss_growth_mb` its growth during the measured calls. On Windows that is the
 current working set, sampled around the call. On Linux and macOS the OS only
 offers `ru_maxrss`, a *lifetime* high-water mark for the whole process, so
 there the column includes interpreter and import costs and reads as an upper
 bound - the same caveat that applies to `memory_peak_bytes` on a descriptor
 run. See `services/descriptor_service.py::_process_rss_bytes`.
+
+Every row carries `repeats`, and `spread_seconds` is null where a case ran
+once: the large analysis size classes are single-shot measurements, and an
+interval of `[t, t]` would read like a spread. `results.json` records
+`omp_num_threads` for the run - the harness sets it *before* importing numpy,
+because BLAS chooses its threads when the library loads and a later value is
+ignored.
