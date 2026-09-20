@@ -289,9 +289,11 @@
 
 `DatasetService.meta` 对 fingerprint 尚未版本化的行也会去算版本化指纹，然后完全走 legacy 分支回答（`cache_valid=False`、`MIGRATING`，与算出的值无关）——这类数据集每次读注册表都白付一趟整目录遍历 + 32 MB 采样。现在只在该分支真正用得到时才计算。
 
-### 剩余清单（按"要不要你先定调"分）
+### 第八批（截断要说出来 — `addacc4`）
 
-需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
+验证：**vitest 144**（新增 1 条）、**eslint + `tsc -b` 干净**、**Playwright 36 passed**。
+
+结果卡片在数组被裁窄时点名说明（`narrowedArrays()` 纯函数；`CachedAnalysis.narrowed` 与它描述的数组同存同取，重看历史行不会把同一张矩阵画成"完整的"）。诚实边界：今天 UI 能达到的参数都触发不了预算（最大的相关矩阵 512×512 恰好等于 `_MAX_CHUNK_VALUES`），所以这条提示是为"第一次有人抬高上限"准备的保险，而不是当前可见的行为变化。
 
 ### 第九批（提交参数的校验 — `a67f752`）
 
@@ -301,8 +303,6 @@
 
 到这一步，第 5、6 步里"不需要定调"的部分已全部落地；剩下的都要你先定调（第 4 步五条口径、Explore 原子表分页、`preview_service` 的 points/rows 合并）。
 
-### 第八批（截断要说出来 — `addacc4`）
+### 剩余清单（按"要不要你先定调"分）
 
-验证：**vitest 144**（新增 1 条）、**eslint + `tsc -b` 干净**、**Playwright 36 passed**。
-
-结果卡片在数组被裁窄时点名说明（`narrowedArrays()` 纯函数；`CachedAnalysis.narrowed` 与它描述的数组同存同取，重看历史行不会把同一张矩阵画成"完整的"）。诚实边界：今天 UI 能达到的参数都触发不了预算（最大的相关矩阵 512×512 恰好等于 `_MAX_CHUNK_VALUES`），所以这条提示是为"第一次有人抬高上限"准备的保险，而不是当前可见的行为变化。
+需要你定调：第 4 步五条科学口径（`coverage` 默认尺度、零方差判据、配位数与 `max_neighbors` 解耦、`acquisition.scores`、strain 中心）——已整理成 `2026-09-20-science-semantics-decisions.md`，每项带现状代码证据、建议改法、失效影响与推荐默认；Explore 原子表分页（与 `tbody tr.explore-atom-row-selected` 定位方式绑死）；`preview_service` 的 points/rows 重复（`rows` 是前端在读的字段，合并会改变响应）。
