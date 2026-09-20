@@ -12,9 +12,29 @@ type StructureViewerModule = {
 
 const STRUCTURE_VIEWER_BACKGROUND = "white";
 
-async function load3Dmol(): Promise<StructureViewerModule> {
-  const mod = await import("3dmol");
-  return ((mod as { default?: unknown }).default ?? mod) as StructureViewerModule;
+// 3Dmol is 1.8 MB in dev and 0.6 MB in the production bundle, and it is only
+// reachable through a dynamic import, so the browser cannot fetch it before the
+// first viewer mounts. Holding that import in a module-level promise is what
+// lets App start it while the shell is still idle. A rejection is cleared so a
+// later mount retries instead of inheriting the failed promise.
+let threeDmolLoad: Promise<StructureViewerModule> | null = null;
+
+function load3Dmol(): Promise<StructureViewerModule> {
+  threeDmolLoad ??= import("3dmol").then(
+    (mod) => ((mod as { default?: unknown }).default ?? mod) as StructureViewerModule,
+    (error) => {
+      threeDmolLoad = null;
+      throw error;
+    },
+  );
+  return threeDmolLoad;
+}
+
+/** Fetch 3Dmol before any viewer asks for it, off the click path.
+ * App calls this once the shell is up; a failed preload is silent because
+ * `createStructureViewer` is where a load failure has to surface. */
+export function preloadStructureViewer(): void {
+  load3Dmol().catch(() => undefined);
 }
 
 /** The 3Dmol surface this app actually uses.
@@ -40,12 +60,27 @@ export type StructureViewer = {
   zoomTo: () => void;
 };
 
+// Every viewer draws into a host node of its own inside the element the page
+// owns. Two viewers can share that element for a moment - a mount cancelled
+// while the next one has already attached its canvas is enough - and a viewer
+// released by emptying the shared element would take the surviving canvas with
+// it, leaving the pane blank for the rest of the page's life.
+const viewerHosts = new WeakMap<object, HTMLElement>();
+
 export async function createStructureViewer(
   element: HTMLElement,
   options: Record<string, unknown> = {},
 ): Promise<StructureViewer> {
   const $3Dmol = await load3Dmol();
-  return $3Dmol.createViewer(element, { backgroundColor: STRUCTURE_VIEWER_BACKGROUND, ...options }) as StructureViewer;
+  const host = document.createElement("div");
+  host.style.cssText = "position:relative;width:100%;height:100%";
+  element.appendChild(host);
+  const viewer = $3Dmol.createViewer(host, {
+    backgroundColor: STRUCTURE_VIEWER_BACKGROUND,
+    ...options,
+  }) as StructureViewer;
+  viewerHosts.set(viewer, host);
+  return viewer;
 }
 
 /** Row-major 3x3 lattice (a1, a2, a3) as the wireframe the viewer draws.
@@ -66,16 +101,17 @@ const UNIT_CELL_EDGES: [number, number, number, number, number, number][] = [
  * document.body that it never removes, the viewer graph stays reachable for
  * the life of the page. Browsers cap live contexts (around 16) and discard the
  * oldest past that limit, which surfaces as earlier viewers silently going
- * blank — so the context is released explicitly through its own canvas before
- * the element is emptied.
+ * blank — so the context is released explicitly through the viewer's own canvas
+ * before its host node is removed.
  */
-export function disposeStructureViewer(element: HTMLElement | null | undefined, viewer: unknown): void {
+export function disposeStructureViewer(viewer: unknown): void {
   try {
     (viewer as { clear?: () => void } | null | undefined)?.clear?.();
   } catch (error) {
     console.error("structure viewer clear failed", error);
   }
-  const canvas = element?.querySelector("canvas");
+  const host = viewer ? viewerHosts.get(viewer as object) : undefined;
+  const canvas = host?.querySelector("canvas");
   if (canvas) {
     for (const type of ["webgl2", "webgl"] as const) {
       const context = canvas.getContext(type) as WebGLRenderingContext | null;
@@ -86,7 +122,7 @@ export function disposeStructureViewer(element: HTMLElement | null | undefined, 
       }
     }
   }
-  if (element) element.innerHTML = "";
+  host?.remove();
 }
 
 export function addUnitCell(

@@ -41,7 +41,7 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
           // The cleanup above already ran with an empty ref, so this is the only
           // place the just-created viewer can be released. Each WebGL context
           // left behind eats one of the ~16 the browser allows.
-          disposeStructureViewer(element, viewer);
+          disposeStructureViewer(viewer);
           return;
         }
         viewerRef.current = viewer;
@@ -55,7 +55,7 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
     return () => {
       cancelled = true;
       setViewerReady(false);
-      disposeStructureViewer(element, viewerRef.current);
+      disposeStructureViewer(viewerRef.current);
       viewerRef.current = null;
     };
   }, []);
@@ -107,6 +107,7 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
         className="results-structure-viewer"
         aria-label={t("Structure preview for frame {index}", { index: frame.index })}
       />
+      {!viewerReady && !viewerError && <div className="structure-viewer-busy">{t("Loading the 3D viewer…")}</div>}
       {viewerError && <div className="results-structure-viewer-error">viewer error: {viewerError}</div>}
       {selectedAtom != null && localCutoff != null && <div className="results-structure-local-badge">{t("Local shell ≤ {cutoff} Å", { cutoff: localCutoff.toFixed(2) })}</div>}
       <button type="button" className="results-structure-open" onClick={onOpen}>

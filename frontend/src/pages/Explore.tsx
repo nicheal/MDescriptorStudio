@@ -411,7 +411,7 @@ export default function Explore() {
           // Cleanup already ran with an empty ref, so only this branch can
           // release a viewer that finished loading after the page moved on;
           // a leaked context is one of the ~16 the browser allows.
-          disposeStructureViewer(element, viewer);
+          disposeStructureViewer(viewer);
           return;
         }
         viewerRef.current = viewer;
@@ -424,7 +424,7 @@ export default function Explore() {
     return () => {
       cancelled = true;
       setViewerReady(false);
-      disposeStructureViewer(element, viewerRef.current);
+      disposeStructureViewer(viewerRef.current);
       viewerRef.current = null;
     };
   }, []);
@@ -690,6 +690,9 @@ export default function Explore() {
           }}
         >
           <div ref={viewerDiv} style={{ width: "100%", height: "100%", minHeight: 420 }} />
+          {/* Two separate waits: the viewer itself, then the frame it shows. */}
+          {!viewerReady && !viewerError && <div className="structure-viewer-busy">{t("Loading the 3D viewer…")}</div>}
+          {viewerReady && !frame && <div className="structure-viewer-busy">{t("Loading structure…")}</div>}
           {viewerError && (
             <div
               style={{

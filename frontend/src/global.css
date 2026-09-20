@@ -255,6 +255,20 @@ body {
   height: 100%;
 }
 
+/* The 3D panes are white boxes before 3Dmol arrives and before a frame does,
+   which reads as a broken app rather than a loading one. Both viewers overlay
+   the same wording on the shell that holds them. */
+.structure-viewer-busy {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #616161;
+  font-size: 12px;
+  pointer-events: none;
+}
+
 .results-structure-viewer-error {
   position: absolute;
   top: 8px;

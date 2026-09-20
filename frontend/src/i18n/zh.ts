@@ -181,6 +181,7 @@ export const zhDict: Record<string, string> = {
   "Browse": "浏览",
 
   // StructurePreview / Explore
+  "Loading the 3D viewer…": "正在加载 3D 查看器…",
   "Structure preview for frame {index}": "结构预览（帧 {index}）",
   "Open frame {index} in Explore": "在浏览页打开帧 {index}",
   "Local shell ≤ {cutoff} Å": "局部壳层 ≤ {cutoff} Å",

@@ -19,6 +19,7 @@ import { useWorkspace, hydrateActiveRun } from "./stores/workspace";
 import { hydrateAnalysisUi } from "./features/analysis";
 import { wireJobEvents } from "./stores/jobs";
 import { getT, initLanguage, useT } from "./i18n";
+import { preloadStructureViewer } from "./viz/StructureViewer";
 import type { DatasetMeta } from "./types/protocol";
 import { APP_ICON_URL } from "./brand";
 
@@ -63,6 +64,13 @@ export default function App() {
   // handler must not report it as a crash; the flag clears when the new
   // process greets us (or if the restart call itself fails).
   const restartingRef = useRef(false);
+
+  // 3Dmol is the largest thing the structure pages wait on, and it sits behind a
+  // dynamic import: loading it only when the viewer mounts leaves the pane empty
+  // for the whole fetch. Start it while the shell comes up instead.
+  useEffect(() => {
+    preloadStructureViewer();
+  }, []);
 
   const restartBackend = useCallback(async () => {
     setBackendStarting();
