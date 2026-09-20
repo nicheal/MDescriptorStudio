@@ -29,6 +29,17 @@ from .analysis_helpers import (
 )
 
 
+def _preprocessing(params: dict) -> dict:
+    """What `analysis_runs.preprocessing_json` records: the scale the run used.
+
+    One expression because the row is written twice - once when the run is
+    claimed, once when it settles - and the two had already drifted: the
+    settlement dropped `scaling`, which for composite FPS is a parameter that
+    defines the space the samples were drawn from.
+    """
+    return {"preprocess": params.get("preprocess"), "scaling": params.get("scaling")}
+
+
 class AnalysisRunMixin:
     """Analysis job execution pipeline (load -> engine -> artifact settle)."""
 
@@ -129,7 +140,7 @@ class AnalysisRunMixin:
                 input_ids=input_ids,
                 primary_run_id=run_rows[0]["id"],
                 dataset_ids=sorted({row["dataset_id"] for row in run_rows}),
-                preprocessing={"preprocess": params.get("preprocess"), "scaling": params.get("scaling")},
+                preprocessing=_preprocessing(params),
             )
             if early is not None:
                 return early
@@ -205,7 +216,7 @@ class AnalysisRunMixin:
                             # here would settle the row COMPLETED and then make
                             # every later read of it fail to encode.
                             "preview_json": json.dumps(preview, ensure_ascii=False, allow_nan=False),
-                            "preprocessing_json": json.dumps({"preprocess": params.get("preprocess")}, ensure_ascii=False),
+                            "preprocessing_json": json.dumps(_preprocessing(params), ensure_ascii=False),
                             "updated_at": _NOW(),
                         },
                         artifact_path,

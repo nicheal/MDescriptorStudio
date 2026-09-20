@@ -1259,6 +1259,27 @@ def test_composite_sampling_builds_requested_blocks_and_reports_layout(tmp_path:
     db.close()
 
 
+def test_a_settled_analysis_row_keeps_the_scale_it_was_claimed_with(tmp_path: Path) -> None:
+    # analysis_runs.preprocessing_json is written twice: when the row is claimed
+    # and when it settles. The settlement wrote a subset, so the row that outlives
+    # the job said less than the row the job started from - and for composite FPS
+    # `scaling` is not decoration, it is the space the samples were drawn from.
+    db, jobs, service = _composite_service(tmp_path)
+    submitted = service.sampling({
+        "run_id": "run_composite",
+        "algorithm": "fps",
+        "n_samples": 3,
+        "scaling": "robust",
+        "blocks": ["descriptor", "lattice", "composition", "energy", "force"],
+    })
+    row = db.query_one("SELECT preprocessing_json FROM analysis_runs WHERE id = ?", (submitted["analysis_id"],))
+
+    recorded = json.loads(row["preprocessing_json"])
+    assert set(recorded) == {"preprocess", "scaling"}, recorded
+    assert recorded["scaling"] == "robust", recorded
+    db.close()
+
+
 def test_composite_sampling_rejects_unknown_blocks_before_enqueue(tmp_path: Path) -> None:
     db, jobs, service = _composite_service(tmp_path)
     with pytest.raises(AppError, match="unknown sampling block") as exc:
