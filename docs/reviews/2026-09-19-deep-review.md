@@ -103,7 +103,7 @@
 | --- | --- |
 | `result.heatmap` | 全仓**无前端调用者**（只有 `main.py:153` 方法表 + `test_analysis_flow.py:96`）。功能要么没接上要么已被取代。 ◑ |
 | `descriptor_service.py:628` `row_offsets_verified` | 写入 metadata，**零读者**（含前端/tests）。它本该是 P0-4 的判据。 ◑ |
-| `preview_service.py:52-92` | 同一次采样用**同一个** `indices` 写两遍（`points` 与 `rows`，只有键名不同：`label/cluster/element` vs `labels/cluster_labels/element`）→ 每份预览传 2 万条记录两遍，逼近 8 MB 帧上限。注意：记忆里"points 用 linspace、rows 取前 20k 覆盖不同子集"的旧残留**已被修好**（`:75-78` 注释即为此），今天的问题是重复而非不一致。 ✅ |
+| `preview_service.py:52-92` | 同一次采样用**同一个** `indices` 写两遍（`points` 与 `rows`，只有键名不同：`label/cluster/element` vs `labels/cluster_labels/element`）→ 每份预览传 2 万条记录两遍，逼近 8 MB 帧上限。注意：记忆里"points 用 linspace、rows 取前 20k 覆盖不同子集"的旧残留**已被修好**（当时 `:75-78` 的注释即为此），今天的问题是重复而非不一致。 ✅（第十五批合为一份：表读 `points`） |
 | `main.py:63-79` vs `:210-221` | 同一份 6 字段版本载荷手写两份（`backend.ready` 与 `system.info` 从此可漂移）。 |
 | `_NOW` 四份 | `job_service.py:22`、`analysis_helpers.py:15`、`dataset_service.py:49`、`descriptor_service.py:42`（`job_runner.py:24` 已在 import 其中一份）。`_ARTIFACT_ID_RE` 两份；托管路径校验两套（`_managed_artifact_path` / `_managed_result_path`+`_managed_analysis_path`）。 |
 | "cross 样本取哪一侧" 三份词汇表 | `job_runner.py:58` 四类（coverage/overlap/acquisition/drift）、`artifact_service.py:239` 两类、`analysis_loader.py:87` 第三份。重叠分析的重建行因此以 reference 身份配 query 数组。 |
@@ -352,12 +352,28 @@
 | `Explore.tsx` 渲染体内新建的查找表 | **不成立**：`frameAtoms`/`forceArrows` 早已在 `useMemo` 内（第十三批四-7 实测时顺手读到）。删掉这条，未改代码 |
 | `backend-temp` 只建不清：shell 每次建目录时扫一遍，把 24 小时没被写过的条目删掉（尽力而为，删不掉的留着） | 24 小时是唯一在"可能有并发实例"前提下还能成立的说法：活着的 sidecar 反复写自己的 scratch，被崩溃留下的才会静默。cargo **3 passed**（+1）；把阈值调成 0 注入 → 新增那条失败，证明它不是空跑 |
 
+### 第十五批（最后一件定调：points/rows 合一份）
+
+验证：**pytest 343 passed / 1 skipped**、**vitest 159**（+10）、**eslint + `tsc -b` 干净**、**Playwright 39 passed**。金标 keys 无变化（它记的是响应顶层键，preview 内部不在射程内）。
+
+| 位置 | 内容 |
+| --- | --- |
+| `preview_service.py` | 带 coords 的分支不再为同一批 `indices` 建第二份列表（`rows`/`total_rows` 一并去掉），逐样本字段只写在 `points` 上 |
+| `analysisPreview.ts` + `ResultPanel` | 表的来源抽成三个纯函数：`previewTableRows`（rows → **带了逐样本字段的** points → selected → pairs → runs → top_indices）、`previewTableColumns`（x/y 排到最后再截 7 列）、`previewRowFields`（`label`/`labels` 两种命名都读）。十条单测钉住三条分支与列序 |
+| `preview.tsx` | 两处 `rows: points` 删除（mock 本来就是把同一个数组挂两个键，与后端的复数命名并不一致） |
+| `docs/plan/03-BACKEND_DESIGN.md` | "PCA/UMAP/t-SNE 出 points，cluster/outlier/coverage 出 rows" 那句按真实规则改写：有没有 coords 决定发哪一份，表读同一份 |
+| `tests/test_analysis_api.py` | 三条断言从 `rows` 改读 `points`（同一批样本，本就等价）；原来那条"表与散点覆盖同一批样本"的不变量测试换成"只有一份列表，且表要看的字段都在点上"——它要防的分裂现在由形状保证 |
+
+实测（合成 20k 样本、coords + labels + cluster_labels 的投影）：preview 的 JSON **3909 KiB → 2144 KiB（−45%）**，`_build_preview` **150 ms → 92 ms（−39%）**。反向验证：把 `previewTableColumns` 的排序去掉 → e2e 那条（`x` 挤掉了 `cluster`）与列序单测同时失败。
+
+兼容：历史 `preview_json` 里 `rows` 还在，前端仍**优先读 rows**，所以旧结果打开时形状与列名不变；`previewRowFields` 两种命名都认，点行的选中语义因此也没变。
+
+没做（都不成比例）：mock 的 sampling `points` 带着 label/score 等字段，而真后端的 sampling 只给 identity + 坐标，于是 mock 的 sampling 表仍是"所有候选点"、真后端是"选中的样本" —— 这个偏差合并前就在（原先走 `rows`），要修得动 `mockAnalysisPoints` 的共用形状，会连带几条 e2e 的点击目标；`_rows_from_artifact` 里 `rows → selected → points` 的优先级保持原样，它只在"没有可分页 preview 的旧 artifact"上跑，三种列表任取一种分页都是合理的。
+
 ### 剩余清单（按"要不要你先定调"分）
 
-第 4 步的五条口径在第十批落地（提案与差异见 `2026-09-20-science-semantics-decisions.md`），第 5、6 步在第十一批，第五节的 5 与 7 在第十二批，你定调的四件与四-7 的实测在第十三批，不需要定调的五条尾巴在第十四批。
+第 4 步的五条口径在第十批落地（提案与差异见 `2026-09-20-science-semantics-decisions.md`），第 5、6 步在第十一批，第五节的 5 与 7 在第十二批，你定调的四件与四-7 的实测在第十三批，不需要定调的五条尾巴在第十四批，最后定调的一件在第十五批。
 
-还需要你定调的只剩一件：**`preview_service` 的 points/rows 重复** —— 同一批 ≤20k 记录以两个键、两套字段名发两遍（`points` 用 `label/cluster`，`rows` 用 `labels/cluster_labels`），`rows` 是前端 DataTable 在读的字段，所以合并成一份必然改变响应形状（要动前端读法、mock 与金标）。
-
-这条的实测分量（2026-09-20，合成 20k 样本、带 coords + labels + cluster_labels 的投影）：一份 preview 的 JSON 是 **3.9 MB**，其中 `points` 2.1 MB、`rows` 1.8 MB —— 两个列表是**同一批样本、同一个 `indices` 抽样、顺序一致**（逐条比对 `i/frame/sample_id` 全等），只差字段名和 `x/y`；`total_rows` 与 `total_points` 是同一个数。`_build_preview` 在这一例上花 150 ms：只有 coords 时 62 ms，加上两个 label 数组后 149 ms —— 多出的 87 ms 是给每个点补字段 + 为 `rows` 再走一遍同样的 20k 次 dict 构造。这份 blob 存在 SQLite 的 `preview_json` 列里（每个结果永久一份），并且只在 `analysis.get` 时整份过 IPC（列表响应按 `_ROW_SKIP_COLUMNS` 排除它）。合并后的形状问题只剩一个：DataTable 改读 `points`，于是表里会多出 x/y 两列、列名从 `labels` 变成 `label`。
+待决项到此为零。最后那件 —— `preview_service` 把同一批 ≤20k 记录以两个键、两套字段名发两遍（`points` 用 `label/cluster`，`rows` 用 `labels/cluster_labels`，而 `total_rows` 与 `total_points` 本来就是同一个数）—— 在第十五批合成一份。它值得做的理由留在这儿：这份列表存在 SQLite 的 `preview_json` 列里，每个结果永久一份，打开结果时整份过 IPC（列表响应按 `_ROW_SKIP_COLUMNS` 把它排除掉），所以重复一次就是每个被查看的投影结果多 1.8 MB。
 
 审阅这边到此见底；再往下是新功能或发布侧的事。
