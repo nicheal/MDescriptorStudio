@@ -102,10 +102,13 @@ describe("analysis submission payloads", () => {
     expect(run("clusters", { clusterAlgorithm: "gmm", nClusters: 4 }).params).toEqual({
       algorithm: "gmm", n_clusters: 4, preprocess: "standardized", mode: "structure",
     });
+    // isForest never reads k, so it must not be sent: an unrelated k change on
+    // another panel would otherwise look like a different analysis here.
     expect(run("outliers", { outlierAlgorithm: "iforest", contamination: 0.05 }).params).toEqual({
-      algorithm: "iforest", k: 10, contamination: 0.05, preprocess: "standardized", mode: "structure",
+      algorithm: "iforest", contamination: 0.05, preprocess: "standardized", mode: "structure",
     });
-    expect(run("outliers", { outlierAlgorithm: "lof" }).label).toBe("LOF");
+    expect(run("outliers", { outlierAlgorithm: "lof", k: 7 }).params).toMatchObject({ algorithm: "lof", k: 7 });
+    expect(run("outliers", { outlierAlgorithm: "mahalanobis" }).params).not.toHaveProperty("k");
   });
 
   it("slices every single-run module by the active dataset view", () => {

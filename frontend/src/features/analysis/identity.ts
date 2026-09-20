@@ -22,7 +22,10 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
     case "clusters":
       return [p.clusterAlgorithm, p.nClusters, p.mode, p.viewId ?? "full"].join("|");
     case "outliers":
-      return [p.outlierAlgorithm, p.k, p.contamination, p.mode, p.viewId ?? "full"].join("|");
+      // Only LOF and k-NN read k, so only they key on it - otherwise a k moved
+      // on another panel would blank this module's cached-result dot without
+      // changing the computation, with no control on screen to move it back.
+      return [p.outlierAlgorithm, p.outlierAlgorithm === "lof" || p.outlierAlgorithm === "knn" ? p.k : "", p.contamination, p.mode, p.viewId ?? "full"].join("|");
     case "sampling":
       return [
         p.samplingAlgorithm,

@@ -57,8 +57,13 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
     case "clusters":
       return { kind: "run", method: "analysis.cluster", label: p.clusterAlgorithm.toUpperCase(), params: { algorithm: p.clusterAlgorithm, n_clusters: p.nClusters, preprocess: "standardized", mode: p.mode, ...viewSuffix(p.viewId) } };
 
-    case "outliers":
-      return { kind: "run", method: "analysis.outlier", label: p.outlierAlgorithm.toUpperCase(), params: { algorithm: p.outlierAlgorithm, k: p.k, contamination: p.contamination, preprocess: "standardized", mode: p.mode, ...viewSuffix(p.viewId) } };
+    case "outliers": {
+      // LOF and k-NN score against k neighbours; isolation forest and
+      // Mahalanobis do not read it at all, so sending it there would make an
+      // unrelated k change look like a different analysis.
+      const usesK = p.outlierAlgorithm === "lof" || p.outlierAlgorithm === "knn";
+      return { kind: "run", method: "analysis.outlier", label: p.outlierAlgorithm.toUpperCase(), params: { algorithm: p.outlierAlgorithm, ...(usesK ? { k: p.k } : {}), contamination: p.contamination, preprocess: "standardized", mode: p.mode, ...viewSuffix(p.viewId) } };
+    }
 
     case "sampling": {
       if (p.samplingAlgorithm === "novelty_fps" || p.samplingAlgorithm === "uncertainty_diversity") {
