@@ -55,6 +55,7 @@ export default function App() {
   const setBackendReady = useWorkspace((s) => s.setBackendReady);
   const setBackendStarting = useWorkspace((s) => s.setBackendStarting);
   const setBackendError = useWorkspace((s) => s.setBackendError);
+  const backendLogDir = useWorkspace((s) => s.backendLogDir);
   const setDatasets = useWorkspace((s) => s.setDatasets);
   const setActiveDataset = useWorkspace((s) => s.setActiveDataset);
   const { t } = useT();
@@ -160,10 +161,10 @@ export default function App() {
           offReady = null;
           readyHandled = false;
           stopPoller();
-          await ipc.connect(() => {
+          await ipc.connect((logDir) => {
             if (disposed) return;
             if (!restartingRef.current) message.error(getT().t("Backend process exited"));
-            useWorkspace.getState().setBackendError();
+            useWorkspace.getState().setBackendError(logDir);
             void arm();
           });
           if (disposed) break;
@@ -241,6 +242,16 @@ export default function App() {
             <Button type="primary" onClick={() => void restartBackend()}>
               {t("Restart the backend")}
             </Button>
+          )}
+          {backendStatus === "error" && backendLogDir && (
+            // A release build has no console: this directory is the only place
+            // the shell's own failure reason can be found.
+            <div
+              title={backendLogDir}
+              style={{ maxWidth: "72%", color: "#8A8A8A", fontSize: 12, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              {t("Startup log: {path}", { path: backendLogDir })}
+            </div>
           )}
         </div>
       </div>

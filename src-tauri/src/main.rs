@@ -55,6 +55,17 @@ fn log_file(name: &str) -> Option<File> {
     OpenOptions::new().create(true).append(true).open(path).ok()
 }
 
+/// What the webview needs once the sidecar is gone. A release build has no
+/// console, so this event is the only channel left - and the directory the shell
+/// wrote its own diagnostics to is the only thing a user can act on.
+fn backend_exit_payload() -> Value {
+    json!({
+        "logDir": app_root()
+            .ok()
+            .map(|root| root.join("logs").display().to_string()),
+    })
+}
+
 fn log_line(message: &str) {
     #[cfg(debug_assertions)]
     eprintln!("{message}");
@@ -159,7 +170,7 @@ fn backend_restart(app: tauri::AppHandle, state: tauri::State<BackendState>) -> 
     let _ = app.emit_to(
         EventTarget::webview_window(MAIN_WEBVIEW),
         BACKEND_EXIT_EVENT,
-        (),
+        backend_exit_payload(),
     );
     spawn_backend_async(app);
     Ok(())
@@ -220,7 +231,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
             let _ = app.emit_to(
                 EventTarget::webview_window(MAIN_WEBVIEW),
                 BACKEND_EXIT_EVENT,
-                (),
+                backend_exit_payload(),
             );
             return;
         }
@@ -243,7 +254,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
             let _ = app.emit_to(
                 EventTarget::webview_window(MAIN_WEBVIEW),
                 BACKEND_EXIT_EVENT,
-                (),
+                backend_exit_payload(),
             );
             return;
         }
@@ -308,7 +319,7 @@ fn spawn_backend(app: &tauri::AppHandle) {
             let _ = handle.emit_to(
                 EventTarget::webview_window(MAIN_WEBVIEW),
                 BACKEND_EXIT_EVENT,
-                (),
+                backend_exit_payload(),
             );
         }
     });

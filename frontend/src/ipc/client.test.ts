@@ -36,7 +36,7 @@ describe("IpcClient connection lifecycle", () => {
     expect(listen).toHaveBeenCalledTimes(2);
     expect(ipc.isReady).toBe(true);
 
-    listeners.get(BACKEND_EXIT_EVENT)?.();
+    listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } });
 
     expect(unlisten).toHaveBeenCalledTimes(2);
     expect(firstExit).not.toHaveBeenCalled();
@@ -57,7 +57,7 @@ describe("IpcClient connection lifecycle", () => {
     const oldExitListener = listeners.get(BACKEND_EXIT_EVENT);
     const request = ipc.request("slow");
 
-    listeners.get(BACKEND_EXIT_EVENT)?.();
+    listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } });
 
     await expect(
       Promise.race([
@@ -71,6 +71,8 @@ describe("IpcClient connection lifecycle", () => {
     await Promise.resolve();
     await Promise.resolve();
 
+    // Deliberately malformed: a listener fired without an event object must
+    // still tear the connection down rather than throw inside the handler.
     oldExitListener?.();
     expect(ipc.isReady).toBe(true);
 

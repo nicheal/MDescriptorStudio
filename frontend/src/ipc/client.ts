@@ -40,13 +40,13 @@ class IpcClient {
   private connectionGeneration = 0;
   private unlistenMessage: UnlistenFn | null = null;
   private unlistenExit: UnlistenFn | null = null;
-  private onExit: (() => void) | undefined;
+  private onExit: ((logDir: string | null) => void) | undefined;
 
   get isReady() {
     return this.connected;
   }
 
-  async connect(onExit?: () => void): Promise<void> {
+  async connect(onExit?: (logDir: string | null) => void): Promise<void> {
     this.onExit = onExit;
     if (this.connected) return;
     if (this.connecting) return this.connecting;
@@ -62,7 +62,13 @@ class IpcClient {
       }
       this.unlistenMessage = unlistenMessage;
       try {
-        const unlistenExit = await listen<void>(BACKEND_EXIT_EVENT, () => this.handleBackendExit(generation));
+        // The shell names its log directory on exit: in a release build it has
+        // no console, so this event is the only way a failure can be reported at
+        // all, and a path the user can open is the difference between a bug
+        // report and a guess.
+        const unlistenExit = await listen<{ logDir?: string | null }>(BACKEND_EXIT_EVENT, (evt) =>
+          this.handleBackendExit(generation, typeof evt?.payload?.logDir === "string" ? evt.payload.logDir : null),
+        );
         if (generation !== this.connectionGeneration) {
           unlistenMessage();
           unlistenExit();
@@ -90,7 +96,7 @@ class IpcClient {
     return connection;
   }
 
-  private handleBackendExit(generation: number) {
+  private handleBackendExit(generation: number, logDir: string | null) {
     if (generation !== this.connectionGeneration) return;
     this.connectionGeneration += 1;
     this.connected = false;
@@ -105,7 +111,7 @@ class IpcClient {
     unlistenExit?.();
     const onExit = this.onExit;
     this.onExit = undefined;
-    onExit?.();
+    onExit?.(logDir);
   }
 
   /** Release native listeners when Vite replaces this module during HMR. */

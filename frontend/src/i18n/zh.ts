@@ -20,6 +20,8 @@ export const zhDict: Record<string, string> = {
   "Starting backend…": "正在启动后端…",
   "Backend process exited.": "后端进程已退出。",
   "Restart the backend": "重启后端",
+  "Startup log: {path}": "启动日志目录：{path}",
+
   "Backend process exited": "后端进程已退出",
 
   // TitleBar

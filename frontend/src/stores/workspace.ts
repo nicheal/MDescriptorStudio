@@ -35,10 +35,13 @@ interface WorkspaceState {
   findingsCheck: string | null;
   // bumped after a health rescan completes → pages refetch dataset statistics
   statsTick: number;
+  // where the desktop shell wrote its own diagnostics, once a backend has died
+  // enough to explain it (null until an exit event carries one)
+  backendLogDir: string | null;
 
   setBackendReady: (engineVersion: string | null, cpuThreads?: number | null) => void;
   setBackendStarting: () => void;
-  setBackendError: () => void;
+  setBackendError: (logDir?: string | null) => void;
   setDatasets: (datasets: DatasetMeta[]) => void;
   setActiveDataset: (id: string | null) => void;
   setActiveFrame: (index: number) => void;
@@ -68,11 +71,15 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   findingsDrawerOpen: false,
   findingsCheck: null,
   statsTick: 0,
+  backendLogDir: null,
 
   setBackendReady: (engineVersion, cpuThreads) =>
     set((st) => ({ backendStatus: "ready", engineVersion, cpuThreads: cpuThreads ?? st.cpuThreads })),
   setBackendStarting: () => set({ backendStatus: "starting", engineVersion: null }),
-  setBackendError: () => set({ backendStatus: "error" }),
+  setBackendError: (logDir) =>
+    // Sticky: a later error path that carries no payload should not hide
+    // the location the shell already reported.
+    set((st) => ({ backendStatus: "error", backendLogDir: logDir ?? st.backendLogDir })),
   setDatasets: (datasets) => set({ datasets }),
   setActiveDataset: (id) =>
     set((st) => {

@@ -99,11 +99,23 @@ describe("App backend channel", () => {
     expect(ipc.isReady).toBe(true);
   });
 
+  it("names the shell's log directory on the offline screen", async () => {
+    await mount();
+    act(() => listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: "C:/Users/me/AppData/Local/MDescriptorStudio/logs" } }));
+    await flush();
+
+    // A release build has no console, so a user who is told "the backend
+    // exited" has nowhere to look unless the exit event carries the path.
+    expect(useWorkspace.getState().backendLogDir).toBe("C:/Users/me/AppData/Local/MDescriptorStudio/logs");
+    expect(document.body.textContent).toContain("MDescriptorStudio/logs");
+    useWorkspace.setState({ backendLogDir: null });
+  });
+
   it("re-arms the listeners after a backend exit and answers the new process", async () => {
     await mount();
     const before = unlistenCalls.n;
 
-    act(() => listeners.get(BACKEND_EXIT_EVENT)?.());
+    act(() => listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } }));
     await flush();
 
     // The exit released the old pair, and App installed a fresh one: without
@@ -127,9 +139,9 @@ describe("App backend channel", () => {
 
   it("answers exactly one handshake per ready frame after repeated re-arms", async () => {
     await mount();
-    act(() => listeners.get(BACKEND_EXIT_EVENT)?.());
+    act(() => listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } }));
     await flush();
-    act(() => listeners.get(BACKEND_EXIT_EVENT)?.());
+    act(() => listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } }));
     await flush();
 
     // The handshake is one-way and parks on its first request here (no frame
