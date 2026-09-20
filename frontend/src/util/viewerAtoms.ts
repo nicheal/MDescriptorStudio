@@ -123,3 +123,11 @@ export function neighborsWithinCutoff(
     .filter(({ index, distance }) => index !== selectedAtom && distance > 1e-6 && distance <= cutoff)
     .sort((left, right) => left.distance - right.distance);
 }
+
+/** The 1-based page of a paginated atom table that shows `atom`, or null when
+ * the row is not in `rows`. Kept out of the component so the page a selection
+ * lands on is testable: the table's own order, not the atom number, decides it. */
+export function atomPageFor(rows: { i: number }[], atom: number, pageSize: number): number | null {
+  const position = rows.findIndex((row) => row.i === atom);
+  return position < 0 ? null : Math.floor(position / pageSize) + 1;
+}

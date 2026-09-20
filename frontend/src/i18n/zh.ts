@@ -216,6 +216,7 @@ export const zhDict: Record<string, string> = {
   "Volume": "体积",
   "Selected atom": "选中原子",
   "Local coordination": "局部配位数",
+  "{count} atoms": "原子数 {count}",
   "Neighbor shell": "近邻壳层",
   "Neighbors: {list}": "近邻原子：{list}",
   "none within cutoff": "截断半径内无原子",

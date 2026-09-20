@@ -18,7 +18,7 @@ import { forceArrowGeometry, frameMaxForce } from "../util/forces";
 import { DATASET_PROPERTY_LABELS } from "../util/properties";
 import { cellParameters, massDensity, minimumDistancePair, netForceMagnitude, virialSummary } from "../util/structure";
 import { CHECK_KEYS, healthCheckTitle } from "../util/healthChecks";
-import { neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
+import { atomPageFor, neighborsWithinCutoff, parseViewerAtoms } from "../util/viewerAtoms";
 import {
   addUnitCell,
   createStructureViewer,
@@ -92,6 +92,11 @@ export default function Explore() {
   // "Shortest interatomic distance" row click: highlight the closest atom pair
   // instead of the single-atom selection (the two are mutually exclusive).
   const [showDistancePair, setShowDistancePair] = useState(false);
+  // The atom table is the only table here that grows with the structure instead
+  // of with what the user asked for: an unpaginated 10k-atom frame is ~90k cells
+  // and froze the main thread for seconds on every frame switch.
+  const [atomPage, setAtomPage] = useState(1);
+  const [atomPageSize, setAtomPageSize] = useState(50);
   const viewerDiv = useRef<HTMLDivElement>(null);
   const atomTableRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<StructureViewer | null>(null);
@@ -287,8 +292,18 @@ export default function Explore() {
   const atomClickRef = useRef(selectAtom);
   atomClickRef.current = selectAtom;
 
-  // Keep the table's selected row visible when selection originates in the
-  // viewer (and use the same behavior for table/inspector selections).
+  // The table pages through atoms, so a selection made in the viewer has to open
+  // the page that holds the row first, and only then be scrolled into view -
+  // which is why this is two effects: the second runs once the new page has
+  // rendered the row.
+  useEffect(() => {
+    setAtomPage(1);
+  }, [frame?.index]);
+  useEffect(() => {
+    if (selectedAtom == null) return;
+    const page = atomPageFor(frame?.atom_rows ?? [], selectedAtom, atomPageSize);
+    if (page != null) setAtomPage(page);
+  }, [atomPageSize, frame, selectedAtom]);
   useEffect(() => {
     if (selectedAtom == null) return;
     const row = atomTableRef.current?.querySelector<HTMLTableRowElement>("tbody tr.explore-atom-row-selected");
@@ -297,7 +312,7 @@ export default function Explore() {
       && typeof window.matchMedia === "function"
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     row.scrollIntoView({ behavior: prefersReducedMotion ? "auto" : "smooth", block: "center", inline: "nearest" });
-  }, [frame?.index, selectedAtom]);
+  }, [atomPage, atomPageSize, frame?.index, selectedAtom]);
 
   // Red "Max |F|" row click: select the offending atom exactly like a table
   // click (highlight + force arrow, arrow forced on so it is always visible);
@@ -818,11 +833,25 @@ export default function Explore() {
       </div>
 
       {/* Atom table */}
-      <div ref={atomTableRef} style={{ background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, maxHeight: 260, overflow: "auto" }}>
+      {/* The body scrolls and the header sticks, so the pager stays reachable
+          without scrolling past 50 rows to find it. */}
+      <div ref={atomTableRef} style={{ background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, padding: "0 4px 4px" }}>
         <Table
           size="small"
           tableLayout="fixed"
-          pagination={false}
+          scroll={{ y: 210 }}
+          pagination={{
+            size: "small",
+            current: atomPage,
+            pageSize: atomPageSize,
+            showSizeChanger: true,
+            pageSizeOptions: [25, 50, 100, 200],
+            showTotal: (total) => t("{count} atoms", { count: String(total) }),
+            onChange: (page, size) => {
+              setAtomPageSize(size);
+              setAtomPage(page);
+            },
+          }}
           dataSource={frame?.atom_rows ?? []}
           rowKey="i"
           rowClassName={(row) => row.i === selectedAtom ? "explore-atom-row-selected" : selectedLocalNeighborSet.has(row.i) ? "explore-atom-row-neighbor" : ""}
