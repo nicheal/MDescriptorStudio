@@ -467,7 +467,46 @@ fn backend_temp_dir() -> Result<PathBuf, String> {
             temp_dir.display()
         )
     })?;
+    sweep_stale_backend_temp(&temp_dir);
     Ok(temp_dir)
+}
+
+// The sidecar writes nothing of its own here; this directory exists so that
+// third-party readers keep their scratch inside the app-local root. When the
+// sidecar is killed or crashes mid-run those scratch files stay forever, so a
+// run sweeps the ones its predecessors abandoned. A day of no writes means the
+// run that made the file is over - and it is the only thing that can be said
+// without assuming this is the only instance running, since a live sibling
+// rewrites its own scratch far more often than that.
+const STALE_BACKEND_TEMP: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+fn sweep_stale_backend_temp(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        // No readable mtime means nothing can be said about it, so it stays.
+        let Ok(touched) = meta.modified() else { continue };
+        if std::time::SystemTime::now()
+            .duration_since(touched)
+            .unwrap_or_default()
+            < STALE_BACKEND_TEMP
+        {
+            continue;
+        }
+        // Best effort: a file a sibling process still holds simply refuses to go,
+        // which is the outcome worth having rather than a startup failure.
+        let removed = if meta.is_dir() {
+            fs::remove_dir_all(entry.path())
+        } else {
+            fs::remove_file(entry.path())
+        };
+        if removed.is_ok() {
+            log_line(&format!(
+                "backend-temp: removed {}",
+                entry.file_name().to_string_lossy()
+            ));
+        }
+    }
 }
 
 fn backend_command() -> Result<(Command, &'static str), String> {
@@ -667,5 +706,20 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+
+    #[test]
+    fn the_temp_sweep_leaves_a_live_run_alone_and_survives_a_missing_dir() {
+        // The dangerous half of the sweep is deleting scratch a running sidecar
+        // still needs, so a freshly written file must survive it - and an absent
+        // directory must not stop the shell from starting a backend.
+        let dir = std::env::temp_dir().join(format!("mds-temp-sweep-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("frame-cache.xyz"), b"scratch").unwrap();
+        sweep_stale_backend_temp(&dir);
+        assert!(dir.join("frame-cache.xyz").is_file());
+        drop(fs::remove_dir_all(&dir));
+        sweep_stale_backend_temp(&dir.join("gone"));
     }
 }
