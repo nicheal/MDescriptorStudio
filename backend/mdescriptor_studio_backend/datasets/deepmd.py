@@ -38,8 +38,14 @@ def _preflight_npy_layout(path: Path, sets: list[Path]) -> None:
         if type_count <= 0 or type_count > MAX_DEEPMD_ATOMS:
             raise AppError(INVALID_DATASET, "DeepMD atom count is outside the supported limit")
 
-        total_bytes = type_path.stat().st_size
-        total_files = 1
+        # Every file in the source counts exactly once. This used to add
+        # coord.npy here and then again in the walk over the set directory below,
+        # while root files other than type.raw (type_map.raw, nopbc) counted zero
+        # times - so the guard enforced a different quantity than scan() reports
+        # for the same directory, and refused datasets already under the advertised
+        # cap because the dominant array was weighted twice.
+        total_bytes = sum(item.stat().st_size for item in path.iterdir() if item.is_file())
+        total_files = 0
         total_frames = 0
         total_atoms = 0
         for set_path in sets:
@@ -48,7 +54,6 @@ def _preflight_npy_layout(path: Path, sets: list[Path]) -> None:
             ensure_no_reparse_points(coord_path)
             if not coord_path.is_file():
                 raise AppError(INVALID_DATASET, "DeepMD coord.npy is missing")
-            total_bytes += coord_path.stat().st_size
             coord = np.load(coord_path, mmap_mode="r", allow_pickle=False)
             try:
                 if coord.ndim == 3:

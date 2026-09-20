@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from mdescriptor_studio_backend.datasets import create_adapter
@@ -80,6 +81,102 @@ def test_extxyz_resolves_species_tokens_and_refuses_to_guess(tmp_path: Path) -> 
         read("Xx 0 0 0\n")
     assert exc.value.code == INVALID_DATASET
     assert "unknown species" in str(exc.value)
+
+
+def test_extxyz_pbc_accepts_the_spellings_writers_emit_and_refuses_the_rest(tmp_path: Path) -> None:
+    """`pbc = tuple(v.upper() == "T")` read anything but a bare T as False - and a
+    frame with no periodic axis has its cell zeroed, so a hand-edited or non-ASE
+    `pbc="True True True"` crystal was silently analysed as an isolated cluster:
+    vacuum between every pair, no volume in the statistics, ghosts bonded through
+    the empty direction. Omitting the key was strictly better, because that
+    infers periodicity from the lattice."""
+    def read(flag: str):
+        path = tmp_path / f"pbc_{abs(hash(flag))}.xyz"
+        path.write_text(
+            '2\nLattice="5 0 0 0 5 0 0 0 5" pbc="' + flag + '" '
+            "Properties=species:S:1:pos:R:3\nSi 0 0 0\nSi 2.5 0 0\n",
+            encoding="utf-8",
+        )
+        return create_adapter(path).get_frame(0)
+
+    for spelling in ("T T T", "True True True", "true true true", "1 1 1", "yes yes yes"):
+        frame = read(spelling)
+        assert bool(frame.pbc.all()), spelling
+        assert abs(float(np.linalg.det(frame.cell))) == pytest.approx(125.0), spelling
+    for spelling in ("F F F", "False False False", "0 0 0", "n n n"):
+        frame = read(spelling)
+        assert not bool(frame.pbc.any()), spelling
+        assert not frame.cell.any(), "an isolated frame keeps no cell"
+    assert read("T F T").cell is not None  # mixed still flattens to periodic: ADR-28
+    for garbage in ("X X X", "maybe yes no", "T T"):
+        with pytest.raises(AppError) as exc:
+            read(garbage)
+        assert exc.value.code == INVALID_DATASET, garbage
+
+
+def test_extxyz_refuses_a_number_spelling_xyz_cannot_mean(tmp_path: Path) -> None:
+    # float() and int() accept PEP 515 underscores and any Unicode decimal digit,
+    # so "1_0.0" parsed as 10.0 and a fullwidth １０.０ likewise: the file text said
+    # one thing and the structure got another, with no error to trace.
+    def read(token: str):
+        path = tmp_path / f"num_{abs(hash(token))}.xyz"
+        path.write_text(
+            '1\nLattice="10 0 0 0 10 0 0 0 10" pbc="F F F" Properties=species:S:1:pos:R:3\n'
+            + f"Si {token} 0 0\n",
+            encoding="utf-8",
+        )
+        return create_adapter(path).get_frame(0)
+
+    assert read("2.5").positions[0][0] == 2.5
+    for token in ("1_0.0", "１０.0", "1_0"):
+        with pytest.raises(AppError) as exc:
+            read(token)
+        assert exc.value.code == INVALID_DATASET, token
+    # An underscore is only forbidden inside a number; a species token is still
+    # whatever the symbol table knows, and a comment may hold any text at all.
+    assert read("2.5").numbers.tolist() == [14]
+
+
+def test_extxyz_opens_a_file_saved_with_a_byte_order_mark(tmp_path: Path) -> None:
+    """Notepad's default save prepends a BOM. Read as plain utf-8 it stays in the
+    first line's text, int() fails, and the parser concluded the frame boundaries
+    had desynchronised - a wrong diagnosis for a structurally perfect file, and a
+    dataset that could never be opened."""
+    body = (
+        '1\nLattice="10 0 0 0 10 0 0 0 10" pbc="T T T" Properties=species:S:1:pos:R:3\n'
+        "Si 0 0 0\n"
+    )
+    plain = tmp_path / "plain.xyz"
+    plain.write_text(body, encoding="utf-8")
+    bom = tmp_path / "bom.xyz"
+    bom.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+
+    assert len(create_adapter(bom)) == len(create_adapter(plain)) == 1
+    assert create_adapter(bom).get_frame(0).numbers.tolist() == [14]
+
+
+def test_deepmd_size_gate_counts_every_file_exactly_once(tmp_path: Path, monkeypatch) -> None:
+    """The pre-flight guard added coord.npy twice (once by name, once again in the
+    walk over set.000) while never counting root files other than type.raw, so it
+    enforced a larger quantity than the advertised cap and refused datasets that
+    fit under it - and disagreed with scan(), which reports the true total."""
+    from make_fixtures import write_deepmd
+
+    import mdescriptor_studio_backend.datasets.deepmd as deepmd_module
+
+    source = tmp_path / "deepmd"
+    write_deepmd(source, 4, 8, seed=5)
+    true_total = sum(item.stat().st_size for item in source.rglob("*") if item.is_file())
+    coord = (source / "set.000" / "coord.npy").stat().st_size
+    assert coord > (source / "type_map.raw").stat().st_size, "the test needs the double count to dominate"
+
+    monkeypatch.setattr(deepmd_module, "MAX_DEEPMD_BYTES", true_total)
+    assert len(create_adapter(source)) == 4, "a dataset exactly at the cap must open"
+
+    monkeypatch.setattr(deepmd_module, "MAX_DEEPMD_BYTES", true_total - 1)
+    with pytest.raises(AppError) as exc:
+        create_adapter(source)
+    assert exc.value.code == INVALID_DATASET, "the gate is still a gate"
 
 
 def test_builtin_formats_are_registered() -> None:

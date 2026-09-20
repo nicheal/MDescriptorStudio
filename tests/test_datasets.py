@@ -15,6 +15,7 @@ from mdescriptor_studio_backend.datasets import (
     exporters,
 )
 from mdescriptor_studio_backend.datasets.ghosts import periodic_boundary_ghosts
+from mdescriptor_studio_backend.datasets.fingerprint import FINGERPRINT_VERSION
 from mdescriptor_studio_backend.datasets.statistics import _int_hist
 from mdescriptor_studio_backend.errors import AppError
 
@@ -29,15 +30,19 @@ def test_meta_skips_the_fingerprint_it_cannot_use(tmp_path: Path, monkeypatch) -
     from mdescriptor_studio_backend.storage.database import Database
 
     calls: list[str] = []
+    # The version prefix comes from the constant, not a literal: this test is
+    # about versioned-versus-legacy spelling, and a hardcoded v3 reads as a
+    # statement about the current version every time it is bumped.
+    versioned = f"{FINGERPRINT_VERSION}:abc123"
     monkeypatch.setattr(
         ds_module,
         "compute_fingerprint",
-        lambda source, frames, use_cache=True: calls.append("versioned") or "v3:abc123",
+        lambda source, frames, use_cache=True: calls.append("versioned") or versioned,
     )
 
     db = Database(tmp_path / "database.sqlite")
     # source_path is unique per dataset row, so the two generations get their own file
-    for label, fingerprint in (("old", "fingerprint"), ("new", "v3:abc123")):
+    for label, fingerprint in (("old", "fingerprint"), ("new", versioned)):
         source = tmp_path / f"{label}.extxyz"
         write_extxyz(source, n_frames=2, natoms=2)
         db.execute(

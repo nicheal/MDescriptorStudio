@@ -31,10 +31,20 @@ class ExtXYZAdapter(DatasetAdapter):
         self._frame_meta: list[dict] = []
         self._build_index()
 
+    # -- source --------------------------------------------------------------
+    def _open(self):
+        """The source as text. utf-8-sig, not utf-8: a byte order mark (what
+        Notepad writes by default on Windows) would otherwise sit at the start of
+        the first line's text, so the atom count fails to parse and the reader
+        concludes the frame boundaries desynchronised - a wrong diagnosis for a
+        structurally perfect file, which could then never be opened. A no-op when
+        no BOM is present."""
+        return open(self.source_path, "r", encoding="utf-8-sig", errors="replace")
+
     # -- index ---------------------------------------------------------------
     def _build_index(self) -> None:
         try:
-            with open(self.source_path, "r", encoding="utf-8", errors="replace") as f:
+            with self._open() as f:
                 while True:
                     start = f.tell()
                     line = _readline_bounded(f)
@@ -104,7 +114,7 @@ class ExtXYZAdapter(DatasetAdapter):
             raise AppError(INVALID_PARAMS, f"frame index out of range: {index}")
         meta = self._frame_meta[index]
         natoms = meta["natoms"]
-        with open(self.source_path, "r", encoding="utf-8", errors="replace") as f:
+        with self._open() as f:
             f.seek(self._offsets[index])
             _readline_bounded(f)  # natoms line
             comment = _readline_bounded(f)
@@ -139,20 +149,35 @@ class ExtXYZAdapter(DatasetAdapter):
                 else offsets.get("force")
             )
             species: list[str] = []
+            numbers: list[int] = []
             positions = np.empty((natoms, 3), dtype=np.float64)
             forces = np.empty((natoms, 3), dtype=np.float64) if forces_i is not None else None
             frame_bytes = len(comment.encode("utf-8"))
             for row in range(natoms):
                 atom_line = _readline_bounded(f)
-                frame_bytes += len(atom_line.encode("utf-8"))
+                frame_bytes += _utf8_len(atom_line)
                 if frame_bytes > MAX_FRAME_BYTES:
-                    raise AppError(INVALID_DATASET, "extXYZ frame exceeds the supported size limit")
+                    raise AppError(INVALID_DATASET, f"frame {index} exceeds the supported size limit")
+                # float() and int() accept spellings an XYZ file does not mean:
+                # PEP 515 makes "1_0.0" ten, and any Unicode decimal digit parses
+                # (fullwidth １０.0 is ten too). That writes a coordinate the file
+                # text does not show, and the structure then fails contact
+                # detection, statistics and descriptors with no error anywhere -
+                # so a line holding either is refused. isascii() is a flag read
+                # and `_utf8_len` above has already consulted it for this string.
+                if "_" in atom_line or not atom_line.isascii():
+                    raise AppError(
+                        INVALID_DATASET,
+                        f"frame {index} row {row}: atom line holds a number spelling XYZ cannot mean",
+                    )
                 tokens = atom_line.split()
                 if len(tokens) < n_cols:
                     raise AppError(INVALID_DATASET, f"frame {index} row {row}: truncated")
                 try:
                     sym = _Z_RE.match(tokens[species_i])
-                    species.append(sym.group(1) if sym else tokens[species_i])
+                    symbol = sym.group(1) if sym else tokens[species_i]
+                    species.append(symbol)
+                    numbers.append(_atomic_number(symbol, index, row))
                     positions[row] = [
                         float(tokens[pos_i]),
                         float(tokens[pos_i + 1]),
@@ -176,10 +201,7 @@ class ExtXYZAdapter(DatasetAdapter):
                     raise AppError(
                         INVALID_DATASET, f"frame {index} row {int(bad_rows[0])}: non-finite {what}"
                     )
-        numbers = np.array(
-            [_atomic_number(s, f"frame {index} row {row}") for row, s in enumerate(species)],
-            dtype=np.int64,
-        )
+        numbers = np.array(numbers, dtype=np.int64)
         lattice = meta.get("lattice")
         cell = lattice.reshape(3, 3) if lattice is not None else np.zeros((3, 3))
         # A Lattice with no periodic axis is a box around an isolated structure
@@ -225,18 +247,20 @@ def _readline_bounded(stream) -> str:
     return line
 
 
-def _atomic_number(symbol: str, where: str) -> int:
+def _atomic_number(symbol: str, frame: int, row: int) -> int:
     """Resolve a species token instead of guessing at it.
 
     An unresolvable token used to become Z=0, which the radii table then
     promoted to hydrogen: a Properties column misread as species silently
-    described every atom as H and skewed contact detection.
+    described every atom as H and skewed contact detection. The frame and row
+    arrive as numbers rather than a formatted context because this runs once per
+    atom on the hot path, and only the failure needs the sentence.
     """
     z = _SYMBOL_TO_Z.get(symbol) or _SYMBOL_TO_Z.get(symbol.capitalize())
-    if z is None and symbol.isdigit():
+    if z is None and symbol.isascii() and symbol.isdigit():
         z = int(symbol)  # writers that store the nuclear charge directly
     if not z:
-        raise AppError(INVALID_DATASET, f"{where}: unknown species {symbol!r}")
+        raise AppError(INVALID_DATASET, f"frame {frame} row {row}: unknown species {symbol!r}")
     return int(z)
 
 
@@ -250,6 +274,37 @@ def _finite(value, what: str):
     if not np.isfinite(value).all():
         raise AppError(INVALID_DATASET, f"extXYZ {what} is not a finite number")
     return value
+
+
+_PBC_TRUE = {"T", "TRUE", "1", "Y", "YES"}
+_PBC_FALSE = {"F", "FALSE", "0", "N", "NO"}
+
+
+def _pbc_flags(values: list[str]) -> tuple[bool, bool, bool]:
+    """The three periodicity axes, accepting the spellings writers emit.
+
+    ASE writes bare `T`/`F`, but a hand-edited or non-ASE comment says `True`,
+    `true` or `1`. Reading anything but `T` as False did not merely lose
+    periodicity: `get_frame` zeroes the cell when no axis is periodic, so a
+    crystal became an isolated cluster - vacuum between every pair, a volume that
+    vanished from the statistics, and ghost atoms bonded through the empty
+    direction. That is worse than omitting the key, which infers periodicity from
+    a non-zero lattice. An unparseable flag is therefore refused rather than
+    guessed, exactly as a malformed atom count is.
+    """
+    flags: list[bool] = []
+    for token in values:
+        upper = token.upper()
+        if upper in _PBC_TRUE:
+            flags.append(True)
+        elif upper in _PBC_FALSE:
+            flags.append(False)
+        else:
+            raise AppError(
+                INVALID_DATASET,
+                f"extXYZ pbc flag {token!r} is neither a true nor a false spelling",
+            )
+    return flags[0], flags[1], flags[2]
 
 
 def _parse_comment(comment: str) -> dict:
@@ -267,7 +322,7 @@ def _parse_comment(comment: str) -> dict:
             values = value.split()
             if len(values) != 3:
                 raise AppError(INVALID_DATASET, "extXYZ pbc must contain exactly three flags")
-            pbc = tuple(v.upper() == "T" for v in values)
+            pbc = _pbc_flags(values)
         elif key == "energy":
             meta["energy"] = _finite(float(value), "energy")
         elif key == "virial":

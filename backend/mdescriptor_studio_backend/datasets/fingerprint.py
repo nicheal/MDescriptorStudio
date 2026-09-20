@@ -12,8 +12,12 @@ from ..security import ensure_no_reparse_points, is_reparse_point
 
 # Bumped when reader semantics change in a way that alters stored results, so
 # every existing fingerprint mismatches and its runs go STALE. v3: extxyz stops
-# inventing periodicity for a Lattice that declares pbc="F F F".
-FINGERPRINT_VERSION = "v3"
+# inventing periodicity for a Lattice that declares pbc="F F F". v4: extxyz reads
+# every true/false spelling a writer emits instead of only a bare "T", so a file
+# that said pbc="True True True" stops being reinterpreted as an isolated cluster
+# with a zeroed cell - the stored statistics, health findings and descriptors for
+# such sources were computed on the wrong structure.
+FINGERPRINT_VERSION = "v4"
 MAX_FINGERPRINT_FILES = 100_000
 MAX_FINGERPRINT_BYTES = 4 * 1024 * 1024 * 1024
 SAMPLE_CHUNK_BYTES = 1 * 1024 * 1024
