@@ -26,6 +26,75 @@ def artifact_arrays_by_kind() -> dict[str, list[str]]:
     return {kind: names for kind, names in arrays.items() if names}
 
 
+def _view_bodies() -> dict[str, str]:
+    """The source of every component in the result-view files, by name."""
+    bodies: dict[str, str] = {}
+    pages = REGISTRY.parents[2] / "pages"
+    for path in sorted(pages.glob("*.tsx")):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"^(?:export\s+)?(?:default\s+)?function (\w+)\(", text, re.M):
+            depth, index = 0, text.index("(", match.start())
+            while True:
+                if text[index] == "(":
+                    depth += 1
+                elif text[index] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                index += 1
+            follow = re.search(r"^(?:export\s+)?(?:default\s+)?function ", text[index:], re.M)
+            bodies[match.group(1)] = text[index: index + (follow.start() if follow else len(text))]
+    return bodies
+
+
+def _dispatcher() -> tuple[dict[str, tuple[str, str]], list[str]]:
+    """The view dispatcher, as {preview kind: (component, its dispatch line)}.
+
+    The line is kept because MatrixView is handed matrix(arrays.similarity_matrix)
+    there rather than reading `arrays` inside its own body.
+    """
+    lines = (REGISTRY.parents[2] / "pages" / "analysisVisualizations.tsx").read_text(encoding="utf-8").splitlines()
+    mapping: dict[str, tuple[str, str]] = {}
+    for index, line in enumerate(lines):
+        match = re.search(r'if \((kind === "[a-z_"]+(?: \|\| kind === "[a-z_"]+")*)\) return <(\w+)', line)
+        if match:
+            for kind in re.findall(r'"([a-z_]+)"', match.group(1)):
+                mapping[kind] = (match.group(2), line)
+    return mapping, lines
+
+
+def test_every_fetched_array_is_read_by_the_view_that_fetches_it() -> None:
+    """registry.ts's own comment says a name on this table is a full chunk
+    round-trip, and AnalysisResultVisualization gates the whole panel on the
+    fetch finishing - so an array no view reads is blank time charged to a
+    result the user just asked for, and the local-environment panel carried
+    three of them (coords, sample_indices and labels, for a 20 000-row
+    preview). The forward direction is checked against real artifacts elsewhere;
+    this is the other half, and it reads the TypeScript rather than restating it.
+
+    Two tiers, because only part of the table is reachable from the dispatcher:
+    a kind `Visualization` routes is checked against *that component*, while a
+    kind rendered elsewhere (feature_variance, effective_dimension) is checked
+    against the whole pages tree. The precise tier catches "declared for X, read
+    only by Y"; the fallback tier only catches "read by nobody" - and says so
+    rather than pretending to more than it can see."""
+    bodies, per_kind = _view_bodies(), _dispatcher()[0]
+    pages = REGISTRY.parents[2] / "pages"
+    everywhere = "".join(path.read_text(encoding="utf-8") for path in sorted(pages.glob("*.ts*")))
+    strict, fallback = [], []
+    for kind, names in sorted(artifact_arrays_by_kind().items()):
+        if kind in per_kind:
+            component, dispatch_line = per_kind[kind]
+            assert component in bodies, f"{component} was not found in frontend/src/pages"
+            read = set(re.findall(r"arrays\.([a-z_][a-z0-9_]*)", bodies[component] + dispatch_line))
+            strict += [f"{kind}.{name}" for name in names if name not in read]
+        else:
+            read = set(re.findall(r"arrays\.([a-z_][a-z0-9_]*)", everywhere))
+            fallback += [f"{kind}.{name}" for name in names if name not in read]
+    assert strict == [], f"fetched but never read by the view that fetches them: {strict}"
+    assert fallback == [], f"fetched but read by nothing under frontend/src/pages: {fallback}"
+
+
 def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
     ds_dir = tmp_path / "gaas"
     write_deepmd(ds_dir, 8, 16, seed=51)

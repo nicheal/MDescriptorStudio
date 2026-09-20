@@ -118,12 +118,19 @@ export const SAMPLING_LABELS: Record<string, Pair> = {
 // Arrays each result view actually reads, per kind. The loader fetches exactly
 // this list and the panel's loading gate waits for all of it, so a name that no
 // view reads costs a full chunk round-trip - and for the CSR neighbour arrays of
-// local diversity, that was seconds of "Loading bounded analysis arrays…" for a
-// payload that was then thrown away.
+// local diversity, that was three of them, seconds of "Loading bounded analysis
+// arrays…" for a payload that was then thrown away.
+// tests/test_analysis_ipc.py checks every entry against the component the
+// dispatcher routes its kind to. It cannot see the one place this table is
+// coarser than the truth: sampling and acquisition share a component that reads
+// the FPS curves and pick_scores respectively, so a random/stratified sampling
+// run still fetches the three curves it will not draw. Narrowing that needs the
+// table keyed by algorithm as well as kind, which the loading gate has no way
+// to ask for yet.
 export const ARTIFACT_ARRAYS: Record<string, string[]> = {
   pairwise_similarity: ["similarity_matrix"],
   compare: ["left_coords", "right_coords", "left_pair_distances", "right_pair_distances"],
-  mantel: ["left_pair_distances", "right_pair_distances", "null_distribution", "sample_indices"],
+  mantel: ["left_pair_distances", "right_pair_distances", "null_distribution"],
   feature_correlation: ["correlation_matrix", "correlation_feature_indices"],
   effective_dimension: ["explained_variance"],
   property_correlation: ["sample_indices", "sample_frames", "sample_rows", "targets", "predictions", "residuals", "absolute_errors", "feature_indices", "pearson_correlations", "spearman_correlations", "mutual_information", "oof_distances", "reliability_bin_center", "reliability_bin_median", "reliability_bin_p90", "reliability_bin_p95"],
@@ -131,9 +138,9 @@ export const ARTIFACT_ARRAYS: Record<string, string[]> = {
   overlap: ["projection_coords", "projection_source", "labels"],
   drift: ["projection_coords", "projection_source", "labels"],
   trajectory: ["time", "frames", "sample_indices", "step_distance", "reference_distance", "cumulative_distance", "coords", "pc_explained_variance"],
-  perturbation_sensitivity: ["amplitudes", "mean_response", "median_response", "p95_response", "max_response", "response_matrix", "sample_indices"],
-  local_diversity: ["coords", "sample_indices", "labels", "coordination", "neighbor_distances"],
-  kernel: ["kernel_matrix", "eigenvalues", "sample_indices"],
+  perturbation_sensitivity: ["amplitudes", "mean_response", "median_response", "p95_response", "max_response", "response_matrix"],
+  local_diversity: ["coordination", "neighbor_distances"],
+  kernel: ["kernel_matrix", "eigenvalues"],
   sampling: ["coverage_radius_curve", "coverage_mean_curve", "coverage_r2_curve"],
   acquisition: ["pick_scores"],
 };
