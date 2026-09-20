@@ -143,6 +143,18 @@ def _meaningful_scale(centre: np.ndarray, scale: np.ndarray) -> np.ndarray:
     magnitude = np.maximum(np.abs(np.asarray(centre, dtype=np.float64)), 1.0)
     return np.asarray(scale, dtype=np.float64) > SCALE_RELATIVE_TOLERANCE * magnitude
 
+def _preprocess_mode(params: dict, default: str) -> str:
+    """The scale a single-matrix result was measured on, for its preview to record.
+
+    `_preprocess` resolves the same key the same way: an absent `preprocess`
+    means *this* algorithm's default, and the defaults differ by module (`raw`
+    for the distance views, `standardized` for trajectory and local diversity).
+    Cross-set work already has `_reference_query_preprocess` doing this job;
+    without the per-matrix equivalent a stored `2.4` was a distance in unknown
+    units, and the history row could not say which (deep review pass 4, B-7).
+    """
+    return str((params or {}).get("preprocess", default))
+
 def _preprocess(x: np.ndarray, params: dict, default: str) -> tuple[np.ndarray, list[str], np.ndarray]:
     x = _as_float64(x)
     mode = params.get("preprocess", default)

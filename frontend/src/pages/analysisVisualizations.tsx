@@ -557,7 +557,7 @@ function LocalView({ preview, arrays, points, selectedIndices, onSelect }: Pick<
   const coordination = nums(arrays.coordination);
   const neighborDistances = nums(arrays.neighbor_distances);
   return <>
-    <Metrics values={[{ k: t("Local environments"), v: preview?.sample_count }, { k: t("Elements"), v: rows.length }, { k: t("Outliers"), v: rows.reduce((sum, row) => sum + (num(row.outliers) ?? 0), 0) }, { k: t("Cutoff (Å)"), v: preview?.cutoff }, { k: t("Mean coordination"), v: preview?.mean_coordination }, { k: t("Max coordination"), v: preview?.max_coordination }]} />
+    <Metrics values={[{ k: t("Local environments"), v: preview?.sample_count }, { k: t("Elements"), v: rows.length }, { k: t("Outliers"), v: rows.reduce((sum, row) => sum + (num(row.outliers) ?? 0), 0) }, { k: t("Cutoff (Å)"), v: preview?.cutoff }, { k: t("Mean coordination"), v: preview?.mean_coordination }, { k: t("Max coordination"), v: preview?.max_coordination }, { k: t("Feature scale"), v: preview?.preprocess }]} />
     <div className="analysis-chart-grid">
       <PointPlot points={points} selectedIndices={selectedIndices} onSelect={onSelect} color="element" ariaLabel={t("Atom-level local environment map")} />
       <PlotFrame compact ariaLabel={t("Local environment categories by element")} data={["distorted", "outliers"].map((key, index) => ({ type: "bar", name: t(key), x: rows.map((row) => `Z=${row.element}`), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index + 1] } })) as Data[]} layout={layout({ barmode: "group", xaxis: { title: { text: t("Element") } }, yaxis: { title: { text: t("Environments") } }, legend: { orientation: "h" } })} />
@@ -575,7 +575,7 @@ function SensitivityView({ preview }: { preview: AnalysisPreview }) {
   if (!rows.length) return <NoData message={t("No aligned runs were returned.")} />;
   const metrics = ["pairwise_distance_pearson", "neighbor_overlap", "clustering_stability"];
   return <>
-    <Metrics values={[{ k: t("Runs"), v: rows.length }, { k: t("Baseline"), v: preview.baseline_run_id }]} />
+    <Metrics values={[{ k: t("Runs"), v: rows.length }, { k: t("Baseline"), v: preview.baseline_run_id }, { k: t("Feature scale"), v: preview.preprocess }]} />
     <div className="analysis-chart-grid">
       <PlotFrame compact ariaLabel={t("Parameter sensitivity geometry metrics")} data={metrics.map((key, index) => ({ type: "bar", name: tr(SENSITIVITY_METRIC_LABELS[key] ?? { en: key, zh: key }), x: rows.map((row, runIndex) => runLabel(row, runIndex, t)), y: rows.map((row) => num(row[key]) ?? 0), marker: { color: COLORS[index] } })) as Data[]} layout={layout({ barmode: "group", yaxis: { title: { text: t("Agreement (higher is better)") }, range: [-0.05, 1.05] }, xaxis: { automargin: true }, legend: { orientation: "h" } })} />
       <PlotFrame compact ariaLabel={t("Descriptor compute peak memory")} data={[{ type: "bar", x: rows.map((row, index) => runLabel(row, index, t)), y: rows.map((row) => { const bytes = num(row.memory_peak_bytes); return bytes == null ? null : bytes / 1024 / 1024; }), marker: { color: "#D13438" }, hovertemplate: "%{x}<br>peak RSS=%{y:.2f} MB<extra></extra>" }]} layout={layout({ xaxis: { automargin: true }, yaxis: { title: { text: t("Peak RSS (MB)") } } })} />

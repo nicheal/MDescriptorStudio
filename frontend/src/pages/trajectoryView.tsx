@@ -345,6 +345,9 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
       { k: t("Max step distance"), text: metric(maxStep) },
       { k: t("Detected transitions"), text: String(visibleEvents.length) },
       { k: t("Event rate"), text: `${((visibleEvents.length / Math.max(1, visibleIndices.length - 1)) * 100).toFixed(2)}%` },
+      // Which scale the step distances above were measured on: results written
+      // before the backend recorded it omit the chip rather than guess.
+      { k: t("Feature scale"), v: preview?.preprocess },
     ]} />
     <div className="property-method-strip">
       <Typography.Text>{t("Event detection runs on descriptor-space step distances; the PCA panel is a visualization only.")}</Typography.Text>

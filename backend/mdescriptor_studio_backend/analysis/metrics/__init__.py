@@ -8,7 +8,7 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, AppError
 from ..models import DescriptorMatrix
-from ..algorithms._common import _as_float64, _bounded_indices, _check_samples, _effective_dimension_metrics, _float_param, _int_param, _local_neighbor_graph, _meaningful_scale, _nearest_distances, _pairwise_matrix, _preprocess, _safe_import, _seed, _trajectory_threshold, _visual_pca, _visual_pca_components
+from ..algorithms._common import _as_float64, _bounded_indices, _check_samples, _effective_dimension_metrics, _float_param, _int_param, _local_neighbor_graph, _meaningful_scale, _nearest_distances, _pairwise_matrix, _preprocess, _preprocess_mode, _safe_import, _seed, _trajectory_threshold, _visual_pca, _visual_pca_components
 
 def _feature_histogram(values: np.ndarray, bins: int) -> tuple[np.ndarray, np.ndarray]:
     """Bin one feature, or one centred bucket when it has no bin-able spread.
@@ -488,6 +488,7 @@ def local_diversity(samples: DescriptorMatrix, params: dict, progress: Callable[
         },
         "preview": {
             "kind": "local_diversity",
+            "preprocess": _preprocess_mode(params, "standardized"),
             "categories": ["main", "distorted", "outlier"],
             "element_summary": summaries,
             "sample_count": int(x.shape[0]),
@@ -616,6 +617,7 @@ def trajectory(samples: DescriptorMatrix, params: dict, progress: Callable[[floa
         },
         "preview": {
             "kind": "trajectory",
+            "preprocess": _preprocess_mode(params, "standardized"),
             "frame_start": start,
             "frame_end": end,
             "frame_step": step,

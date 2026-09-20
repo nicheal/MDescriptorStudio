@@ -758,6 +758,7 @@ function mockOverviewPreview() {
     return {
       analysis_id: mockLatestAnalysisId,
       kind: "trajectory",
+      preprocess: "standardized",
       frame_start: 0,
       frame_end: 179,
       frame_step: 1,

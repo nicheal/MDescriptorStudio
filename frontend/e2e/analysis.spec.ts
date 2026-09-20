@@ -182,6 +182,9 @@ test("browser preview preserves trajectory overlay axes", async ({ page }) => {
   await selectAnalysisModule(page, "Evolution & Response", "Descriptor Trajectory");
   await page.getByRole("button", { name: /Run Descriptor Trajectory/i }).click();
   await expect(page.getByText("DESCRIPTOR TRAJECTORY", { exact: true })).toBeVisible({ timeout: 30_000 });
+  // The step distances only mean something with the scale they were measured on,
+  // which the result now states and the panel prints beside them.
+  await expect(page.locator(".analysis-metric").filter({ hasText: "Feature scale" })).toContainText("standardized");
   const timeline = page.locator(".trajectory-chart-grid .js-plotly-plot").first();
   await expect(timeline).toBeVisible({ timeout: 30_000 });
   await page.getByRole("checkbox", { name: "Distance to reference", exact: true }).check();

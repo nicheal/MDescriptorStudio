@@ -10,7 +10,7 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, AppError
 from ..models import DescriptorMatrix
-from ._common import _aligned_space_metrics, _as_float64, _effective_dimension_metrics, _meaningful_scale, _preprocess, _preprocess_reference_query
+from ._common import _aligned_space_metrics, _as_float64, _effective_dimension_metrics, _meaningful_scale, _preprocess, _preprocess_mode, _preprocess_reference_query, _reference_query_preprocess
 
 def sensitivity(runs: list[tuple[dict, DescriptorMatrix]], params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     if len(runs) < 2:
@@ -31,8 +31,13 @@ def sensitivity(runs: list[tuple[dict, DescriptorMatrix]], params: dict, progres
             baseline_sample.values,
             params,
         )
+        # Which scale the distances below were measured on is decided by the same
+        # key the preprocessing calls read, and the two entry points default
+        # differently, so the row has to say which one it used.
+        preprocess_mode = _reference_query_preprocess(params)
     else:
         baseline_values, baseline_warnings, _baseline_keep = _preprocess(baseline_sample.values, params, "standardized")
+        preprocess_mode = _preprocess_mode(params, "standardized")
     baseline_memory = baseline_run.get("memory_peak_bytes")
     try:
         baseline_memory = int(baseline_memory) if baseline_memory is not None else None
@@ -105,6 +110,7 @@ def sensitivity(runs: list[tuple[dict, DescriptorMatrix]], params: dict, progres
         },
         "preview": {
             "kind": "sensitivity",
+            "preprocess": preprocess_mode,
             "runs": rows,
             "baseline_run_id": baseline_run["id"],
             "memory_metric": "peak process RSS during descriptor compute",
