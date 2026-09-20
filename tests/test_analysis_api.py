@@ -245,6 +245,28 @@ def test_sensitivity_requires_same_descriptor_before_enqueue(tmp_path: Path) -> 
     db.close()
 
 
+def test_a_multi_run_submission_probes_its_dataset_once(tmp_path: Path) -> None:
+    # Three sensitivity inputs share one dataset. Verifying the fingerprint per
+    # run meant walking the source and hashing a sampled 32 MB three times on
+    # the RPC thread before a single sample was loaded, and a compare of two
+    # runs of the same dataset always paid for it twice.
+    probes: list[str] = []
+    datasets = SimpleNamespace(
+        adapter_for=lambda row: list(range(12)),
+        refresh_if_changed=lambda row: probes.append(str(row["id"])),
+    )
+    db, jobs, service = _service(tmp_path, datasets=datasets)
+    _dataset_and_view(db, list(range(12)))
+    _insert_compatible_run(db, tmp_path, run_id="run_2")
+    _insert_compatible_run(db, tmp_path, run_id="run_3")
+
+    service.sensitivity({"run_ids": ["run_1", "run_2", "run_3"]})
+
+    assert jobs.calls == 1
+    assert probes == ["ds_1"], f"one submission should probe one dataset once: {probes}"
+    db.close()
+
+
 def test_cross_dataset_analysis_rejects_incompatible_feature_space_before_enqueue(tmp_path: Path) -> None:
     db, jobs, service = _service(tmp_path)
     db.execute(
@@ -915,7 +937,7 @@ def test_structural_perturbation_service_recomputes_descriptor_sweep(tmp_path: P
 
     jobs = _InlineJobs(db)
     service = AnalysisService(db, jobs, ResultService(db), datasets=_Datasets(), data_dir=tmp_path)
-    service._assert_dataset_current = lambda _row: None
+    service._assert_dataset_current = lambda *_: None
 
     response = service.perturbation_sensitivity(
         {
@@ -1080,7 +1102,7 @@ def _grouped_service(tmp_path: Path, frames: list[DatasetFrame]):
 
     service.datasets = _Datasets()
     # The fixture dataset has no real file behind it; skip the freshness probe.
-    service._assert_dataset_current = lambda _row: None
+    service._assert_dataset_current = lambda *_: None
     return db, jobs, service
 
 
@@ -1196,7 +1218,7 @@ def _composite_service(tmp_path: Path):
             return _Adapter()
 
     service.datasets = _Datasets()
-    service._assert_dataset_current = lambda _row: None
+    service._assert_dataset_current = lambda *_: None
     return db, jobs, service
 
 

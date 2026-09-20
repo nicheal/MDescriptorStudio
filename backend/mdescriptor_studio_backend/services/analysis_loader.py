@@ -160,7 +160,7 @@ class AnalysisDataMixin:
             self._group_labels_cache.pop(next(iter(self._group_labels_cache)))
         return labels
 
-    def _usable_run(self, run_id: str) -> dict:
+    def _usable_run(self, run_id: str, checked_datasets: set[str] | None = None) -> dict:
         row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (run_id,))
         if row is None:
             raise AppError(INVALID_PARAMS, f"run {run_id} does not exist")
@@ -168,18 +168,30 @@ class AnalysisDataMixin:
             raise AppError(ANALYSIS_STALE, f"run {run_id} is STALE and cannot feed new analysis", {"run_id": run_id})
         if row["status"] != "COMPLETED" or not row.get("result_path"):
             raise AppError(RESULT_INCOMPATIBLE, f"run {run_id} is {row['status']}")
-        self._assert_dataset_current(row)
+        self._assert_dataset_current(row, checked_datasets)
         return row
 
-    def _assert_dataset_current(self, row: dict) -> None:
+    def _assert_dataset_current(self, row: dict, checked_datasets: set[str] | None = None) -> None:
+        """Probe a run's dataset for on-disk changes, once per submission.
+
+        `checked_datasets` is the caller's scope, so the probe can be repeated
+        for the next submission. A multi-run analysis - sensitivity over several
+        perturbations, a compare of two views - shares one dataset and used to
+        walk and hash that directory once per run, on the RPC thread.
+        """
         if self.datasets is None:
             return
-        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (row["dataset_id"],))
+        dataset_id = str(row["dataset_id"])
+        if checked_datasets is not None and dataset_id in checked_datasets:
+            return
+        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (dataset_id,))
         if dataset is not None:
             # DatasetService.refresh_if_changed owns the fingerprint comparison:
             # it also migrates v1 fingerprints and marks the linked runs stale,
             # so re-deriving it here only drifted from the real check.
             self.datasets.refresh_if_changed(dataset)
+            if checked_datasets is not None:
+                checked_datasets.add(dataset_id)
 
     def _usable_view(self, view_id: str, dataset_id: str) -> dict:
         view = self.db.query_one("SELECT * FROM dataset_views WHERE id = ?", (view_id,))

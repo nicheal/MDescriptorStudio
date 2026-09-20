@@ -56,7 +56,11 @@ class AnalysisRunMixin:
             # and explicit standardized requests share one cache identity.
             params["preprocess"] = "standardized"
         input_ids = self._input_ids(analysis_type, params)
-        run_rows = [self._usable_run(run_id) for run_id in input_ids]
+        # The dataset freshness probe is per submission, not per run: a three-run
+        # sensitivity submission shares one dataset and used to walk and hash that
+        # directory three times before loading a single sample.
+        current_datasets: set[str] = set()
+        run_rows = [self._usable_run(run_id, current_datasets) for run_id in input_ids]
         cross_dataset = analysis_type in CROSS_DATASET_TYPES
         warm_start_fps = analysis_type == "fps" and len(input_ids) == 2
         if cross_dataset or warm_start_fps:
