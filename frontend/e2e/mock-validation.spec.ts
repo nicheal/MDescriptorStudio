@@ -88,6 +88,46 @@ test("a job the mock finished answers as finished rather than running forever", 
   expect((settled?.result as { result?: Record<string, unknown> }).result?.analysis_id).toBe("ana-mock-pca");
 });
 
+test("an analysis submission is checked before the mock answers it", async ({ page }) => {
+  // The handlers return canned results whatever they are sent, so every one of
+  // these is a mistake the renderer could make and the suite would never see:
+  // a dropped run id, a renamed field, a mode only some algorithms accept, a
+  // QUEUED run, two descriptor spaces compared as if they were one.
+  const cases: [string, Record<string, unknown>, string][] = [
+    ["analysis.pca", {}, "INVALID_PARAMS"],
+    ["analysis.pca", { run_id: "run-nope" }, "INVALID_PARAMS"],
+    ["analysis.pca", { run_id: "run-soap" }, "RESULT_INCOMPATIBLE"],
+    ["analysis.pca", { run_id: "run-dpa2", mode: "structures" }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.pca", { run_id: "run-dpa2", preprocess: "normalize" }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.pca", { run_id: "run-dpa2", n_samples: 0 }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.pca", { run_id: "run-dpa2", view_id: "view-nope" }, "DATASET_NOT_FOUND"],
+    ["analysis.pca", { run_id: "run-dpa2-si", view_id: "view-gaas-train" }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.coverage", { reference_run_id: "run-dpa2" }, "INVALID_PARAMS"],
+    ["analysis.coverage", { reference_run_id: "run-dpa2", query_run_id: "run-ace" }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.coverage", { reference_run_id: "run-dpa2", query_run_id: "run-dpa2-si", view_id: "view-gaas-train" }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.sensitivity", { run_ids: ["run-dpa2", "run-ace"] }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.export", { run_id: "run-dpa2", output_path: "" }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.export", { run_id: "run-dpa2", output_path: "C:\\preview\\a.csv", format: "npy" }, "ANALYSIS_INPUT_INVALID"],
+    ["analysis.export", { run_id: "run-dpa2", output_path: "C:\\preview\\a.csv", indices: [-1] }, "ANALYSIS_INPUT_INVALID"],
+  ];
+  for (const [method, params, code] of cases) {
+    const reply = await respond(page, method, params);
+    expect(reply?.error?.code, `${method} ${JSON.stringify(params)} should refuse as ${code}, got ${JSON.stringify(reply)}`).toBe(code);
+  }
+
+  // Positive controls: what the app actually sends must still be answered.
+  const valid: [string, Record<string, unknown>][] = [
+    ["analysis.pca", { run_id: "run-dpa2", mode: "structure", preprocess: "center", seed: 42 }],
+    ["analysis.coverage", { reference_run_id: "run-dpa2", query_run_id: "run-dpa2-si", mode: "structure", reference_view_id: "view-gaas-train" }],
+    ["analysis.export", { run_id: "run-dpa2", indices: [0, 2], mode: "structure", format: "csv", output_path: "C:\\preview\\subset.csv" }],
+  ];
+  for (const [method, params] of valid) {
+    const reply = await respond(page, method, params);
+    expect(reply?.error, `${method} refused a valid submission: ${JSON.stringify(reply?.error)}`).toBeUndefined();
+    expect(reply?.result).toBeDefined();
+  }
+});
+
 test("a valid request still answers with a result, not an error", async ({ page }) => {
   for (const [method, params] of [
     ["dataset.statistics", { id: "ds-gaas" }],

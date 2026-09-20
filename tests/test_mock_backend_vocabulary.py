@@ -184,3 +184,24 @@ def test_the_mock_only_refuses_with_codes_the_backend_can_send():
     assert used, "the mock throws no MockError, so nothing in the renderer has an error to branch on"
     invented = sorted(used - sendable - {"NO_HANDLER"})
     assert not invented, "preview.tsx refuses requests with codes the sidecar never sends: " + ", ".join(invented)
+
+
+# What the mock answers without a job, so no submission rules apply to them.
+READ_ONLY_ANALYSIS_METHODS = {"analysis.list", "analysis.preview", "analysis.chunk", "analysis.get", "analysis.delete"}
+
+
+def test_every_mock_analysis_submission_has_parameter_rules():
+    # Handlers return canned results whatever they are sent, so an analysis the
+    # mock answers but never checks is a module whose whole parameter surface
+    # the e2e suite silently blesses - the failure mode this file exists to
+    # close. Enumerating the routes rather than the rules keeps a new analysis
+    # from arriving unvalidated.
+    text = (FRONTEND_SRC / "preview.tsx").read_text(encoding="utf-8")
+    table = re.search(r"const ANALYSIS_RUN_PARAMS: Record<string, string\[\]> = \{(.*?)\n\};", text, re.S)
+    assert table, "preview.tsx no longer declares ANALYSIS_RUN_PARAMS"
+    ruled = set(re.findall(r'"(analysis\.[a-z_]+)":', table.group(1)))
+    assert ruled, "the submission table extracted nothing"
+    routes = {name for name in mock_methods() if name.startswith("analysis.")}
+    assert routes - READ_ONLY_ANALYSIS_METHODS <= ruled, sorted(routes - READ_ONLY_ANALYSIS_METHODS - ruled)
+    phantom = sorted(ruled - routes)
+    assert not phantom, "parameter rules name methods the mock does not answer: " + ", ".join(phantom)

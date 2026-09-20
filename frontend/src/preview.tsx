@@ -1103,6 +1103,124 @@ function handOut<T extends { job_id?: string }>(payload: T): T {
   return payload;
 }
 
+/** Run-id parameters each analysis submission needs, in the order the sidecar
+ *  reads them (`run_ids` is a list). A method absent from this table is not a
+ *  submit path; tests/test_mock_backend_vocabulary.py fails if an analysis.*
+ *  route the mock answers is missing here, so a new module cannot arrive
+ *  unvalidated. */
+const ANALYSIS_RUN_PARAMS: Record<string, string[]> = {
+  "analysis.pca": ["run_id"],
+  "analysis.umap": ["run_id"],
+  "analysis.tsne": ["run_id"],
+  "analysis.neighbors": ["run_id"],
+  "analysis.similarity": ["run_id"],
+  "analysis.pairwise": ["run_id"],
+  "analysis.cluster": ["run_id"],
+  "analysis.outlier": ["run_id"],
+  "analysis.sampling": ["run_id"],
+  "analysis.coverage": ["reference_run_id", "query_run_id"],
+  "analysis.overlap": ["reference_run_id", "query_run_id"],
+  "analysis.acquisition": ["reference_run_id", "query_run_id"],
+  "analysis.drift": ["reference_run_id", "query_run_id"],
+  "analysis.compare": ["left_run_id", "right_run_id"],
+  "analysis.mantel": ["left_run_id", "right_run_id"],
+  "analysis.sensitivity": ["run_ids"],
+  "analysis.feature_variance": ["run_id"],
+  "analysis.feature_correlation": ["run_id"],
+  "analysis.effective_dimension": ["run_id"],
+  "analysis.property_correlation": ["run_id"],
+  "analysis.local_diversity": ["run_id"],
+  "analysis.kernel": ["run_id"],
+  "analysis.trajectory": ["run_id"],
+  "analysis.perturbation_sensitivity": ["run_id"],
+  "analysis.export": ["run_id"],
+};
+
+/** The submissions whose two runs must share one descriptor feature space, plus
+ *  the ones that compare runs some other way and deliberately allow different
+ *  feature counts (compare, mantel, sensitivity). */
+const CROSS_SUBMITS = new Set(["analysis.coverage", "analysis.overlap", "analysis.acquisition", "analysis.drift"]);
+
+/** Parameters the numeric guards in analysis/algorithms/_common.py read as
+ *  integers of at least one. Deliberately excludes anything where zero is a
+ *  legitimate value (frame_start, frame_step, min_dist, contamination). */
+const COUNT_PARAMS = [
+  "n_samples", "k", "n_neighbors", "max_samples", "top_k", "heatmap_features", "n_clusters",
+  "min_samples", "perplexity", "max_iter", "folds", "reliability_k", "n_amplitudes",
+  "max_structures", "chunk_size", "reference_chunk_size", "uncertainty_k", "permutations",
+];
+
+const EXPORT_FORMATS = ["json", "csv", "extxyz", "deepmd", "indices", "report"];
+
+function requireRun(value: unknown) {
+  if (typeof value !== "string" || !value) throw new MockError("INVALID_PARAMS", "at least one descriptor run id is required");
+  const run = RUNS.find((item) => item.id === value);
+  if (!run) throw new MockError("INVALID_PARAMS", `run ${value} does not exist`);
+  if (run.status !== "COMPLETED") throw new MockError("RESULT_INCOMPATIBLE", `run ${value} is ${run.status}`);
+  return run;
+}
+
+/**
+ * Refuse an analysis submission the way `submit_generic` does, before any job.
+ *
+ * Every analysis handler used to answer with canned results whatever it was
+ * sent: a renderer that dropped `run_id`, renamed a parameter, sent a mode the
+ * backend only accepts for some algorithms, or paired two incompatible feature
+ * spaces passed the whole e2e suite and failed only against a real sidecar -
+ * the exact class of bug this mock exists to hide.
+ */
+function refuseSubmit(method: string, params: Record<string, unknown>): void {
+  const keys = ANALYSIS_RUN_PARAMS[method];
+  if (!keys) return;
+  const ids = keys.flatMap((key) => (Array.isArray(params[key]) ? params[key] as unknown[] : params[key] == null ? [] : [params[key]]));
+  if (ids.length < keys.length) throw new MockError("INVALID_PARAMS", `${method} requires ${keys.join(" and ")}`);
+  const runs = ids.map(requireRun);
+  if (runs.length > 1 && params.view_id) {
+    // Same refusal as submit_generic: a pair has two candidate sets, so one
+    // unqualified scope is ambiguous even if it would parse.
+    throw new MockError("ANALYSIS_INPUT_INVALID", "view_id applies to single-run analyses only");
+  }
+  if (CROSS_SUBMITS.has(method)) {
+    const [first, second] = runs;
+    if (first.feature_space_signature !== second.feature_space_signature) {
+      throw new MockError("ANALYSIS_INPUT_INVALID", "reference and query runs must use the same descriptor feature space");
+    }
+  }
+  if (method === "analysis.sensitivity" && new Set(runs.map((run) => run.descriptor_name)).size > 1) {
+    throw new MockError("ANALYSIS_INPUT_INVALID", "parameter sensitivity requires the same descriptor; use Compare for different descriptors");
+  }
+  const scope = runs[0];
+  for (const key of ["view_id", "reference_view_id", "query_view_id"]) {
+    const value = params[key];
+    if (value == null || value === "") continue;
+    const view = MOCK_DATASET_VIEWS.find((item) => item.id === value);
+    if (!view) throw new MockError("DATASET_NOT_FOUND", `dataset view ${String(value)} does not exist`);
+    if (view.dataset_id !== scope.dataset_id) throw new MockError("ANALYSIS_INPUT_INVALID", "dataset view does not belong to the descriptor run dataset");
+    if (view.stale) throw new MockError("ANALYSIS_STALE", `dataset view ${String(value)} is stale`);
+  }
+  if (params.mode != null && params.mode !== "structure" && params.mode !== "atom") {
+    throw new MockError("ANALYSIS_INPUT_INVALID", "mode must be structure or atom");
+  }
+  if (params.preprocess != null && params.preprocess !== "" && !["raw", "center", "standardized"].includes(String(params.preprocess))) {
+    throw new MockError("ANALYSIS_INPUT_INVALID", "preprocess must be raw, center, or standardized");
+  }
+  for (const key of COUNT_PARAMS) {
+    const value = params[key];
+    if (value !== undefined && !(typeof value === "number" && Number.isInteger(value) && value >= 1)) {
+      throw new MockError("ANALYSIS_INPUT_INVALID", `${key} must be an integer of at least 1`);
+    }
+  }
+  if (method === "analysis.export") {
+    const format = String(params.format ?? "json");
+    if (!EXPORT_FORMATS.includes(format)) throw new MockError("ANALYSIS_INPUT_INVALID", "format must be json, csv, extxyz, deepmd, indices, or report");
+    if (typeof params.output_path !== "string" || !params.output_path) throw new MockError("ANALYSIS_INPUT_INVALID", "output_path is required for export");
+    const indices = params.indices;
+    if (indices !== undefined && (!Array.isArray(indices) || indices.some((index) => !Number.isInteger(index) || (index as number) < 0))) {
+      throw new MockError("ANALYSIS_INPUT_INVALID", "indices must be a list of non-negative integers");
+    }
+  }
+}
+
 const METHODS: Record<string, Handler> = {
   "system.info": () => ({
     // Every key the real sidecar answers (see tests/data/backend-response-keys.json):
@@ -1467,6 +1585,7 @@ function replyFor(id: number, method: string, params: Record<string, unknown>): 
     return { protocol_version: 1, id, error: { code: "NO_HANDLER", message: "Preview mock method is unavailable.", error_id: "preview" } };
   }
   try {
+    refuseSubmit(method, params);
     return { protocol_version: 1, id, result: handler(params) };
   } catch (error) {
     // A MockError is the mock refusing a request the way the sidecar refuses it;
