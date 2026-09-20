@@ -67,18 +67,33 @@ def is_reparse_point(path: Path) -> bool:
         raise UnsafePathError("cannot inspect a filesystem reparse point") from exc
 
 
-def ensure_no_reparse_points(path: Path) -> None:
-    """Check every existing component without following links."""
+def ensure_no_reparse_points(path: Path, checked: set[str] | None = None) -> None:
+    """Check every existing component without following links.
+
+    ``checked`` is a caller-owned set of prefixes already verified while one tree
+    is being listed. Without it every leaf re-walks its whole chain: a 1 010-file
+    DeepMD source asked the filesystem 57 976 questions about a handful of
+    directories. It belongs to the caller and no call site keeps one, so a path
+    is never trusted because an earlier request liked it - the only widening is
+    inside a single listing, where a directory already passed could be replaced
+    by a junction before that listing ends. Nothing here can close that either
+    way: the check and the read are always separate operations.
+    """
     path = Path(path)
     current = Path(path.anchor) if path.anchor else Path(".")
     for part in path.parts:
         if part == path.anchor:
             continue
         current = current / part
+        key = str(current)
+        if checked is not None and key in checked:
+            continue
         junction = getattr(current, "is_junction", None)
         is_junction = bool(junction and junction())
         if (current.exists() or current.is_symlink() or is_junction) and is_reparse_point(current):
             raise UnsafePathError("path crosses a symlink or junction")
+        if checked is not None:
+            checked.add(key)
 
 
 def validate_local_path(raw: object, *, field: str = "path") -> Path:

@@ -30,9 +30,13 @@ MAX_DEEPMD_FILES = 100_000
 def _preflight_npy_layout(path: Path, sets: list[Path]) -> None:
     """Inspect NPY headers before dpdata eagerly materializes the system."""
     try:
-        ensure_no_reparse_points(path)
+        # One verified-prefix set for this listing: every path below shares the
+        # source directory and its set subdirectories, and each call used to
+        # re-walk the whole chain file by file.
+        checked: set[str] = set()
+        ensure_no_reparse_points(path, checked)
         type_path = path / "type.raw"
-        ensure_no_reparse_points(type_path)
+        ensure_no_reparse_points(type_path, checked)
         type_tokens = type_path.read_text(encoding="utf-8", errors="strict").split()
         type_count = len(type_tokens)
         if type_count <= 0 or type_count > MAX_DEEPMD_ATOMS:
@@ -49,9 +53,9 @@ def _preflight_npy_layout(path: Path, sets: list[Path]) -> None:
         total_frames = 0
         total_atoms = 0
         for set_path in sets:
-            ensure_no_reparse_points(set_path)
+            ensure_no_reparse_points(set_path, checked)
             coord_path = set_path / "coord.npy"
-            ensure_no_reparse_points(coord_path)
+            ensure_no_reparse_points(coord_path, checked)
             if not coord_path.is_file():
                 raise AppError(INVALID_DATASET, "DeepMD coord.npy is missing")
             coord = np.load(coord_path, mmap_mode="r", allow_pickle=False)
@@ -77,7 +81,7 @@ def _preflight_npy_layout(path: Path, sets: list[Path]) -> None:
                 if mmap_handle is not None:
                     mmap_handle.close()
             for child in set_path.iterdir():
-                ensure_no_reparse_points(child)
+                ensure_no_reparse_points(child, checked)
                 if child.is_file():
                     total_files += 1
                     if total_files > MAX_DEEPMD_FILES:
@@ -173,6 +177,11 @@ class DeepMDAdapter(DatasetAdapter):
     def scan(self) -> ScanMeta:
         file_size = 0
         file_count = 0
+        # Prefixes already verified during this walk. Every entry below re-walked
+        # the whole chain from the drive root, 57 probes per file on a 1 010-file
+        # source; a directory is still checked the first time the walk names it,
+        # which is what stops os.walk descending into a junction.
+        checked: set[str] = set()
         def raise_walk_error(error: OSError) -> None:
             raise AppError(INVALID_DATASET, "DeepMD source cannot be enumerated safely") from error
 
@@ -184,10 +193,10 @@ class DeepMDAdapter(DatasetAdapter):
         ):
             directory_path = Path(directory)
             for dirname in dirnames:
-                ensure_no_reparse_points(directory_path / dirname)
+                ensure_no_reparse_points(directory_path / dirname, checked)
             for filename in filenames:
                 child = directory_path / filename
-                ensure_no_reparse_points(child)
+                ensure_no_reparse_points(child, checked)
                 if not child.is_file():
                     raise AppError(INVALID_DATASET, "DeepMD source contains a non-regular file")
                 file_count += 1

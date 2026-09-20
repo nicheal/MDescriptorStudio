@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
 
+from mdescriptor_studio_backend import security
 from mdescriptor_studio_backend.datasets import compute_fingerprint
 from mdescriptor_studio_backend.datasets.extxyz import ExtXYZAdapter
 from mdescriptor_studio_backend.datasets.fingerprint import FINGERPRINT_VERSION
@@ -18,7 +22,7 @@ from mdescriptor_studio_backend.errors import (
     RESULT_INCOMPATIBLE,
 )
 from mdescriptor_studio_backend.protocol.frames import parse_request, response_err
-from mdescriptor_studio_backend.security import UnsafePathError, validate_local_path
+from mdescriptor_studio_backend.security import UnsafePathError, ensure_no_reparse_points, validate_local_path
 from mdescriptor_studio_backend.services.analysis_service import AnalysisService
 from mdescriptor_studio_backend.services.descriptor_service import DescriptorService
 from mdescriptor_studio_backend.services.result_service import ResultService
@@ -65,6 +69,88 @@ def test_extended_length_and_device_paths_are_named_not_merged():
             validate_local_path(raw)
     with pytest.raises(UnsafePathError, match="must be a local path"):
         validate_local_path(r"\\server\share\file.xyz")
+
+
+def _point_at(link: Path, target: Path) -> bool:
+    """Make *link* a real junction (Windows) or symlink (elsewhere) to *target*."""
+    if sys.platform == "win32":
+        return subprocess.run(
+            ["cmd", "/c", "mklink", "/J", os.fspath(link), os.fspath(target)],
+            capture_output=True,
+        ).returncode == 0
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError:
+        return False
+    return True
+
+
+@pytest.fixture()
+def sets_with_a_junction(tmp_path: Path) -> tuple[Path, Path, Path]:
+    """A DeepMD-shaped ``sets`` directory: one clean set, one junction to another.
+
+    A real reparse point rather than a mocked predicate, because on Windows a
+    junction is not a symlink to :func:`os.path.islink` - the exact case these
+    checks exist for. Skips if the filesystem or its policy will not make one.
+    """
+    sets = tmp_path / "sets"
+    clean = sets / "set.000000"
+    elsewhere = tmp_path / "elsewhere"
+    for directory in (clean, elsewhere):
+        directory.mkdir(parents=True)
+    (clean / "coord.npy").write_bytes(b"x" * 8)
+    (elsewhere / "coord.npy").write_bytes(b"y" * 8)
+    junction = sets / "set.000001"
+    if not _point_at(junction, elsewhere):
+        pytest.skip("this filesystem will not create a directory link")
+    return sets, clean, junction
+
+
+def test_a_junction_is_refused_at_the_component_it_crosses(sets_with_a_junction) -> None:
+    _, clean, junction = sets_with_a_junction
+    ensure_no_reparse_points(clean / "coord.npy")
+    with pytest.raises(UnsafePathError, match="symlink or junction"):
+        ensure_no_reparse_points(junction)
+    with pytest.raises(UnsafePathError, match="symlink or junction"):
+        ensure_no_reparse_points(junction / "coord.npy")
+
+
+def test_a_shared_prefix_set_skips_verified_directories_only(sets_with_a_junction) -> None:
+    # The listing-level memo has to skip the directories it already walked and
+    # nothing else. Priming the parent and then asking about a file under a
+    # junction is the one shape where "check the leaf only" would read through
+    # the link, so that is the case that has to stay refused.
+    sets, clean, junction = sets_with_a_junction
+    checked: set[str] = set()
+    ensure_no_reparse_points(clean / "coord.npy", checked)
+    assert str(sets) in checked
+    with pytest.raises(UnsafePathError, match="symlink or junction"):
+        ensure_no_reparse_points(junction / "coord.npy", checked)
+
+
+def test_a_shared_prefix_set_probes_each_directory_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    probed: list[str] = []
+    monkeypatch.setattr(security, "is_reparse_point", lambda path: probed.append(str(path)) or False)
+    sets = tmp_path / "sets"
+    for index in range(4):
+        set_dir = sets / f"set.{index:06d}"
+        set_dir.mkdir(parents=True)
+        for number in range(5):
+            (set_dir / f"array_{number}.npy").write_bytes(b"x")
+    leaves = sorted(child for set_dir in sets.iterdir() for child in set_dir.iterdir())
+
+    checked: set[str] = set()
+    for child in leaves:
+        ensure_no_reparse_points(child, checked)
+    with_memo = list(probed)
+    probed.clear()
+    for child in leaves:
+        ensure_no_reparse_points(child)
+
+    assert len(with_memo) == len(set(with_memo)), "a verified prefix must be probed at most once"
+    assert with_memo.count(str(sets)) == 1
+    assert probed.count(str(sets)) == len(leaves), "without the memo every leaf re-walks the chain"
+    assert len(probed) > 2 * len(with_memo), (len(with_memo), len(probed))
 
 
 def test_fingerprint_changes_when_file_content_changes(tmp_path: Path) -> None:
