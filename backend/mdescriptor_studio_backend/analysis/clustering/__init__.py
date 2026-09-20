@@ -73,14 +73,25 @@ def outlier(samples: DescriptorMatrix, params: dict, algorithm: str, progress: C
         scores = -np.asarray(model.score_samples(x), dtype=np.float64)
         labels = (np.asarray(model.predict(x)) < 0).astype(np.int64)
     elif algorithm in ("mahalanobis", "mahalanobis_distance"):
+        # One sample makes np.cov all-NaN, and pinv of that raises LinAlgError out
+        # of the whole job; knn and lof answer with a proper error at this point.
+        _check_samples(x, 2)
         center = x.mean(axis=0)
-        cov = np.cov(x, rowvar=False)
-        cov = np.atleast_2d(cov) + np.eye(x.shape[1]) * 1e-10
-        inv = np.linalg.pinv(cov)
+        covariance = np.atleast_2d(np.cov(x, rowvar=False))
+        # The ridge is what pinv truncates, so keep the estimate and the rank
+        # separate: the unregularised rank is the space the score can see.
+        inv = np.linalg.pinv(covariance + np.eye(x.shape[1]) * 1e-10)
         delta = x - center
         scores = np.sqrt(np.maximum(np.einsum("ij,jk,ik->i", delta, inv, delta), 0.0))
         threshold = float(np.quantile(scores, 1.0 - (0.01 if contamination == "auto" else contamination)))
         labels = (scores > threshold).astype(np.int64)
+        span = int(np.linalg.matrix_rank(covariance))
+        if span < x.shape[1]:
+            warnings.append(
+                f"Mahalanobis scores span {span} of {x.shape[1]} directions with {x.shape[0]} samples:"
+                " the rest are not measured, and a sample that is the only one occupying a direction"
+                " absorbs its own variance and scores as ordinary"
+            )
     else:
         raise AppError(ANALYSIS_INPUT_INVALID, f"unsupported outlier algorithm: {algorithm}")
     if progress:

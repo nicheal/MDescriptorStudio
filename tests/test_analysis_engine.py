@@ -325,6 +325,40 @@ def test_single_feature_matrix_runs_do_not_crash_unstructured() -> None:
     assert exc.value.code == ANALYSIS_INPUT_INVALID
 
 
+def test_mahalanobis_scores_say_when_the_covariance_cannot_be_estimated() -> None:
+    # A few hundred structures over a couple of hundred SOAP features is the
+    # Studio's normal shape, and there n - 1 < d: pinv inverts a covariance whose
+    # rank is at most n - 1, so the score lives in a span-dimensional subspace of
+    # the feature space and every direction outside it is simply unmeasured. The
+    # panel reported an outlier_count as though the estimate were full rank.
+    # The review's stronger claim - that a departure along an unoccupied direction
+    # ranks *last* - did not reproduce: such a point adds that direction to the
+    # covariance itself, and is still the one flagged, which is asserted below.
+    rows, columns = 50, 60
+    rng = np.random.default_rng(3)
+    values = rng.normal(size=(rows, 8)) @ rng.normal(size=(8, columns))
+    unoccupied = np.linalg.svd(values - values.mean(axis=0), full_matrices=True)[2][-1]
+    values[0] += 500.0 * unoccupied
+
+    result = outlier(StructureDescriptorMatrix(values, np.arange(rows, dtype=np.int64)), {}, "mahalanobis")
+    healthy = outlier(
+        StructureDescriptorMatrix(rng.normal(size=(400, 20)), np.arange(400, dtype=np.int64)), {}, "mahalanobis"
+    )
+
+    assert any("Mahalanobis scores span 9 of 60 directions with 50 samples" in warning for warning in result["warnings"]), result["warnings"]
+    assert result["arrays"]["labels"][0] == 1, "the lone departure is still the point the panel flags"
+    assert not any("Mahalanobis" in warning for warning in healthy["warnings"]), healthy["warnings"]
+
+
+def test_mahalanobis_refuses_one_sample_instead_of_failing_inside_pinv() -> None:
+    # np.cov of a single sample is all-NaN, and pinv of that raises LinAlgError
+    # out of the job; knn and lof already answer with a structured error here.
+    single = StructureDescriptorMatrix(np.array([[1.0, 2.0]]), np.array([0], dtype=np.int64))
+    with pytest.raises(AppError) as exc:
+        outlier(single, {}, "mahalanobis")
+    assert exc.value.code == ANALYSIS_INSUFFICIENT_SAMPLES
+
+
 def test_compare_reports_geometry_and_neighbor_consistency(samples: StructureDescriptorMatrix) -> None:
     perturbed = StructureDescriptorMatrix(samples.values * 1.5 + 0.01, samples.frame, sample_ids=samples.sample_ids)
     result = compare(samples, perturbed, {"max_samples": 32, "k": 5})
