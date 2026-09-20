@@ -601,14 +601,14 @@ function mockOverviewPreview() {
         coordination: points.map((point) => point.coordination ?? 0),
         neighbor_distances: Array.from({ length: 420 }, (_, index) => 2.1 + Math.abs(Math.sin(index / 17)) * 1.4),
       };
-      return { analysis_id: mockLatestAnalysisId, kind: "local_diversity", sample_count: points.length, cutoff: 3.0, max_neighbors: 128, mean_coordination: 5.1, max_coordination: 7, coordination_capped_atoms: 0, categories: ["main", "distorted", "outlier"], element_summary: [{ element: 31, samples: 90, clusters: 4, distorted: 8, outliers: 3, effective_dimension: 6.2 }, { element: 33, samples: 90, clusters: 4, distorted: 9, outliers: 3, effective_dimension: 5.8 }], points, rows: points };
+      return { analysis_id: mockLatestAnalysisId, kind: "local_diversity", sample_count: points.length, cutoff: 3.0, max_neighbors: 128, mean_coordination: 5.1, max_coordination: 7, coordination_capped_atoms: 0, categories: ["main", "distorted", "outlier"], element_summary: [{ element: 31, samples: 90, clusters: 4, distorted: 8, outliers: 3, effective_dimension: 6.2 }, { element: 33, samples: 90, clusters: 4, distorted: 9, outliers: 3, effective_dimension: 5.8 }], points };
     }
     if (mockLatestAnalysisKind === "acquisition") {
       // Aligned with `selected`: pick_scores records the objective each greedy
       // pick actually maximised, not the final-state ranking in `scores`.
       mockAnalysisArrays = { pick_scores: selected.map((_, step) => Number((0.92 - step * 0.03).toFixed(3))) };
     }
-    return { analysis_id: mockLatestAnalysisId, kind: mockLatestAnalysisKind, ...(mockLatestAnalysisKind === "acquisition" ? { preprocess: "standardized" } : {}), algorithm: mockLatestAnalysisKind === "acquisition" ? mockLatestAcquisitionMethod : mockLatestAnalysisKind, uncertainty_method: mockLatestAcquisitionMethod === "uncertainty_diversity" ? "knn_extrapolation" : null, cluster_count: 4, noise_count: 3, outlier_count: 8, selected_count: selected.length, candidate_pool: points.length, mean_selected_novelty: 0.82, mean_selected_uncertainty: 1.04, points, rows: points, selected };
+    return { analysis_id: mockLatestAnalysisId, kind: mockLatestAnalysisKind, ...(mockLatestAnalysisKind === "acquisition" ? { preprocess: "standardized" } : {}), algorithm: mockLatestAnalysisKind === "acquisition" ? mockLatestAcquisitionMethod : mockLatestAnalysisKind, uncertainty_method: mockLatestAcquisitionMethod === "uncertainty_diversity" ? "knn_extrapolation" : null, cluster_count: 4, noise_count: 3, outlier_count: 8, selected_count: selected.length, candidate_pool: points.length, mean_selected_novelty: 0.82, mean_selected_uncertainty: 1.04, points, selected };
   }
   if (["coverage", "overlap", "drift"].includes(mockLatestAnalysisKind)) {
     const reference = Array.from({ length: 100 }, (_, i) => [Math.sin(i / 9) * 2, Math.cos(i / 13) * 1.5]);

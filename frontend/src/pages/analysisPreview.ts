@@ -68,3 +68,61 @@ export function selectedDisplayIndices(points: Pick<AnalysisPoint, "i">[], selec
 export function narrowedArrays(replies: readonly { array: string; truncated: boolean }[]): string[] {
   return replies.filter((reply) => reply.truncated).map((reply) => reply.array).sort();
 }
+
+/** What a point carries even when the analysis attached nothing to it. */
+const POINT_IDENTITY_KEYS = new Set(["i", "frame", "sample_id", "row", "x", "y"]);
+
+/**
+ * The list the result table tabulates.
+ *
+ * A result with coordinates used to send that list twice — `points` for the
+ * scatter and a `rows` copy carrying the arrays' plural names for the table —
+ * so a capped preview was twice the size it needed to be and "the table shows
+ * the samples the scatter drew" was an invariant rather than the shape. There is
+ * one list now, which leaves a choice to make: a `points` list is worth a table
+ * only when it carries a per-sample field beyond identity and coordinates. A
+ * plain sampling result attaches nothing per point, and there the samples it
+ * selected are the table.
+ */
+export function previewTableRows(preview: AnalysisPreview | null): Record<string, unknown>[] {
+  if (!preview) return [];
+  if (Array.isArray(preview.rows)) return preview.rows;
+  const points = Array.isArray(preview.points) ? preview.points : [];
+  // Every point is built from the same per-sample arrays, so one describes them all.
+  if (points.length && Object.keys(points[0]).some((key) => !POINT_IDENTITY_KEYS.has(key))) return points;
+  if (Array.isArray(preview.selected)) return preview.selected;
+  if (Array.isArray(preview.pairs)) return preview.pairs as Record<string, unknown>[];
+  if (Array.isArray(preview.runs)) return preview.runs as Record<string, unknown>[];
+  if (Array.isArray(preview.top_indices)) {
+    const values = Array.isArray(preview.top_values) ? preview.top_values : [];
+    return preview.top_indices.map((feature, position) => ({ rank: position + 1, feature, variance: values[position] }));
+  }
+  return [];
+}
+
+/**
+ * The four per-sample fields a table row contributes to the selected point, read
+ * under whichever of the two names they arrived in: rows taken from `points`
+ * carry the singular names the plot uses, while the row lists of analyses
+ * without coordinates pass the source array names straight through.
+ */
+export function previewRowFields(row: Record<string, unknown>): { label?: number; score?: number; distance?: number; cluster?: number } {
+  const either = (singular: string, plural: string) => {
+    const value = row[singular] ?? row[plural];
+    return value == null ? undefined : Number(value);
+  };
+  return { label: either("label", "labels"), score: either("score", "scores"), distance: either("distance", "distances"), cluster: either("cluster", "cluster_labels") };
+}
+
+/**
+ * The keys a table becomes columns from, capped at seven.
+ *
+ * The two plotted coordinates go last on purpose: the chart already reads them,
+ * and a cluster result's table would otherwise spend its seven columns on x and y
+ * before reaching the assignment it is there to show.
+ */
+export function previewTableColumns(row: Record<string, unknown>): string[] {
+  return Object.keys(row)
+    .sort((a, b) => Number(a === "x" || a === "y") - Number(b === "x" || b === "y"))
+    .slice(0, 7);
+}

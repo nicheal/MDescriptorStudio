@@ -89,8 +89,10 @@ analysis.compare、analysis.feature_variance、analysis.feature_correlation、
 analysis.effective_dimension、analysis.trajectory、analysis.drift、
 analysis.sensitivity、analysis.export。
 
-PCA/UMAP/t-SNE 结果为 preview points；cluster/outlier/coverage 结果为
-preview rows；large arrays 通过 chunk 访问，preview 与单次 chunk 均受
+带投影坐标的结果（PCA/UMAP/t-SNE、cluster/outlier、local diversity、
+acquisition、sampling）只发 preview points，结果表读同一份列表；没有坐标的
+结果（similarity/neighbors、coverage/overlap/drift、feature 类）发 preview
+rows；large arrays 通过 chunk 访问，preview 与单次 chunk 均受
 20,000 行硬上限。计算中的自有循环调用 ctx.check_cancelled()。JobService
 按类别分池并发（ADR-27）：engine 1（descriptor.compute）、analysis 2、
 dataset 2。距离/coverage 使用分块 nearest-neighbour，

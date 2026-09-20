@@ -52,6 +52,9 @@ class AnalysisPreviewMixin:
         if "coords" in arrays:
             coords = np.asarray(arrays["coords"])
             count = min(coords.shape[0], samples.n_samples, _MAX_PREVIEW_POINTS)
+            # Past the cap the preview strides over the whole set instead of
+            # taking its beginning, so a capped result still shows the extent of
+            # what it describes.  The result table reads this same list.
             indices = np.linspace(0, coords.shape[0] - 1, count, dtype=np.int64) if coords.shape[0] > count else np.arange(coords.shape[0])
             sample_indices = np.asarray(arrays.get("sample_indices", []), dtype=np.int64)
             points = []
@@ -68,28 +71,12 @@ class AnalysisPreviewMixin:
                 points.append(point)
             preview["points"] = points
             preview["total_points"] = int(coords.shape[0])
-            row_keys = [key for key in _PREVIEW_ARRAY_KEYS if key in arrays and np.asarray(arrays[key]).ndim == 1]
-            if row_keys:
-                row_arrays = {key: np.asarray(arrays[key]) for key in row_keys}
-                rows = []
-                # The table must describe the same samples the scatter drew:
-                # taking the first N rows while the points strided across the
-                # whole set made the two halves of one preview disagree.
-                for i in indices.tolist():
-                    logical_index = int(sample_indices[i]) if sample_indices.ndim == 1 and i < sample_indices.size else int(i)
-                    item = sample_identity(logical_index)
-                    if item is None:
-                        continue
-                    for key in row_keys:
-                        values = row_arrays[key]
-                        if i >= len(values):
-                            continue
-                        value = values[i]
-                        output_key = "labels" if key == "labels" else "cluster_labels" if key == "cluster_labels" else "element" if key == "elements" else key
-                        item[output_key] = int(value) if key in ("labels", "cluster_labels", "elements", "coordination") else float(value)
-                    rows.append(item)
-                preview["rows"] = rows
-                preview["total_rows"] = int(coords.shape[0])
+            # One list serves the scatter and the result table. This branch used
+            # to build a second list over the same `indices` with the arrays'
+            # plural names (`labels`, `cluster_labels`) so the table could use a
+            # column header per key - 1.8 MB of the 3.9 MB a 20k-point cluster
+            # preview cost, and an invariant (`tests/test_analysis_api.py`) whose
+            # only job was to keep the two halves sampling the same samples.
             if "selected_indices" in arrays:
                 selected = np.asarray(arrays["selected_indices"], dtype=np.int64)
                 preview["selected"] = [item for i in selected[:_MAX_PREVIEW_POINTS].tolist() if (item := sample_identity(int(i))) is not None]

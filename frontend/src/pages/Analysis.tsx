@@ -54,7 +54,7 @@ import {
 import { useT } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import SaveViewModal from "../components/SaveViewModal";
-import { hasColorByData, narrowedArrays, normalizePoints, selectedDisplayIndices } from "./analysisPreview";
+import { hasColorByData, narrowedArrays, normalizePoints, previewRowFields, selectedDisplayIndices } from "./analysisPreview";
 import AnalysisResultVisualization from "./analysisVisualizations";
 import { getAnalysisMethodGuide } from "./analysisMethodGuides";
 import { HIGH_CONTRAST_COLORSCALE, overviewLayout, plotData } from "./analysisChartKit";
@@ -1416,7 +1416,8 @@ export default function Analysis() {
             if (row.i == null && row.sample_index == null && row.frame == null) return;
             const index = Number(row.i ?? row.sample_index ?? 0);
             const frame = Number(row.frame ?? index);
-            handlePoint({ i: index, frame, row: row.row == null ? undefined : Number(row.row), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, label: row.labels == null ? undefined : Number(row.labels), score: row.scores == null ? undefined : Number(row.scores), distance: row.distances == null ? undefined : Number(row.distances), element: row.element == null ? undefined : Number(row.element), cluster: row.cluster_labels == null ? undefined : Number(row.cluster_labels), coordination: row.coordination == null ? undefined : Number(row.coordination), novelty: row.novelty == null ? undefined : Number(row.novelty), uncertainty: row.uncertainty == null ? undefined : Number(row.uncertainty), diversity: row.diversity == null ? undefined : Number(row.diversity) });
+            const numeric = (key: string) => (row[key] == null ? undefined : Number(row[key]));
+            handlePoint({ i: index, frame, row: numeric("row"), sample_id: row.sample_id == null ? undefined : String(row.sample_id), x: 0, y: 0, element: numeric("element"), coordination: numeric("coordination"), novelty: numeric("novelty"), uncertainty: numeric("uncertainty"), diversity: numeric("diversity"), ...previewRowFields(row) });
           }} />}
 
           {tab === "sampling" && <SamplingExportCard format={exportFormat} onFormat={setExportFormat} destination={exportPath} onChoose={() => void chooseExportPath()} onExport={() => void exportSelection()} />}

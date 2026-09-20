@@ -350,7 +350,9 @@ def test_single_run_analysis_scopes_to_dataset_view(tmp_path: Path) -> None:
     assert saved["view_id"] == "view_v1"
     assert saved["selection_hash"] == "selection_v1"
     preview = service.preview({"analysis_id": submitted["analysis_id"], "limit": 20})
-    assert {item["frame"] for item in preview["rows"]} == {2, 4, 6, 8}
+    # A clustering result carries coordinates, so its table reads `points`: the
+    # `rows` copy this used to assert on is the duplicate that merge removed.
+    assert {item["frame"] for item in preview["points"]} == {2, 4, 6, 8}
 
     # The selection hash joins the cache key: the identical request reuses the
     # artifact, a different view computes fresh.
@@ -443,7 +445,7 @@ def test_generic_analysis_is_cached_and_chunked(tmp_path: Path) -> None:
     assert jobs.calls == 1
 
     preview = service.preview({"analysis_id": first["analysis_id"], "limit": 3})
-    assert len(preview["rows"]) == 3
+    assert len(preview["points"]) == 3
     chunk = service.chunk({"analysis_id": first["analysis_id"], "array": "labels", "limit": 4})
     assert chunk["data"] and chunk["next_offset"] == 4
 
@@ -507,7 +509,7 @@ def test_stale_artifacts_remain_auditable_but_cannot_feed_new_work(tmp_path: Pat
     # Historical artifacts remain readable for audit, but a stale descriptor
     # cannot be used as the input of a new analysis or cache hit.
     assert service.get({"analysis_id": created["analysis_id"]})["status"] == "STALE"
-    assert service.preview({"analysis_id": created["analysis_id"], "limit": 2})["rows"]
+    assert service.preview({"analysis_id": created["analysis_id"], "limit": 2})["points"]
     try:
         service.cluster({"run_id": "run_1", "algorithm": "kmeans", "n_clusters": 2, "seed": 42})
     except AppError as exc:
@@ -580,10 +582,13 @@ def test_generic_pca_pads_the_second_coordinate_for_one_feature(tmp_path: Path) 
     db.close()
 
 
-def test_projection_preview_table_and_scatter_cover_the_same_samples(tmp_path: Path, monkeypatch) -> None:
-    """Past the preview cap the scatter strides across all points; the table has
-    to stride identically, or the two halves of one preview describe different
-    samples and a click on a row highlights an unrelated point."""
+def test_projection_preview_carries_one_list_for_scatter_and_table(tmp_path: Path, monkeypatch) -> None:
+    """Past the preview cap the list strides across all points, and the result
+    table reads that same list. This branch used to build a second one over the
+    identical samples under the arrays' plural names, which doubled a capped
+    preview (1.8 MB of the 3.9 MB a 20k-point cluster result costs) and made
+    "the table and the scatter describe the same samples" something a test had
+    to hold in place rather than something the shape guaranteed."""
     monkeypatch.setattr(preview_service, "_MAX_PREVIEW_POINTS", 3)
     db, _jobs, service = _service(tmp_path)
     samples = StructureDescriptorMatrix(
@@ -598,7 +603,12 @@ def test_projection_preview_table_and_scatter_cover_the_same_samples(tmp_path: P
     preview = service._build_preview(result, samples, "pca")
     assert len(preview["points"]) == 3
     assert preview["total_points"] == 10
-    assert [point["i"] for point in preview["points"]] == [row["i"] for row in preview["rows"]]
+    assert "rows" not in preview and "total_rows" not in preview
+    # everything the table showed is on the points it now reads, strided the
+    # same way the scatter is: sample identity, coordinates, and the label.
+    assert [(point["i"], point["x"], point["label"]) for point in preview["points"]] == [
+        (0, 0.0, 0), (4, 8.0, 4), (9, 18.0, 9)
+    ]
     db.close()
 
 

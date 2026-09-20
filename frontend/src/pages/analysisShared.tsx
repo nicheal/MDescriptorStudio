@@ -16,7 +16,7 @@ import type {
   PcaPayload,
   RunRow,
 } from "../types/protocol";
-import type { AnalysisPoint } from "./analysisPreview";
+import { previewTableColumns, previewTableRows, type AnalysisPoint } from "./analysisPreview";
 import type { AnalysisArrays } from "./analysisVisualizations";
 import type { AnalysisMethodGuide } from "./analysisMethodGuides";
 import { FeatureVarianceChart } from "./featureVariance";
@@ -190,18 +190,8 @@ export function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPr
   const { t } = useT();
   if (preview?.kind === "feature_variance" || preview?.kind === "feature_correlation" || preview?.kind === "effective_dimension" || preview?.kind === "property_correlation") return null;
   if (!preview && !points.length) return <section className="analysis-card"><Empty description={t("Run an analysis module to see its bounded result preview.")} /></section>;
-  const rows = Array.isArray(preview?.rows)
-    ? preview.rows
-    : Array.isArray(preview?.selected)
-      ? preview.selected
-      : Array.isArray(preview?.pairs)
-        ? preview.pairs as Record<string, unknown>[]
-        : Array.isArray(preview?.runs)
-          ? preview.runs as Record<string, unknown>[]
-          : Array.isArray(preview?.top_indices)
-            ? (preview.top_indices as unknown[]).map((index, position) => ({ rank: position + 1, feature: index, variance: (preview.top_values as unknown[] | undefined)?.[position] }))
-            : [];
-  if (rows.length) return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} meta={t("{n} rows", { n: rows.length.toLocaleString() })} /><Table size="small" pagination={{ pageSize: 12 }} rowKey={(row, index) => `${String(row.i ?? row.sample_id ?? row.run_id ?? index)}:${String(row.source_i ?? row.rank ?? index)}`} dataSource={rows} onRow={(row) => ({ onClick: () => onSelect?.(row) })} columns={Object.keys(rows[0]).slice(0, 7).map((key) => ({ title: key, dataIndex: key, key, render: (value: unknown) => typeof value === "number" ? value.toPrecision(6) : String(value ?? "—") }))} /></section>;
+  const rows = previewTableRows(preview);
+  if (rows.length) return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} meta={t("{n} rows", { n: rows.length.toLocaleString() })} /><Table size="small" pagination={{ pageSize: 12 }} rowKey={(row, index) => `${String(row.i ?? row.sample_id ?? row.run_id ?? index)}:${String(row.source_i ?? row.rank ?? index)}`} dataSource={rows} onRow={(row) => ({ onClick: () => onSelect?.(row) })} columns={previewTableColumns(rows[0]).map((key) => ({ title: key, dataIndex: key, key, render: (value: unknown) => typeof value === "number" ? value.toPrecision(6) : String(value ?? "—") }))} /></section>;
   return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} /><Collapse ghost size="small" items={[{ key: "raw", label: t("Raw result output"), children: <pre className="analysis-json-preview">{JSON.stringify(preview, null, 2)}</pre> }]} /></section>;
 }
 

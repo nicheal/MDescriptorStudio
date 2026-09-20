@@ -482,6 +482,14 @@ test("history restores the canonical cluster algorithm", async ({ page }) => {
   await page.getByRole("button", { name: /Run Structural Clusters/i }).click();
   await expect(page.getByText("CLUSTER STRUCTURE", { exact: true })).toBeVisible({ timeout: 30_000 });
 
+  // The result table reads the same list the scatter draws, so the cluster
+  // assignment has to survive the seven columns the table shows: the two
+  // coordinates the chart already reads are ordered out of the window.
+  const resultTable = page.locator(".analysis-main .ant-table").last();
+  await expect(resultTable.getByRole("columnheader", { name: "cluster", exact: true })).toBeVisible();
+  await expect(resultTable.getByRole("columnheader", { name: "label", exact: true })).toBeVisible();
+  await expect(resultTable.getByRole("columnheader", { name: "x", exact: true })).toHaveCount(0);
+
   await algorithm.click();
   await page.getByText("KMEANS", { exact: true }).last().click();
   await page.getByRole("button", { name: "Load clusters analysis" }).last().click();
