@@ -25,7 +25,17 @@ export default function SettingsDrawer() {
   const [defaultThreads, setDefaultThreads] = useState<number | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saveState, setSaveState] = useState<"saving" | "saved" | "failed" | null>(null);
-  const appUpdate = useAppUpdate();
+  // Per-field selectors, not the whole store: install progress is written once
+  // per downloaded chunk, and an unselected subscription re-rendered this whole
+  // drawer for every one of them.
+  const currentVersion = useAppUpdate((s) => s.current);
+  const updateStatus = useAppUpdate((s) => s.status);
+  const latestRelease = useAppUpdate((s) => s.latest);
+  const releaseNotes = useAppUpdate((s) => s.notes);
+  const updateProgress = useAppUpdate((s) => s.progress);
+  const updateError = useAppUpdate((s) => s.error);
+  const refreshUpdate = useAppUpdate((s) => s.refresh);
+  const installUpdate = useAppUpdate((s) => s.install);
   const { t } = useT();
   const lang = useI18n((s) => s.lang);
   const setLang = useI18n((s) => s.setLang);
@@ -168,49 +178,49 @@ export default function SettingsDrawer() {
             <div className="settings-about-update-title">
               <Typography.Text strong>MDescriptor Studio</Typography.Text>
               <Typography.Text type="secondary" className="settings-about-update-version">
-                {appUpdate.current || "—"}
+                {currentVersion || "—"}
               </Typography.Text>
             </div>
             <Button
               size="small"
-              onClick={() => void appUpdate.refresh()}
-              loading={appUpdate.status === "checking"}
-              disabled={appUpdate.status === "installing"}
+              onClick={() => void refreshUpdate()}
+              loading={updateStatus === "checking"}
+              disabled={updateStatus === "installing"}
             >
               {t("Check for updates")}
             </Button>
           </div>
-          {appUpdate.status === "available" && (
+          {updateStatus === "available" && (
             <div className="settings-about-update-details">
               <Typography.Text type="secondary" className="settings-about-update-release">
-                {t("Latest release")}: {appUpdate.latest}
+                {t("Latest release")}: {latestRelease}
               </Typography.Text>
-              <Button type="primary" size="small" onClick={() => void appUpdate.install()}>
+              <Button type="primary" size="small" onClick={() => void installUpdate()}>
                 {t("Install and restart")}
               </Button>
             </div>
           )}
-          {appUpdate.status === "available" && appUpdate.notes && (
+          {updateStatus === "available" && releaseNotes && (
             <Typography.Paragraph type="secondary" className="settings-about-update-notes">
-              {appUpdate.notes}
+              {releaseNotes}
             </Typography.Paragraph>
           )}
-          {appUpdate.progress !== null && (
-            <Progress percent={appUpdate.progress} size="small" showInfo={false} style={{ margin: "8px 0 0" }} />
+          {updateProgress !== null && (
+            <Progress percent={updateProgress} size="small" showInfo={false} style={{ margin: "8px 0 0" }} />
           )}
-          {(appUpdate.status === "installing" || appUpdate.status === "installed") && (
+          {(updateStatus === "installing" || updateStatus === "installed") && (
             <Typography.Text type="secondary" className="settings-about-update-message">
               {t("The app will close and restart to finish the update.")}
             </Typography.Text>
           )}
-          {appUpdate.status === "up_to_date" && (
+          {updateStatus === "up_to_date" && (
             <Typography.Text type="secondary" className="settings-about-update-message">
               {t("Up to date")}
             </Typography.Text>
           )}
-          {appUpdate.error && (
+          {updateError && (
             <Typography.Text type="danger" className="settings-about-update-message">
-              {appUpdate.error}
+              {updateError}
             </Typography.Text>
           )}
         </div>

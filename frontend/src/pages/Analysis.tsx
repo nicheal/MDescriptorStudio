@@ -1326,9 +1326,9 @@ export default function Analysis() {
             />}
             {tab === "overview" && overviewAnalysis === "feature_variance" && <Space wrap>
               <ParamLabel label={t("Near-zero threshold")} cached={cachedParam("nearZeroThreshold")} />
-              <InputNumber min={0} max={1} step={0.0001} precision={6} value={nearZeroThreshold} onChange={(value) => setNearZeroThreshold(Math.min(lowVariationThreshold, Math.max(0, value ?? 1e-4)))} />
+              <InputNumber min={0} max={1} step={0.0001} precision={6} value={nearZeroThreshold} onChange={(value) => setNearZeroThreshold(value ?? 1e-4)} />
               <ParamLabel label={t("Low variation threshold")} cached={cachedParam("lowVariationThreshold")} />
-              <InputNumber min={0} max={1} step={0.0001} precision={6} value={lowVariationThreshold} onChange={(value) => setLowVariationThreshold(Math.min(1, Math.max(nearZeroThreshold, value ?? 1e-2)))} />
+              <InputNumber min={0} max={1} step={0.0001} precision={6} value={lowVariationThreshold} onChange={(value) => setLowVariationThreshold(value ?? 1e-2)} />
             </Space>}
             {tab === "overview" && overviewAnalysis === "feature_correlation" && <Space wrap>
               <ParamLabel label={t("Correlation method")} cached={cachedParam("featureCorrelationMethod")} />
