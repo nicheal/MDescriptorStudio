@@ -35,6 +35,10 @@ _CELL_DET_TOL = 1e-8
 # lattice images per periodic axis when hunting the minimum distance; closest
 # pairs needing more only occur in extremely skewed cells (angles below ~25°)
 _MIN_DISTANCE_IMAGE_LIMIT = 2
+# Rows per image-shift query: atoms x images x 3 is the temporary this hunt
+# materialises, and a million-atom frame with a 2-image stencil is gigabytes on
+# one shot. 250k rows is a few MB per query.
+_MIN_DISTANCE_QUERY_ROWS = 250_000
 # short-contact scan batching: query atoms per ball-query call and the pair
 # count that forces a vectorized scan flush (bounds memory on pathological
 # frames; the scan stops at the first violating pair)
@@ -136,6 +140,7 @@ def _frame_min_distance(positions: np.ndarray, cell: np.ndarray, pbc: np.ndarray
         best = np.inf
     if periodic:
         inverse = np.linalg.inv(cell)
+        block_shifts = max(1, _MIN_DISTANCE_QUERY_ROWS // max(n, 1))
         # query lattice-image shifts outward until the bound below proves the
         # stencil covers every pair that could still beat `best`: a pair at
         # distance <= best has |S_k| <= best * |inv col_k| + 1 per periodic
@@ -165,8 +170,14 @@ def _frame_min_distance(positions: np.ndarray, cell: np.ndarray, pbc: np.ndarray
                 break
             seen.update(tuples)
             shifts = np.asarray(tuples, dtype=np.float64)
-            queries = (pts[None, :, :] + (shifts @ cell)[:, None, :]).reshape(-1, 3)
-            best = min(best, float(tree.query(queries, k=1)[0].min()))
+            # Query a bounded slice of the stencil at a time. The whole
+            # (shifts x atoms x 3) temporary is gigabytes on a million-atom
+            # frame - which the pre-check in deepmd.py allows through, since it
+            # bounds atoms per frame and not the product with the image count -
+            # and the minimum over slices is the same number the one query gave.
+            for start in range(0, shifts.shape[0], block_shifts):
+                queries = (pts[None, :, :] + (shifts[start : start + block_shifts] @ cell)[:, None, :]).reshape(-1, 3)
+                best = min(best, float(tree.query(queries, k=1)[0].min()))
     return float(best)
 
 

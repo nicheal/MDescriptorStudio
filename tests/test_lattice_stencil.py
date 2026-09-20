@@ -35,6 +35,22 @@ def _cubic(side: float) -> np.ndarray:
     return np.eye(3) * side
 
 
+def test_min_distance_does_not_depend_on_the_query_block_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The image-shift hunt chunks its query to bound a (shifts x atoms x 3)
+    temporary, which is gigabytes on a million-atom frame if issued in one shot.
+    Chunking may only change when the minimum is found, never what it is."""
+    rng = np.random.default_rng(3)
+    positions = rng.random((80, 3)) @ SKEW_CELL
+    cell, pbc = SKEW_CELL, PBC3
+
+    whole = st._frame_min_distance(positions, cell, pbc)
+    assert np.isfinite(whole) and whole > 0.0
+
+    # One shift per query: the widest possible disagreement with the fused call.
+    monkeypatch.setattr(st, "_MIN_DISTANCE_QUERY_ROWS", 1)
+    assert st._frame_min_distance(positions, cell, pbc) == pytest.approx(whole, rel=1e-12)
+
+
 def test_limits_widen_the_axis_the_rows_would_miss():
     limits = image_shift_limits(SKEW_CELL, 1.554)
     assert limits == [4, 3, 2]
