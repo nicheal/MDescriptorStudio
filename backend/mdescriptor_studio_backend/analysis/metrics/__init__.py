@@ -8,7 +8,7 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, AppError
 from ..models import DescriptorMatrix
-from ..algorithms._common import _as_float64, _bounded_indices, _check_samples, _effective_dimension_metrics, _float_param, _int_param, _local_neighbor_graph, _nearest_distances, _pairwise_matrix, _preprocess, _safe_import, _seed, _trajectory_threshold, _visual_pca, _visual_pca_components
+from ..algorithms._common import _as_float64, _bounded_indices, _check_samples, _effective_dimension_metrics, _float_param, _int_param, _local_neighbor_graph, _meaningful_scale, _nearest_distances, _pairwise_matrix, _preprocess, _safe_import, _seed, _trajectory_threshold, _visual_pca, _visual_pca_components
 
 def _feature_histogram(values: np.ndarray, bins: int) -> tuple[np.ndarray, np.ndarray]:
     """Bin one feature, or one centred bucket when it has no bin-able spread.
@@ -244,7 +244,13 @@ def feature_variance(samples: DescriptorMatrix, params: dict, progress: Callable
                 sample_count_for_feature = int(sample_indices.size)
                 distribution_samples[index, :sample_count_for_feature] = finite_values[sample_indices]
                 distribution_sample_counts[index] = sample_count_for_feature
-            is_constant = float(np.ptp(finite_values)) <= constant_tolerance
+            # `constant_tolerance` is the panel's own absolute cut on the range and
+            # stays that; on its own it kept a column jittering by a few ulps
+            # around 1e6 (range ~1e-10, so above 1e-12) as a real feature and
+            # counted it in effective_nonzero_dimensions, while _preprocess
+            # dropped the same column from every distance. One owner for the
+            # relative judgement, and it is this one.
+            is_constant = not bool(_meaningful_scale(mean, feature_std)) or bool(np.ptp(finite_values) <= constant_tolerance)
             record.update(
                 {
                     "mean": mean,

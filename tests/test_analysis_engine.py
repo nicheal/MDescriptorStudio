@@ -14,7 +14,7 @@ from mdescriptor_studio_backend.analysis import AtomDescriptorMatrix, StructureD
 from mdescriptor_studio_backend.analysis.algorithms.correlation import feature_correlation, property_correlation
 from mdescriptor_studio_backend.analysis.algorithms.kernel import kernel
 from mdescriptor_studio_backend.analysis.algorithms.pairs import acquisition, compare, coverage, drift, mantel, overlap
-from mdescriptor_studio_backend.analysis.algorithms._common import _local_neighbor_graph, _rank_correlation, _safe_correlation, _trajectory_threshold
+from mdescriptor_studio_backend.analysis.algorithms._common import _local_neighbor_graph, _preprocess, _rank_correlation, _safe_correlation, _trajectory_threshold
 from mdescriptor_studio_backend.analysis.algorithms.pca import pca
 from mdescriptor_studio_backend.analysis.algorithms.sensitivity import perturbation_sensitivity, sensitivity
 from mdescriptor_studio_backend.analysis.algorithms.tsne import MAX_ITERATIONS, tsne
@@ -568,11 +568,47 @@ def test_a_column_too_narrow_to_bin_is_reported_not_fatal() -> None:
     assert counts.sum(axis=1).tolist() == [rows] * 4, "every sample lands in a bucket"
     statuses = [record["status"] for record in result["preview"]["features"]]
     assert statuses[0] == statuses[1] == "active", statuses
-    # Column 2 is the ulp jitter (ptp 5.7e-11, above constant_tolerance, so it
-    # is not "constant") and column 3 is exactly 7.0. Neither has room for 32
-    # finite bin edges; both are reported instead of killing the run.
-    assert statuses[2] == "near_zero", statuses
+    # Column 2 is the ulp jitter and column 3 is exactly 7.0. Neither has room
+    # for 32 finite bin edges, so both are reported instead of killing the run.
+    # Column 2 used to come back "near_zero": its range (5.7e-11) is above the
+    # absolute constant_tolerance, while _preprocess drops the same column for
+    # being rounding noise at its own magnitude. One owner now decides, and the
+    # two panels agree - see the B-3 note in the pass-4 report.
+    assert statuses[2] == "constant", statuses
     assert statuses[3] == "constant", statuses
+
+
+def test_the_constant_verdict_has_one_owner_across_the_three_sites() -> None:
+    # Three places decided "this feature carries nothing" three different ways:
+    # feature_correlation cut on variance, which is in squared units;
+    # feature_variance cut on the absolute range; and _preprocess - the pass every
+    # distance, PCA and coverage threshold runs through - used the relative rule.
+    # So a real feature with a small amplitude and a column that is pure rounding
+    # noise at 1e6 got opposite verdicts in different panels.
+    rows = 400
+    rng = np.random.default_rng(4)
+    values = np.column_stack(
+        [
+            rng.normal(size=rows),
+            rng.normal(size=rows) * 1e-8,
+            1e6 + np.arange(rows, dtype=np.float64) * np.spacing(1e6),
+            np.full(rows, 7.0),
+        ]
+    )
+    matrix = StructureDescriptorMatrix(
+        values,
+        np.arange(rows, dtype=np.int64),
+        sample_ids=[f"frame:{index}" for index in range(rows)],
+    )
+
+    kept = np.asarray(feature_correlation(matrix, {})["arrays"]["correlation_feature_indices"], dtype=np.int64).tolist()
+    preprocessed = _preprocess(values, {}, "standardized")[2].tolist()
+    statuses = [row["status"] for row in feature_variance(matrix, {})["preview"]["features"]]
+
+    assert kept == [0, 1], "column 1 is small but real; column 2 is noise at its own magnitude"
+    assert preprocessed == [True, True, False, False], preprocessed
+    assert statuses[0] == "active"
+    assert statuses[2:] == ["constant", "constant"], statuses
 
 
 def test_pairwise_minimum_ignores_the_zero_diagonal() -> None:

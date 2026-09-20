@@ -17,8 +17,13 @@ def feature_correlation(samples: DescriptorMatrix, params: dict, progress: Calla
     if method not in ("pearson", "spearman"):
         raise AppError(ANALYSIS_INPUT_INVALID, "feature correlation method must be pearson or spearman")
     variance = x.var(axis=0)
-    variance_threshold = _float_param(params, "variance_threshold", 1e-12, 0.0)
-    valid = variance > variance_threshold
+    # The default used to be 1e-12 - in squared units, so it silently decided
+    # that any feature whose spread is below 1e-6 of its own magnitude carries
+    # nothing, and the panel reported those columns as "zero-variance" while
+    # distances, PCA and coverage kept them. An explicit threshold still cuts,
+    # but the floor every other algorithm uses is the relative one below.
+    variance_threshold = _float_param(params, "variance_threshold", 0.0, 0.0)
+    valid = _meaningful_scale(x.mean(axis=0), np.sqrt(variance)) & (variance > variance_threshold)
     warnings = [f"ignored {int((~valid).sum())} zero-variance feature(s)"] if not bool(valid.all()) else []
     xv = x[:, valid]
     if xv.shape[1] < 2:
