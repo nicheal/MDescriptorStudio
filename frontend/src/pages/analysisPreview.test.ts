@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { previewRowFields, previewTableColumns, previewTableRows } from "./analysisPreview";
+import { matrixExtent, previewRowFields, previewTableColumns, previewTableRows } from "./analysisPreview";
 import type { AnalysisPreview } from "../types/protocol";
 
 const preview = (value: Record<string, unknown>): AnalysisPreview => ({ analysis_id: "ana_1", ...value });
@@ -62,5 +62,19 @@ describe("previewRowFields", () => {
 
   it("leaves absent fields undefined rather than zero", () => {
     expect(previewRowFields({ i: 4, frame: 4 })).toEqual({ label: undefined, score: undefined, distance: undefined, cluster: undefined });
+  });
+});
+
+describe("matrixExtent", () => {
+  it("describes the values that are drawn, not a related quantity", () => {
+    // The similarity strip used to print the distance range beside a similarity
+    // grid: a cosine "Maximum" of 1.86 next to values that never pass 0.76.
+    expect(matrixExtent([[0.2, -0.8], [1.0, 0.4]])).toEqual({ min: -0.8, max: 1.0 });
+  });
+
+  it("skips what a heatmap cannot draw and says so when nothing is left", () => {
+    expect(matrixExtent([[Number.NaN, 2], [3, Number.POSITIVE_INFINITY]])).toEqual({ min: 2, max: 3 });
+    expect(matrixExtent([[]])).toEqual({ min: null, max: null });
+    expect(matrixExtent([])).toEqual({ min: null, max: null });
   });
 });

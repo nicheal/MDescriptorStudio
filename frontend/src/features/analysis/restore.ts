@@ -163,9 +163,11 @@ function restoreOverview(analysisType: string, p: Record<string, unknown>, curre
       };
     }
     case "effective_dimension":
-      // Rows written before the preprocessing control existed used centred
-      // data; restoring them must not claim a scale they never computed with.
-      return { effectiveDimensionPreprocess: p.preprocess === "standardized" ? "standardized" : "center" };
+      // The backend has always defaulted this one to standardized - it even
+      // writes that default into the canonical params of a row that omitted it
+      // - so a stored row without the key restores to the same basis it was
+      // computed on. The old comment claimed the opposite (pass 5, 5-C3).
+      return { effectiveDimensionPreprocess: p.preprocess === "center" ? "center" : "standardized" };
     case "property_correlation":
       return {
         propertyName: String(p.property ?? "energy_per_atom"),

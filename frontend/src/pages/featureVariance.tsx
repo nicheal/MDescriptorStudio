@@ -178,9 +178,13 @@ export function FeatureVarianceChart({ preview, analysisId }: { preview: Analysi
     () => buildFeatureHistogram(distribution?.edges ?? [], distribution?.counts ?? [], selectedSamples),
     [distribution?.counts, distribution?.edges, selectedSamples],
   );
+  // Scaled to the sample it is drawn from, not to the bars beside it: the
+  // backend keeps every detected outlier in this bounded sample on purpose, so
+  // a curve normalised to the whole-set count would be a different
+  // population's shape on the histogram's axis (pass 5, 5-C1).
   const selectedKde = useMemo(
-    () => buildKde(selectedSamples, selectedHistogram.edges, selectedHistogram.countScale),
-    [selectedHistogram.countScale, selectedHistogram.edges, selectedSamples],
+    () => buildKde(selectedSamples, selectedHistogram.edges, selectedSamples.length),
+    [selectedHistogram.edges, selectedSamples],
   );
   if (!features.length) return <OverviewNoData message={t("No feature variance values were returned.")} />;
 
@@ -218,7 +222,7 @@ export function FeatureVarianceChart({ preview, analysisId }: { preview: Analysi
       <label className="feature-variance-control"><span>{t("Coordinate scale")}</span><Select aria-label={t("Coordinate scale")} value={scale} onChange={setScale} options={[{ value: "linear", label: t("Linear") }, { value: "log", label: t("Log") }]} /></label>
     </div>
     <div className="feature-variance-thresholds">
-      <Typography.Text type="secondary">{t("{n} samples · Near-zero < {near} · Low variation < {low} · Constant tolerance ≤ {constant}", { n: sampleCount ?? 0, near: nearZeroThreshold, low: lowVariationThreshold, constant: constantTolerance })}</Typography.Text>
+      <Typography.Text type="secondary">{t("{n} samples · Near-zero < {near} · Low variation < {low} · Constant ≤ {constant} range, or negligible next to its own magnitude", { n: sampleCount ?? 0, near: nearZeroThreshold, low: lowVariationThreshold, constant: constantTolerance })}</Typography.Text>
       <Typography.Text type="secondary">{t("Near-zero and Low variation thresholds use normalized variance.")}</Typography.Text>
       {varianceSpan >= 100 && <Typography.Text type="warning">{t("Variance spans multiple orders of magnitude; log scale is recommended by default.")}</Typography.Text>}
       {scale === "log" && hasZeroVariance && <Typography.Text type="secondary">{t("Zero-variance features are omitted from the log axis.")}</Typography.Text>}
@@ -342,6 +346,9 @@ function FeatureVarianceDetail({ feature, distribution, histogram, kde, statusTe
     </div>}
     {distribution?.loading && <Typography.Text type="secondary">{t("Loading feature distribution…")}</Typography.Text>}
     {feature.status === "constant" && <ChartCaption>{t("Constant feature; KDE omitted.")}</ChartCaption>}
+    {feature.distribution_sample_count > 0 && feature.distribution_sample_count < feature.finite_count && (
+      <ChartCaption>{t("The KDE is drawn over {n} of {total} values, with every detected outlier kept, and is scaled to that sample rather than to the bars.", { n: feature.distribution_sample_count, total: feature.finite_count })}</ChartCaption>
+    )}
   </div>;
 }
 
@@ -469,7 +476,7 @@ function medianOf(values: number[]): number {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-function buildFeatureHistogram(edges: number[], counts: number[], samples: number[]): { edges: number[]; counts: number[]; countScale: number } {
+export function buildFeatureHistogram(edges: number[], counts: number[], samples: number[]): { edges: number[]; counts: number[]; countScale: number } {
   if (edges.length === counts.length + 1 && counts.length > 0) {
     return { edges, counts, countScale: counts.reduce((sum, count) => sum + Math.max(0, count), 0) };
   }
@@ -488,7 +495,7 @@ function buildFeatureHistogram(edges: number[], counts: number[], samples: numbe
   return { edges: computedEdges, counts: computedCounts, countScale: samples.length };
 }
 
-function buildKde(samples: number[], edges: number[], totalCount: number): { x: number[]; y: number[] } {
+export function buildKde(samples: number[], edges: number[], totalCount: number): { x: number[]; y: number[] } {
   if (samples.length < 2) return { x: [], y: [] };
   const minimum = samples.reduce((value, sample) => Math.min(value, sample), samples[0]);
   const maximum = samples.reduce((value, sample) => Math.max(value, sample), samples[0]);

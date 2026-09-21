@@ -137,3 +137,24 @@ export function previewTableColumns(row: Record<string, unknown>): string[] {
     .sort((a, b) => Number(a === "x" || a === "y") - Number(b === "x" || b === "y"))
     .slice(0, 7);
 }
+
+
+/** The extent of the values actually being drawn.
+ *
+ * The metric strip beside a matrix has to describe that matrix. Reading
+ * `distance_min`/`distance_max` next to a similarity grid printed a cosine
+ * "Maximum" of 1.86 - a number the plotted values never reach - because the two
+ * came from different quantities (deep review pass 5, 5-C4).
+ */
+export function matrixExtent(matrix: number[][]): { min: number | null; max: number | null } {
+  let lowest: number | null = null;
+  let highest: number | null = null;
+  for (const row of matrix) {
+    for (const value of row) {
+      if (!Number.isFinite(value)) continue;
+      if (lowest === null || value < lowest) lowest = value;
+      if (highest === null || value > highest) highest = value;
+    }
+  }
+  return { min: lowest, max: highest };
+}

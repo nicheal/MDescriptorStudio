@@ -125,7 +125,9 @@ describe("restoring controls from a stored analysis row", () => {
     expect(restore("overview", "feature_correlation", { method: "spearman", redundancy_threshold: 2 })).toMatchObject({
       featureCorrelationMethod: "spearman", featureCorrelationThreshold: 1,
     });
-    expect(restore("overview", "effective_dimension", {})).toEqual({ effectiveDimensionPreprocess: "center" });
+    expect(restore("overview", "effective_dimension", {})).toEqual({ effectiveDimensionPreprocess: "standardized" });
+    // A row that really was computed centered still comes back centered.
+    expect(restore("overview", "effective_dimension", { preprocess: "center" })).toEqual({ effectiveDimensionPreprocess: "center" });
     expect(restore("overview", "perturbation_sensitivity", { perturbation: "strain", n_amplitudes: 1 })).toMatchObject({
       perturbationType: "strain", perturbationCount: 2, perturbationMaximum: 0.2, perturbationStructures: 64,
     });

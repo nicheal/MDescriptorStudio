@@ -4,6 +4,7 @@ import { Select, Space, Switch, Table, Tag, Typography } from "antd";
 import { useT, type Pair } from "../i18n";
 import { formatLabel } from "../util/format";
 import type { AnalysisPreview } from "../types/protocol";
+import { matrixExtent } from "./analysisPreview";
 import type { AnalysisPoint } from "./analysisPreview";
 import TrajectoryView from "./trajectoryView";
 import { HIGH_CONTRAST_COLORSCALE, Metrics, NoData, PlotFrame, fmt, formatCount, formatFixed, formatPercent, layout, matrix, num, nums, quantile, records, strings } from "./analysisChartKit";
@@ -129,8 +130,12 @@ function MatrixView({ preview, matrix: values, label }: { preview: AnalysisPrevi
   const { t } = useT();
   const labelT = t(label);
   if (!values.length) return <NoData message={t("{label} matrix is unavailable.", { label: labelT })} />;
+  // What the strip states is what the grid holds: the pairwise view's preview
+  // numbers are distances, and labelling a similarity grid with them reported a
+  // maximum the drawn values never reach.
+  const extent = matrixExtent(values);
   return <>
-    <Metrics values={[{ k: t("Samples"), v: preview.sample_count }, { k: t("Metric"), v: preview.metric ?? preview.kernel }, { k: t("Minimum"), v: preview.kernel_min ?? preview.distance_min }, { k: t("Maximum"), v: preview.kernel_max ?? preview.distance_max }]} />
+    <Metrics values={[{ k: t("Samples"), v: preview.sample_count }, { k: t("Metric"), v: preview.metric ?? preview.kernel }, { k: t("Minimum"), v: extent.min }, { k: t("Maximum"), v: extent.max }]} />
     <PlotFrame ariaLabel={t("{label} heatmap", { label: labelT })} data={[{ type: "heatmap", z: values, colorscale: "Viridis", colorbar: { title: { text: labelT } }, hovertemplate: `${t("row")}=%{y}<br>${t("column")}=%{x}<br>${t("value")}=%{z:.5g}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Sample") } }, yaxis: { title: { text: t("Sample") }, autorange: "reversed" } })} />
   </>;
 }
