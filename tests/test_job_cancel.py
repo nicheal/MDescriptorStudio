@@ -235,6 +235,67 @@ def test_cancelled_materialize_stops_mid_write_and_leaves_nothing_behind(tmp_pat
         db.close()
 
 
+def test_a_refused_materialize_destination_survives_the_failed_job(tmp_path: Path) -> None:
+    """The refusal exists so a writer never truncates somebody else's file - and
+    it must not delete that file either (pass 5, A-1).
+
+    ``_refuse_filled_destination`` used to sit inside the ``try`` whose handler
+    removes the destination, so the one case it was written for ran straight into
+    the unlink/rmtree it was refusing for.
+    """
+    from make_fixtures import write_extxyz
+
+    from mdescriptor_studio_backend.datasets import compute_fingerprint, create_adapter
+    from mdescriptor_studio_backend.services.dataset_view_service import (
+        _INSERT_VIEW,
+        DatasetViewService,
+    )
+
+    class _CapturingJobs:
+        def __init__(self) -> None:
+            self.runner = None
+
+        def submit(self, name, runner, **kwargs):
+            self.runner = runner
+            return "job_captured"
+
+    class _Ctx:
+        def progress(self, *args, **kwargs):
+            pass
+
+        def check_cancelled(self):
+            pass
+
+    db = Database(tmp_path / "database.sqlite")
+    source = tmp_path / "source.xyz"
+    write_extxyz(source, n_frames=3, natoms=4)
+    now = "2026-01-01T00:00:00+00:00"
+    fingerprint = compute_fingerprint(source, 3, use_cache=False)
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
+        " properties, periodicity, fingerprint, created_at)"
+        " VALUES ('ds_m', 'src', 'extxyz', ?, 3, '[]', '[]', '[]', ?, ?)",
+        (str(source), fingerprint, now),
+    )
+    db.execute(
+        _INSERT_VIEW,
+        ("view_m", "ds_m", "all", "selection", "[]", json.dumps([0, 1, 2]), "h", fingerprint, now, now),
+    )
+    jobs = _CapturingJobs()
+    views = DatasetViewService(_ViewDatasets(db, jobs, create_adapter(source, "extxyz")))
+    dest = tmp_path / "copy.xyz"
+    try:
+        views.materialize({"view_id": "view_m", "dest_path": str(dest)})
+        assert dest.is_file() and dest.stat().st_size == 0, "the claim leaves an empty placeholder"
+        # Between claim and write, the path stopped being ours.
+        dest.write_text("user notes", encoding="utf-8")
+        with pytest.raises(AppError, match="after it was claimed"):
+            jobs.runner(_Ctx())
+        assert dest.read_text(encoding="utf-8") == "user notes", "refusing must not delete what it refused"
+    finally:
+        db.close()
+
+
 def test_partial_output_cleanup_covers_both_writers(tmp_path: Path) -> None:
     # extXYZ leaves a file, DeepMD a directory; either would poison a retry.
     from mdescriptor_studio_backend.services.dataset_view_service import _discard_partial_output
@@ -427,6 +488,12 @@ def test_a_materialize_destination_is_claimed_not_checked(tmp_path: Path) -> Non
     directory = tmp_path / "deepmd_out"
     _reserve_destination(directory, True, "materialize")
     _refuse_filled_destination(directory, "materialize")
+    # Re-claiming our own empty placeholder is allowed: a job cancelled while it
+    # was still queued never got to write, and its 0-byte claim must not poison
+    # the path for every later attempt (pass 5, A-3).
+    _reserve_destination(fresh_file, False, "materialize")
+    _reserve_destination(directory, True, "materialize")
+    (directory / "type.raw").write_text("H", encoding="utf-8")
     with pytest.raises(AppError, match="already exists"):
         _reserve_destination(directory, True, "materialize")
 

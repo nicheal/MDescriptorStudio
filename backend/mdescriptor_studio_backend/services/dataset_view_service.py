@@ -24,7 +24,7 @@ from ..errors import (
     INVALID_DATASET,
     INVALID_PARAMS,
 )
-from ..security import UnsafePathError, validate_local_path
+from ..security import UnsafePathError, path_within, validate_local_path
 from .analysis_helpers import _NOW
 
 _VIEW_ROLES = ("train", "validation", "test", "selection", "filtered")
@@ -61,6 +61,18 @@ _INSERT_VIEW = (
 )
 
 
+def _destination_is_empty(dest: Path) -> bool:
+    """The one rule both the claim and the write ask about: does this path hold anything?
+
+    Empty is not somebody's data - it is the placeholder this app left behind when
+    a claimed job never reached its writer (cancelled in the queue, or the process
+    ended) - and a full one never is.
+    """
+    if dest.is_dir():
+        return not any(dest.iterdir())
+    return (not dest.exists()) or dest.stat().st_size == 0
+
+
 def _reserve_destination(dest: Path, as_directory: bool, verb: str) -> None:
     """Claim the destination atomically, before the job that fills it is queued.
 
@@ -79,6 +91,11 @@ def _reserve_destination(dest: Path, as_directory: bool, verb: str) -> None:
         else:
             os.close(os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
     except FileExistsError as exc:
+        if _destination_is_empty(dest):
+            # A placeholder left by a claimed job that never ran (cancelled while
+            # queued, or the process was closed) would otherwise block this path
+            # forever with a 0-byte file the user has to go and delete by hand.
+            return
         raise AppError(INVALID_DATASET, f"{verb} destination already exists: {dest}") from exc
     except OSError as exc:
         reason = exc.strerror or str(exc)
@@ -92,11 +109,7 @@ def _refuse_filled_destination(dest: Path, verb: str) -> None:
     empty is not: that means the path stopped being ours, and the only thing the
     writer would do with it is truncate.
     """
-    if dest.is_dir():
-        filled = any(dest.iterdir())
-    else:
-        filled = dest.exists() and dest.stat().st_size > 0
-    if filled:
+    if not _destination_is_empty(dest):
         raise AppError(INVALID_DATASET, f"{verb} destination was written to after it was claimed: {dest}")
 
 
@@ -333,7 +346,7 @@ class DatasetViewService:
         except UnsafePathError as exc:
             raise AppError(INVALID_PARAMS, f"{verb} destination must be an absolute local path") from exc
         source = validate_local_path(row["source_path"], field="dataset source path")
-        if dest == source or source in dest.parents or dest in source.parents:
+        if path_within(source, dest) or path_within(dest, source):
             raise AppError(INVALID_DATASET, f"{verb} destination must be outside the source dataset path")
         fmt = detect_format(source) if source.exists() else row["format"]
         if fmt == "extxyz":
@@ -371,8 +384,10 @@ class DatasetViewService:
                         ctx.progress(position, max(len(indices), 1), "writing view frames")
                     yield adapter.get_frame(frame_index)
 
+            # Outside the try: the cleanup below deletes the destination, and a
+            # refusal is the one case where something else's data is in it.
+            _refuse_filled_destination(dest, "materialize")
             try:
-                _refuse_filled_destination(dest, "materialize")
                 written = writer(dest, frames())
             except BaseException:
                 # _export_destination refuses a path that already exists, so

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from ..security import (
     UnsafePathError,
     ensure_no_reparse_points,
     open_text_for_write,
+    path_within,
     validate_local_path,
 )
 from .analysis_helpers import ANALYSIS_ALGORITHM_VERSION, _NOW, _view_id
@@ -33,6 +35,27 @@ def _cancellable_frames(adapter, frames: list[int], ctx):
         if position % 250 == 0 or position == total:
             ctx.progress(position, total, "writing frames")
         yield adapter.get_frame(frame_index)
+
+
+_DESTINATION_LOCKS: dict[str, threading.Lock] = {}
+_DESTINATION_LOCKS_GUARD = threading.Lock()
+
+
+def _destination_lock(target: Path) -> threading.Lock:
+    """One writer per destination, process-wide.
+
+    Overwriting an earlier export is this RPC's documented behaviour (unlike
+    materialize, which refuses an existing path), so what must not happen is two
+    live jobs writing one file *at the same time*: each truncates and each counts
+    from zero, so the bytes end up describing neither selection while both rows
+    report COMPLETED.
+    """
+    key = str(target)
+    with _DESTINATION_LOCKS_GUARD:
+        lock = _DESTINATION_LOCKS.get(key)
+        if lock is None:
+            lock = _DESTINATION_LOCKS[key] = threading.Lock()
+    return lock
 
 
 def _identity_records(samples, chosen: list[int]) -> list[dict]:
@@ -87,9 +110,19 @@ class AnalysisExportMixin:
         if not target:
             raise AppError(ANALYSIS_INPUT_INVALID, "output_path is required for export")
         try:
-            target = str(validate_local_path(target, field="export output path"))
+            target_path = validate_local_path(target, field="export output path")
         except UnsafePathError as exc:
             raise AppError(ANALYSIS_INPUT_INVALID, "export output must be an absolute local path") from exc
+        # Every format below opens its destination with O_TRUNC and DeepMD writes a
+        # directory, so pointing an export at the file (or folder) the run was
+        # computed from would replace the source with a selection of it - and the
+        # row would still claim success. materialize refuses this already.
+        source_row = self.db.query_one("SELECT source_path FROM datasets WHERE id = ?", (run["dataset_id"],))
+        if source_row is not None and source_row.get("source_path"):
+            source = Path(str(source_row["source_path"]))
+            if path_within(source, target_path) or path_within(target_path, source):
+                raise AppError(ANALYSIS_INPUT_INVALID, "export output must be outside the dataset it exports")
+        target = str(target_path)
         # The analysis id is part of a report's identity: two different
         # sampling analyses must never share one report cache entry.
         canonical = self._canonical_params({
@@ -108,8 +141,10 @@ class AnalysisExportMixin:
             # longer there (moved, deleted, cleaned up) the cached answer would
             # report a success the disk contradicts, so keep claiming under keys
             # no completed row can match until this submission owns a fresh
-            # QUEUED row. A live job is still deduplicated on the first pass, so
-            # a double click cannot interleave two writers on one path.
+            # QUEUED row. Two live jobs may therefore share one destination - the
+            # per-path lock in `_write_export` keeps them out of each other's
+            # bytes, which the key cannot: a different selection of the same run
+            # is a different cache key and the same file.
             attempt = 0
             while True:
                 analysis_id, early, created = self._claim_analysis_row(
@@ -170,6 +205,10 @@ class AnalysisExportMixin:
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
 
     def _write_export(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None, view_id: str | None = None) -> tuple[Path, int]:
+        with _destination_lock(target):
+            return self._write_export_to(run, selected, export_format, mode, target, ctx, report_analysis, view_id)
+
+    def _write_export_to(self, run: dict, selected: list[int], export_format: str, mode: str, target: Path, ctx, report_analysis: dict | None = None, view_id: str | None = None) -> tuple[Path, int]:
         """Write the export and report how many entries the file actually holds.
 
         The caller records that number rather than the length of the request:
@@ -241,14 +280,12 @@ class AnalysisExportMixin:
                     writer.writerow(record)
             return target, len(chosen)
         if export_format == "extxyz":
-            write_extxyz(target, _cancellable_frames(adapter, frames, ctx))
-            return target, len(frames)
+            return target, write_extxyz(target, _cancellable_frames(adapter, frames, ctx))
         if dataset["format"] != "deepmd":
             raise AppError(EXPORT_FAILED, "DeepMD export requires a DeepMD source dataset")
         if target.exists() and not target.is_dir():
             raise AppError(EXPORT_FAILED, "DeepMD export requires a directory destination")
-        write_deepmd(target, _cancellable_frames(adapter, frames, ctx))
-        return target, len(frames)
+        return target, write_deepmd(target, _cancellable_frames(adapter, frames, ctx))
 
     def _write_sampling_report(self, run: dict, analysis_row: dict, selected: list[int], target: Path) -> None:
         """Write the reprovenance JSON for a sampling selection.

@@ -133,6 +133,76 @@ def test_export_repeats_when_the_written_file_disappears(tmp_path: Path) -> None
     db.close()
 
 
+def test_an_export_cannot_write_into_the_dataset_it_exports(tmp_path: Path) -> None:
+    """Every format here opens its destination with O_TRUNC, so a destination
+    inside the source set would replace the data the run was computed from - with
+    a row still claiming success. materialize has refused this all along."""
+    db, jobs, service = _service(tmp_path)
+    _dataset_and_view(db, [0, 1])
+    source = tmp_path / "ds_1"
+    source.mkdir()
+    db.execute("UPDATE datasets SET source_path = ? WHERE id = 'ds_1'", (str(source),))
+
+    inside = source / "subset.txt"
+    with pytest.raises(AppError) as refused:
+        service.submit_export({"run_id": "run_1", "indices": [1], "format": "indices", "output_path": str(inside)})
+    assert refused.value.code == ANALYSIS_INPUT_INVALID
+    assert not inside.exists(), "the refusal must not even leave the file behind"
+
+    # The same name outside the set is the ordinary case and stays allowed.
+    sibling = tmp_path / "subset.txt"
+    service.submit_export({"run_id": "run_1", "indices": [1], "format": "indices", "output_path": str(sibling)})
+    assert sibling.read_text(encoding="utf-8").splitlines() == ["1"]
+
+    # A single-file source: exporting onto it is the worst case, and a directory
+    # wrapping it is refused for the same reason.
+    flat = tmp_path / "flat.xyz"
+    flat.write_text("nothing", encoding="utf-8")
+    db.execute("UPDATE datasets SET source_path = ? WHERE id = 'ds_1'", (str(flat),))
+    with pytest.raises(AppError, match="outside the dataset"):
+        service.submit_export({"run_id": "run_1", "indices": [1], "format": "indices", "output_path": str(flat)})
+    assert flat.read_text(encoding="utf-8") == "nothing"
+    db.close()
+
+
+def test_two_live_exports_to_one_destination_take_turns(tmp_path: Path) -> None:
+    """A cache key cannot keep two writers out of one file: a different selection
+    of the same run is a different key and the same path (pass 5, A-2)."""
+    import threading
+    import time
+
+    from mdescriptor_studio_backend.services.export_service import AnalysisExportMixin
+
+    class _CountingWriter(AnalysisExportMixin):
+        def __init__(self) -> None:
+            self.live = 0
+            self.most = 0
+
+        def _write_export_to(self, run, selected, export_format, mode, target, ctx, report_analysis=None, view_id=None):
+            self.live += 1
+            self.most = max(self.most, self.live)
+            time.sleep(0.05)
+            self.live -= 1
+            return Path(target), 1
+
+    def run_two(service: AnalysisExportMixin, left: Path, right: Path) -> int:
+        threads = [
+            threading.Thread(target=lambda: service._write_export({}, [], "indices", "structure", left, None)),
+            threading.Thread(target=lambda: service._write_export({}, [], "indices", "structure", right, None)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        return service.most
+
+    same_path = _CountingWriter()
+    assert run_two(same_path, tmp_path / "one.txt", tmp_path / "one.txt") == 1
+    # ...and the guard is per destination, not one global write lock.
+    different_paths = _CountingWriter()
+    assert run_two(different_paths, tmp_path / "a.txt", tmp_path / "b.txt") == 2
+
+
 def test_export_of_the_same_selection_to_two_paths_writes_both(tmp_path: Path) -> None:
     db, jobs, service = _service(tmp_path)
     left, right = tmp_path / "a.txt", tmp_path / "b.txt"

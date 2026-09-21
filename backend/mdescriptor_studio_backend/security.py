@@ -125,6 +125,19 @@ def same_lexical_path(left: Path, right: Path) -> bool:
     )
 
 
+def path_within(ancestor: Path, node: Path) -> bool:
+    """True when ``node`` is ``ancestor`` itself or sits somewhere under it.
+
+    Every level is compared with `same_lexical_path` instead of asking `Path` for
+    containment, because on Windows a destination that differs from a source only
+    in case or separator is the same file - and that is exactly the write that
+    must be refused.
+    """
+    return same_lexical_path(ancestor, node) or any(
+        same_lexical_path(ancestor, parent) for parent in node.parents
+    )
+
+
 def validate_managed_path(root: Path, stored: object, relative_name: str) -> Path:
     """Return a DB-stored artifact path only when it is the expected child."""
     if not isinstance(stored, str) or not stored.strip():
