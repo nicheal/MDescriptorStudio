@@ -207,6 +207,20 @@ class AnalysisService(
             # earlier generic backend that only stored arrays.
             preview["rows"] = self._rows_from_artifact(row, offset, limit)
         preview.update({"analysis_id": row["id"], "offset": offset, "limit": limit})
+        # Every analysis stores the warnings its algorithm raised on its row, and
+        # the read path used to hand them to the UI for feature_variance alone -
+        # the only panel that looked. A dropped zero-variance column, a
+        # permutation sample cut to the cap, a neighbour table that overflowed or
+        # a robust-threshold fallback therefore reached nobody, including the
+        # person whose result was computed from them (deep review pass 4, E-7).
+        # Reading the column rather than the stored preview also gives the
+        # answer to results written before any panel displayed warnings;
+        # feature_variance keeps its embedded copy, which is what was already
+        # being shown.
+        if "warnings" not in preview:
+            stored = self._json_load(row.get("warnings_json"), [])
+            if isinstance(stored, list) and stored:
+                preview["warnings"] = [str(item) for item in stored]
         return preview
 
     def chunk(self, params: dict) -> dict:

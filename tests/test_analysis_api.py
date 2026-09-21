@@ -1312,6 +1312,38 @@ def test_composite_sampling_builds_requested_blocks_and_reports_layout(tmp_path:
     db.close()
 
 
+def test_any_analysis_that_warns_reaches_the_preview(tmp_path: Path) -> None:
+    # `result["warnings"]` was copied into the preview for feature_variance only,
+    # and that panel was the only one that rendered them. So a clustering that
+    # dropped a column, a projection sampled down to the permutation cap or a
+    # neighbour table that overflowed reported nothing to the person looking at
+    # the result (deep review pass 4, E-7).
+    db, _jobs, service = _service(tmp_path)
+    result_dir = tmp_path / "results" / "run_flat"
+    result_dir.mkdir(parents=True)
+    values = np.arange(96, dtype=np.float32).reshape(12, 8)
+    values[:, 0] = 1.0  # a feature with nothing in it
+    np.save(result_dir / "values.npy", values)
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_flat", "level": "structure", "row_semantics": "structure", "shape": list(values.shape)}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, status, created_at, result_path) VALUES ('run_flat', 'ds_1', 'SOAP', 'test', '{}',"
+        " 'dataset', 'COMPLETED', '2026-01-01T00:00:01+00:00', ?)",
+        (str(result_dir),),
+    )
+
+    submitted = service.cluster({"run_id": "run_flat", "algorithm": "kmeans", "n_clusters": 3, "seed": 42})
+    preview = service.preview({"analysis_id": submitted["analysis_id"], "limit": 20})
+
+    assert any("zero-variance" in warning for warning in preview["warnings"]), preview.get("warnings")
+    row = db.query_one("SELECT warnings_json FROM analysis_runs WHERE id = ?", (submitted["analysis_id"],))
+    assert json.loads(row["warnings_json"]) == preview["warnings"], "the preview repeats what the row stored"
+    db.close()
+
+
 def test_a_settled_analysis_row_keeps_the_scale_it_was_claimed_with(tmp_path: Path) -> None:
     # analysis_runs.preprocessing_json is written twice: when the row is claimed
     # and when it settles. The settlement wrote a subset, so the row that outlives

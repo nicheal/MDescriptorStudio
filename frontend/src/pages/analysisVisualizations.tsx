@@ -67,6 +67,15 @@ export default function AnalysisResultVisualization(props: Props) {
       {/* An array that arrived narrowed - fewer columns, or fewer rows than the
           artifact holds - looks exactly like a genuinely narrow or short one,
           and the charts built from it would be read as complete. */}
+      {/* The algorithm's own report about what it dropped or could not measure.
+          It used to be shown for one analysis only, from inside that panel;
+          every result carries it now, so it belongs where a user reads any
+          caveat about the picture below. */}
+      {Array.isArray(preview.warnings) && preview.warnings.length > 0 && (
+        <Typography.Text type="warning" style={{ display: "block", marginBottom: 8 }}>
+          {preview.warnings.filter((warning): warning is string => typeof warning === "string").join(" · ")}
+        </Typography.Text>
+      )}
       {narrowed && narrowed.length > 0 && (
         <Typography.Text type="warning" style={{ display: "block", marginBottom: 8 }}>
           {t("Some arrays were narrowed to fit one response: {names}", { names: narrowed.join(", ") })}

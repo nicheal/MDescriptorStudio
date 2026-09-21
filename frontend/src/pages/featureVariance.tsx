@@ -222,7 +222,6 @@ export function FeatureVarianceChart({ preview, analysisId }: { preview: Analysi
       <Typography.Text type="secondary">{t("Near-zero and Low variation thresholds use normalized variance.")}</Typography.Text>
       {varianceSpan >= 100 && <Typography.Text type="warning">{t("Variance spans multiple orders of magnitude; log scale is recommended by default.")}</Typography.Text>}
       {scale === "log" && hasZeroVariance && <Typography.Text type="secondary">{t("Zero-variance features are omitted from the log axis.")}</Typography.Text>}
-      {Array.isArray(preview.warnings) && preview.warnings.filter((warning): warning is string => typeof warning === "string").map((warning, index) => <Typography.Text type="warning" key={`${index}-${warning}`}>{warning}</Typography.Text>)}
     </div>
 
     <div className="feature-variance-layout">
