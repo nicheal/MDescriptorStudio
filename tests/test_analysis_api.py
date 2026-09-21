@@ -267,6 +267,51 @@ def test_a_multi_run_submission_probes_its_dataset_once(tmp_path: Path) -> None:
     db.close()
 
 
+def test_a_multi_run_submission_reads_the_input_runs_once(tmp_path: Path) -> None:
+    # The finding was the linear cost: N inputs meant N
+    # `SELECT * FROM descriptor_runs WHERE id = ?` on the job's own thread, and
+    # `run_ids` deliberately has no cap. One `IN (...)` read is what keeps a wide
+    # sweep affordable without inventing a rejection the renderer never asks for.
+    datasets = SimpleNamespace(
+        adapter_for=lambda row: list(range(12)),
+        refresh_if_changed=lambda row: None,
+    )
+    db, jobs, service = _service(tmp_path, datasets=datasets)
+    _dataset_and_view(db, list(range(12)))
+    _insert_compatible_run(db, tmp_path, run_id="run_2")
+    _insert_compatible_run(db, tmp_path, run_id="run_3")
+    reads: list[str] = []
+    original_query = db.query
+
+    def counting(sql: str, params=()):
+        if "FROM descriptor_runs" in sql and " IN (" in sql:
+            reads.append(sql)
+        return original_query(sql, params)
+
+    db.query = counting  # type: ignore[method-assign]
+    service.sensitivity({"run_ids": ["run_1", "run_2", "run_3"]})
+
+    assert jobs.calls == 1
+    assert len(reads) == 1, f"three inputs, one read: {reads}"
+    assert reads[0].count("?") == 3, reads[0]
+    db.close()
+
+
+def test_a_missing_input_run_still_names_itself_from_the_batched_read(tmp_path: Path) -> None:
+    # Batching the read must not batch the verdict: the renderer reports which id
+    # the submission got wrong, and the codes differ per failure.
+    db, jobs, service = _service(tmp_path)
+    _dataset_and_view(db, list(range(12)))
+    _insert_compatible_run(db, tmp_path, run_id="run_2")
+
+    with pytest.raises(AppError) as exc:
+        service.sensitivity({"run_ids": ["run_1", "run_2", "run_absent"]})
+
+    assert exc.value.code == INVALID_PARAMS
+    assert "run_absent" in str(exc.value)
+    db.close()
+
+
 def test_cross_dataset_analysis_rejects_incompatible_feature_space_before_enqueue(tmp_path: Path) -> None:
     db, jobs, service = _service(tmp_path)
     db.execute(

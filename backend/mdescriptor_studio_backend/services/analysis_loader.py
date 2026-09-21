@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -167,15 +168,41 @@ class AnalysisDataMixin:
         return labels
 
     def _usable_run(self, run_id: str, checked_datasets: set[str] | None = None) -> dict:
-        row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (run_id,))
-        if row is None:
-            raise AppError(INVALID_PARAMS, f"run {run_id} does not exist")
-        if row["status"] == "STALE":
-            raise AppError(ANALYSIS_STALE, f"run {run_id} is STALE and cannot feed new analysis", {"run_id": run_id})
-        if row["status"] != "COMPLETED" or not row.get("result_path"):
-            raise AppError(RESULT_INCOMPATIBLE, f"run {run_id} is {row['status']}")
-        self._assert_dataset_current(row, checked_datasets)
-        return row
+        return self._usable_runs([run_id], checked_datasets)[0]
+
+    def _usable_runs(self, run_ids: Sequence[str], checked_datasets: set[str] | None = None) -> list[dict]:
+        """The requested runs, validated, read with one query.
+
+        Validating per id meant one `SELECT * FROM descriptor_runs WHERE id = ?`
+        per input, so a submission cost grew linearly with the length of
+        `run_ids` - which has no cap, by design (deep review pass 4, C-17: the
+        fix taken was to remove the linear cost rather than to invent a
+        rejection the renderer never needs). Each id still gets its own verdict
+        and its own message, and the order of the request is preserved.
+        """
+        requested = [str(run_id) for run_id in run_ids]
+        if not requested:
+            return []
+        placeholders = ", ".join("?" for _ in dict.fromkeys(requested))
+        found = {
+            str(row["id"]): row
+            for row in self.db.query(
+                f"SELECT * FROM descriptor_runs WHERE id IN ({placeholders})",
+                tuple(dict.fromkeys(requested)),
+            )
+        }
+        usable: list[dict] = []
+        for run_id in requested:
+            row = found.get(run_id)
+            if row is None:
+                raise AppError(INVALID_PARAMS, f"run {run_id} does not exist")
+            if row["status"] == "STALE":
+                raise AppError(ANALYSIS_STALE, f"run {run_id} is STALE and cannot feed new analysis", {"run_id": run_id})
+            if row["status"] != "COMPLETED" or not row.get("result_path"):
+                raise AppError(RESULT_INCOMPATIBLE, f"run {run_id} is {row['status']}")
+            self._assert_dataset_current(row, checked_datasets)
+            usable.append(row)
+        return usable
 
     def _assert_dataset_current(self, row: dict, checked_datasets: set[str] | None = None) -> None:
         """Probe a run's dataset for on-disk changes, once per submission.
