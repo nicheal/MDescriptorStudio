@@ -125,8 +125,6 @@
  "system.info": {
   "keys": [
    "analysis_algorithm_version",
-   "analysis_api_version",
-   "analysis_dependencies",
    "backend_version",
    "cpu_threads",
    "data_dir",
