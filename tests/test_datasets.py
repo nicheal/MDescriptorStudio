@@ -1,5 +1,6 @@
 """Adapter + statistics unit tests on generated fixtures."""
 
+import tracemalloc
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,11 @@ from mdescriptor_studio_backend.datasets import (
 )
 from mdescriptor_studio_backend.datasets.ghosts import periodic_boundary_ghosts
 from mdescriptor_studio_backend.datasets.fingerprint import FINGERPRINT_VERSION
+from mdescriptor_studio_backend.datasets.statistics import FORCE_MAGNITUDE_BIN
+from mdescriptor_studio_backend.datasets.statistics import _ForceMagnitudeCounts
+from mdescriptor_studio_backend.datasets.statistics import _hist
 from mdescriptor_studio_backend.datasets.statistics import _int_hist
+from mdescriptor_studio_backend.datasets.statistics import _summary
 from mdescriptor_studio_backend.errors import AppError
 
 
@@ -176,6 +181,49 @@ def test_statistics(tmp_path: Path) -> None:
         assert hist is not None and len(hist["counts"]) == 40
         assert sum(hist["counts"]) == (6 if key != "force_magnitude" else 6 * 64)
     assert stats["periodicity"]["fully_periodic"] is True
+
+
+def test_kept_force_magnitudes_reproduce_the_whole_array_statistics() -> None:
+    """Under the memory budget the scan still reports what it always reported.
+
+    A small dataset's median interpolates across the gap between its two middle
+    values, which no count grid can recover, so exactness is what is promised
+    here rather than a tolerance.
+    """
+    rng = np.random.default_rng(11)
+    frames = [np.abs(rng.normal(0.4, 0.35, 300)) for _ in range(50)]
+    counted = _ForceMagnitudeCounts()
+    for frame in frames:
+        counted.add(frame)
+    assert counted.counts is None  # kept verbatim, not counted
+    all_forces = np.concatenate(frames)
+    assert counted.histogram() == _hist(all_forces)
+    assert counted.summary() == _summary(all_forces)
+
+
+def test_force_magnitudes_over_the_budget_are_counted_not_held() -> None:
+    """Deep review D-8: every atom used to sit in a list until the scan ended,
+    and the final `np.concatenate` asked for the whole pile again, all for a
+    median. Past the budget the magnitudes are counted as they stream past."""
+    rng = np.random.default_rng(5)
+    frames = [np.abs(rng.normal(0.4, 0.35, 800)) for _ in range(2000)]  # 1.6M values
+    reference_hist, reference_summary = _hist(np.concatenate(frames)), _summary(np.concatenate(frames))
+    tracemalloc.start()
+    counted = _ForceMagnitudeCounts()
+    for frame in frames:
+        counted.add(frame)
+    histogram, summary = counted.histogram(), counted.summary()
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    # Those magnitudes are 12.8 MB of float64: held, and concatenated once, they
+    # peak well above this bound.
+    assert peak < 12 * 1024 * 1024
+    assert counted.counts is not None  # the grid took over
+    assert histogram["edges"] == reference_hist["edges"]  # the chart axis is exact
+    assert sum(histogram["counts"]) == pytest.approx(sum(reference_hist["counts"]), abs=2)
+    for key in ("min", "max", "mean"):
+        assert summary[key] == reference_summary[key]
+    assert abs(summary["median"] - reference_summary["median"]) <= FORCE_MAGNITUDE_BIN
 
 
 def test_element_atom_counts_keep_wide_integer_bins() -> None:

@@ -23,7 +23,12 @@ if not _native.native_available():
     from scipy.spatial import cKDTree  # noqa: F401
 
 BINS = 40
-STATS_VERSION = 5
+# Cached stats are refused when this differs, so it moves with anything a
+# stored payload would now state wrongly. 6 = force magnitudes are counted
+# through a streaming grid instead of held for an exact median (see
+# _ForceMagnitudeCounts): the min/max/mean are unchanged, the median and the
+# 40-bin counts are resolved to within one bin.
+STATS_VERSION = 6
 EXTREME_FORCE_EV_A = 50.0  # per-atom |F| above this flags the frame (health panel)
 # ‖ΣF‖ above this flags the frame (force-balance check; NepTrainKit's default
 # force_balance_threshold — DFT labels should be translationally balanced)
@@ -47,6 +52,126 @@ _SHORT_CONTACT_PAIR_BATCH = 1_000_000
 # per-check frame-index lists returned alongside the health counts; capped so
 # a pathological dataset cannot blow up the stats JSON (counts stay exact)
 HEALTH_FINDINGS_CAP = 5000
+# Force magnitudes are the one statistic every atom in the dataset contributes
+# to.  Holding them all for an exact median made the scan's live memory grow
+# with the dataset (250k structures x 100 atoms is ~200 MB, and the final
+# `np.concatenate` asked for that again), so past a fixed budget they are counted
+# into a fixed-width grid as they stream past instead: a few hundred KB whatever
+# the size, with min/max/mean exact and the median and the 40-bin chart resolved
+# to within one grid step.  Below the budget the values are kept verbatim and
+# both stay exact - a small dataset's median interpolates across gaps the grid
+# cannot see.
+FORCE_MAGNITUDE_BIN = 1e-3  # eV/Å
+# Grid covers [0, ~4194 eV/Å); a magnitude above it is counted in the last bin.
+_FORCE_MAGNITUDE_BINS = 1 << 22
+# Magnitudes kept verbatim before the grid takes over: 8 MiB of float64.
+_FORCE_MAGNITUDE_VALUES_KEPT = 1 << 20
+# Binning scales by the reciprocal of the step rather than dividing by it.
+_FORCE_MAGNITUDE_PER_BIN = 1.0 / FORCE_MAGNITUDE_BIN
+
+
+class _ForceMagnitudeCounts:
+    """Per-atom force magnitudes, kept exact while they fit and counted after.
+
+    Feeds the same two payloads the whole-array code did - `force_magnitude`
+    (the 40-bin chart) and `force_magnitude_summary` - through `_hist` and
+    `_summary` while the dataset's magnitudes fit the budget, and from the grid
+    once they do not.
+    """
+
+    def __init__(self) -> None:
+        self.counts: np.ndarray | None = None
+        self.kept: list[np.ndarray] = []
+        self.kept_values = 0
+        self.count = 0
+        self.total = 0.0
+        self.lowest = float("inf")
+        self.highest = float("-inf")
+
+    def add(self, magnitudes: np.ndarray) -> None:
+        values = magnitudes[np.isfinite(magnitudes)]
+        if values.size == 0:
+            return
+        self.count += int(values.size)
+        self.total += float(values.sum())
+        self.lowest = min(self.lowest, float(values.min()))
+        self.highest = max(self.highest, float(values.max()))
+        if self.counts is None:
+            self.kept.append(values)
+            self.kept_values += int(values.size)
+            if self.kept_values > _FORCE_MAGNITUDE_VALUES_KEPT:
+                self.counts = np.zeros(1024, dtype=np.int64)
+                for retained in self.kept:
+                    self._count(retained)
+                self.kept, self.kept_values = [], 0
+        else:
+            self._count(values)
+
+    def _count(self, values: np.ndarray) -> None:
+        bins = values * _FORCE_MAGNITUDE_PER_BIN
+        needed = int(bins.max()) + 2
+        counts = self.counts
+        assert counts is not None  # only reached once add() has switched to the grid
+        if needed > counts.size:
+            size = counts.size
+            while size < needed and size < _FORCE_MAGNITUDE_BINS:
+                size *= 2
+            grown = np.zeros(min(size, _FORCE_MAGNITUDE_BINS), dtype=np.int64)
+            grown[: counts.size] = counts
+            counts = self.counts = grown
+        index = np.minimum(bins.astype(np.int64), counts.size - 1)
+        counts += np.bincount(index, minlength=counts.size)
+
+    def histogram(self) -> dict | None:
+        if self.count == 0:
+            return None
+        if self.counts is None:
+            return _hist(self._kept())
+        low, high = self.lowest, self.highest
+        if high == low:
+            # np.histogram's own rule for a constant column.
+            low, high = low - 0.5, high + 0.5
+        width = (high - low) / BINS
+        edges = np.linspace(low, high, BINS + 1)
+        left = np.arange(self.counts.size, dtype=np.float64) * FORCE_MAGNITUDE_BIN
+        # A grid bin overlaps one chart bin or two adjacent ones: split its count
+        # by the overlap. `keep` is how much of the step still lies inside the
+        # chart bin it starts in, so a bin that sits wholly inside contributes
+        # all of its count and only the crossing part of a step is shared.
+        position = np.clip((left - low) / width, 0.0, BINS - 1e-12)
+        below = np.floor(position).astype(np.int64)
+        above = np.minimum(below + 1, BINS - 1)
+        keep = np.clip((1.0 - (position - below)) * width / FORCE_MAGNITUDE_BIN, 0.0, 1.0)
+        weights = self.counts.astype(np.float64)
+        counts = np.bincount(below, weights=weights * keep, minlength=BINS)
+        counts += np.bincount(above, weights=weights * (1.0 - keep), minlength=BINS)
+        return {
+            "edges": [round(float(e), 6) for e in edges],
+            "counts": [int(c) for c in np.rint(counts[:BINS])],
+        }
+
+    def summary(self) -> dict | None:
+        if self.count == 0:
+            return None
+        if self.counts is None:
+            return _summary(self._kept())
+        # The rank np.median would take, located in the grid; the midpoint of the
+        # part of that bin the data can actually occupy is the estimate, so a
+        # distribution narrower than one step still reports inside its own range.
+        rank = (self.count - 1) / 2.0
+        index = int(np.flatnonzero(self.counts.cumsum() > rank)[0])
+        low = max(index * FORCE_MAGNITUDE_BIN, self.lowest)
+        high = min((index + 1) * FORCE_MAGNITUDE_BIN, self.highest)
+        return {
+            "min": round(self.lowest, 6),
+            "max": round(self.highest, 6),
+            "mean": round(self.total / self.count, 6),
+            "median": round((low + high) / 2.0, 6),
+        }
+
+    def _kept(self) -> np.ndarray:
+        return np.concatenate(self.kept) if self.kept else np.zeros(0)
+
 
 
 def _finite(values: list | np.ndarray) -> np.ndarray:
@@ -418,7 +543,7 @@ def _frame_geometry(
 def compute_statistics(adapter: DatasetAdapter) -> dict:
     natoms: list[float] = []
     energy_per_atom: list[float] = []
-    force_magnitudes: list[np.ndarray] = []
+    magnitudes = _ForceMagnitudeCounts()
     max_force: list[float] = []
     min_distance: list[float] = []
     volumes: list[float] = []
@@ -494,9 +619,10 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
             bits |= 2
             props["forces"] = True
             mags = np.linalg.norm(frame.forces, axis=1)
-            force_magnitudes.append(mags)
-            max_force.append(float(mags.max()) if mags.size else 0.0)
-            if mags.size and float(mags.max()) > EXTREME_FORCE_EV_A:
+            peak = float(mags.max()) if mags.size else 0.0
+            magnitudes.add(mags)
+            max_force.append(peak)
+            if peak > EXTREME_FORCE_EV_A:
                 extreme_force += 1
                 findings["extreme_force"].append(pos)
             # net force ‖ΣF‖: physically balanced labels sum to ~0 (NaN forces
@@ -559,9 +685,6 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
     }
     duplicates = len(findings["duplicate_structures"])
 
-    all_forces = (
-        np.concatenate(force_magnitudes) if force_magnitudes else np.array([])
-    )
     periodicity = pbc_summary(pbc_set)
     return {
         "stats_version": STATS_VERSION,
@@ -596,8 +719,8 @@ def compute_statistics(adapter: DatasetAdapter) -> dict:
         "atoms_per_structure_summary": _summary(natoms),
         "energy_per_atom": _hist(energy_per_atom),
         "energy_per_atom_summary": _summary(energy_per_atom),
-        "force_magnitude": _hist(all_forces),
-        "force_magnitude_summary": _summary(all_forces),
+        "force_magnitude": magnitudes.histogram(),
+        "force_magnitude_summary": magnitudes.summary(),
         "max_force": _hist(max_force),
         "max_force_summary": _summary(max_force),
         "min_distance": _hist(min_distance),

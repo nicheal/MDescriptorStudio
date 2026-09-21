@@ -183,7 +183,7 @@ const CHO_STATS = choStats();
 
 const STATS: Record<string, Stats> = {
   "ds-gaas": {
-    stats_version: 5,
+    stats_version: 6,
     structures: 12480,
     atoms_total: 798720,
     elements: [
@@ -245,7 +245,7 @@ const STATS: Record<string, Stats> = {
     },
   },
   "ds-cho": {
-    stats_version: 5,
+    stats_version: 6,
     structures: 3813,
     atoms_total: 747348,
     elements: [
