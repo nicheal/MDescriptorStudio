@@ -4,7 +4,7 @@
 // tiny in-browser mock backend over the same NDJSON protocol. Not part of the
 // production bundle (vite builds only index.html's entry).
 import "./global.css";
-import type { DatasetView, Hist } from "./types/protocol";
+import type { DatasetView, Hist, Stats, HealthFindings } from "./types/protocol";
 import { setAppIcon } from "./brand";
 
 setAppIcon();
@@ -181,8 +181,9 @@ function choStats(): { formulas: { formula: string; elements: string[]; count: n
 
 const CHO_STATS = choStats();
 
-const STATS: Record<string, unknown> = {
+const STATS: Record<string, Stats> = {
   "ds-gaas": {
+    stats_version: 5,
     structures: 12480,
     atoms_total: 798720,
     elements: [
@@ -244,6 +245,7 @@ const STATS: Record<string, unknown> = {
     },
   },
   "ds-cho": {
+    stats_version: 5,
     structures: 3813,
     atoms_total: 747348,
     elements: [
@@ -1326,8 +1328,11 @@ const METHODS: Record<string, Handler> = {
     if (typeof p.check !== "string" || !FINDINGS_CHECKS.includes(p.check)) {
       throw new MockError("INVALID_PARAMS", `'check' must be one of ${FINDINGS_CHECKS.join(", ")}`);
     }
-    const stats = STATS[p.id as string] as { health_findings?: { [k: string]: number[] } } | undefined;
-    const indices = stats?.health_findings?.[p.check as string] ?? [];
+    // `check` is validated against FINDINGS_CHECKS, which the vocabulary gate binds
+    // to the backend's own set, so it names one of HealthFindings' index lists; only
+    // `cap` is a number, and a non-list answers "nothing flagged".
+    const listed = STATS[p.id as string]?.health_findings?.[p.check as keyof HealthFindings];
+    const indices = Array.isArray(listed) ? listed : [];
     const limit = Math.min(Number(p.limit ?? 1000), 1000);
     // per-frame missing properties, consistent with MOCK_MISSING_INDICES and
     // the ds-gaas health mock (energy 2, virial 5)

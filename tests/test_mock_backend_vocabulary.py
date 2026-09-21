@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 from mdescriptor_studio_backend.analysis import ANALYSIS_REGISTRY
 from mdescriptor_studio_backend.main import build_methods
+from mdescriptor_studio_backend.datasets.statistics import STATS_VERSION
 from mdescriptor_studio_backend.protocol import frames
 from mdescriptor_studio_backend.services.analysis_helpers import (
     ANALYSIS_ALGORITHM_VERSION,
@@ -181,6 +182,15 @@ def test_the_mock_copies_the_current_analysis_schema_revisions():
     ):
         literals = set(re.findall(rf'kind: "{kind}",\s*schema_version: (\d+)', text))
         assert literals == {str(revision)}, f"preview.tsx {kind} preview schema: {literals}"
+
+
+def test_the_mock_reports_the_current_statistics_revision():
+    # `protocol.ts` declares stats_version required and the backend refuses a cache
+    # whose value differs, yet the mock's canned stats payloads omitted the key
+    # altogether - so no browser run ever exercised the branch that reads it, and
+    # the loose `Record<string, unknown>` typing let the omission stand.
+    literals = set(re.findall(r"stats_version:\s*(\d+)", (FRONTEND_SRC / "preview.tsx").read_text(encoding="utf-8")))
+    assert literals == {str(STATS_VERSION)}, literals
 
 
 def test_the_mock_reports_the_current_analysis_algorithm_version():
