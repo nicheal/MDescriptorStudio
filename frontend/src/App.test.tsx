@@ -137,6 +137,42 @@ describe("App backend channel", () => {
     expect(settled).toEqual([]);
   });
 
+  it("says so when the restart it was asked for could not start a backend", async () => {
+    // The shell reports a failed spawn asynchronously - the `backend_restart`
+    // call itself has already returned - so a second `backend-exit` is the only
+    // news the UI gets. Swallowing it behind the double-click guard left the
+    // offline screen with a Restart button that could never be pressed again
+    // (pass 5, 5-B4).
+    await mount();
+    act(() => listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } }));
+    await flush();
+
+    const restart = async () => {
+      const button = [...document.querySelectorAll("button")].find((node) => /restart/i.test(node.textContent ?? ""));
+      expect(button, "the offline screen offers a restart").toBeTruthy();
+      await act(async () => { button!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+      await flush();
+    };
+
+    await restart();
+    const asked = invokeMock.mock.calls.filter(([command]) => command === "backend_restart").length;
+    expect(asked).toBe(1);
+
+    // exit #1: the process we asked the shell to stop.
+    act(() => listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } }));
+    await flush();
+    expect(document.body.textContent).not.toContain("could not be restarted");
+
+    // exit #2: the replacement never greeted us.
+    act(() => listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } }));
+    await flush();
+    expect(document.body.textContent).toContain("could not be restarted");
+
+    // and the button works again rather than being silently swallowed.
+    await restart();
+    expect(invokeMock.mock.calls.filter(([command]) => command === "backend_restart").length).toBe(asked + 1);
+  });
+
   it("answers exactly one handshake per ready frame after repeated re-arms", async () => {
     await mount();
     act(() => listeners.get(BACKEND_EXIT_EVENT)?.({ payload: { logDir: null } }));

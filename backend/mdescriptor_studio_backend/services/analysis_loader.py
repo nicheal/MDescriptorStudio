@@ -124,15 +124,18 @@ class AnalysisDataMixin:
         runs are immutable, so cached labels cannot go stale.
         """
         cache_key = (str(run_row["id"]), "atom" if samples.elements is not None else "structure") + tuple(str(part) for part in scope)
-        cached = self._group_labels_cache.get(cache_key)
-        if cached is not None and len(cached) == samples.n_samples:
-            # Dictionary order *is* the LRU order, but only if a hit moves its
-            # entry to the back - re-inserting is how that is done on a plain
-            # dict. Without it the eviction below dropped whatever had been
-            # inserted first, which can be the labels the job that just finished
-            # needed: a FIFO wearing an LRU's name.
-            self._group_labels_cache[cache_key] = self._group_labels_cache.pop(cache_key)
-            return cached
+        with self._group_labels_lock:
+            cached = self._group_labels_cache.get(cache_key)
+            if cached is not None and len(cached) == samples.n_samples:
+                # Dictionary order *is* the LRU order, but only if a hit moves its
+                # entry to the back - re-inserting is how that is done on a plain
+                # dict. Without it the eviction below dropped whatever had been
+                # inserted first, which can be the labels the job that just finished
+                # needed: a FIFO wearing an LRU's name. The whole touch is under the
+                # lock because `pop` of a key another thread has just evicted is a
+                # KeyError that kills the job for no reason but the bookkeeping.
+                self._group_labels_cache[cache_key] = self._group_labels_cache.pop(cache_key)
+                return cached
         from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
 
         if samples.elements is not None and len(samples.elements) == samples.n_samples:
@@ -162,9 +165,10 @@ class AnalysisDataMixin:
             labels = np.asarray(labels_list, dtype=object)
         if len(labels) != samples.n_samples:
             raise AppError(ANALYSIS_INPUT_INVALID, "element metadata does not align with the descriptor samples")
-        self._group_labels_cache[cache_key] = labels
-        while len(self._group_labels_cache) > 8:
-            self._group_labels_cache.pop(next(iter(self._group_labels_cache)))
+        with self._group_labels_lock:
+            self._group_labels_cache[cache_key] = labels
+            while len(self._group_labels_cache) > 8:
+                self._group_labels_cache.pop(next(iter(self._group_labels_cache)))
         return labels
 
     def _usable_run(self, run_id: str, checked_datasets: set[str] | None = None) -> dict:

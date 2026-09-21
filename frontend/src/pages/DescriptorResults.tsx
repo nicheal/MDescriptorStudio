@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useRef, useEffect, useMemo, useState } from "react";
 import { App as AntApp, Button, Empty, Popconfirm, Space, Table, Tag, Typography } from "antd";
 import {
   ArrowRight16Regular,
@@ -50,7 +50,12 @@ export default function DescriptorResults() {
   const [refreshing, setRefreshing] = useState(false);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
 
+  // See Analysis.tsx: an old `result.list` answer must not write the new
+  // dataset's table, nor pick the active run out of a list it never described
+  // (pass 5, 5-B3).
+  const refreshGeneration = useRef(0);
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     if (!datasetId) {
       setRuns([]);
       return;
@@ -58,6 +63,7 @@ export default function DescriptorResults() {
     setRefreshing(true);
     try {
       const resultRows = await ipc.request<RunRow[]>("result.list", { dataset_id: datasetId });
+      if (generation !== refreshGeneration.current) return;
       setRuns(resultRows);
       const completed = displayableDescriptorRuns(resultRows).filter((run) => run.status === "COMPLETED");
       const current = useWorkspace.getState().activeDescriptorRunId;

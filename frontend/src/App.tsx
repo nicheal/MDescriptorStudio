@@ -64,6 +64,9 @@ export default function App() {
   // handler must not report it as a crash; the flag clears when the new
   // process greets us (or if the restart call itself fails).
   const restartingRef = useRef(false);
+  // The exit of the process we just killed is the one we asked for; the exit of
+  // the replacement is the shell admitting it could not start it.
+  const restartExitRef = useRef(false);
 
   // 3Dmol is the largest thing the structure pages wait on, and it sits behind a
   // dynamic import: loading it only when the viewer mounts leaves the pane empty
@@ -83,6 +86,7 @@ export default function App() {
     // case, and only this check sees them.
     if (restartingRef.current) return;
     restartingRef.current = true;
+    restartExitRef.current = false;
     setBackendStarting();
     try {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -92,6 +96,7 @@ export default function App() {
     } catch (error) {
       console.error(error);
       restartingRef.current = false;
+      restartExitRef.current = false;
       setBackendError();
     }
   }, [setBackendStarting, setBackendError]);
@@ -128,6 +133,7 @@ export default function App() {
       if (disposed || readyHandled) return;
       readyHandled = true;
       restartingRef.current = false;
+      restartExitRef.current = false;
       try {
         // apply the persisted UI language before the main UI renders
         await initLanguage();
@@ -180,7 +186,21 @@ export default function App() {
           stopPoller();
           await ipc.connect((logDir) => {
             if (disposed) return;
-            if (!restartingRef.current) message.error(getT().t("Backend process exited"));
+            // A deliberate restart emits exactly one expected exit. A second one
+            // while the flag is still up is the shell admitting that the process
+            // it was asked to start never came up - and swallowing that used to
+            // leave the user on the offline screen with a Restart button that did
+            // nothing, because the flag that guards double clicks was never
+            // cleared (pass 5, 5-B4).
+            if (restartingRef.current && !restartExitRef.current) {
+              restartExitRef.current = true;
+            } else if (restartingRef.current) {
+              restartingRef.current = false;
+              restartExitRef.current = false;
+              message.error(getT().t("Backend could not be restarted"));
+            } else {
+              message.error(getT().t("Backend process exited"));
+            }
             useWorkspace.getState().setBackendError(logDir);
             void arm();
           });

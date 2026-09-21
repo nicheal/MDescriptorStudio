@@ -318,7 +318,15 @@ export default function Analysis() {
   const markOptions = (param: string, options: CacheOption[]) => withCacheMarks((value) => isCached(param, value), options);
   const cachedParam = (param: keyof AnalysisParams) => isCached(param, analysisParams[param]);
 
+  // The four lists below are read together and written together, so a response
+  // that arrives after a newer one must be dropped whole: `dataset` is a new
+  // object after every refetch, which rebuilds this callback and puts another
+  // request in flight, and the RPC pool answers out of order. An abandoned
+  // answer used to bounce the selection back to the first completed run and
+  // persist a run from the dataset the user had already left (pass 5, 5-B3).
+  const refreshGeneration = useRef(0);
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     if (!dataset) {
       setRuns([]);
       setAllRuns([]);
@@ -332,6 +340,7 @@ export default function Analysis() {
         ipc.request<AnalysisRow[]>("analysis.list", { }),
         ipc.request<DatasetView[]>("dataset.view.list", {}),
       ]);
+      if (generation !== refreshGeneration.current) return;
       const resultRows = allResultRows.filter((row) => row.dataset_id === dataset.id);
       setRuns(resultRows);
       setAllRuns(allResultRows);

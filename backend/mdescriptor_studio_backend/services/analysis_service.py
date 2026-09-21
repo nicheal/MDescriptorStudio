@@ -128,6 +128,10 @@ class AnalysisService(
         # parts the scope has (view selection hash and size), so it is a tuple of
         # strings rather than a fixed three.
         self._group_labels_cache: dict[tuple[str, ...], np.ndarray] = {}
+        # `analysis.fps_quota` reads this from an RPC worker while a grouped FPS
+        # job writes it from an analysis worker; the dict itself tolerates that,
+        # but a hit's re-insert and the eviction below do not (pass 5, 5-B5).
+        self._group_labels_lock = threading.Lock()
 
 
     # -- generic Analysis API -------------------------------------------------
