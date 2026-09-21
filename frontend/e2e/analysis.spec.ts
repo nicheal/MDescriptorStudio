@@ -574,6 +574,24 @@ test("sampling keeps save-view and export actions available for selected frames"
   await expect(page.getByText(/Export written to/)).toBeVisible({ timeout: 15_000 });
 });
 
+test("browser preview restores the analysis module it was left on", async ({ page }) => {
+  // The writing half of analysis-view persistence had e2e coverage; the reading
+  // half did not, because the mock answered every settings.get with a literal.
+  // So a restore that never happened - or one that threw - was invisible to every
+  // browser run (deep review pass 4, C-6).
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Feature Variance");
+  await expect(page.getByRole("tab", { name: "Feature Variance", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect
+    .poll(() => page.evaluate(() => window.localStorage.getItem("mockBackend.settings")))
+    .toContain("workspace.analysisUi");
+
+  await page.reload();
+  await openAnalysis(page);
+  await expect(page.getByRole("tab", { name: "Feature Variance", exact: true })).toHaveAttribute("aria-selected", "true");
+});
+
 test("language switch in Settings applies immediately and persists across reload", async ({ page }) => {
   await page.goto("/preview.html");
   await expect(page.getByRole("button", { name: "Analysis" })).toBeVisible({ timeout: 30_000 });

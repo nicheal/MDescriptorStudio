@@ -1068,6 +1068,36 @@ const SETTING_KEYS = [
   "compute.default_threads",
 ];
 
+/** What `settings.set` has stored, in localStorage so it survives a reload the way
+ *  the sidecar's SQLite row does. The mock used to validate the key and throw the
+ *  value away, so every `settings.get` was a literal and the restore-on-startup
+ *  half of `hydrateAnalysisUi` / `hydrateActiveRun` was never exercised by a
+ *  browser test - only the writing half was ever green (deep review pass 4, C-6).
+ */
+const SETTINGS_STORE = "mockBackend.settings";
+const DEFAULT_SETTINGS: Record<string, unknown> = { "workspace.activeDatasetId": "ds-gaas" };
+
+function storedSettings(): Map<string, unknown> {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SETTINGS_STORE) ?? "{}") as Record<string, unknown>;
+    return new Map(Object.entries(parsed));
+  } catch {
+    return new Map();
+  }
+}
+
+const mockSettings = storedSettings();
+
+function rememberSetting(key: string, value: unknown) {
+  mockSettings.set(key, value);
+  try {
+    window.localStorage.setItem(SETTINGS_STORE, JSON.stringify(Object.fromEntries(mockSettings)));
+  } catch {
+    // Unwritable storage keeps the session's values in memory, which is still a
+    // truer answer than a literal for every key.
+  }
+}
+
 /** The per-check frame lists the statistics pass produces; mirrors the `known`
  *  set in DatasetService.findings, same test binding the two together. */
 const FINDINGS_CHECKS = [
@@ -1386,9 +1416,13 @@ const METHODS: Record<string, Handler> = {
     if (!issuedJobs.has(id)) throw new MockError("JOB_NOT_FOUND", `job ${id} does not exist`);
     return inFlightJob(id);
   },
-  "settings.get": (p) => ({ key: requireSetting(p?.key), value: p?.key === "workspace.activeDatasetId" ? "ds-gaas" : null }),
+  "settings.get": (p) => {
+    const key = requireSetting(p?.key);
+    return { key, value: mockSettings.has(key) ? mockSettings.get(key) : DEFAULT_SETTINGS[key] ?? null };
+  },
   "settings.set": (p) => {
-    requireSetting(p?.key);
+    const key = requireSetting(p?.key);
+    rememberSetting(key, p?.value ?? null);
     return {};
   },
   "descriptor.list": () => MOCK_DESCRIPTORS.map(descriptorRow),
