@@ -1283,7 +1283,7 @@ const METHODS: Record<string, Handler> = {
     mdescriptor_api_version: 3,
     mdescriptor_baseline_version: "2",
     mdescriptor_descriptor_info_schema_version: 3,
-    analysis_algorithm_version: "studio-analysis-7",
+    analysis_algorithm_version: "studio-analysis-8",
     data_dir: "C:\\Users\\preview\\AppData\\Roaming\\mdescriptor-studio",
     cpu_threads: 16,
   }),

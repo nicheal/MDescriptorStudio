@@ -36,7 +36,10 @@ _ANALYSIS_SCHEMA_VERSION = 1
 # studio-analysis-7 is the two remaining pass-4 semantics findings: cluster
 # sampling now picks its representatives in the scaled space FPS uses, so a
 # stored selection is about a different geometry than the new code returns.
-ANALYSIS_ALGORITHM_VERSION = "studio-analysis-7"
+# studio-analysis-8 is the two follow-ups from pass 5: a comparison's kNN overlap
+# stops counting a duplicated row as its own neighbour, and a sampling artifact's
+# `selection_distances` is stored in the order its `selected_indices` are.
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-8"
 _MAX_PREVIEW_POINTS = 20_000
 # Written into the canonical parameters of the two feature analyses, so bumping
 # one invalidates that analysis' stored results without touching the others.

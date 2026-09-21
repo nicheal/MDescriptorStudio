@@ -1067,3 +1067,45 @@ def test_local_neighbor_graph_reports_progress_per_query_block(monkeypatch: pyte
     assert reported == sorted(reported)
     assert min(reported) < 0.6
     assert max(reported) == pytest.approx(1.0)
+
+
+def test_comparison_knn_overlap_excludes_self_by_identity() -> None:
+    """`_nearest_distances` already refuses to drop a neighbour by position; the
+    aligned-space overlap did not, and both sides of a comparison leaking their own
+    index inflate the number together (deep review pass 5, 5-C5).
+
+    Duplicate-rich input: for the second row of a duplicate pair the query itself
+    sorts behind its twin, so `[:, 1:k+1]` keeps the row and loses a real
+    neighbour, and the two spaces agree on that leaked index by construction.
+    """
+    from mdescriptor_studio_backend.analysis.algorithms._common import _aligned_space_metrics
+
+    # Two unrelated 60-row descriptor spaces, each with 20 exact duplicate rows
+    # copied from a *different* slice. A duplicated row then sorts behind its
+    # twin, so the positional slice keeps the query itself and drops the twin -
+    # and because both sides do it, the leaked self index matches across the two
+    # spaces and is counted as agreement.
+    a = np.random.default_rng(5).normal(0.0, 3.0, (60, 4))
+    b = np.random.default_rng(6).normal(0.0, 3.0, (60, 4))
+    left = np.vstack([a, a[:20]])
+    right = np.vstack([b, b[40:60]])
+    k = 10
+    metrics, _arrays = _aligned_space_metrics(left, right, {"k": k, "max_samples": 600, "n_clusters": 2})
+
+    def neighbours(matrix: np.ndarray, by_identity: bool) -> list[set[int]]:
+        squared = ((matrix[:, None, :] - matrix[None, :, :]) ** 2).sum(axis=-1)
+        rows = []
+        for i in range(matrix.shape[0]):
+            order = np.argsort(squared[i], kind="stable")
+            picks = [j for j in order.tolist() if j != i][:k] if by_identity else order[1 : k + 1].tolist()
+            rows.append(set(int(j) for j in picks))
+        return rows
+
+    def overlap(by_identity: bool) -> float:
+        pairs = zip(neighbours(left, by_identity), neighbours(right, by_identity))
+        return float(np.mean([len(a & b) / k for a, b in pairs]))
+
+    assert metrics["neighbor_overlap"] == pytest.approx(overlap(True))
+    # The input is chosen so the two rules actually differ: the old slice reports
+    # +2.25 points of agreement that belongs to no neighbour pair.
+    assert overlap(False) > overlap(True)

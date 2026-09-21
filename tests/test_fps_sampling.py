@@ -227,8 +227,14 @@ def test_engine_fps_reports_center_init_and_min_distance() -> None:
     preview = result["preview"]
     assert preview["algorithm"] == "fps"
     assert preview["initialization"] == "center"
-    # Selection order 2 → 0 → 4 → 1 → 3 shows up in the selection distances.
-    assert result["arrays"]["selection_distances"].tolist() == pytest.approx([0.0, 2.0, 2.0, 1.0, 1.0])
+    # Selection order is 2 → 0 → 4 → 1 → 3, entering at 0, 2, 2, 1, 1. Both
+    # arrays are stored sorted by sample and the distance travels with its own
+    # sample, so the pair reads: sample 0 joined at 2.0, 1 at 1.0, 2 at 0.0
+    # (it was the seed), 3 at 1.0, 4 at 2.0 (deep review pass 5, 5-C8 - before
+    # that only `selected_indices` was sorted and the two .npy columns did not
+    # line up for anyone joining them by row).
+    assert result["arrays"]["selected_indices"].tolist() == [0, 1, 2, 3, 4]
+    assert result["arrays"]["selection_distances"].tolist() == pytest.approx([2.0, 1.0, 0.0, 1.0, 2.0])
     assert result["arrays"]["coverage_radius_curve"].tolist() == pytest.approx([2.0, 2.0, 1.0, 1.0, 0.0])
 
     stopped = sampling(samples, {"n_samples": 5, "min_distance": 1.5, "scaling": "raw"}, "fps")
@@ -250,10 +256,15 @@ def test_engine_fps_warm_start_passes_existing_set() -> None:
         existing=existing,
     )
     assert result["preview"]["warm_start"] is True
-    # The candidate farthest from {0, 2} is 9.0, selected first at that distance.
+    # The candidate farthest from {0, 2} is 9.0, selected first at that distance -
+    # and the distance still belongs to sample 3 now that both arrays are stored
+    # in the same order.
     assert result["preview"]["warm_start"]
     assert 3 in result["arrays"]["selected_indices"].tolist()
-    assert result["arrays"]["selection_distances"][0] == pytest.approx(7.0)
+    entered_at = dict(
+        zip(result["arrays"]["selected_indices"].tolist(), result["arrays"]["selection_distances"].tolist())
+    )
+    assert entered_at[3] == pytest.approx(7.0)
 
 
 def test_regression_fixed_matrix_golden_selection() -> None:

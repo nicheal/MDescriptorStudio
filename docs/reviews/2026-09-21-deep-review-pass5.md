@@ -14,20 +14,22 @@
 | `fac2a3b` | 5-D1/5-D2：协议文档的四处假承诺改回实现真正做的事（版本不匹配只回一帧 `id:null` 的错误帧并继续服务，没有 exit 2；`dataset.get` 不返回 `fingerprint_valid`；不存在 `JOB_CANCEL_UNSUPPORTED`，取消已结束作业是 `{ok:true, already_finished:true}`；用户可见文案归后端 `_PUBLIC_MESSAGES`，前端不按 code 映射）；§6 补齐 `BUSY`/`DATASET_BUSY` 并把标题的 24 改成 25；`descriptor.submit` 补 `num_threads`/`force`/`cache.in_flight`，`dataset.frame` 补 `ghost_parents`；§5 末尾写下 registry 别名 RPC 的真实规则 | 新门禁 `test_the_protocol_document_lists_every_declared_error_code_once` 把文档代码块与 `errors.py` 声明集双向比对并核对标题计数；把标题改回 24 即报 `the heading counts 24, the block lists 25, errors.py declares 25` |
 | `f4b3149` | 5-D6：删掉 feature_variance / feature_correlation 预览里那份**展示用**的 `schema_version`（后端两处、mock 两处、两条手写 `== 2`），gate 缓存身份的从来是 params 里的 `feature_*_schema`；5-D7 的一部分：删掉 `array_name`、`output_format` 两个无发送者的第二拼法 | 词表门禁反向钉住：params 那份必须等于常量，mock 预览里再出现 `schema_version` 即红；`test_analysis_api` 比常量而不是 2；pytest 386 / vitest 208 / Playwright 44 / tsc / eslint 全绿 |
 | `56d4ddc` | 5-D4 的第一半：删掉 `system.info` 里两个**没人读也没人比较**的版本字段 —— `analysis_api_version`（注释说「载荷形状变了才 bump」，但全仓无一处读它，且它是 mock 手抄版本号里唯一没有门禁钉住的那个）与 `analysis_dependencies`（每次 `system.info` 跑两次 `importlib.metadata.version`，设置面板不显示），连带 `_dependency_version` helper、mock 两处抄本，golden 重生成 | `tests/data/backend-response-keys.json` 少两行；pytest 386 / vitest 208 / Playwright 44 / tsc 干净 |
+| `<hashA>` | 5-C5 + 5-C8：比较的 kNN 重叠改按身份排除自身；FPS 工件里 `selection_distances` 随 `selected_indices` 一起排序；`ANALYSIS_ALGORITHM_VERSION` → "studio-analysis-8"（本轮第三次，也是你点头的那次） | 新 oracle 用例双向断言（等于身份规则、且严格小于旧位置规则的抬高值），注入旧切片报 `Obtained: 0.13625` vs oracle；注入未排序配对报 4/5 元素错位。pytest 387 / vitest 208 / Playwright 44 / tsc / eslint 干净 |
 | `11b4bf4` | 5-C6：drift 预览写下 `mmd_reference_rows`/`mmd_query_rows`，面板把这两个数摆在三个核估计之后，方法指南说明距离类覆盖全部 query 行、MMD/质心/协方差只用每侧 ≤`distribution_samples` 行 | 新用例：60 行数据在 `distribution_samples=25` 时报 25/25，而 covered+marginal+out_of_coverage 仍是 60；不 bump（旧行缺键即按 `Metrics` 既有规则不显示该芯片）|
 | `463431d` | 5-B3 `Analysis.tsx` / `DescriptorResults.tsx` 的 `result.list` 一族响应加世代号（旧答案不得写表、不得改选中的 run、不得把上个数据集的 run 写进持久化设置）；5-B4 `App.tsx` 区分「我要求的那次 exit」与「替换进程没起来的那次」，后者立刻报「后端无法重启」并放开 Restart 按钮；5-B5 `_group_labels_cache` 的命中 touch 与逐出收进一把锁 | 新 App 用例走真按钮与两次 exit：撤掉修复后第二次 exit 静默、断言报 `expected '…' to contain 'could not be restarted'`；vitest 208、Playwright 44、pytest 383。5-B3 的两处守卫只有读码验证，无门禁 |
 | `7f53205` | 5-C1 特征方差详情图：柱是全体有限值、线是**故意保留全部异常值**的有界样本，却按柱的总数定标 → 同一根轴放两个总体；改为按样本定标并写明 n/N。5-C3 `restore` 说「早于控件的行是 centered 算的」是假的（`git show f86a61c~1` 里后端一直默认 standardized），还原旧行会换掉统计量。5-C4 相似度矩阵上方写着距离的 min/max（cosine 实测「Maximum 1.86」而画出的值最大 0.76）。5-C7 指南把「常量」定义成极差 ≤ 1e-12，而 B-3 之后规则是相对量级（1e6 上抖 4.6e-8 即常量） | vitest 203 → 207（`buildKde` 定标随第三个参数线性、无散布不出线；`matrixExtent` 含非有限格与空输入），restore 两向都断言；tsc / eslint / Playwright 44 干净 |
 
 ## 待修（已核实，按批排列）
 
-### 第 1 批 · 需要一次失效授权（本轮唯一被卡住的两条）
+### 第 1 批 · 需要一次失效授权 —— 你点头后已落地（`<hashA>`），`ANALYSIS_ALGORITHM_VERSION` → "studio-analysis-8"
 
-两条都改**已存结果**的内容，而 `ANALYSIS_ALGORITHM_VERSION` 已在第四轮过到 "studio-analysis-7"、额度用尽。修法是确定的，缺的是「要不要再来一次 bump」的决定。
+这是本轮第三次也是最后一次失效：所有分析结果下次提交重算一遍。两条修法的实际含义：
 
-| # | 位置 | 问题 | 已有测量 |
-| --- | --- | --- | --- |
-| 5-C5 | `analysis/algorithms/_common.py:749-751` | 同一文件里 `_nearest_distances:217-225` 已经写明「按位置丢自身是错的：重复行会打平，`[1:]` 丢掉真邻居、把自己的 0 距离留下」，并改成按身份排除；但 `_aligned_space_metrics` 的 kNN 重叠仍用 `argsort(...)[:, 1:k+1]`。含完全重复描述符行的数据集里，Descriptor Comparison 的 kNN overlap 与 Parameter Sensitivity 的 `neighbor_overlap` 一起虚高 | n=200/k=10：40 行重复 → 0.641 vs 0.631（+1.0 个百分点）；100 行重复 → 0.8945 vs 0.8820（+1.25）；上界是重复占比 × 1/k |
-| 5-C8 | `analysis/sampling/engine.py:172` 与 `sampling/fps.py:50-52` | `FPSResult` 承诺「`indices` 按选择顺序，`selection_distances[k]` 与之一一对应」，引擎却把 `selected_indices` 排序后再写工件，距离数组没跟着排。两个数组都作为独立 `.npy` 落盘、可经 `analysis.chunk` 取回，按行拼接就配错 | `tests/test_fps_sampling.py:228-231` 的选择顺序 2→0→4→1→3 与输出 `[0,1,2,3,4]` 直接对照即证；全仓无一条测试同时检查这两个数组。诚实说明：目前 `registry.ts:144` 只读三条 coverage 曲线，面板不读 `selection_distances`，受影响的是导出/直接取工件的人 |
+- 5-C5：`_aligned_space_metrics` 的 kNN 重叠不再用 `[:, 1:k+1]` 按位置丢自身。含重复描述符行的数据里，重复行的排序会落在自己双胞胎之后，
+  于是切片把查询本身留下、把真邻居丢掉，两侧同时发生时那个自指标在两边都出现，被当成「一致」计入。实测该输入下重叠被抬高 +2.25 个百分点；
+  新用例同时钉两端：断言等于独立 oracle，且断言旧切片规则**大于** oracle。
+- 5-C8：`selected_indices` 排序时 `selection_distances` 跟着同一置换走，工件里两列 `.npy` 恢复一一对应；
+  `test_engine_fps_reports_center_init_and_min_distance` 与 warm-start 用例改为按「样本 → 入选手距离」读这对数组。
 
 ### 第 2 批 · 前端生命周期 —— 四条已由 `463431d` / `11b4bf4` 落地，见上表
 

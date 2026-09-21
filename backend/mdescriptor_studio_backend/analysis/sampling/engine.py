@@ -133,6 +133,7 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
         # its explained-variance ratio keeps that claim honest on screen.
         coords, pc_ratio = _visual_pca_components(space)
         residuals = coverage_statistics(result.nearest_distances)
+        order = np.argsort(result.indices, kind="stable")
         initialization = params.get("initialization", "center")
         preview = {
             "kind": "sampling",
@@ -169,10 +170,14 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
             ]
         return {
             "arrays": {
-                "selected_indices": np.sort(result.indices).astype(np.int64),
+                # Sorted for the sample set, and the selection distance travels
+                # with its own sample: `FPSResult` pairs `indices[k]` with
+                # `selection_distances[k]`, and sorting only the first made the
+                # two stored .npy columns describe different orders (pass 5, 5-C8).
+                "selected_indices": result.indices[order].astype(np.int64),
                 "coords": coords,
                 "nearest_distances": result.nearest_distances,
-                "selection_distances": result.selection_distances,
+                "selection_distances": result.selection_distances[order],
                 "coverage_radius_curve": result.coverage_radius_curve,
                 "coverage_mean_curve": result.coverage_mean_curve,
                 "coverage_r2_curve": result.coverage_r2_curve,

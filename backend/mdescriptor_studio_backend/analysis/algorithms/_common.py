@@ -747,8 +747,19 @@ def _aligned_space_metrics(left: np.ndarray, right: np.ndarray, params: dict) ->
     spearman = _rank_correlation(left_pairs, right_pairs)
 
     k = min(_int_param(params, "k", 10, 1), max(sample_indices.size - 1, 1))
-    left_neighbors = np.argsort(left_matrix, axis=1)[:, 1 : k + 1]
-    right_neighbors = np.argsort(right_matrix, axis=1)[:, 1 : k + 1]
+
+    def nearest_by_identity(matrix: np.ndarray) -> np.ndarray:
+        # Not `[:, 1:k+1]`: a duplicate row ties at distance 0, so the query is
+        # not necessarily first after argsort, and the slice then kept the row's
+        # own index while dropping a real neighbour - a leak on both sides of the
+        # comparison inflates the overlap. `_nearest_distances` is fixed the same
+        # way (deep review pass 5, 5-C5).
+        candidates = matrix.copy()
+        np.fill_diagonal(candidates, np.inf)
+        return np.argsort(candidates, axis=1, kind="stable")[:, :k]
+
+    left_neighbors = nearest_by_identity(left_matrix)
+    right_neighbors = nearest_by_identity(right_matrix)
     overlap = np.asarray(
         [len(set(a_row.tolist()) & set(b_row.tolist())) / max(k, 1) for a_row, b_row in zip(left_neighbors, right_neighbors)],
         dtype=np.float64,
