@@ -233,6 +233,33 @@ def test_the_mock_only_refuses_with_codes_the_backend_can_send():
     assert not invented, "preview.tsx refuses requests with codes the sidecar never sends: " + ", ".join(invented)
 
 
+def test_the_mock_does_not_advertise_a_capability_the_backend_fixes_off():
+    # The optimistic direction of wrong evidence: statistics.py reports one
+    # capability as a literal - no supported format carries per-atom energies, so
+    # `"per_atom": False` under energy - while `Overview.tsx` renders that flag as
+    # a ✓ column. The mock said `true`, so every browser run showed a capability the
+    # shipped app can only leave empty. The shape carve-out in this file's header
+    # does not reach it: this is one literal, not a structural diff.
+    source = (ROOT / "backend" / "mdescriptor_studio_backend" / "datasets" / "statistics.py").read_text(encoding="utf-8")
+    block = re.search(r'"properties": \{(.*?)\n        \},', source, re.S)
+    assert block, "statistics.py no longer spells its properties block in one place"
+    fixed_off = {
+        f"{name}.{flag}"
+        for name, body in re.findall(r'"(\w+)": \{([^{}]*)\}', block.group(1))
+        for flag, value in re.findall(r'"(\w+)": (\w+)', body)
+        if value == "False"
+    }
+    assert fixed_off == {"energy.per_atom"}, fixed_off
+
+    claimed = {
+        f"{name}.{flag}"
+        for name, body in re.findall(r"(\w+): \{([^{}]*)\}", (FRONTEND_SRC / "preview.tsx").read_text(encoding="utf-8"))
+        for flag in re.findall(r"(\w+): true", body)
+    }
+    advertised = sorted(claimed & fixed_off)
+    assert not advertised, f"preview.tsx advertises capabilities the sidecar fixes off: {advertised}"
+
+
 # What the mock answers without a job, so no submission rules apply to them.
 READ_ONLY_ANALYSIS_METHODS = {"analysis.list", "analysis.preview", "analysis.chunk", "analysis.get", "analysis.delete"}
 

@@ -49,7 +49,7 @@ const DS = [
     number_of_frames: 12480,
     elements: ["Ga", "As"],
     properties: {
-      energy: { per_structure: true, per_atom: true },
+      energy: { per_structure: true, per_atom: false },
       forces: { per_atom: true },
       virial: { per_structure: true },
     },
@@ -98,7 +98,7 @@ const DS = [
     number_of_frames: 8500,
     elements: ["Al", "O"],
     properties: {
-      energy: { per_structure: true, per_atom: true },
+      energy: { per_structure: true, per_atom: false },
       forces: { per_atom: true },
       virial: { per_structure: true },
     },
@@ -215,7 +215,7 @@ const STATS: Record<string, unknown> = {
     min_distance_summary: { min: 0.85, max: 3.9, mean: 2.05, median: 2.0 },
     volume: hist(400, 1000, 40, 650, 70),
     volume_summary: { min: 405, max: 995, mean: 651, median: 648 },
-    properties: { energy: { per_structure: true, per_atom: true }, forces: { per_atom: true }, virial: { per_structure: true } },
+    properties: { energy: { per_structure: true, per_atom: false }, forces: { per_atom: true }, virial: { per_structure: true } },
     periodicity: { fully_periodic: true, isolated: false, mixed: false, flags: ["X", "Y", "Z"] },
     health: {
       missing_values: 5,
