@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ipc } from "../ipc/client";
-import { fromJobRow, mergeJobRows, trackJob, useJobs, waitForSuccessfulJob, watchJob, wireJobEvents } from "./jobs";
+import { fromJobRow, jobTypeLabel, mergeJobRows, trackJob, useJobs, waitForSuccessfulJob, watchJob, wireJobEvents } from "./jobs";
 import type { JobRow } from "../types/protocol";
 
 const baseRow = (overrides: Partial<JobRow>): JobRow => ({
@@ -405,5 +405,27 @@ describe("running job badge", () => {
     off();
     trackJob("job-c", "descriptor.compute");
     expect(counts).toHaveLength(2);
+  });
+});
+
+describe("jobTypeLabel", () => {
+  const english = (pair: { en: string; zh: string }) => pair.en;
+  const chinese = (pair: { en: string; zh: string }) => pair.zh;
+
+  it("names every method the app can put on the queue", () => {
+    // Three the UI submits had no entry, so the drawer printed the raw RPC name
+    // beside a spinner and the Settings copy could not translate it either.
+    for (const method of ["analysis.mantel", "analysis.perturbation_sensitivity", "dataset.view.materialize"]) {
+      expect(jobTypeLabel(english, method)).not.toBe(method);
+      expect(jobTypeLabel(chinese, method)).not.toBe(method);
+    }
+  });
+
+  it("does not claim an acquisition objective the row cannot support", () => {
+    // `analysis.acquisition` runs either novelty FPS or the uncertainty +
+    // diversity objective, and a job row carries neither - the result panel
+    // states which. A fixed "Novelty" label was wrong for the other method.
+    expect(jobTypeLabel(english, "analysis.acquisition").toLowerCase()).not.toContain("novelty");
+    expect(jobTypeLabel(chinese, "analysis.acquisition")).not.toContain("新颖性");
   });
 });

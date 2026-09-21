@@ -23,6 +23,7 @@ export interface JobState {
 const JOB_TYPE_PAIRS: Record<string, Pair> = {
   "dataset.register": { en: "Dataset scan & statistics", zh: "数据集扫描与统计" },
   "dataset.statistics": { en: "Dataset statistics", zh: "数据集统计" },
+  "dataset.view.materialize": { en: "Materialize dataset view", zh: "固化数据集视图" },
   "descriptor.compute": { en: "Descriptor compute", zh: "描述符计算" },
   "analysis.pca": { en: "PCA", zh: "PCA" },
   "analysis.umap": { en: "UMAP", zh: "UMAP" },
@@ -35,8 +36,12 @@ const JOB_TYPE_PAIRS: Record<string, Pair> = {
   "analysis.sampling": { en: "Representative sampling", zh: "代表性采样" },
   "analysis.coverage": { en: "Dataset coverage", zh: "数据集覆盖度" },
   "analysis.overlap": { en: "Dataset overlap", zh: "数据集重叠" },
-  "analysis.acquisition": { en: "Novelty acquisition", zh: "新颖性采样" },
+  // Variant-neutral on purpose: the same method also runs the uncertainty +
+  // diversity objective, and a job row does not carry which one it was - the
+  // result panel states it, the list must not guess it.
+  "analysis.acquisition": { en: "Acquisition batch selection", zh: "采集批次选择" },
   "analysis.compare": { en: "Descriptor comparison", zh: "描述符对比" },
+  "analysis.mantel": { en: "Mantel permutation test", zh: "Mantel 置换检验" },
   "analysis.feature_variance": { en: "Feature variance", zh: "特征方差" },
   "analysis.feature_correlation": { en: "Feature correlation", zh: "特征相关性" },
   "analysis.effective_dimension": { en: "Effective dimension", zh: "有效维度" },
@@ -46,6 +51,7 @@ const JOB_TYPE_PAIRS: Record<string, Pair> = {
   "analysis.trajectory": { en: "Trajectory", zh: "轨迹" },
   "analysis.drift": { en: "Dataset drift", zh: "数据集漂移" },
   "analysis.sensitivity": { en: "Parameter sensitivity", zh: "参数敏感性" },
+  "analysis.perturbation_sensitivity": { en: "Structural perturbation response", zh: "结构扰动响应" },
   "analysis.export": { en: "Analysis export", zh: "分析导出" },
 };
 
