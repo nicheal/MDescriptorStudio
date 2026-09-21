@@ -213,7 +213,7 @@ export const ANALYSIS_METHOD_GUIDES: Readonly<Record<string, AnalysisMethodGuide
   },
   "overview.drift": {
     title: { en: "Dataset drift", zh: "数据集漂移" },
-    theory: { en: "Dataset drift summarizes how far query samples move from the reference descriptor distribution, using nearest-reference distances and reference-derived quantile thresholds.", zh: "数据集漂移概括 query 样本偏离 reference 描述符分布的程度，使用最近参考距离和由 reference 推导的分位数阈值。" },
+    theory: { en: "Dataset drift summarizes how far query samples move from the reference descriptor distribution, using nearest-reference distances and reference-derived quantile thresholds. The distance statistics cover every query row; MMD, centroid shift and covariance shift are kernel estimates over a bounded sample of at most `distribution_samples` (default 500, max 2000) rows per side, and the panel states how many it used.", zh: "数据集漂移概括 query 样本偏离 reference 描述符分布的程度，使用最近参考距离和由 reference 推导的分位数阈值。距离类统计覆盖全部 query 行；MMD、质心偏移与协方差偏移是基于每侧至多 `distribution_samples`（默认 500，上限 2000）行的有界样本的核估计，面板会写明实际用了多少行。" },
     application: { en: "Use it to monitor incoming data, validate train/validation splits, and identify domain-shifted structures before relying on model or descriptor behavior.", zh: "可用它监测新数据，验证训练/验证划分，并在依赖模型或描述符行为前发现发生域偏移的结构。" },
   },
   "overview.sensitivity": {

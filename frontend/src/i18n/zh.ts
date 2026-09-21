@@ -23,6 +23,8 @@ export const zhDict: Record<string, string> = {
   "Startup log: {path}": "启动日志目录：{path}",
 
   "Backend process exited": "后端进程已退出",
+  "MMD reference rows": "MMD 参考行数",
+  "MMD query rows": "MMD 查询行数",
   "Backend could not be restarted": "后端无法重启，请查看日志后重试本操作或重新启动应用。",
 
   // TitleBar

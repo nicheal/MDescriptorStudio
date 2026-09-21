@@ -689,7 +689,7 @@ function coverageMetrics(preview: AnalysisPreview, t: (key: string) => string): 
   const scale = typeof preview.preprocess === "string" ? preview.preprocess : undefined;
   if (preview.kind === "overlap") return [{ k: t("Near duplicates"), v: preview.near_duplicates }, { k: t("Highly similar"), v: preview.highly_similar }, { k: t("Independent"), v: preview.independent }, { k: t("Overlap fraction"), v: preview.overlap_fraction }, { k: t("Mean distance"), v: preview.mean_distance }, { k: t("Feature scale"), v: scale }];
   const values = [{ k: t("Covered"), v: preview.covered }, { k: t("Marginal"), v: preview.marginal }, { k: t("Out of coverage"), v: preview.out_of_coverage }, { k: t("Mean distance"), v: preview.mean_distance }];
-  if (preview.kind === "drift") values.push({ k: "MMD", v: preview.mmd }, { k: t("Centroid shift"), v: preview.centroid_distance }, { k: t("Covariance shift"), v: preview.covariance_shift });
+  if (preview.kind === "drift") values.push({ k: "MMD", v: preview.mmd }, { k: t("Centroid shift"), v: preview.centroid_distance }, { k: t("Covariance shift"), v: preview.covariance_shift }, { k: t("MMD reference rows"), v: preview.mmd_reference_rows }, { k: t("MMD query rows"), v: preview.mmd_query_rows });
   values.push({ k: t("Feature scale"), v: scale });
   return values;
 }

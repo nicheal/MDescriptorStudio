@@ -40,6 +40,19 @@ def samples() -> StructureDescriptorMatrix:
     )
 
 
+def test_drift_states_how_many_rows_its_kernel_numbers_describe() -> None:
+    """The strip above the drift result mixes two populations: the distance
+    statistics cover every query row while MMD, centroid and covariance shifts are
+    computed on a bounded sample. Nothing on screen said so (pass 5, 5-C6)."""
+    rng = np.random.default_rng(9)
+    left = StructureDescriptorMatrix(rng.normal(0.0, 1.0, (60, 4)), np.arange(60))
+    right = StructureDescriptorMatrix(rng.normal(0.6, 1.0, (60, 4)), np.arange(60))
+    preview = drift(left, right, {"distribution_samples": 25, "seed": 3})["preview"]
+    assert preview["mmd_reference_rows"] == 25 and preview["mmd_query_rows"] == 25
+    # The distance side still describes all 60 query rows.
+    assert preview["covered"] + preview["marginal"] + preview["out_of_coverage"] == 60
+    uncapped = drift(left, right, {"seed": 3})["preview"]
+    assert uncapped["mmd_query_rows"] == 60
 @pytest.mark.parametrize(
     ("name", "runner"),
     [

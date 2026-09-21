@@ -33,7 +33,7 @@
 | --- | --- | --- | --- |
 | 5-C6 | `analysis/algorithms/pairs.py:373-390, 399` | Dataset Drift 的指标条把两类总体并排显示：Covered / Marginal / Out of coverage / Mean distance 来自**全部** query 行，而 MMD、Centroid shift、Covariance shift 来自每侧 ≤500 行的等距抽样（`distribution_samples`），预览里既没写出这个数，`analysisMethodGuides.ts` 的 drift 一节也完全没提核方法 | 同一份 4000+4000×20 数据只改抽样上限：500 → mmd 0.15995 / centroid 1.33261，2000 → 0.14654（−9.1 %）/ 1.23278（−8.1 %），而 mean_distance 纹丝不动 3.50525；8 个 seed 得到同一 mmd，所以不是随机性而是样本量与披露。修法是加一个 preview 键并在指标条写明「按 N 行」，不动任何已存数字 |
 
-### 第 3 批 · 门禁质量 —— 两条已由 `<hash3>` 落地
+### 第 3 批 · 门禁质量 —— 两条已由 ``cafc7ad`` 落地
 
 同一条测试文件里唯一涉及质量的断言（`trustworthiness > 0.9`）此前**不可能失败**：
 实测删掉全部斥力 0.9287、直接返回 PCA 初值 0.9326、σ 二分退化 0.9547、`_ab_params → (1,1)`

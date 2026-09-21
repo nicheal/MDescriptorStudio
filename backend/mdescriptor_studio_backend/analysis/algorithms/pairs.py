@@ -396,7 +396,11 @@ def drift(reference: DescriptorMatrix, query: DescriptorMatrix, params: dict, pr
         covariance_a = np.atleast_2d(np.cov(a, rowvar=False))
         covariance_b = np.atleast_2d(np.cov(b, rowvar=False))
         covariance_shift = float(np.linalg.norm(covariance_a - covariance_b) / max(np.linalg.norm(covariance_a), 1e-15))
-    result["preview"] = {**result["preview"], "kind": "drift", "mean_distance": float(distances.mean()), "median_distance": float(np.median(distances)), "max_distance": float(distances.max()), "mmd": float(np.sqrt(mmd2)), "mmd_squared": mmd2, "bandwidth": bandwidth, "centroid_distance": centroid_distance, "covariance_shift": covariance_shift}
+    result["preview"] = {**result["preview"], "kind": "drift", "mean_distance": float(distances.mean()), "median_distance": float(np.median(distances)), "max_distance": float(distances.max()), "mmd": float(np.sqrt(mmd2)), "mmd_squared": mmd2, "bandwidth": bandwidth, "centroid_distance": centroid_distance, "covariance_shift": covariance_shift,
+            # The three numbers above describe a bounded sample, while everything else on the
+            # strip describes every query row; without this the panel showed one
+            # population wearing another's label (pass 5, 5-C6).
+            "mmd_reference_rows": int(a.shape[0]), "mmd_query_rows": int(b.shape[0])}
     if progress:
         progress(1.0, "drift complete")
     return result
