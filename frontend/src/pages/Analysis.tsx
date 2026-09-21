@@ -476,6 +476,7 @@ export default function Analysis() {
         const values: unknown[] = [];
         let offset = 0;
         let truncated = false;
+        let rowsTotal = Number.NaN;
         while (true) {
           const chunk = await ipc.request<AnalysisChunk>("analysis.chunk", {
             analysis_id: analysisId,
@@ -486,13 +487,13 @@ export default function Analysis() {
           });
           values.push(...chunk.data);
           truncated = truncated || chunk.truncated;
+          rowsTotal = Number(chunk.shape?.[0]);
           if (!loadAll) break;
           const nextOffset = Number(chunk.next_offset);
-          const total = Number(chunk.shape?.[0]);
-          if (!chunk.data.length || !Number.isFinite(nextOffset) || nextOffset <= offset || (Number.isFinite(total) && nextOffset >= total)) break;
+          if (!chunk.data.length || !Number.isFinite(nextOffset) || nextOffset <= offset || (Number.isFinite(rowsTotal) && nextOffset >= rowsTotal)) break;
           offset = nextOffset;
         }
-        return { array: name, values, truncated } as const;
+        return { array: name, values, truncated, rows: values.length, total: rowsTotal } as const;
       } catch {
         // Stay "missing" rather than caching an empty array: hasOwnProperty is
         // what counts as loaded, so [] told every later visit that a result
@@ -502,7 +503,9 @@ export default function Analysis() {
       }
     })).then((entries) => {
       if (disposed) return;
-      const loaded = entries.filter((entry): entry is { array: string; values: unknown[]; truncated: boolean } => entry !== null);
+      const loaded = entries.filter(
+        (entry): entry is { array: string; values: unknown[]; truncated: boolean; rows: number; total: number } => entry !== null,
+      );
       const arrays = { ...cachedArrays, ...Object.fromEntries(loaded.map((entry) => [entry.array, entry.values] as const)) };
       const current = analysisCache.get(analysisId);
       const narrowed = narrowedArrays([

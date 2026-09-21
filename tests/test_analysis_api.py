@@ -471,6 +471,13 @@ def test_generic_analysis_is_cached_and_chunked(tmp_path: Path) -> None:
     assert len(preview["points"]) == 3
     chunk = service.chunk({"analysis_id": first["analysis_id"], "array": "labels", "limit": 4})
     assert chunk["data"] and chunk["next_offset"] == 4
+    # Four of twelve rows. A one-dimensional array cut at the row limit used to
+    # answer `truncated: false`, because only the column window set the flag - so
+    # a panel that fetches one chunk and stopped drew that slice as the whole
+    # population (deep review pass 4, E-2). `shape` carries the total to compare.
+    assert chunk["shape"] == [12] and chunk["truncated"] is True
+    whole = service.chunk({"analysis_id": first["analysis_id"], "array": "labels", "limit": 12})
+    assert whole["next_offset"] == 12 and whole["truncated"] is False
 
     listed = service.list({"analysis_type": "kmeans"})
     assert listed[0]["id"] == first["analysis_id"]

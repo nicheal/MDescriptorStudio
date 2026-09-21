@@ -1481,7 +1481,11 @@ const METHODS: Record<string, Handler> = {
     const limit = Math.min(20_000, Math.max(1, Math.floor(Number(p.limit ?? 2000) || 2000)));
     const data = values.slice(offset, offset + limit);
     const columns = Array.isArray(values[0]) ? (values[0] as unknown[]).length : undefined;
-    return { analysis_id: id, array, offset, next_offset: offset + data.length, shape: columns == null ? [values.length] : [values.length, columns], dtype: "float64", truncated: false, data };
+    // The backend's rule, for the one half the mock can reach: a page that stops
+    // before the array ends is narrowed. (It never cuts a column window, so
+    // answering `false` here would hide the notice from every browser run.)
+    const truncated = offset + data.length < values.length;
+    return { analysis_id: id, array, offset, next_offset: offset + data.length, shape: columns == null ? [values.length] : [values.length, columns], dtype: "float64", truncated, data };
   },
   "analysis.umap": (p) => {
     mockLatestPcaMode = String(p.mode ?? mockLatestPcaMode);

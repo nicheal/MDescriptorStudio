@@ -50,6 +50,17 @@ describe("Analysis preview mapping", () => {
       { array: "correlation_matrix", truncated: true },
     ])).toEqual(["correlation_matrix", "similarity_matrix"]);
     expect(narrowedArrays([{ array: "coords", truncated: false }])).toEqual([]);
+    // A page cut at the row limit says how much of the array arrived, so a chart
+    // of the first 20 000 of 179 700 pairs cannot be read as the whole set.
+    const [withCounts] = narrowedArrays([
+      { array: "left_pair_distances", truncated: true, rows: 20_000, total: 179_700 },
+      { array: "similarity_matrix", truncated: true },
+    ]);
+    expect(withCounts).toBe(`left_pair_distances (${(20_000).toLocaleString()} / ${(179_700).toLocaleString()})`);
+    // A restored name from the cache carries no counts and stays as it was.
+    expect(narrowedArrays([{ array: "similarity_matrix", truncated: true }])).toEqual(["similarity_matrix"]);
+    // Complete arrays are not labelled just because the caller passed a total.
+    expect(narrowedArrays([{ array: "labels", truncated: false, rows: 12, total: 12 }])).toEqual([]);
   });
 
   it("maps logical sample selections to displayed positions after preview sampling", () => {

@@ -249,10 +249,17 @@ class AnalysisService(
         # Rows come from limit (at most _MAX_PREVIEW_POINTS); the column window
         # below keeps the product inside one encodable frame and reports when it
         # had to cut the width the caller asked for.
-        truncated = False
+        #
+        # The flag has to mean "this reply is not the whole array", for any rank.
+        # It used to be set only by the column window, so a one-dimensional array
+        # cut at the row limit answered `truncated: false` while carrying a
+        # fraction of it, and the panels that fetch one chunk and stop drew that
+        # slice as the complete population (deep review pass 4, E-2).
+        truncated = stop < (array.shape[0] if array.ndim else 1)
         if chunk.ndim == 2:
-            column_start, col_end, truncated = _column_window(stop - offset, column_start, column_end, chunk.shape[1])
+            column_start, col_end, width_cut = _column_window(stop - offset, column_start, column_end, chunk.shape[1])
             chunk = chunk[:, column_start:col_end]
+            truncated = truncated or width_cut
         values = chunk.tolist()
         return {
             "analysis_id": row["id"],

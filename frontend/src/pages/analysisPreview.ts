@@ -60,13 +60,24 @@ export function selectedDisplayIndices(points: Pick<AnalysisPoint, "i">[], selec
 /**
  * Which artifact arrays arrived narrower than the chart asked for.
  *
- * The backend keeps one `analysis.chunk` reply inside the protocol's frame cap
- * by shortening the column window and answering `truncated: true`. A matrix
- * chart cannot tell that apart from a genuinely narrow artifact, so the names
- * have to be carried up to the card that draws it.
+ * The backend keeps one `analysis.chunk` reply inside the protocol's frame cap by
+ * shortening the column window, and it cuts rows at the page limit; both answer
+ * `truncated: true`, because a chart cannot tell either apart from an artifact
+ * that genuinely is that shape. Where the row count is known it goes into the
+ * label, so a panel that drew the first 20 000 of 179 700 pairs says so rather
+ * than implying a complete population.
  */
-export function narrowedArrays(replies: readonly { array: string; truncated: boolean }[]): string[] {
-  return replies.filter((reply) => reply.truncated).map((reply) => reply.array).sort();
+export function narrowedArrays(
+  replies: readonly { array: string; truncated: boolean; rows?: number; total?: number }[],
+): string[] {
+  return replies
+    .filter((reply) => reply.truncated)
+    .map((reply) =>
+      reply.rows != null && reply.total != null && reply.total > reply.rows
+        ? `${reply.array} (${reply.rows.toLocaleString()} / ${reply.total.toLocaleString()})`
+        : reply.array,
+    )
+    .sort();
 }
 
 /** What a point carries even when the analysis attached nothing to it. */

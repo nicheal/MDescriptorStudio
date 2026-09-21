@@ -64,8 +64,9 @@ export default function AnalysisResultVisualization(props: Props) {
         <Typography.Text strong>{tr(TITLES[kind])}</Typography.Text>
         <Typography.Text type="secondary">{t("Purpose-built visual summary")}</Typography.Text>
       </div>
-      {/* A matrix that arrived column-truncated looks exactly like a narrower
-          matrix, and the charts built from it would be read as complete. */}
+      {/* An array that arrived narrowed - fewer columns, or fewer rows than the
+          artifact holds - looks exactly like a genuinely narrow or short one,
+          and the charts built from it would be read as complete. */}
       {narrowed && narrowed.length > 0 && (
         <Typography.Text type="warning" style={{ display: "block", marginBottom: 8 }}>
           {t("Some arrays were narrowed to fit one response: {names}", { names: narrowed.join(", ") })}
