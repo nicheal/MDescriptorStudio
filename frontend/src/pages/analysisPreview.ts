@@ -160,13 +160,17 @@ export function matrixExtent(matrix: number[][]): { min: number | null; max: num
 }
 
 
-/** The reason the backend gave for a result no longer standing.
+/** The reason the backend gave for a result no longer standing, for its hover.
  *
- * `dataset_service._mark_runs_stale` writes one sentence ("descriptor source
- * changed after the scan...") into `analysis_runs.stale_reason` and
+ * `dataset_service._mark_runs_stale` writes one sentence ("fingerprint format
+ * upgraded (v3 -> v4)...") into `analysis_runs.stale_reason` and
  * `descriptor_runs.error_message`, and a failed compute writes its message
  * there too. The lists read by the pages carried the status word only, so
- * "STALE" arrived without the explanation that was already stored beside it.
+ * "STALE" arrived without the explanation stored beside it (pass 5, 5-D8).
+ *
+ * The sentence is hover text rather than a table cell: the source-change form
+ * quotes both fingerprints, which is 128 hexadecimal characters no one reads off
+ * a 100 px column, and an unbroken run of them cannot wrap.
  */
 export function stalenessNote(status: unknown, reason: unknown): string | null {
   if (status !== "STALE" && status !== "FAILED" && status !== "CANCELLED") return null;

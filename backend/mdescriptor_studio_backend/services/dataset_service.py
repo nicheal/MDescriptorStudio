@@ -81,6 +81,28 @@ def formula_of(symbols: list[str]) -> str:
     )
 
 
+def fingerprint_change_reason(old: object, current: str) -> str:
+    """Say, in one line, why a result stopped standing when its fingerprint moved.
+
+    A different version prefix means the *reader* changed rather than the source:
+    the upgrade alone invalidates everything computed under the old spelling, and
+    the two digests are outputs of different algorithms, so naming the versions is
+    the whole story while their 128 hexadecimal characters add none. The sentence
+    is stored as the run's stale reason and shown on hover, where a user cannot
+    compare two digests by eye anyway.
+    """
+    # `is_versioned_fingerprint`, not a bare `":"`: a pre-versioning row stores a
+    # bare hexdigest, whose `partition(":")` head would otherwise be that whole
+    # digest presented as if it were a version number.
+    old_version = str(old).partition(":")[0] if is_versioned_fingerprint(old) else "unversioned"
+    new_version = current.partition(":")[0]
+    if old_version != new_version:
+        return (
+            f"fingerprint format upgraded ({old_version} -> {new_version});"
+            " recompute descriptor results"
+        )
+    return f"source fingerprint changed ({old} -> {current})"
+
 
 class DatasetService:
     def __init__(self, db: Database, adapter: EngineAdapter, jobs: JobService, data_dir: Path | None = None):
@@ -128,7 +150,7 @@ class DatasetService:
             # Make the invalidation visible as soon as the registry is read;
             # rescan/recompute later updates the dataset fingerprint but never
             # silently resurrects results calculated from the old bytes.
-            self._mark_runs_stale(row["id"], f"source fingerprint changed ({row['fingerprint']} -> {current})")
+            self._mark_runs_stale(row["id"], fingerprint_change_reason(row["fingerprint"], current))
         lineage = self.db.query_one(
             "SELECT parent_dataset_id, source_view_id, operation, selection_hash, created_at"
             " FROM dataset_lineage WHERE child_dataset_id = ?",
@@ -633,7 +655,7 @@ class DatasetService:
                 if upgraded or fingerprint != old_fingerprint:
                     self._mark_runs_stale(
                         ds_id,
-                        "dataset fingerprint upgraded; recompute descriptor results"
+                        fingerprint_change_reason(old_fingerprint, fingerprint)
                         if upgraded
                         else "source changed while fingerprint was being refreshed",
                     )
@@ -685,7 +707,7 @@ class DatasetService:
                 raise AppError(DATASET_CHANGED, "dataset changed on disk; rescan it before continuing")
             raise AppError(DATASET_CHANGED, "dataset fingerprint migration is in progress; rescan it before continuing")
         if current != row["fingerprint"]:
-            self._mark_runs_stale(row["id"], f"source fingerprint changed ({row['fingerprint']} -> {current})")
+            self._mark_runs_stale(row["id"], fingerprint_change_reason(row["fingerprint"], current))
             raise AppError(
                 DATASET_CHANGED,
                 f"dataset changed on disk: {row['source_path']}",

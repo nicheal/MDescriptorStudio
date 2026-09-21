@@ -80,8 +80,13 @@ describe("matrixExtent", () => {
 });
 
 describe("stalenessNote", () => {
-  it("shows the stored reason only where a result stopped standing", () => {
+  it("hands the stored reason to the status word's hover, in full", () => {
     expect(stalenessNote("STALE", "descriptor source changed after the scan")).toBe("descriptor source changed after the scan");
+    // The source-change form quotes both fingerprints. Off the cell that is the
+    // one place all 128 of those characters can be read.
+    expect(stalenessNote("STALE", "source fingerprint changed (v4:aaaa -> v4:bbbb)")).toBe(
+      "source fingerprint changed (v4:aaaa -> v4:bbbb)",
+    );
     expect(stalenessNote("FAILED", " out of memory ")).toBe("out of memory");
     expect(stalenessNote("COMPLETED", "descriptor source changed after the scan")).toBe(null);
     expect(stalenessNote("RUNNING", null)).toBe(null);

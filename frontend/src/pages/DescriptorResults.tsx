@@ -182,12 +182,17 @@ export default function DescriptorResults() {
                 render: (value: string, row: RunRow) => {
                   const note = stalenessNote(row.status, row.error_message);
                   return (
-                    <div>
-                      <Typography.Text style={{ color: RUN_STATUS_COLOR[value] ?? "#616161", fontWeight: 600, fontSize: 12 }}>
-                        {jobStatusLabel(tr, value)}
-                      </Typography.Text>
-                      {note && <Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>{note}</Typography.Text>}
-                    </div>
+                    <Typography.Text
+                      style={{
+                        color: RUN_STATUS_COLOR[value] ?? "#616161",
+                        fontWeight: 600,
+                        fontSize: 12,
+                        cursor: note ? "help" : undefined,
+                      }}
+                      title={note ?? undefined}
+                    >
+                      {jobStatusLabel(tr, value)}
+                    </Typography.Text>
                   );
                 },
               },

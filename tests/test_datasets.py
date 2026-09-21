@@ -68,6 +68,19 @@ def test_meta_skips_the_fingerprint_it_cannot_use(tmp_path: Path, monkeypatch) -
     db.close()
 
 
+def test_fingerprint_change_reason_names_the_upgrade_not_the_digests() -> None:
+    # The sentence is written onto every run a change invalidates and is what a
+    # hover on "STALE" shows, so it has to read as one line. A moved version
+    # prefix means the reader changed, not the source, and the two digests are
+    # outputs of different algorithms - nothing a user can compare by eye.
+    from mdescriptor_studio_backend.services.dataset_service import fingerprint_change_reason
+
+    upgraded = "fingerprint format upgraded ({old} -> v4); recompute descriptor results"
+    assert fingerprint_change_reason("v3:aaaa", "v4:bbbb") == upgraded.format(old="v3")
+    assert fingerprint_change_reason("fingerprint", "v4:bbbb") == upgraded.format(old="unversioned")
+    assert fingerprint_change_reason("v4:aaaa", "v4:bbbb") == "source fingerprint changed (v4:aaaa -> v4:bbbb)"
+
+
 def test_detect_and_scan_deepmd(tmp_path: Path) -> None:
     d = tmp_path / "d"
     write_deepmd(d, 5, 64, seed=3)
