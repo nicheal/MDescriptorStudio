@@ -1,6 +1,6 @@
 # MDescriptor Studio 发布与应用内升级
 
-当前发布目标为 Windows x64 NSIS 安装包。应用内升级由 Tauri Updater 完成，升级包包含 Studio、Rust 壳、PyInstaller onedir 形式的 Python 后端目录（`src-tauri/resources/backend/`，随 `bundle.resources` 打包，启动时全量校验完整性）和构建时从 PyPI 安装的最新版 MDescriptor（`backend/requirements.txt` 以 `mdescriptor>=0.3.2` 约束下限）；用户无需执行 `pip` 命令。
+当前发布目标为 Windows x64 NSIS 安装包。应用内升级由 Tauri Updater 完成，升级包包含 Studio、Rust 壳、PyInstaller onedir 形式的 Python 后端目录（`src-tauri/resources/backend/`，随 `bundle.resources` 打包，启动时全量校验完整性）和构建时从 PyPI 安装的最新版 MDescriptor（`backend/requirements.txt` 以 `mdescriptor>=0.3.4` 约束下限）；用户无需执行 `pip` 命令。
 
 ## 一次性配置签名
 

@@ -1,15 +1,15 @@
-# Engine API 探测报告（mdescriptor 0.3.3）
+# Engine API 探测报告（mdescriptor 0.3.4）
 
-> 日期：2026-09-13（0.2.8 → 0.3.3 升级后重测；历史 0.2.3/0.2.5/0.2.6/0.2.7/0.2.8 报告见 git 历史）
-> 探测环境：`D:\codex\MD\.venv`（Python 3.12.9）；mdescriptor 0.3.3（cp312 win_amd64 wheel，发布构建时 PyPI 最新）+ numpy 2.5.2
+> 日期：2026-09-21（0.3.3 → 0.3.4 升级后重测；历史 0.2.3/0.2.5/0.2.6/0.2.7/0.2.8 报告见 git 历史）
+> 探测环境：`D:\codex\MD\.venv`（Python 3.12.9）；mdescriptor 0.3.4（cp312 win_amd64 wheel，发布构建时 PyPI 最新）+ numpy 2.5.2
 > 探测方式：`scripts/probe_engine.py`（只读，不实例化描述符、不加载模型）
 > 原始数据：`docs/plan/engine-api-report.json`（引擎版本变化后重跑脚本 diff 此文件）
 > 结论效力：本报告为 GUI 侧 schema 的事实基线（ADR-4、ADR-2）
-> 升级复核：逐条问题复核结论见 `engine-known-issues.md`；0.2.8→0.3.3 schema diff 要点：
-> - **probe JSON 逐键 diff：仅 `engine_version` / `runtime_info.version` 两处版本号变化，schema 零漂移**（28 描述符、参数类型统计、输入能力矩阵、asset policy、错误类型、符号表全部一致）
+> 升级复核：逐条问题复核结论见 `engine-known-issues.md`；0.3.3→0.3.4 schema diff 要点：
+> - **probe JSON 逐键 diff：版本字段变化外，7 个描述符新增 CUDA `execution.device_limits`，SOAP 的 `n_max`/`r_cut` 描述更完整；28 个描述符、参数类型统计、输入能力矩阵、asset policy、错误类型和符号表保持兼容**
 > - **CUDA 插件自 0.3.x 随 wheel 发布**（`mdescriptor/_cuda*.pyd` + `cudart64_12.dll`；0.2.8 仅在 schema 声明 `cuda` 而无插件，为发布版 `DEVICE_UNAVAILABLE` 的根因）；CUDA 计算路径已在 RTX 2080 SUPER 实测通过（引擎直调 + 冻结 sidecar 端到端）
 > - PyInstaller `collect_all("mdescriptor")` 已验证将 `_cuda.pyd` 与 `cudart64_12.dll` 打入 onefile sidecar
-> - 版本策略（ADR-2）：`requirements.txt` 以 `mdescriptor>=0.3.2` 约束下限，发布构建装 PyPI 最新版；**每次发版前以本仓库 `.venv` 实装最新版重跑本探测并跑回归**
+> - 版本策略（ADR-2）：`requirements.txt` 以 `mdescriptor>=0.3.4` 约束下限，发布构建装 PyPI 最新版；**每次发版前以本仓库 `.venv` 实装最新版重跑本探测并跑回归**
 >
 > 历史 0.2.7→0.2.8 diff 要点：
 > - **唯一 schema 变化：28 个描述符的 `execution.devices` 全部由 `["cpu"]` 扩为 `["cpu", "cuda"]`**（上游 GPU 路径条目落地声明层）
@@ -31,7 +31,7 @@
 
 ```json
 {
-  "version": "0.2.8",
+  "version": "0.3.4",
   "api_version": 1,
   "baseline_version": "2",
   "configuration_schema_version": 1,

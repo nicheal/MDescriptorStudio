@@ -38,7 +38,7 @@ frontend/src/
 │              │ 高度自适应视口，默认零滚动条    │ Data Health     │
 │              │ [+ Inspector]                 │ + Rescan        │
 ├──────────────┴──────────────────────────────┴────────────────┤
-│ StatusBar: ● Ready | MDescriptor 0.3.2 | CPU n threads        │
+│ StatusBar: ● Ready | MDescriptor 0.3.4 | CPU n threads        │
 └──────────────────────────────────────────────────────────────┘
 ```
 

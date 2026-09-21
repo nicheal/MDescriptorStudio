@@ -1,8 +1,8 @@
-# mdescriptor 已知问题清单（基于 0.3.3 复核）
+# mdescriptor 已知问题清单（基于 0.3.4 复核）
 
-> 日期：2026-09-13（0.3.2→0.3.3 复核；初版 2026-08-30 基于 0.2.7）；环境：Windows x64，cp312 wheel，项目 `.venv`
+> 日期：2026-09-21（0.3.3→0.3.4 复核；初版 2026-08-30 基于 0.2.7）；环境：Windows x64，cp312 wheel，项目 `.venv`
 > 性质：MDescriptor Studio 开发过程中的实测发现，可直接作为上游 issue 素材（github.com/nicheal/MDescriptor）
-> 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ 已历经 0.2.5（2026-08-29）、0.2.7（2026-08-30）、0.2.8（2026-09-05）、0.3.2/0.3.3（2026-09-13）升级复核；每轮按 `scripts/probe_engine.py` 重建 API 基线并跑 `scripts/verify_known_issues.py`。
+> 注：~~PyPI 已出现 0.2.4，以下问题是否仍存在需在升级后按本清单逐条复核~~ 已历经 0.2.5（2026-08-29）、0.2.7（2026-08-30）、0.2.8（2026-09-05）、0.3.2/0.3.3（2026-09-13）、0.3.4（2026-09-21）升级复核；每轮按 `scripts/probe_engine.py` 重建 API 基线并跑 `scripts/verify_known_issues.py`。
 > **本清单的判定现在有门禁**：`verify_known_issues.py` 把十项判定写进脚本内的 `EXPECTED` 表，任一项与文档不符（含 checker 崩溃或漏记）即以非零码退出；`.github/workflows/engine-known-issues.yml` 在引擎版本约束、脚本或本文档变动时自动运行，也可手动触发。判定真的变化时，**同一提交里**同时更新本文档与 `EXPECTED`。
 > 仍需上游修改的项已整理为可开工清单：**`upstream-issues.md`**（无待开工项；CUDA 运行时验收已在 RTX 2080 SUPER 于 0.3.2/0.3.3 完成）
 
@@ -11,6 +11,11 @@
 - **升级动因**：0.2.8 仅在 schema 声明 `execution.devices: ["cpu","cuda"]`，但 wheel 未携带 CUDA 插件（实测 0.2.8 wheel 内无 `_cuda*.pyd` / `cudart64_12.dll`），`import mdescriptor._cuda` 失败 → 引擎 `code=device_unavailable` → 发布版选 CUDA 必报 `DEVICE_UNAVAILABLE`。0.3.x 起 `_cuda.pyd` + `cudart64_12.dll` 随 wheel 发布。
 - probe JSON 逐键 diff（0.2.8 → 0.3.3）：仅 `engine_version` / `runtime_info.version` 变化，schema 零漂移；`verify_known_issues.py` 复核结论不变。版本策略同步放开为 `mdescriptor>=0.3.2`（发布构建装 PyPI 最新版，ADR-2）。
 - **CUDA 计算路径验收通过**（RTX 2080 SUPER，driver 610.47；0.3.2 与 0.3.3 双版本实测）：引擎直调 CoulombMatrix device=cuda 计算正确；后端 pytest 163 项全绿（含 `descriptor.submit device=cuda` 实算分支）；PyInstaller onefile sidecar 内已确认打包 `_cuda.pyd` + `cudart64_12.dll`，冻结 sidecar 经 stdio 协议端到端 CUDA 计算完成。
+
+## 0.3.3→0.3.4 复核补充（2026-09-21）
+
+- probe JSON 逐键 diff：`engine_version` / `runtime_info.version` 升为 `0.3.4`；C00PSMLFF、CoulombMatrix、EwaldSumMatrix、MBTR、SineMatrix、ValleOganov 新增 CUDA `execution.device_limits`，SOAP 的 `n_max` / `r_cut` 描述补充了数值约束说明；28 个描述符和 schema 版本位保持不变。
+- Studio 只依赖通用 `execution.devices`、`execution.num_threads`、参数 schema 和输入能力字段，新增可选元数据无需适配代码；`verify_known_issues.py` 十项判定全部与文档一致。
 
 ## 0.2.8 复核补充（2026-09-05）
 

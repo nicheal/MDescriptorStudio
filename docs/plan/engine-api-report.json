@@ -1,7 +1,7 @@
 {
-  "engine_version": "0.3.3",
+  "engine_version": "0.3.4",
   "runtime_info": {
-    "version": "0.3.3",
+    "version": "0.3.4",
     "api_version": 1,
     "baseline_version": "2",
     "configuration_schema_version": 1,
@@ -590,7 +590,17 @@
           "cuda"
         ],
         "num_threads": true,
-        "cooperative_cancel": true
+        "cooperative_cancel": true,
+        "device_limits": {
+          "cuda": {
+            "parameter_limits": {
+              "l_max": {
+                "maximum": 20,
+                "description": "CUDA C00PS angular workspaces support l_max through 20."
+              }
+            }
+          }
+        }
       },
       "input": {
         "periodicity": [
@@ -665,7 +675,23 @@
           "cuda"
         ],
         "num_threads": true,
-        "cooperative_cancel": true
+        "cooperative_cancel": true,
+        "device_limits": {
+          "cuda": {
+            "parameter_limits": {
+              "n_atoms_max": {
+                "maximum": 256,
+                "description": "CUDA matrix workspaces support at most 256 atoms."
+              }
+            },
+            "input_limits": {
+              "n_atoms_max": {
+                "maximum": 256,
+                "when": "n_atoms_max_omitted"
+              }
+            }
+          }
+        }
       },
       "input": {
         "periodicity": [
@@ -1001,7 +1027,23 @@
           "cuda"
         ],
         "num_threads": true,
-        "cooperative_cancel": true
+        "cooperative_cancel": true,
+        "device_limits": {
+          "cuda": {
+            "parameter_limits": {
+              "n_atoms_max": {
+                "maximum": 256,
+                "description": "CUDA matrix workspaces support at most 256 atoms."
+              }
+            },
+            "input_limits": {
+              "n_atoms_max": {
+                "maximum": 256,
+                "when": "n_atoms_max_omitted"
+              }
+            }
+          }
+        }
       },
       "input": {
         "periodicity": [
@@ -1471,7 +1513,21 @@
           "cuda"
         ],
         "num_threads": true,
-        "cooperative_cancel": true
+        "cooperative_cancel": true,
+        "device_limits": {
+          "cuda": {
+            "conditional_limits": {
+              "global_valle_oganov_non_atomic_species": {
+                "parameter": "species",
+                "maximum_items": 64,
+                "normalization": "valle_oganov",
+                "geometry": "non_atomic_number",
+                "scope": "global",
+                "description": "CUDA Valle-Oganov normalization uses a 64-entry species-count buffer."
+              }
+            }
+          }
+        }
       },
       "input": {
         "periodicity": [
@@ -2042,7 +2098,7 @@
           "required": false,
           "display_name": "Maximum radial order",
           "default": 8,
-          "description": "Number of radial basis functions used for each species.",
+          "description": "Number of radial basis functions used for each species. Very large n_max combined with a high l_max can leave the radial basis ill-conditioned and fail to normalize.",
           "minimum": 1
         },
         "l_max": {
@@ -2086,7 +2142,7 @@
           "type": "number",
           "required": false,
           "display_name": "Cutoff radius",
-          "description": "Maximum distance from the center included in the descriptor.",
+          "description": "Maximum distance from the center included in the descriptor. The GTO radial basis requires r_cut > 1 Å; values that leave the basis ill-conditioned are rejected at construction.",
           "exclusiveMinimum": 0.0,
           "unit": "Å"
         },
@@ -2386,7 +2442,23 @@
           "cuda"
         ],
         "num_threads": true,
-        "cooperative_cancel": true
+        "cooperative_cancel": true,
+        "device_limits": {
+          "cuda": {
+            "parameter_limits": {
+              "n_atoms_max": {
+                "maximum": 256,
+                "description": "CUDA matrix workspaces support at most 256 atoms."
+              }
+            },
+            "input_limits": {
+              "n_atoms_max": {
+                "maximum": 256,
+                "when": "n_atoms_max_omitted"
+              }
+            }
+          }
+        }
       },
       "input": {
         "periodicity": [
@@ -2959,7 +3031,21 @@
           "cuda"
         ],
         "num_threads": true,
-        "cooperative_cancel": true
+        "cooperative_cancel": true,
+        "device_limits": {
+          "cuda": {
+            "conditional_limits": {
+              "global_valle_oganov_non_atomic_species": {
+                "parameter": "species",
+                "maximum_items": 64,
+                "normalization": "valle_oganov",
+                "geometry": "non_atomic_number",
+                "scope": "global",
+                "description": "CUDA Valle-Oganov normalization uses a 64-entry species-count buffer."
+              }
+            }
+          }
+        }
       },
       "input": {
         "periodicity": [

@@ -29,11 +29,11 @@ convert errors            → 引擎异常 → GUI 错误码
 
 ## 2. 版本策略（ADR-2）
 
-- 开发与 Release 一律从 PyPI 安装 mdescriptor，`backend/requirements.txt` 以 `mdescriptor>=0.3.2` 约束下限（2026-09-13 起，由 `==0.2.8` 放开：CUDA 插件自 0.3.x 随 wheel 发布，0.2.8 声明 `cuda` 却无插件导致发布版 `DEVICE_UNAVAILABLE`）。**发布构建时装 PyPI 最新版**；开发 `.venv` 已满足下限时 pip 不自动升级，引擎升级由人工执行下述流程；不做 editable 安装；引擎无本地仓库，PyPI 为唯一来源。
+- 开发与 Release 一律从 PyPI 安装 mdescriptor，`backend/requirements.txt` 以 `mdescriptor>=0.3.4` 约束下限（2026-09-21 由 `>=0.3.2` 升级；CUDA 插件自 0.3.x 随 wheel 发布，0.2.8 声明 `cuda` 却无插件导致发布版 `DEVICE_UNAVAILABLE`）。**发布构建时装 PyPI 最新版**；开发 `.venv` 已满足下限时 pip 不自动升级，引擎升级由人工执行下述流程；不做 editable 安装；引擎无本地仓库，PyPI 为唯一来源。
 - 引擎升级流程（固定四步，缺一不可）：
   1. 必要时抬高 requirements.txt 中的版本下限；
   2. `.venv\Scripts\python.exe scripts\probe_engine.py --out docs/plan/engine-api-report.json` 重跑探测；
-  3. diff 新旧 JSON，核对 §5 差异清单是否新增（尤其 parameter type / input capability / asset policy）；
+  3. diff 新旧 JSON，核对 §5 差异清单是否新增（尤其 parameter type / input capability / asset policy）；0.3.4 新增的 CUDA `device_limits` 与 SOAP 参数说明已确认由通用 schema 消费路径兼容；
   4. 更新 `engine-api-report.md` 版本头并跑 backend pytest 回归。
 - `backend.ready` 事件携带 `mdescriptor_version`，前端与期望 pin 不符时报 `MDESCRIPTOR_INCOMPATIBLE`。
 
