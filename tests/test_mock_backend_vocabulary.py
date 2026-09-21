@@ -270,6 +270,44 @@ def test_the_mock_does_not_advertise_a_capability_the_backend_fixes_off():
     assert not advertised, f"preview.tsx advertises capabilities the sidecar fixes off: {advertised}"
 
 
+# The renderer calls these and the browser preview has no answer, so it returns
+# `NO_HANDLER` - a code the sidecar never sends. Each one is a decision made here
+# rather than an accident discovered later, and the gate below fails on a new
+# unmocked method so the list cannot silently grow (deep review pass 4, Q5: seven
+# were unhandled, `descriptor.submit` and `dataset.remove` now are implemented
+# because a browser run could not otherwise produce a descriptor run or reach a
+# refusal).
+UNMOCKED_METHODS = {
+    # Cancelling a preview job that finishes on a timer exercises the renderer's
+    # bookkeeping only; the cooperative cancel that matters is tested against the
+    # real sidecar in tests/test_job_cancel.py.
+    "job.cancel": "the preview's jobs hold no work to cancel",
+    # History rows in the preview are session state, rebuilt on reload, so a
+    # delete has nothing persistent to remove. The sidecar's behaviour, including
+    # refusing to delete a row an artifact still points at, is in pytest.
+    "analysis.delete": "preview history is rebuilt per page load",
+    # Renaming a fixture dataset in the preview would only survive until the next
+    # reload, and the name is not what any assertion depends on.
+    "dataset.rename": "the preview's datasets are fixtures, not user state",
+    # It writes a directory of frames to a user path; an in-browser mock has no
+    # filesystem. Covered end to end against the sidecar, including the cleanup
+    # after a cancel mid-copy, in tests/test_dataset_flow.py and test_job_cancel.
+    "dataset.view.materialize": "needs a filesystem the browser mock does not have",
+    # A quota preview recomputes √N_g over the descriptor matrix, which the
+    # preview does not load; answering it would mean shipping a second numeric
+    # implementation to fake.
+    "analysis.fps_quota": "would require recomputing the descriptor matrix",
+}
+
+
+def test_the_mock_answers_every_method_the_frontend_calls():
+    # `NO_HANDLER` is not a code the sidecar can produce, so every unmocked method
+    # is a branch the browser tests cannot reach - they silently exercise a
+    # response the shipped app would never see.
+    unmocked = sorted(frontend_called_methods() - mock_methods() - set(UNMOCKED_METHODS))
+    assert not unmocked, f"preview.tsx has no handler for: {unmocked}"
+
+
 # What the mock answers without a job, so no submission rules apply to them.
 READ_ONLY_ANALYSIS_METHODS = {"analysis.list", "analysis.preview", "analysis.chunk", "analysis.get", "analysis.delete"}
 

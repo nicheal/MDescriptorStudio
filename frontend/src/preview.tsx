@@ -362,6 +362,7 @@ const JOB_ROWS = [
   },
 ];
 
+let mockSubmittedRuns = 0;
 let mockLatestAnalysisId = "ana-mock-analysis";
 let mockLatestAnalysisKind = "projection";
 let mockAnalysisArrays: Record<string, unknown[]> = {};
@@ -1398,6 +1399,59 @@ const METHODS: Record<string, Handler> = {
         missing_props: mockMissingProps(i),
       })),
     };
+  },
+  "descriptor.submit": (p) => {
+    // The compute path had no answer here, so a browser run could never produce
+    // a descriptor run and no part of it - cache hit, force recalculation, the
+    // completion message - was reachable (pass 4, Q5).
+    const dataset = requireDataset(p.dataset_id);
+    const descriptorName = String(p.descriptor_name ?? "");
+    if (!descriptorName) throw new MockError("INVALID_PARAMS", "descriptor.submit requires 'descriptor_name'");
+    const scope = p.scope === "frame" ? "frame" : "dataset";
+    const existing = RUNS.find((run) => run.dataset_id === dataset.id && run.descriptor_name === descriptorName && run.status === "COMPLETED");
+    if (existing && !p.force) {
+      // The sidecar answers a compatible completed run with the cache entry and
+      // no job; the renderer turns that into a "recalculate anyway" prompt.
+      return { job_id: null, cache: { existing_run_id: existing.id, cache_key: "mock-cache" } };
+    }
+    mockSubmittedRuns += 1;
+    const id = `run-computed-${mockSubmittedRuns}`;
+    const jobId = `job-compute-${mockSubmittedRuns}`;
+    const started = new Date().toISOString();
+    // The row appears when the compute finishes, not as a RUNNING placeholder: the
+    // preview's jobs are timers with no feature space to describe yet, and the
+    // renderer follows this one by job id anyway.
+    window.setTimeout(() => {
+      RUNS.push({
+        id,
+        dataset_id: dataset.id,
+        dataset_name: dataset.name,
+        descriptor_name: descriptorName,
+        engine_version: "0.3.3",
+        scope,
+        device: String(p.device ?? "cpu"),
+        status: "COMPLETED",
+        created_at: started,
+        started_at: started,
+        finished_at: new Date().toISOString(),
+        result_path: "mock",
+        shape: `[${dataset.number_of_frames}, 256]`,
+        feature_space_signature: "mock-feature-space",
+        feature_count: 256,
+        row_semantics: scope === "frame" ? "atom" : "structure",
+      });
+      mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { run_id: id }, error: null });
+    }, 800);
+    return handOut({ job_id: jobId, cache: null });
+  },
+  "dataset.remove": (p) => {
+    const dataset = requireDataset(p?.id);
+    const index = DS.indexOf(dataset);
+    if (index >= 0) DS.splice(index, 1);
+    mockAnalysisRows.forEach((row, id) => {
+      if ((row.dataset_ids as string[] | undefined)?.includes(dataset.id)) mockAnalysisRows.delete(id);
+    });
+    return { ok: true };
   },
   "dataset.register": () => {
     window.setTimeout(() => {

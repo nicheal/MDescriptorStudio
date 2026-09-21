@@ -60,3 +60,53 @@ test("the preview mock answers with the real backend's envelope", async ({ page 
   }
   expect(drifted, `preview.tsx drifted from the real response shapes:\n${drifted.join("\n")}`).toEqual([]);
 });
+test("the preview mock computes and removes like the sidecar does", async ({ page }) => {
+  // Both RPCs used to be missing, so `NO_HANDLER` - a code the sidecar never
+  // sends - was what every descriptor-compute and dataset-delete attempt got in
+  // a browser run: no descriptor run could be created, and no refusal branch of
+  // either flow was reachable (deep review pass 4, Q5).
+  await page.goto("/preview.html");
+  await page.waitForFunction(() => Boolean(window.__mdsMock));
+  const datasetId = await page.evaluate(() => (window.__mdsMock?.call("dataset.list") as { id: string }[])[0].id);
+
+  const cached = await page.evaluate(
+    ([id]) => window.__mdsMock?.call("descriptor.submit", { dataset_id: id, descriptor_name: "DPA-2", scope: "dataset" }) as
+      { job_id: string | null; cache: { existing_run_id: string } | null },
+    [datasetId] as [string],
+  );
+  expect(cached.job_id).toBeNull();
+  expect(cached.cache?.existing_run_id).toBeTruthy();
+
+  const before = await page.evaluate(() => (window.__mdsMock?.call("result.list") as { id: string }[]).map((run) => run.id));
+  const submitted = await page.evaluate(
+    ([id]) => window.__mdsMock?.call("descriptor.submit", { dataset_id: id, descriptor_name: "DPA-2", scope: "dataset", force: true }) as
+      { job_id: string | null },
+    [datasetId] as [string],
+  );
+  expect(submitted.job_id).toBeTruthy();
+  // The job id the mock hands out is its own, so the run is found as "the row
+  // that was not there before" rather than by guessing an id from it.
+  await expect.poll(async () => page.evaluate(
+    ([prior]) => (window.__mdsMock?.call("result.list") as { id: string; status: string }[])
+      .find((run) => !prior.includes(run.id))?.status ?? null,
+    [before] as [string[]],
+  ), "the finished compute never appeared as a run").toBe("COMPLETED");
+
+  const refusal = await page.evaluate(() => {
+    try {
+      window.__mdsMock?.call("descriptor.submit", { dataset_id: "ds-none", descriptor_name: "DPA-2" });
+      return "answered without refusing";
+    } catch (error) {
+      return (error as Error).message;
+    }
+  });
+  expect(refusal).toContain("does not exist");
+
+  const removed = await page.evaluate(
+    ([id]) => [window.__mdsMock?.call("dataset.remove", { id }) as { ok: boolean }, (window.__mdsMock?.call("dataset.list") as { id: string }[]).map((row) => row.id)],
+    [datasetId] as [string],
+  );
+  expect(removed[0]).toEqual({ ok: true });
+  expect(removed[1]).not.toContain(datasetId);
+  expect(before.length).toBeGreaterThan(0);
+});
