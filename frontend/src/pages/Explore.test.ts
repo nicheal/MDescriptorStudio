@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadExploreHealth } from "./Explore";
-import { createExploreFrameLoader } from "./exploreFrameLoader";
+import { createExploreFrameLoader, resolveExternalFrame } from "./exploreFrameLoader";
 import type { ExploreStatisticsResponse } from "./Explore";
 import type { DatasetHealth, FramePayload, HealthFindings } from "../types/protocol";
 
@@ -78,6 +78,25 @@ describe("Explore frame loading", () => {
     });
     expect(committed).toEqual([7]);
     expect(loading).toEqual([true, true, false]);
+  });
+
+  it("replays an external jump that arrived while a fetch was in flight", () => {
+    // The findings drawer's "preview this frame" moves the shared pointer. If a
+    // frame is already being fetched the jump used to be dropped outright, and
+    // the landing response then overwrote the pointer with the frame it had been
+    // fetching - the drawer reported a jump the screen never made (pass 4, E-5).
+    const held = resolveExternalFrame({ pointer: 100, displayed: 6, loading: true, pending: null });
+    expect(held).toEqual({ pending: 100, fetch: null });
+    // The response lands on 6 and rewrites the pointer; the remembered jump
+    // survives exactly because `pending` is not derived from the pointer.
+    expect(resolveExternalFrame({ pointer: 6, displayed: 6, loading: false, pending: held.pending }))
+      .toEqual({ pending: null, fetch: 100 });
+    // Arriving at the target ends the replay rather than looping it.
+    expect(resolveExternalFrame({ pointer: 100, displayed: 100, loading: false, pending: null }))
+      .toEqual({ pending: null, fetch: null });
+    // Nothing in flight, the jump is fetched straight away.
+    expect(resolveExternalFrame({ pointer: 100, displayed: 6, loading: false, pending: null }))
+      .toEqual({ pending: null, fetch: 100 });
   });
 
   it("drops a response after dataset switch or component unmount invalidates loading", async () => {

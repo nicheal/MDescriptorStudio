@@ -25,7 +25,7 @@ import {
   disposeStructureViewer,
   type StructureViewer,
 } from "../viz/StructureViewer";
-import { createExploreFrameLoader, type ExploreFrameLoader } from "./exploreFrameLoader";
+import { createExploreFrameLoader, resolveExternalFrame, type ExploreFrameLoader } from "./exploreFrameLoader";
 import type { DatasetHealth, DatasetView, FramePayload, HealthFindings } from "../types/protocol";
 
 const DEFAULT_BOND_CUTOFF = 2.4;
@@ -115,6 +115,7 @@ export default function Explore() {
   // last requested extent so enabling or enlarging a local shell can fetch
   // enough periodic images without refetching on every render.
   const fetchedGhostCutoffRef = useRef(0);
+  const pendingFrameRef = useRef<number | null>(null);
 
   const total = d?.number_of_frames ?? 0;
   const selectedAtom = selectedSample
@@ -381,12 +382,21 @@ export default function Explore() {
   // External frame navigation (e.g. the findings drawer's preview): follow the
   // shared active-frame pointer while this page is open. Internal navigation
   // already lands on the pointer, and frame===null defers to the reset above.
+  // A jump that arrives while a fetch is in flight is remembered and replayed
+  // when it lands, because the response overwrites the pointer with the frame it
+  // was already fetching.
   useEffect(() => {
-    if (!d || loading || !frame) return;
-    if (activeFrameIndex === frame.index) return;
-    void fetchFrame(activeFrameIndex);
+    if (!d || !frame) return;
+    const decision = resolveExternalFrame({
+      pointer: activeFrameIndex,
+      displayed: frame.index,
+      loading,
+      pending: pendingFrameRef.current,
+    });
+    pendingFrameRef.current = decision.pending;
+    if (decision.fetch != null) void fetchFrame(decision.fetch);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeFrameIndex, loading]);
+  }, [activeFrameIndex, loading, d, frame?.index]);
 
   // A local shell may need periodic images farther out than the bond display
   // cutoff. Fetch that larger xyz padding only while the shell is active.
