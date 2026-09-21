@@ -36,9 +36,6 @@
 
 同一条门禁事实值得记下：`tests/test_backend_response_contract.py` 在全量并跑时曾失败一次、单独跑与重跑全量都通过 —— 它经 `conftest.BackendProcess.read_line(timeout=30)` 等 sidecar 握手，机器被其他会话占满时 30 s 会到。这不是契约漂移而是这台共享机器上的负载抖动，报告在此登记以免下次有人当真去改形状。
 
-| # | 位置 | 问题 | 已有测量 |
-| --- | --- | --- | --- |
-
 ### 第 3 批 · 门禁质量 —— 两条已由 `cafc7ad` 落地
 
 同一条测试文件里唯一涉及质量的断言（`trustworthiness > 0.9`）此前**不可能失败**：
@@ -89,9 +86,14 @@ agent 的「preview 里 9 个键与 events 明细零读者」对**渲染器**成
 5-D7 剩下两条有意留着：`block_weights` 无人发送却参与 canonical params 与缓存身份，删之前得先看有没有历史行按权重键存过；`max_features` 属于 `result.heatmap` —— 一个有测试、无调用者的 RPC，删公共方法是产品决定，不是清理。
 5-D3（`fingerprint_status`）复核后**建议留着**：它确实零产品读者，但它是全仓唯一把 MIGRATING / UNAVAILABLE / STALE 三种情形区分开的地方（`cache_valid` 只是一个布尔），删它就等于宣布这三个状态永不区分 —— 那该由你定，而不是删除清单替我定。
 
-| # | 位置 | 问题 | 已有测量 |
-| --- | --- | --- | --- |
-| 5-D3 | `dataset_service.py:150-154` + golden + `preview.tsx:1008` | `fingerprint_status` 每次 `dataset.list` 都算并上线，`DatasetMeta` 类型里没有它 → TS 不可能读；golden 把它钉成必发键，第三轮还倒过来给 mock 补了一份。同一事实 `cache_valid` 已经表达，且有三处真读者 | 全仓 4 处命中全为生产端/门禁/旧文档，前端读取 0 |
+剩下四件，两件按你的决定留着，两件还等你点头：
+
+| # | 位置 | 状态 |
+| --- | --- | --- |
+| 5-D3 | `dataset_service.py:150-154` | **留着**（复核结论，见本节开头）：`fingerprint_status` 零产品读者，但它是全仓唯一把 MIGRATING / UNAVAILABLE / STALE 分开写的地方，删它等于宣布「不区分」 |
+| 5-D7 剩余 | `analysis_loader.py:465,483-487`、`result_service.py:336-340` | **留着并已记账**（你的决定）：`block_weights` 无人发送但参与缓存身份；`max_features` 属于 `result.heatmap` —— 有测试、无调用者的公共 RPC |
+| 5-D4 后半 | `storage/database.py:90-91`、`_LIST_COLUMNS`、`protocol.ts:337-338` | **待点头**：`analysis_runs.schema_version` / `algorithm_version` 两列上线、进类型、零读者；删列要 migration 12，故未动。`ANALYSIS_API_VERSION` 与 `analysis_dependencies` 已随 `56d4ddc` 删掉 |
+| 5-D8 剩余 | `statistics.py:718-719`、`protocol.ts:90-91` | **待点头**：`atoms_per_structure` 与其 summary 每次扫描都算、必填上云、前端零读取；删它要过 `STATS_VERSION`，而你这次的「不删列」决定覆盖了同类载荷，故留着。`stale_reason` 与 `error_message` 那半边已按决定改成界面显示（`3c89578`） |
 
 ### 第 4 批的失效说明（决定顺序时用得上）
 
@@ -104,9 +106,15 @@ agent 的「preview 里 9 个键与 events 明细零读者」对**渲染器**成
 3. **「排队中被取消」的占位（5-A3）没按 agent 建议改成 runner 内占位。** 那会把「路径已被占」的答复推迟到作业启动，用户在对话框里选的本地数据集会被多写一次指纹；改成让重试复用自己的空占位，规则与写入时那条 `_refuse_filled_destination` 合并成一个 `_destination_is_empty`。
 4. **5-C1 的修法不是「让 KDE 换一份无偏样本」。** 后端保留全部异常值是刻意的（长尾在详情面板里可见），换样本等于删功能；真正的错位只有「曲线按柱的总数定标」这一处，于是改定标 + 写明样本，不动载荷、不动任何已存数字。
 
+### 本轮结论
+
+第 1、2、3 批与第 3.5 批全部关闭：该修的修了，该留的留了并写明理由，两条「可删」主张经复核被推翻。
+第 4 批里唯一还需要工程动作的是两件载荷删除（5-D4 后半要 migration、5-D8 剩余要 `STATS_VERSION`），
+外加 `result.heatmap` 这类「要不要收回一个公共面」的产品判断。除这些之外本轮没有待办。
+
 ### 计数（把这页当账本时用）
 
-四个 agent 交回 29 条候选，我自己补了 1 条（5-N3：writer 计数无测试看守），共 30 条：**已落地 20**（5-A1..A5、5-B1..B5、5-C1/C3/C4/C6/C7/C8/C5、5-D1/D2/D6、5-D7 的两条别名、5-D4 的前两个字段、5-N2/N3、5-D5 的重复数组、5-D8 的界面），**复核后保留 4**（5-A6、5-B6、5-B7、5-D3，各附理由），**待你点头或属界面重构 5**（5-D4 的两列 + migration、5-D5 的推导合并、5-D7 剩下的 `block_weights` 与 `max_features`/`result.heatmap`、5-D8 的 `atoms_per_structure*`），另有 agent 自否的 13 条进下面的反证记录。
+四个 agent 交回 29 条候选，我自己补了 1 条（5-N3：writer 计数无测试看守），共 30 条：**已落地 20**（5-A1..A5、5-B1..B5、5-C1/C3/C4/C6/C7/C8/C5、5-D1/D2/D6、5-D7 的两条别名、5-D4 的前两个字段、5-N2/N3、5-D5 的重复数组、5-D8 的界面），**复核后保留 4**（5-A6、5-B6、5-B7、5-D3，各附理由），**按你的决定留着并已记账 3**（5-D7 剩下的 `block_weights` 与 `max_features`/`result.heatmap`、5-D5 的两份推导已被两侧门禁夹住而不必合并），**仍等你点头 2**（5-D4 的两列要 migration 12、5-D8 剩下的 `atoms_per_structure*` 要过 `STATS_VERSION`），另有 agent 自否的 13 条进下面的反证记录。
 
 ## 反证记录（不要再报）
 
