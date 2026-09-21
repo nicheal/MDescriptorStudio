@@ -321,6 +321,10 @@ export interface RunRow {
   row_semantics?: string | null;
   metadata?: Record<string, unknown>;
   memory_peak_bytes?: number | null;
+  /** Why a COMPLETED run stopped being trustworthy, or why a compute failed. The sidecar
+   * already writes this when it marks runs stale and when a job dies; the row list
+   * used to show only the status word (deep review pass 5, 5-D8). */
+  error_message?: string | null;
 }
 
 export type AnalysisStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "STALE";

@@ -8,7 +8,7 @@ import {
 import { ipc } from "../ipc/client";
 import { useActiveDataset, useWorkspace } from "../stores/workspace";
 import { jobStatusLabel } from "../stores/jobs";
-import { displayableDescriptorRuns } from "./analysisPreview";
+import { displayableDescriptorRuns, stalenessNote } from "./analysisPreview";
 import { useT } from "../i18n";
 import type { RunRow } from "../types/protocol";
 import { formatComputeDuration } from "../util/duration";
@@ -179,11 +179,17 @@ export default function DescriptorResults() {
                 dataIndex: "status",
                 key: "status",
                 width: 100,
-                render: (value: string) => (
-                  <Typography.Text style={{ color: RUN_STATUS_COLOR[value] ?? "#616161", fontWeight: 600, fontSize: 12 }}>
-                    {jobStatusLabel(tr, value)}
-                  </Typography.Text>
-                ),
+                render: (value: string, row: RunRow) => {
+                  const note = stalenessNote(row.status, row.error_message);
+                  return (
+                    <div>
+                      <Typography.Text style={{ color: RUN_STATUS_COLOR[value] ?? "#616161", fontWeight: 600, fontSize: 12 }}>
+                        {jobStatusLabel(tr, value)}
+                      </Typography.Text>
+                      {note && <Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>{note}</Typography.Text>}
+                    </div>
+                  );
+                },
               },
               {
                 title: t("Compute time"),

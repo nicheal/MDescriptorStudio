@@ -602,8 +602,9 @@ def trajectory(samples: DescriptorMatrix, params: dict, progress: Callable[[floa
     ]
     return {
         "arrays": {
+            # `sample_indices` only: the second name for the same array was a
+            # stored duplicate no reader asked for (deep review pass 5, 5-D5).
             "sample_indices": selected.astype(np.int64),
-            "indices": selected.astype(np.int64),
             "frames": frames[selected],
             "time": time_axis,
             "step_distance": step_distance,

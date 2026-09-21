@@ -15,6 +15,7 @@
 | `f4b3149` | 5-D6：删掉 feature_variance / feature_correlation 预览里那份**展示用**的 `schema_version`（后端两处、mock 两处、两条手写 `== 2`），gate 缓存身份的从来是 params 里的 `feature_*_schema`；5-D7 的一部分：删掉 `array_name`、`output_format` 两个无发送者的第二拼法 | 词表门禁反向钉住：params 那份必须等于常量，mock 预览里再出现 `schema_version` 即红；`test_analysis_api` 比常量而不是 2；pytest 386 / vitest 208 / Playwright 44 / tsc / eslint 全绿 |
 | `56d4ddc` | 5-D4 的第一半：删掉 `system.info` 里两个**没人读也没人比较**的版本字段 —— `analysis_api_version`（注释说「载荷形状变了才 bump」，但全仓无一处读它，且它是 mock 手抄版本号里唯一没有门禁钉住的那个）与 `analysis_dependencies`（每次 `system.info` 跑两次 `importlib.metadata.version`，设置面板不显示），连带 `_dependency_version` helper、mock 两处抄本，golden 重生成 | `tests/data/backend-response-keys.json` 少两行；pytest 386 / vitest 208 / Playwright 44 / tsc 干净 |
 | `362df30` | 5-C5 + 5-C8：比较的 kNN 重叠改按身份排除自身；FPS 工件里 `selection_distances` 随 `selected_indices` 一起排序；`ANALYSIS_ALGORITHM_VERSION` → "studio-analysis-8"（本轮第三次，也是你点头的那次） | 新 oracle 用例双向断言（等于身份规则、且严格小于旧位置规则的抬高值），注入旧切片报 `Obtained: 0.13625` vs oracle；注入未排序配对报 4/5 元素错位。pytest 387 / vitest 208 / Playwright 44 / tsc / eslint 干净 |
+| `<hashB>` | 5-D5 的一部分 + 5-D8 的界面那一半：trajectory 工件里 `sample_indices` 的第二份名字（`indices`）删掉；`RunRow` 声明 `error_message`，运行表与分析历史在 STALE/FAILED/CANCELLED 行下面显示后端早就写好的那句理由（`stalenessNote`） | pytest 387 / 1 skipped；vitest 209（新增 `stalenessNote` 五态用例：只有失效状态出文案，空串与空白不显示）；Playwright 44 不变 —— **界面上这条文案没有浏览器用例**：mock 的 13 个 run 与全部 analysis 行都是 COMPLETED，要让它在浏览器里可见得先给 mock 加一行 STALE 记录，那一行同时会关掉历史行的「载入」按钮，故未做 |
 | `11b4bf4` | 5-C6：drift 预览写下 `mmd_reference_rows`/`mmd_query_rows`，面板把这两个数摆在三个核估计之后，方法指南说明距离类覆盖全部 query 行、MMD/质心/协方差只用每侧 ≤`distribution_samples` 行 | 新用例：60 行数据在 `distribution_samples=25` 时报 25/25，而 covered+marginal+out_of_coverage 仍是 60；不 bump（旧行缺键即按 `Metrics` 既有规则不显示该芯片）|
 | `463431d` | 5-B3 `Analysis.tsx` / `DescriptorResults.tsx` 的 `result.list` 一族响应加世代号（旧答案不得写表、不得改选中的 run、不得把上个数据集的 run 写进持久化设置）；5-B4 `App.tsx` 区分「我要求的那次 exit」与「替换进程没起来的那次」，后者立刻报「后端无法重启」并放开 Restart 按钮；5-B5 `_group_labels_cache` 的命中 touch 与逐出收进一把锁 | 新 App 用例走真按钮与两次 exit：撤掉修复后第二次 exit 静默、断言报 `expected '…' to contain 'could not be restarted'`；vitest 208、Playwright 44、pytest 383。5-B3 的两处守卫只有读码验证，无门禁 |
 | `7f53205` | 5-C1 特征方差详情图：柱是全体有限值、线是**故意保留全部异常值**的有界样本，却按柱的总数定标 → 同一根轴放两个总体；改为按样本定标并写明 n/N。5-C3 `restore` 说「早于控件的行是 centered 算的」是假的（`git show f86a61c~1` 里后端一直默认 standardized），还原旧行会换掉统计量。5-C4 相似度矩阵上方写着距离的 min/max（cosine 实测「Maximum 1.86」而画出的值最大 0.76）。5-C7 指南把「常量」定义成极差 ≤ 1e-12，而 B-3 之后规则是相对量级（1e6 上抖 4.6e-8 即常量） | vitest 203 → 207（`buildKde` 定标随第三个参数线性、无散布不出线；`matrixExtent` 含非有限格与空输入），restore 两向都断言；tsc / eslint / Playwright 44 干净 |
@@ -67,6 +68,19 @@
 （记录这条否决的理由：pass 4 已有同类先例 —— `_json_safe`、`finite_or_none` 的「可删」主张都在读过调用顺序后
 被推翻。凡是「这道闸永不触发」的结论，必须先把写下顺序的两条语句找出来。）
 
+### 5-D5 复核后的改写（读代码的人请注意这条）
+
+agent 的「preview 里 9 个键与 events 明细零读者」对**渲染器**成立，但对**契约**不成立：
+`test_analysis_engine.py::test_trajectory_event_detection_is_explicit_about_threshold_and_space` 与
+`test_analysis_ipc.py::test_analysis_method_catalog_over_ipc` 明确要求工件带上 `event_threshold`/`event_count`/
+`event_space`/`step_robust_sigma`/`events` 明细（注释原话：面板自己推阈值，所以产物必须带上稳健统计量与检测空间）。
+我先按「无人读即删」删了一轮，这两条门禁立刻把其中一半要回来 —— 于是这一批只删了真正多余的那一件：
+与 `sample_indices` 一字不差的 `indices` 数组。
+**剩下的问题不是删除而是合并**：`trajectoryView.tsx` 在浏览器里重算阈值、事件与百分位，后端也有一套并且把它写进工件；
+两份实现并存且互不校验，这才是缺陷。修法是把面板改成读 `preview.event_threshold`/`events`（或反过来，把前端的推导变成后端唯一实现），
+属界面重构，随第 5 批走。`speed` 与 `event_indices` 数组同样属于「后端产、无人取」，但它们在 `registry.ts:140` 的读取清单之外，
+删之前应当先确认历史工件不必保持数组名集合稳定。
+
 ### 第 4 批 · 契约与死重量 —— 5-D1/5-D2（`fac2a3b`）、5-D6 与 5-D7 的两条别名（`f4b3149`）已落地，其余逐项都需点头
 
 5-D7 剩下两条有意留着：`block_weights` 无人发送却参与 canonical params 与缓存身份，删之前得先看有没有历史行按权重键存过；`max_features` 属于 `result.heatmap` —— 一个有测试、无调用者的 RPC，删公共方法是产品决定，不是清理。
@@ -75,8 +89,6 @@
 | # | 位置 | 问题 | 已有测量 |
 | --- | --- | --- | --- |
 | 5-D3 | `dataset_service.py:150-154` + golden + `preview.tsx:1008` | `fingerprint_status` 每次 `dataset.list` 都算并上线，`DatasetMeta` 类型里没有它 → TS 不可能读；golden 把它钉成必发键，第三轮还倒过来给 mock 补了一份。同一事实 `cache_valid` 已经表达，且有三处真读者 | 全仓 4 处命中全为生产端/门禁/旧文档，前端读取 0 |
-| 5-D5 | `analysis/metrics/__init__.py:558-631` | `analysis.trajectory` 服务端一半参数没人能发（面板把范围/方法/灵敏度全放浏览器重算，`submission.ts` 恒发 `{}`）：`timestep`/`time_unit` 分支零发送者零测试而 `trajectoryView.tsx:160` 还在读它；`preview.events`（≤200 条 × 8 字段）与 9 个 preview 键零读者；数组 `indices` 与 `sample_indices` 是同一份数据落两遍，`speed`/`event_indices` 不在读取清单 | 脚本抽出 trajectory 的键逐个 grep 前端；只有 `test_analysis_ipc.py`/`test_analysis_engine.py` 发过这些参数 |
-| 5-D8 | `statistics.py:718-719`、`dataset_service.py:694`、`protocol.ts:90-91,342` | 写而不读：`atoms_per_structure` 与其 summary 每次扫描都算、进 `stats_json` 常驻、类型里还是必填，前端零读取；`analysis_runs.stale_reason` 后端已经算好「源文件指纹变了」这句，但没人显示，所以一行变 STALE 时用户只看到「STALE」；`descriptor_runs.error_message` 三处 UPDATE 写入，只有 SQL 测试读 | 逐 key `grep -rw` 前端非测试代码 |
 
 ### 第 4 批的失效说明（决定顺序时用得上）
 
@@ -91,7 +103,7 @@
 
 ### 计数（把这页当账本时用）
 
-四个 agent 交回 29 条候选，我自己补了 1 条（5-N3：writer 计数无测试看守），共 30 条：**已落地 11**（5-A1..A5、5-B1/B2、5-C1/C3/C4/C7），**待修 18**（第 1 批 2 条需失效授权、第 2 批 4 条、第 3 批 2 条、第 3.5 批 2 条待复核、第 4 批 8 条），**记录为故意不做 1 条**（5-A6：`_write_export` 里三到四次同链 reparse 展开 —— 那是噪声而非缺陷，为整洁删一道路径守卫不划算），另有 agent 自否的 13 条进下面的反证记录。
+四个 agent 交回 29 条候选，我自己补了 1 条（5-N3：writer 计数无测试看守），共 30 条：**已落地 20**（5-A1..A5、5-B1..B5、5-C1/C3/C4/C6/C7/C8/C5、5-D1/D2/D6、5-D7 的两条别名、5-D4 的前两个字段、5-N2/N3、5-D5 的重复数组、5-D8 的界面），**复核后保留 4**（5-A6、5-B6、5-B7、5-D3，各附理由），**待你点头或属界面重构 5**（5-D4 的两列 + migration、5-D5 的推导合并、5-D7 剩下的 `block_weights` 与 `max_features`/`result.heatmap`、5-D8 的 `atoms_per_structure*`），另有 agent 自否的 13 条进下面的反证记录。
 
 ## 反证记录（不要再报）
 

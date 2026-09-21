@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matrixExtent, previewRowFields, previewTableColumns, previewTableRows } from "./analysisPreview";
+import { matrixExtent, stalenessNote, previewRowFields, previewTableColumns, previewTableRows } from "./analysisPreview";
 import type { AnalysisPreview } from "../types/protocol";
 
 const preview = (value: Record<string, unknown>): AnalysisPreview => ({ analysis_id: "ana_1", ...value });
@@ -76,5 +76,16 @@ describe("matrixExtent", () => {
     expect(matrixExtent([[Number.NaN, 2], [3, Number.POSITIVE_INFINITY]])).toEqual({ min: 2, max: 3 });
     expect(matrixExtent([[]])).toEqual({ min: null, max: null });
     expect(matrixExtent([])).toEqual({ min: null, max: null });
+  });
+});
+
+describe("stalenessNote", () => {
+  it("shows the stored reason only where a result stopped standing", () => {
+    expect(stalenessNote("STALE", "descriptor source changed after the scan")).toBe("descriptor source changed after the scan");
+    expect(stalenessNote("FAILED", " out of memory ")).toBe("out of memory");
+    expect(stalenessNote("COMPLETED", "descriptor source changed after the scan")).toBe(null);
+    expect(stalenessNote("RUNNING", null)).toBe(null);
+    expect(stalenessNote("STALE", "   ")).toBe(null);
+    expect(stalenessNote("STALE", undefined)).toBe(null);
   });
 });

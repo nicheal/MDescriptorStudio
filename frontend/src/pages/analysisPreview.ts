@@ -158,3 +158,18 @@ export function matrixExtent(matrix: number[][]): { min: number | null; max: num
   }
   return { min: lowest, max: highest };
 }
+
+
+/** The reason the backend gave for a result no longer standing.
+ *
+ * `dataset_service._mark_runs_stale` writes one sentence ("descriptor source
+ * changed after the scan...") into `analysis_runs.stale_reason` and
+ * `descriptor_runs.error_message`, and a failed compute writes its message
+ * there too. The lists read by the pages carried the status word only, so
+ * "STALE" arrived without the explanation that was already stored beside it.
+ */
+export function stalenessNote(status: unknown, reason: unknown): string | null {
+  if (status !== "STALE" && status !== "FAILED" && status !== "CANCELLED") return null;
+  const text = typeof reason === "string" ? reason.trim() : "";
+  return text.length ? text : null;
+}
