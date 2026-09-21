@@ -30,6 +30,7 @@
 | --- | --- | --- | --- |
 | 5-B3 | `pages/Analysis.tsx:321-351`、`pages/DescriptorResults.tsx:53-76` | 两处 `refresh` 都是「await 之后无条件 setState」，没有世代号也没有 disposed 标记，而同仓 `Overview`(`isCurrent()`)、`Explore`、`Analysis.tsx:437/469/541` 都有；`dataset` 每次 `refetchDatasets()` 都是新身份 → effect 重建 → 在飞请求叠加（RPC 池 4 个 worker，响应顺序不保证）。后果一：旧列表后到，把用户刚点中的 COMPLETED run 静默跳回第一行；后果二：A→B 切换时 A 的响应写进 B 的表格，并经 `workspace.setActiveRun` 把 A 的 run 落进持久化设置，下次启动 `hydrateActiveRun` 还原的还是它 | agent 读码确认；未跑 e2e |
 | 5-B4 | `App.tsx:84/130/183/201-204` + `src-tauri/src/main.rs:271-302` | `restartingRef` 只在握手成功与 `backend_restart` 同步报错两处清零；Rust 侧 spawn 失败是**异步**发第二次 `backend-exit`，命令本身早已返回 Ok。于是 kill 成功 → spawn 失败 → 两次 exit 都被同一个 flag 静默 → poller 90 s 超时置 error，屏幕上留一个永远点不动的 Restart 按钮，此后真实崩溃的提示也一并被吞 | `grep restartingRef` 全仓 4 处；`App.test.tsx` 只测「重启成功」与「exit 后重挂监听」，没有失败分支 |
+| 5-C6 | `analysis/algorithms/pairs.py:373-390, 399` | Dataset Drift 的指标条把两类总体并排显示：Covered / Marginal / Out of coverage / Mean distance 来自**全部** query 行，而 MMD、Centroid shift、Covariance shift 来自每侧 ≤500 行的等距抽样（`distribution_samples`），预览里既没写出这个数，`analysisMethodGuides.ts` 的 drift 一节也完全没提核方法 | 同一份 4000+4000×20 数据只改抽样上限：500 → mmd 0.15995 / centroid 1.33261，2000 → 0.14654（−9.1 %）/ 1.23278（−8.1 %），而 mean_distance 纹丝不动 3.50525；8 个 seed 得到同一 mmd，所以不是随机性而是样本量与披露。修法是加一个 preview 键并在指标条写明「按 N 行」，不动任何已存数字 |
 | 5-B5 | `services/analysis_loader.py:126-135, 165-167` | `_group_labels_cache` 是 C-13 改的真 LRU，但命中路径 `get → pop → 回写` 与逐出路径 `next(iter(...)) → pop` 都是跨字节码序列，而 grouped FPS（analysis 池）与 `analysis.fps_quota`（RPC 线程）共用它；同目录 `fingerprint._CACHE` 有锁，这是唯一裸奔的共享缓存 | 6 线程 × 6 000 次、`setswitchinterval(1e-7)`：36 000 次调用里 `KeyError` 1 303 + `RuntimeError: dictionary changed size during iteration` 4 590；恢复默认 5 ms 间隔后 24 000 次调用 0 次 —— 概率低但非零，且失败表现为作业 INTERNAL_ERROR |
 
 ### 第 3 批 · 门禁质量（不看代码就发现不了的“测了等于没测”）
@@ -38,6 +39,15 @@
 | --- | --- | --- | --- |
 | 5-N2 | `tests/test_umap_numpy.py:60-65` | 第四轮反证记录的结论是「UMAP 该修的是门禁，不是公式」。本轮把那句话量出来：唯一质量闸 `trustworthiness > 0.9` 落在「什么都没做」和「做了」之间 —— 删掉全部斥力 0.9287、直接返回 PCA 初值 0.9326、`_ab_params → (1,1)`（`min_dist` 完全失效）仍 0.958 且 9 条测试全绿；用户面板上 0–1 的 `min_dist` 滑杆零测试 | 夹具 `_blobs(300,10,seed=7)`，七种破坏实现逐一实测 TW 与簇分离比；`grep min_dist` 只在 `test_analysis_ipc.py:155` 作为提交参数出现 |
 | 5-N3 | `tests/test_datasets.py::test_statistics` 一族 | 落盘/缓存类断言集中在「键在不在」，`_write_export` 的两个 writer 计数分支此前无任何断言经过 writer（`indices` 早退分支才是唯一检查点），所以 5-A5 那条「记下来的是请求给的数」长期无人看守 | 5-A5 已把两处改为取 writer 返回值；给帧格式补一条真正经过 writer 的计数用例仍是待办 |
+
+### 第 3.5 批 · 报告为「过度防御、可删」，待我逐条复核
+
+agent 只给了读码证据，我自己还没跑过，所以先记账不动手：
+
+| # | 位置 | 主张 | 复核要到什么程度 |
+| --- | --- | --- | --- |
+| 5-B6 | `services/job_service.py:45, 50-52, 83-84, 185` | `JobContext.detached` 是同一条件的第三道闸：`cancel()` 先 `ctx.cancel()` 再 `ctx.detach()` 再 `_finalize()`，故 `detached` 恒蕴含 `_cancelled.is_set()`；`progress()` 想挡的「行已结算后仍写进度」实际由 `_update_progress` 的 `WHERE status IN ('QUEUED','RUNNING')` 挡住 | 需要确认没有第四条路径只 detach 不 cancel，且删后亚毫秒窗口里多出的那条 0 行 UPDATE 无副作用 |
+| 5-B7 | `storage/database.py:164` | `_write_lock` 是 `RLock` 而无人重入；更糟的是它让「在 `transaction()` 里调 `self.db.execute(...)`」这种提前提交外层事务的写法静默通过 | 需要确认两个 `transaction()` 使用点确实不回回调 `db.*`，然后换成 `Lock` 看测试是否全绿 |
 
 ### 第 4 批 · 契约与死重量（删比加多，逐项都需点头）
 
@@ -62,6 +72,10 @@
 2. **5-A2 的修法换了一次。** 报告原打算「同一目标上有活作业就拒绝」，读下来发现覆写一个**已完成**导出的目标本就是 `analysis.export` 的文档行为，拒绝会新增一种用户无法行动的失败；改成按目标路径串行，语义不动，交错消失。
 3. **「排队中被取消」的占位（5-A3）没按 agent 建议改成 runner 内占位。** 那会把「路径已被占」的答复推迟到作业启动，用户在对话框里选的本地数据集会被多写一次指纹；改成让重试复用自己的空占位，规则与写入时那条 `_refuse_filled_destination` 合并成一个 `_destination_is_empty`。
 4. **5-C1 的修法不是「让 KDE 换一份无偏样本」。** 后端保留全部异常值是刻意的（长尾在详情面板里可见），换样本等于删功能；真正的错位只有「曲线按柱的总数定标」这一处，于是改定标 + 写明样本，不动载荷、不动任何已存数字。
+
+### 计数（把这页当账本时用）
+
+四个 agent 交回 29 条候选，我自己补了 1 条（5-N3：writer 计数无测试看守），共 30 条：**已落地 11**（5-A1..A5、5-B1/B2、5-C1/C3/C4/C7），**待修 18**（第 1 批 2 条需失效授权、第 2 批 4 条、第 3 批 2 条、第 3.5 批 2 条待复核、第 4 批 8 条），**记录为故意不做 1 条**（5-A6：`_write_export` 里三到四次同链 reparse 展开 —— 那是噪声而非缺陷，为整洁删一道路径守卫不划算），另有 agent 自否的 13 条进下面的反证记录。
 
 ## 反证记录（不要再报）
 
