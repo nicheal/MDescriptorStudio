@@ -11,7 +11,8 @@
 | --- | --- | --- |
 | `35924f2` | 5-A1..A5 落盘安全：固化「拒绝覆写」的分支反过来删掉用户文件（refusal 落在 `try` 里，被自己的 `_discard_partial_output` 接走）；空占位改为可复用（排队中被取消的固化永久占死那条路径）；导出补上 materialize 早就有的「不得落在源数据集内」守卫（并把该比较搬进 `security.path_within`，逐层用 `same_lexical_path`，Windows 大小写不再漏）；同一目标上的两个活作业按路径串行（注释里「会被去重」只对同参数成立）；extxyz/DeepMD 分支不再丢弃 writer 自己数出的帧数 | 新用例 `test_a_refused_materialize_destination_survives_the_failed_job` 把改动前形态跑出 `FileNotFoundError`（用户的文件真被删了）；`test_two_live_exports_to_one_destination_take_turns` 同路径 `most_live==1`、异路径 `==2`；pytest 381 → 383 全绿 |
 | `c9cf613` | 5-B1 指纹缓存的 TTL 用「计算开始前」的时间盖章 → 只要 walk 超过 2 s 就写进去即过期，`dataset.list` 的防抖对慢源永不上岗；5-B2 `adapter_for` 的检查-然后-写跨三个线程池裸奔，冷数据集被并发整份重复载入 | 合成 12 060 文件树实测第二次调用 2 735 ms → 1.6 ms；四线程同数据集 4 份副本 → 1 份且四者同一对象；两条门禁各自反向验证（假时钟报 `walks == 1`、无锁报 `4 copies`） |
-| ``463431d`` | 5-B3 `Analysis.tsx` / `DescriptorResults.tsx` 的 `result.list` 一族响应加世代号（旧答案不得写表、不得改选中的 run、不得把上个数据集的 run 写进持久化设置）；5-B4 `App.tsx` 区分「我要求的那次 exit」与「替换进程没起来的那次」，后者立刻报「后端无法重启」并放开 Restart 按钮；5-B5 `_group_labels_cache` 的命中 touch 与逐出收进一把锁 | 新 App 用例走真按钮与两次 exit：撤掉修复后第二次 exit 静默、断言报 `expected '…' to contain 'could not be restarted'`；vitest 208、Playwright 44、pytest 383。5-B3 的两处守卫只有读码验证，无门禁 |
+| `11b4bf4` | 5-C6：drift 预览写下 `mmd_reference_rows`/`mmd_query_rows`，面板把这两个数摆在三个核估计之后，方法指南说明距离类覆盖全部 query 行、MMD/质心/协方差只用每侧 ≤`distribution_samples` 行 | 新用例：60 行数据在 `distribution_samples=25` 时报 25/25，而 covered+marginal+out_of_coverage 仍是 60；不 bump（旧行缺键即按 `Metrics` 既有规则不显示该芯片）|
+| `463431d` | 5-B3 `Analysis.tsx` / `DescriptorResults.tsx` 的 `result.list` 一族响应加世代号（旧答案不得写表、不得改选中的 run、不得把上个数据集的 run 写进持久化设置）；5-B4 `App.tsx` 区分「我要求的那次 exit」与「替换进程没起来的那次」，后者立刻报「后端无法重启」并放开 Restart 按钮；5-B5 `_group_labels_cache` 的命中 touch 与逐出收进一把锁 | 新 App 用例走真按钮与两次 exit：撤掉修复后第二次 exit 静默、断言报 `expected '…' to contain 'could not be restarted'`；vitest 208、Playwright 44、pytest 383。5-B3 的两处守卫只有读码验证，无门禁 |
 | `7f53205` | 5-C1 特征方差详情图：柱是全体有限值、线是**故意保留全部异常值**的有界样本，却按柱的总数定标 → 同一根轴放两个总体；改为按样本定标并写明 n/N。5-C3 `restore` 说「早于控件的行是 centered 算的」是假的（`git show f86a61c~1` 里后端一直默认 standardized），还原旧行会换掉统计量。5-C4 相似度矩阵上方写着距离的 min/max（cosine 实测「Maximum 1.86」而画出的值最大 0.76）。5-C7 指南把「常量」定义成极差 ≤ 1e-12，而 B-3 之后规则是相对量级（1e6 上抖 4.6e-8 即常量） | vitest 203 → 207（`buildKde` 定标随第三个参数线性、无散布不出线；`matrixExtent` 含非有限格与空输入），restore 两向都断言；tsc / eslint / Playwright 44 干净 |
 
 ## 待修（已核实，按批排列）
@@ -25,15 +26,14 @@
 | 5-C5 | `analysis/algorithms/_common.py:749-751` | 同一文件里 `_nearest_distances:217-225` 已经写明「按位置丢自身是错的：重复行会打平，`[1:]` 丢掉真邻居、把自己的 0 距离留下」，并改成按身份排除；但 `_aligned_space_metrics` 的 kNN 重叠仍用 `argsort(...)[:, 1:k+1]`。含完全重复描述符行的数据集里，Descriptor Comparison 的 kNN overlap 与 Parameter Sensitivity 的 `neighbor_overlap` 一起虚高 | n=200/k=10：40 行重复 → 0.641 vs 0.631（+1.0 个百分点）；100 行重复 → 0.8945 vs 0.8820（+1.25）；上界是重复占比 × 1/k |
 | 5-C8 | `analysis/sampling/engine.py:172` 与 `sampling/fps.py:50-52` | `FPSResult` 承诺「`indices` 按选择顺序，`selection_distances[k]` 与之一一对应」，引擎却把 `selected_indices` 排序后再写工件，距离数组没跟着排。两个数组都作为独立 `.npy` 落盘、可经 `analysis.chunk` 取回，按行拼接就配错 | `tests/test_fps_sampling.py:228-231` 的选择顺序 2→0→4→1→3 与输出 `[0,1,2,3,4]` 直接对照即证；全仓无一条测试同时检查这两个数组。诚实说明：目前 `registry.ts:144` 只读三条 coverage 曲线，面板不读 `selection_distances`，受影响的是导出/直接取工件的人 |
 
-### 第 2 批 · 前端生命周期 —— 三条已由 `<pending>` 落地，见上表
+### 第 2 批 · 前端生命周期 —— 四条已由 `463431d` / `11b4bf4` 落地，见上表
 
 同一条门禁事实值得记下：`tests/test_backend_response_contract.py` 在全量并跑时曾失败一次、单独跑与重跑全量都通过 —— 它经 `conftest.BackendProcess.read_line(timeout=30)` 等 sidecar 握手，机器被其他会话占满时 30 s 会到。这不是契约漂移而是这台共享机器上的负载抖动，报告在此登记以免下次有人当真去改形状。
 
 | # | 位置 | 问题 | 已有测量 |
 | --- | --- | --- | --- |
-| 5-C6 | `analysis/algorithms/pairs.py:373-390, 399` | Dataset Drift 的指标条把两类总体并排显示：Covered / Marginal / Out of coverage / Mean distance 来自**全部** query 行，而 MMD、Centroid shift、Covariance shift 来自每侧 ≤500 行的等距抽样（`distribution_samples`），预览里既没写出这个数，`analysisMethodGuides.ts` 的 drift 一节也完全没提核方法 | 同一份 4000+4000×20 数据只改抽样上限：500 → mmd 0.15995 / centroid 1.33261，2000 → 0.14654（−9.1 %）/ 1.23278（−8.1 %），而 mean_distance 纹丝不动 3.50525；8 个 seed 得到同一 mmd，所以不是随机性而是样本量与披露。修法是加一个 preview 键并在指标条写明「按 N 行」，不动任何已存数字 |
 
-### 第 3 批 · 门禁质量 —— 两条已由 ``cafc7ad`` 落地
+### 第 3 批 · 门禁质量 —— 两条已由 `cafc7ad` 落地
 
 同一条测试文件里唯一涉及质量的断言（`trustworthiness > 0.9`）此前**不可能失败**：
 实测删掉全部斥力 0.9287、直接返回 PCA 初值 0.9326、σ 二分退化 0.9547、`_ab_params → (1,1)`
