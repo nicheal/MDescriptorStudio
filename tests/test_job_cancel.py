@@ -400,3 +400,43 @@ def test_cancel_descriptor_compute(tmp_path: Path) -> None:
         assert run["result"]["status"] == "CANCELLED"
     finally:
         assert bp.close() == 0
+
+
+def test_a_materialize_destination_is_claimed_not_checked(tmp_path: Path) -> None:
+    # "Already exists is refused" was a check on the RPC thread and an O_TRUNC in
+    # the job minutes later, so whatever the user - or a second materialization of
+    # a different selection - put at that path in between was truncated anyway.
+    # Claiming is now one atomic act, and the writer re-checks the placeholder
+    # before it opens.
+    from mdescriptor_studio_backend.services.dataset_view_service import (
+        _refuse_filled_destination,
+        _reserve_destination,
+    )
+
+    taken = tmp_path / "copy.xyz"
+    taken.write_text("user notes", encoding="utf-8")
+    with pytest.raises(AppError, match="already exists"):
+        _reserve_destination(taken, False, "materialize")
+    assert taken.read_text(encoding="utf-8") == "user notes", "refusing must not cost the user their file"
+
+    fresh_file = tmp_path / "fresh.xyz"
+    _reserve_destination(fresh_file, False, "materialize")
+    assert fresh_file.is_file() and fresh_file.stat().st_size == 0, "an empty placeholder, not a truncation"
+    _refuse_filled_destination(fresh_file, "materialize")  # still ours
+
+    directory = tmp_path / "deepmd_out"
+    _reserve_destination(directory, True, "materialize")
+    _refuse_filled_destination(directory, "materialize")
+    with pytest.raises(AppError, match="already exists"):
+        _reserve_destination(directory, True, "materialize")
+
+    # Between claim and write, the path stopped being ours: filled is a refusal,
+    # while a deletion stays writable because no user data is at stake.
+    fresh_file.write_text("someone else's export", encoding="utf-8")
+    with pytest.raises(AppError, match="after it was claimed"):
+        _refuse_filled_destination(fresh_file, "materialize")
+    (directory / "type.raw").write_text("H", encoding="utf-8")
+    with pytest.raises(AppError, match="after it was claimed"):
+        _refuse_filled_destination(directory, "materialize")
+    fresh_file.unlink()
+    _refuse_filled_destination(fresh_file, "materialize")

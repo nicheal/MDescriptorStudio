@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -60,13 +61,52 @@ _INSERT_VIEW = (
 )
 
 
+def _reserve_destination(dest: Path, as_directory: bool, verb: str) -> None:
+    """Claim the destination atomically, before the job that fills it is queued.
+
+    The destination contract is "already exists is refused", and it used to be
+    enforced by asking `dest.exists()` on the RPC thread and writing from the job
+    minutes later. In that window the user could create the file they meant to
+    export somewhere else, or a second materialization of a different selection
+    could pass the same check - and the writer's O_TRUNC then discarded what was
+    never ours. Creating the placeholder here (exclusive file, or the directory
+    itself) makes existence and ownership one atomic answer; the writers already
+    tolerate their own empty placeholder.
+    """
+    try:
+        if as_directory:
+            dest.mkdir(parents=True)
+        else:
+            os.close(os.open(dest, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666))
+    except FileExistsError as exc:
+        raise AppError(INVALID_DATASET, f"{verb} destination already exists: {dest}") from exc
+    except OSError as exc:
+        reason = exc.strerror or str(exc)
+        raise AppError(INVALID_DATASET, f"{verb} destination cannot be created: {reason}") from exc
+
+
+def _refuse_filled_destination(dest: Path, verb: str) -> None:
+    """Stop if something wrote into the placeholder between claim and write.
+
+    Deleted is fine - the writer recreates it and no user data is at stake. Not
+    empty is not: that means the path stopped being ours, and the only thing the
+    writer would do with it is truncate.
+    """
+    if dest.is_dir():
+        filled = any(dest.iterdir())
+    else:
+        filled = dest.exists() and dest.stat().st_size > 0
+    if filled:
+        raise AppError(INVALID_DATASET, f"{verb} destination was written to after it was claimed: {dest}")
+
+
 def _discard_partial_output(dest: Path) -> None:
     """Delete what a failed write left at a path this run created.
 
-    ``_export_destination`` refuses a destination that already exists, so
-    anything at that path afterwards is ours: extXYZ writes one file, DeepMD a
-    directory, and either leftover makes every retry fail with "destination
-    already exists" for a job the user was told had stopped.
+    ``_reserve_destination`` claims the path exclusively, so anything at it
+    afterwards is ours: extXYZ writes one file, DeepMD a directory, and either
+    leftover makes every retry fail with "destination already exists" for a job
+    the user was told had stopped.
     """
     if not dest.exists():
         return
@@ -292,8 +332,6 @@ class DatasetViewService:
             dest = validate_local_path(raw_dest, field=f"{verb} destination path")
         except UnsafePathError as exc:
             raise AppError(INVALID_PARAMS, f"{verb} destination must be an absolute local path") from exc
-        if dest.exists():
-            raise AppError(INVALID_DATASET, f"{verb} destination already exists: {dest}")
         source = validate_local_path(row["source_path"], field="dataset source path")
         if dest == source or source in dest.parents or dest in source.parents:
             raise AppError(INVALID_DATASET, f"{verb} destination must be outside the source dataset path")
@@ -304,6 +342,9 @@ class DatasetViewService:
             from ..datasets.exporters import write_extxyz as writer
         else:
             from ..datasets.exporters import write_deepmd as writer
+        # Claimed here, on the path this call has just validated, so the queue
+        # cannot turn "refuse an existing destination" into "truncate one".
+        _reserve_destination(dest, fmt != "extxyz", verb)
         return dest, fmt, writer
 
     def materialize(self, params: dict) -> dict:
@@ -331,6 +372,7 @@ class DatasetViewService:
                     yield adapter.get_frame(frame_index)
 
             try:
+                _refuse_filled_destination(dest, "materialize")
                 written = writer(dest, frames())
             except BaseException:
                 # _export_destination refuses a path that already exists, so
@@ -353,5 +395,11 @@ class DatasetViewService:
                 },
             }
 
-        job_id = self.jobs.submit("dataset.view.materialize", runner, dataset_id=dataset["id"])
+        try:
+            job_id = self.jobs.submit("dataset.view.materialize", runner, dataset_id=dataset["id"])
+        except BaseException:
+            # Nothing will ever run to fill or clean the placeholder: a full job
+            # queue must not cost the user their next retry on the same path.
+            _discard_partial_output(dest)
+            raise
         return {"job_id": job_id, "dest_path": str(dest)}
