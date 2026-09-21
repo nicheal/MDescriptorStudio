@@ -135,14 +135,32 @@ afterEach(() => {
 describe("Overview statistics loading", () => {
   it("re-reads completed statistics after a missed job.finished event", async () => {
     const ds = dataset("dataset-a");
-    const request = vi.spyOn(ipc, "request")
-      .mockResolvedValueOnce({ recalculating: true, job_id: "job-1", stats: null } as never)
-      .mockResolvedValueOnce({ recalculating: false, job_id: null, stats: stats(42) } as never);
+    const order: string[] = [];
+    let statisticsReads = 0;
+    const request = vi.spyOn(ipc, "request").mockImplementation((method) => {
+      if (method === "dataset.statistics") {
+        order.push("statistics");
+        statisticsReads += 1;
+        return Promise.resolve(
+          statisticsReads === 1
+            ? { recalculating: true, job_id: "job-1", stats: null }
+            : { recalculating: false, job_id: null, stats: stats(42) },
+        ) as never;
+      }
+      if (method === "dataset.list") {
+        // `refetchDatasets()`, which the recompute now triggers: the statistics
+        // pass rewrote this row's frame count, fingerprint and scan time.
+        order.push("dataset.list");
+        return Promise.resolve([ds]) as never;
+      }
+      return Promise.resolve(undefined) as never;
+    });
     useWorkspace.setState({ datasets: [ds], activeDatasetId: ds.id });
     const mounted = await mountOverview();
     await flushEffects();
 
     expect(waitForSuccessfulJobMock).toHaveBeenCalledWith("job-1");
+    expect(order).toEqual(["statistics", "dataset.list", "statistics"]);
     expect(request.mock.calls.filter(([method]) => method === "dataset.statistics")).toHaveLength(2);
     expect(document.body.textContent).toContain("42");
     expect(document.body.textContent).not.toContain("Recomputing statistics…");

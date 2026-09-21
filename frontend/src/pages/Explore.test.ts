@@ -130,13 +130,19 @@ describe("Explore health loading", () => {
     const waitForJob = vi.fn().mockResolvedValue(undefined);
     const committed: number[] = [];
 
+    let readsWhenRowRefetched = -1;
     await loadExploreHealth("dataset-a", request, waitForJob, () => true, (stats) => {
       committed.push((stats?.health as { marker?: number } | undefined)?.marker ?? -1);
+    }, async () => {
+      readsWhenRowRefetched = request.mock.calls.length;
     });
 
     expect(waitForJob).toHaveBeenCalledWith("job-1");
     expect(request).toHaveBeenCalledTimes(2);
     expect(committed).toEqual([2]);
+    // The dataset row is refreshed after the job and before the second read, so
+    // the statistics and the row they describe land together (pass 4, E-8).
+    expect(readsWhenRowRefetched).toBe(1);
   });
 
   it("does not commit an old dataset response after the active dataset changes", async () => {

@@ -9,7 +9,7 @@ import Histogram from "../components/Histogram";
 import { createCartesianDataZoom } from "../components/chartInteraction";
 import { ipc } from "../ipc/client";
 import { waitForSuccessfulJob } from "../stores/jobs";
-import { useActiveDataset, useWorkspace } from "../stores/workspace";
+import { refetchDatasets, useActiveDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import { formatLabel, formatSize } from "../util/format";
@@ -44,6 +44,10 @@ export default function Overview() {
           setRecalculating(true);
           await waitForSuccessfulJob(response.job_id);
           if (!isCurrent()) return;
+          // The recompute rewrote the dataset row (frames, fingerprint, scan
+          // time); without this the overview's own numbers were fresh while the
+          // row they describe was still the pre-recompute copy (pass 4, E-8).
+          await refetchDatasets();
           response = await ipc.request<OverviewStatisticsResponse>("dataset.statistics", { id: datasetId });
         }
         if (!isCurrent()) return;

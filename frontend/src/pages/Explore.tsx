@@ -11,7 +11,7 @@ import {
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
 import { waitForSuccessfulJob } from "../stores/jobs";
-import { useActiveDataset, useWorkspace } from "../stores/workspace";
+import { refetchDatasets, useActiveDataset, useWorkspace } from "../stores/workspace";
 import { useT } from "../i18n";
 import { elementColor } from "../util/elements";
 import { forceArrowGeometry, frameMaxForce } from "../util/forces";
@@ -58,12 +58,19 @@ export async function loadExploreHealth(
   waitForJob: (jobId: string) => Promise<void>,
   isCurrent: () => boolean,
   commit: (stats: ExploreStatisticsResponse["stats"]) => void,
+  onRecalculated?: () => Promise<unknown>,
 ): Promise<void> {
   let response = await requestStatistics(datasetId);
   if (!isCurrent()) return;
   if (!response.stats && response.job_id) {
     await waitForJob(response.job_id);
     if (!isCurrent()) return;
+    // A statistics recompute rewrites the dataset row itself - frame count,
+    // fingerprint, last_scan_at - so a caller that only refreshes its own stats
+    // leaves the row a page is describing behind it. This is the step Overview
+    // and Explore were each missing (deep review pass 4, E-8), and it happens
+    // before the second read so the row is current when the numbers arrive.
+    await onRecalculated?.();
     response = await requestStatistics(datasetId);
   }
   if (isCurrent()) commit(response.stats);
@@ -212,6 +219,7 @@ export default function Explore() {
             if (stats?.health) setHealth(stats.health);
             if (stats?.health_findings) setHealthFindings(stats.health_findings);
           },
+          refetchDatasets,
         );
       } catch (e) {
         console.error("dataset.statistics failed", e);
