@@ -3,7 +3,7 @@
 范围：全仓。基线 `7d5605f`（第三轮第 15 批收尾）。本轮是**新一次审阅**，不是上一份报告的续批。
 方法：5 个审阅 agent 分片（算法层 / 服务层 / 解析与协议 / 前端页面 / 状态与 mock），外加散装前端文件、`benchmark/`、`scripts/`、测试与 CI。每条候选结论经我重新读码或实测后才进入下面的清单。
 
-环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。第 4、5 批与第 6 批一部分落地后的当前门禁：pytest 368 passed / 1 skipped；vitest 201；Playwright 40；tsc / eslint 干净（cargo 本轮未跑）。
+环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。第 4、5 批与第 6 批一部分落地后的当前门禁：pytest 369 passed / 1 skipped；vitest 201；Playwright 40；tsc / eslint 干净（cargo 本轮未跑）。
 
 ## 已落地
 
@@ -34,6 +34,7 @@
 | `77a999f` | C-8：mock 不再广告 `energy.per_atom`（后端把它写死成 False，`Overview` 照它渲染 ✓）；新门禁从 `statistics.py` 读「被写死关闭的能力」并禁止 mock 声称 | 放回 `true` 即点名 `['energy.per_atom']`；`fixed_off == {energy.per_atom}` 一条保证门禁不会静默变空 |
 | `b1c88b0` | C-9：mock 的 `STATS` 改标 `Record<string, Stats>`，两条 payload 补上 `stats_version: 5`，顺带拆掉一个不成立的 cast | `tsc` 自己数出两个缺字段；新门禁绑 `STATS_VERSION`，改成 4 报 `{'4'} != {'5'}` |
 | `3f00938` | C-15：抽屉里三个被打印成裸 RPC 名的作业补标签；`analysis.acquisition` 不再替两种目标断言「新颖性」 | vitest 22→24；两条新断言分别是「标签不得等于方法名」与「不得声称做不到的事」 |
+| `be22297` | D4'：物化目标从「先查后写」改成「先占后写」—— 独占创建 + 落盘前复查占位是否还空 | 去掉 `O_EXCL` 与复查，新测试报 `DID NOT RAISE`；导出（export）**故意不套**这条：覆写同一目标本就是它的文档行为，而定调又排除了 `overwrite` 参数 |
 
 ## 待修（已核实，按批排列）
 
@@ -87,7 +88,6 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 | E-7 | `preview_service.py:146-147` + `featureVariance.tsx:225` | 后端 `result["warnings"]` 只在 `analysis_type == "feature_variance"` 时抄进 preview，也只有这一个面板渲染它 → `_preprocess` 丢掉的非有限/零方差列、"pairwise matrix limited to 400 deterministic samples"、trajectory 的 MAD 回落告警、local diversity 的邻居表溢出提示全到不了界面；`DataTable` 还把 `warnings` 显式过滤掉。**注意这条会动响应形状**（preview 多一个键），需重生成金标 keys 并单独说明 |
 | E-8 | `RightRail.tsx:147-197` + `Explore.tsx:55-70` + `Overview.tsx:32-65` + `HealthFindingsDrawer.tsx:76-90` | 「取统计 → 等作业 → 再取一次」四份实现且已漂移：只有 RightRail/HealthFindingsDrawer 等完调 `refetchDatasets()`，所以 Explore/Overview 重算后数据集那一行（`dataset_service.py:635` 重写 `number_of_frames`/`fingerprint`/`last_scan_at`）还是旧的；`loadExploreHealth` 已抽出并单测但另外三处没收进去。次要：rail 的 `rescan()` 自己请求一次后又 `bumpStatsTick()` 触发自己的 mount effect → 多一次往返 + 一帧七行健康项全空 |
 | Q5 | `preview.tsx` 的 METHODS 表 | 7 个前端真发的 RPC 没有 handler（`descriptor.submit`、`job.cancel`、`analysis.delete`、`dataset.remove`、`dataset.rename`、`dataset.view.materialize`、`analysis.fps_quota`），拿到的是 `NO_HANDLER` —— 真后端永远不会发的码。于是 e2e 建不出描述符 run、也走不到任何拒绝/失败分支。**定调：补 `descriptor.submit` 与 `dataset.remove`，其余五个在门禁里显式列例外并写明理由** |
-| D4' | `dataset_view_service.py:295,333`、`export_service.py:134`、`security.py:145-152` | 导出/物化目标路径在 RPC 线程查「存在就拒」，几分钟后由作业以 `O_CREAT\|O_WRONLY\|O_TRUNC`（无 `O_EXCL`）写：用户在此期间自建的同名文件被静默截断；两次同时提交同一路径能穿过检查互相插；`materialize` 完全没去重。**定调：`O_EXCL` 占位 + runner 复查，不新增 overwrite 参数** |
 
 ## 反证记录（不要再报）
 
