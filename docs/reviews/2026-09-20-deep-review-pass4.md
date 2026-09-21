@@ -3,7 +3,7 @@
 范围：全仓。基线 `7d5605f`（第三轮第 15 批收尾）。本轮是**新一次审阅**，不是上一份报告的续批。
 方法：5 个审阅 agent 分片（算法层 / 服务层 / 解析与协议 / 前端页面 / 状态与 mock），外加散装前端文件、`benchmark/`、`scripts/`、测试与 CI。每条候选结论经我重新读码或实测后才进入下面的清单。
 
-环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。第 4、5 批与第 6 批一部分落地后的当前门禁：pytest 366 passed / 1 skipped；vitest 199；Playwright 40；tsc / eslint 干净（cargo 本轮未跑）。
+环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。第 4、5 批与第 6 批一部分落地后的当前门禁：pytest 368 passed / 1 skipped；vitest 201；Playwright 40；tsc / eslint 干净（cargo 本轮未跑）。
 
 ## 已落地
 
@@ -30,6 +30,10 @@
 | `918ebbd` | C-12 `preprocessing_json` 两个写点收敛成 `_preprocessing(params)`，落定不再丢 `scaling` | 撤回旧写法测试点名 `scaling` |
 | `baafdec` | C-11 导出记录「写了多少条」而不是「被给了多少个下标」：`_write_export` 返回 `(path, written)` | `[2,2,7,7,7]` 的 indices 导出写 2 行、记 2 |
 | `f5916a2` | C-13 `_group_labels_cache` 成为真 LRU，key 类型不再谎报三元组 | 命中后再塞 1 条即证：撤掉 touch，被刚用过的键先被丢 |
+| `f93f2b9` | B-7：trajectory / local_diversity / sensitivity 把生效尺度写进 preview（`_preprocess_mode` 与 `_preprocess` 读同一个键），面板用现成的「特征尺度」芯片显示 | 12×4 实测三条默认 `standardized`、显式 `raw` 时如实报 `raw`；撤掉 mock 那行 Playwright 即红 |
+| `77a999f` | C-8：mock 不再广告 `energy.per_atom`（后端把它写死成 False，`Overview` 照它渲染 ✓）；新门禁从 `statistics.py` 读「被写死关闭的能力」并禁止 mock 声称 | 放回 `true` 即点名 `['energy.per_atom']`；`fixed_off == {energy.per_atom}` 一条保证门禁不会静默变空 |
+| `b1c88b0` | C-9：mock 的 `STATS` 改标 `Record<string, Stats>`，两条 payload 补上 `stats_version: 5`，顺带拆掉一个不成立的 cast | `tsc` 自己数出两个缺字段；新门禁绑 `STATS_VERSION`，改成 4 报 `{'4'} != {'5'}` |
+| `3f00938` | C-15：抽屉里三个被打印成裸 RPC 名的作业补标签；`analysis.acquisition` 不再替两种目标断言「新颖性」 | vitest 22→24；两条新断言分别是「标签不得等于方法名」与「不得声称做不到的事」 |
 
 ## 待修（已核实，按批排列）
 
@@ -61,23 +65,21 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 
 已随第 2 批落地的语义变更：A-2 pbc 拼写 + `FINGERPRINT_VERSION` v3→v4。
 
-### 第 4 批落地时对本报告的三处自我修正
+### 落地时对本报告的自我修正
 
 1. **第 1 批的 A-1 修复自己引入了一次热路径回退，第 4 批量出来并修掉。** 把 `finite_or_none` 放进 `_json_safe` 后，净化函数对每个叶子多一次 Python 调用；cProfile 在 20 000 点 × 9 列上数到 420 000 次调用，约占该函数运行时 35 %。现在规则仍由 `datasets.statistics.finite_or_none` 表述（`frame_force_max`、`frame_energy_per_atom` 用它），但 `_json_safe` 里内联成一次 `math.isfinite`，注释指明是同一条规则。教训：给一个被遍历全树的函数加"每叶子一次调用"就是加常数开销，必须在加它的那批里量一次。
 2. **`_load_samples` 的 metadata 二次解析（D-4）顺带让 `AnalysisPreviewMixin._result_metadata` 变成死代码**，已删除，并清掉它留下的三个 import。同一批还修掉第 1 批在 `artifact_service.py` 留下的一个**重复 import**（同一条 `from ..datasets.statistics import finite_or_none` 出现两次）——自查 diff 抓到的，不是 agent 报的。
 3. **D-5 的「全在 RPC 线程」是错的。** `job_runner._run_analysis` 跑在作业自己的线程上，不在 RPC 线程；探针次数（3 → 1）与代价（冷 26.3 ms / 热 3.3 ms）都成立，线程归属不成立，落地时按实测写法纠正。同一条 finding 里的「`_input_ids` 对 `run_ids` 无长度上限」是真的，但它是个契约问题而不是探针问题，留在第 6 批。
+
+4. **C-9 的「mock 也缺 `health_findings.nonphysical_distances`」这条不成立为待办。** 后端确实发这个键，但 `HealthFindings` 类型里没有它、前端也没人读它 —— `Explore` 的最小距离对是从已经拿到的帧现算的（`minimumDistancePair(frame.xyz, ...)`）。把它补进类型只会加一个没有读者的字段；真要它得先有界面用途。落地时按这个结论只做了一半（见 `b1c88b0` 末尾说明）。
 
 ### 第 6 批 · 契约与工具诚实
 
 | # | 位置 | 问题 |
 | --- | --- | --- |
 | A-7 | `main.rs:164-177,225-264` + `App.tsx:75-88,250` | `backend_restart` 可重入：`spawn_backend` 先花 ~1 s（release）哈希 ~470 MB bundle 才 `command.spawn()`，然后覆写 `state.child`；两次重叠提交产生两个孩子，输的那个 `Child` 被赋值 drop（Windows 只关句柄不杀进程），`kill_backend` 再也够不到 → 两个 sidecar 打同一个 SQLite 与同一个 webview 通道，第一个 reader 线程收不到 EOF 永不退出。前端 `restartingRef` 只压 toast，`restartBackend` 提交前不测它，Restart 按钮无 `disabled`。修法：`spawn_backend` 整体持锁 + 在飞行时拒绝 + 按钮禁用 + 一个 Rust 测试断言两次重叠提交只剩一个孩子 |
-| B-7 | `metrics/__init__.py:561-587`、`sensitivity.py:106-112`、`:433-446` | 口径 1 的「把生效尺度写回结果」漏了 `trajectory`/`sensitivity`/`local_diversity`：它们发布 `median_step_distance`、`event_threshold`、`median_neighbor_distance` 这类随尺度变的量却不记 `_preprocess` 用的是哪个，历史行说不出 `2.4` 是 σ 单位还是描述符单位。`coverage`/`overlap`/`acquisition`/`effective_dimension` 都记了。纯加法，不需要失效 |
 | C-6 | `preview.tsx:1383-1387` | mock 校验 setting 的 key 然后把值扔掉，`settings.get` 对 6 个 key 里 5 个回字面值/`null` → `hydrateAnalysisUi`（view + slots）、`hydrateActiveRun`、`initLanguage` 在浏览器测试里永远走「什么都没持久化」分支；reload 半边（含 `v:2` 与旧 slot 判别）零 e2e 覆盖，写的那半边是绿的。`test_backend_response_contract.py:28-30` 还专门论证过要抓 `settings.get` |
 | C-7 | `preview.tsx:405-416` | `mockRecordAnalysisRow` 硬编码单 `descriptor_run_id`、默认单 inputRun/单 dataset，而 `analysis.drift`/`sensitivity`/`compare`/`mantel` 不覆盖默认 —— 尽管 `ANALYSIS_RUN_PARAMS` 正在校验它们带两个 run。于是 e2e 看到的每条 `analysis.list` 都是生产不会产出的形状，依赖它的两个前端判据只吃过退化输入 |
-| C-8 | `preview.tsx:52,101,218,272` vs `statistics.py:578` | mock 广告真后端永远报不出的能力：`energy.per_atom: true`，而 `statistics.py` 硬编码 `"per_atom": False`、无任何读者产出逐原子能量属性。`Overview.tsx:265` 正好渲染它 → 真 sidecar 那列永远 `—`，mock 每次预览都 ✓。**乐观方向的错误证据** |
-| C-9 | `preview.tsx` 的 `stats` 无 `stats_version`；`protocol.ts:75-78` 声明必在 | 类型注释断言「到得了 UI 的 payload 一定带它」，mock 回的 `stats` 却没这个键，也缺 `health_findings.nonphysical_distances`。`STATS: Record<string, unknown>` 故意无类型所以 `tsc` 看不见，金标契约只记 3 键信封。同一测试文件已镜像另外三个兄弟常量。更省的做法：把 mock 的 `STATS` 标成 `Record<string, Stats>` 让 `tsc` 去数剩下的洞 |
-| C-15 | `jobs.ts:23-50` + `JobsDrawer.tsx:70` | ui-review 与 state-review 各自独立报出同一处：`JOB_TYPE_PAIRS` 是 `registry.ts` 那张表的第二份手抄，漏了 UI 自己会提交的 `analysis.mantel`、`analysis.perturbation_sensitivity`、`dataset.view.materialize`（直接打印方法名），第四条是**错的**而非缺失：`analysis.acquisition` 固定标 "Novelty acquisition"，而同一 method 也可能带 `acquisition_method: "uncertainty_diversity"` —— 这个区分提交侧已知，是 `trackJob(jobId, method)` 扔掉了 |
 | C-16 | `benchmark/run_benchmarks.py:187-206` | `storage` 的 read 行报 `mb_per_second`，实测 **4 452 / 4 476 MB/s**，write 只有 265–300 MB/s —— 同一文件连读三次测的是页缓存不是存储带宽。README 的措辞勉强算诚实，但一张 MB/s 表会被论文当 I/O 数字引用（要投 CPC/JOSS 的那份）。在行里和 README 标明 cache-warm 即可；绕开缓存要 Windows admin 权限，不成比例 |
 | C-17 | `job_runner.py:_input_ids` | 对 `run_ids` 无长度上限：一次提交带 N 个 id 就有 N 次 `SELECT * FROM descriptor_runs`、N 次 `feature_space_signature`，且 `input_ids` 会被拼进缓存身份。第 4 批把每 id 一次的数据集探针收成每次提交一次之后，剩下的按 N 线性项都在这里 —— 是个契约问题（要不要设上限、上限是多少、超了报什么码），不是性能问题 |
 | E-2 | `analysis_service.py:249-251` + `Analysis.tsx:469,478,483` | `truncated` 只在 `ndim == 2` 时才可能为真，而加载器除 trajectory/effective_dimension 外取一块就 `break`。Mantel/Compare 于是画「全域均匀抽样的前 40 %」—— 有偏子集被当作关联强度，旁边 "Pairs" 写完整数量；property 面板在原子模式常年只覆盖 2 万样本而 KPI 写 "Samples"；同面板散点是跨全域 stride 的，两者描述的不是同一批样本。**S3 定调：如实标注** —— 后端对一维也报 `truncated`，前端把行不足并进 `narrowedArrays` 语义并显示「前 2 万 / N」 |
