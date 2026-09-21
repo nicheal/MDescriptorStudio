@@ -138,7 +138,7 @@ const VARIANTS: Partial<Record<TabKey, Partial<AnalysisParams>[]>> = {
     .map((overviewAnalysis) => ({ overviewAnalysis })),
   projection: (["pca", "umap", "tsne"] as const).map((projection) => ({ projection })),
   similarity: (["query", "all_neighbors", "pairwise"] as const).map((similarityMode) => ({ similarityMode })),
-  sampling: (["fps", "random", "novelty_fps", "uncertainty_diversity"] as const)
+  sampling: (["fps", "random", "cluster_representative", "novelty_fps", "uncertainty_diversity"] as const)
     .map((samplingAlgorithm) => ({ samplingAlgorithm })),
   outliers: (["lof", "knn", "isolation_forest", "mahalanobis"] as const)
     .map((outlierAlgorithm) => ({ outlierAlgorithm })),

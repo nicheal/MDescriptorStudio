@@ -28,6 +28,23 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
     algorithm = algorithm.lower().replace("-", "_")
     rng = np.random.default_rng(_seed(params))
     warnings: list[str] = []
+    scaling_mode = str(params.get("scaling") or "robust")
+    if scaling_mode not in SCALING_MODES:
+        raise AppError(ANALYSIS_INPUT_INVALID, "scaling must be raw, standardized, or robust")
+    # The space a distance measure is taken in.  Algorithms that never compare
+    # two samples keep the raw matrix; the ones that do scale it first, so both
+    # of them partition or spread over the same geometry.
+    space = x
+    space_claim: dict = {}
+
+    def scaled_space() -> np.ndarray:
+        """`x` in the feature space the distance-based algorithms share."""
+        try:
+            scaling, scale_warnings = fit_scaling(x, scaling_mode)
+        except ValueError as exc:
+            raise AppError(ANALYSIS_INPUT_INVALID, str(exc)) from exc
+        warnings.extend(scale_warnings)
+        return apply_scaling(scaling, x)
 
     def choose_grouped(labels: np.ndarray) -> np.ndarray:
         """Choose exactly ``target`` rows while preserving group coverage."""
@@ -69,9 +86,6 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
             raise AppError(ANALYSIS_INPUT_INVALID, "strategy must be global or grouped")
         if strategy == "grouped" and (group_labels is None or len(group_labels) != n):
             raise AppError(ANALYSIS_INPUT_INVALID, "grouped FPS requires one element-set label per sample")
-        scaling_mode = str(params.get("scaling") or "robust")
-        if scaling_mode not in SCALING_MODES:
-            raise AppError(ANALYSIS_INPUT_INVALID, "scaling must be raw, standardized, or robust")
         target_coverage = params.get("target_coverage")
         if target_coverage is None or target_coverage == "":
             target_coverage = None
@@ -173,16 +187,23 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
             labels = samples.frame
         selected = choose_grouped(np.asarray(labels))
     elif algorithm in ("cluster", "cluster_representative"):
+        # KMeans assigns every sample to its nearest centre and then keeps the
+        # member closest to each centre, so it is distance-based exactly like
+        # FPS and has to measure in the same space: on a mixed-unit matrix
+        # (energy in eV, virial, volume in Å³) the raw values hand the whole
+        # choice to the widest column.
+        space = scaled_space()
+        space_claim = {"scaling": scaling_mode}
         k = _int_param(params, "n_clusters", min(6, max(2, target)), 2)
         cls = _safe_import("sklearn.cluster", "scikit-learn").KMeans
-        model = cls(n_clusters=min(k, n), random_state=_seed(params), n_init=10).fit(x)
+        model = cls(n_clusters=min(k, n), random_state=_seed(params), n_init=10).fit(space)
         selected_list = []
         for label, center in enumerate(model.cluster_centers_):
             # KMeans can leave a cluster empty, so the label a centre owns is
             # its own index, not however many representatives exist so far.
             members = np.flatnonzero(model.labels_ == label)
             if len(members):
-                distances = ((x[members] - center) ** 2).sum(axis=1)
+                distances = ((space[members] - center) ** 2).sum(axis=1)
                 selected_list.append(int(members[int(np.argmin(distances))]))
         selected = np.asarray(selected_list, dtype=np.int64)
         if selected.size < target:
@@ -198,7 +219,7 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
         raise AppError(ANALYSIS_INPUT_INVALID, f"unsupported sampling algorithm: {algorithm}")
     if progress:
         progress(1.0, f"{algorithm} sampling complete")
-    return {"arrays": {"selected_indices": selected.astype(np.int64), "coords": _visual_pca(x)}, "preview": {"kind": "sampling", "algorithm": algorithm, "selected_count": int(selected.size), "requested_count": int(target)}, "warnings": warnings}
+    return {"arrays": {"selected_indices": selected.astype(np.int64), "coords": _visual_pca(space)}, "preview": {"kind": "sampling", "algorithm": algorithm, "selected_count": int(selected.size), "requested_count": int(target), **space_claim}, "warnings": warnings}
 
 
 

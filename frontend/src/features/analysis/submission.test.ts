@@ -122,6 +122,10 @@ describe("analysis submission payloads", () => {
       target_coverage: 0.9,
     });
     expect(run("sampling", { samplingAlgorithm: "random" }).params).not.toHaveProperty("strategy");
+    // Only the two algorithms that measure a distance name the space they did it in.
+    expect(run("sampling", { samplingAlgorithm: "random" }).params).not.toHaveProperty("scaling");
+    expect(run("sampling", { samplingAlgorithm: "cluster_representative" }).params)
+      .toMatchObject({ scaling: "robust" });
     expect(run("sampling", { samplingBlocks: ["energy", "forces"] }).params).toMatchObject({ blocks: ["energy", "forces"] });
     expect(run("sampling", { samplingExistingRunId: "run_prev" }).params).toMatchObject({ existing_run_id: "run_prev" });
   });

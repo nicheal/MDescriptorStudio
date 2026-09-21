@@ -93,14 +93,16 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
       const fpsParams = p.samplingAlgorithm === "fps"
         ? {
             strategy: p.samplingStrategy,
-            scaling: p.samplingScaling,
             min_distance: p.samplingMinDistance,
             ...(p.samplingExistingRunId ? { existing_run_id: p.samplingExistingRunId } : {}),
             ...(p.samplingBlocks.length ? { blocks: p.samplingBlocks } : {}),
             ...(p.samplingBudgetMode === "coverage" ? { target_coverage: p.samplingCoverage / 100 } : {}),
           }
         : {};
-      return { kind: "run", method: "analysis.sampling", label: "Sampling", params: { algorithm: p.samplingAlgorithm, n_samples: p.nSamples, mode: p.mode, ...fpsParams, ...viewSuffix(p.viewId) } };
+      // Only the two algorithms that measure a distance run in a scaled space,
+      // so only they send the `scaling` they actually applied.
+      const distanceBased = p.samplingAlgorithm === "fps" || p.samplingAlgorithm === "cluster_representative";
+      return { kind: "run", method: "analysis.sampling", label: "Sampling", params: { algorithm: p.samplingAlgorithm, n_samples: p.nSamples, mode: p.mode, ...(distanceBased ? { scaling: p.samplingScaling } : {}), ...fpsParams, ...viewSuffix(p.viewId) } };
     }
 
     case "coverage":

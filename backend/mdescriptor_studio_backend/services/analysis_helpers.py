@@ -33,7 +33,10 @@ _ANALYSIS_SCHEMA_VERSION = 1
 # carries nothing", the acquisition diversity ruler, the Mahalanobis rank guard),
 # which change which samples and features a stored result is *about* rather than
 # how it is laid out - so the per-analysis schema_version numbers below stay.
-ANALYSIS_ALGORITHM_VERSION = "studio-analysis-6"
+# studio-analysis-7 is the two remaining pass-4 semantics findings: cluster
+# sampling now picks its representatives in the scaled space FPS uses, so a
+# stored selection is about a different geometry than the new code returns.
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-7"
 _MAX_PREVIEW_POINTS = 20_000
 # Written into the canonical parameters of the two feature analyses, so bumping
 # one invalidates that analysis' stored results without touching the others.

@@ -32,9 +32,13 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
         p.nSamples,
         p.mode,
         p.samplingAlgorithm === "uncertainty_diversity" ? p.uncertaintyK : "",
+        // FPS and cluster representatives both measure in a scaled space, so a
+        // moved scaling is a different computation for them; the rest never read it.
         p.samplingAlgorithm === "fps"
           ? [p.samplingStrategy, p.samplingScaling, p.samplingMinDistance, p.samplingExistingRunId ?? "none", p.samplingBlocks.length ? p.samplingBlocks.join("+") : "descriptor", p.samplingBudgetMode === "coverage" ? `cov${p.samplingCoverage}` : "count"].join(":")
-          : "",
+          : p.samplingAlgorithm === "cluster_representative"
+            ? p.samplingScaling
+            : "",
         p.samplingAlgorithm === "novelty_fps" || p.samplingAlgorithm === "uncertainty_diversity"
           ? [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")
           : p.viewId ?? "full",

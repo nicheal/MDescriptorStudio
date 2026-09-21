@@ -576,3 +576,56 @@ def test_grouped_fps_reports_progress_inside_a_group() -> None:
     assert len(reports) > 2  # one per group would be two
     assert reports == sorted(reports)  # a bar that goes backwards is broken
     assert reports[-1] == pytest.approx(1.0)
+
+
+def _cluster_selection(x: np.ndarray, scaling: str) -> list[int]:
+    params = {"n_samples": 3, "n_clusters": 3, "seed": 5, "scaling": scaling}
+    result = sampling(StructureDescriptorMatrix(x, np.arange(x.shape[0])), params, "cluster_representative")
+    return result["arrays"]["selected_indices"].tolist()
+
+
+def _two_blob_matrix() -> np.ndarray:
+    """Three tight groups in three comparable columns, the last of which a
+    mixed-unit matrix would make enormous (energy in eV next to volume in Å³)."""
+    rng = np.random.default_rng(11)
+    blocks = [rng.normal(centre, 0.15, (10, 3)) for centre in ((0.0, 0.0, 0.0), (3.0, 1.0, 2.0), (1.0, 4.0, 0.5))]
+    return np.vstack(blocks)
+
+
+def test_cluster_representatives_ignore_a_column_unit() -> None:
+    """Deep review B-5: FPS measured in a scaled space and cluster in the raw one,
+    so the same matrix gave two sampling cards describing two geometries, and one
+    wide column decided every representative on its own."""
+    x = _two_blob_matrix()
+    wide = x.copy()
+    wide[:, 2] *= 1000.0
+
+    raw, raw_wide = _cluster_selection(x, "raw"), _cluster_selection(wide, "raw")
+    assert raw != raw_wide  # the wide column moved every pick it touches
+    for mode in ("standardized", "robust"):
+        assert _cluster_selection(x, mode) == _cluster_selection(wide, mode)
+    # The default is a scaled mode, so this batch changes stored selections and
+    # carries the studio-analysis-7 invalidation with it.
+    assert _cluster_selection(x, "robust") != raw
+
+
+def test_cluster_scaling_matches_an_already_scaled_matrix() -> None:
+    """The engine scales the matrix the representatives are measured in, not just
+    the one KMeans is fitted on: pre-scaling by hand must give the same answer."""
+    x = _two_blob_matrix()
+    scaled = (x - x.mean(axis=0)) / x.std(axis=0)
+    assert _cluster_selection(x, "standardized") == _cluster_selection(scaled, "raw")
+
+
+def test_cluster_preview_names_the_space_it_used() -> None:
+    """The card has to say which geometry it picked from, because the two
+    distance-based algorithms no longer share the raw one."""
+    x = _two_blob_matrix()
+    samples = StructureDescriptorMatrix(x, np.arange(x.shape[0]))
+    default = sampling(samples, {"n_samples": 3, "n_clusters": 3}, "cluster_representative")
+    assert default["preview"]["scaling"] == "robust"
+    with pytest.raises(AppError) as refused:
+        sampling(samples, {"n_samples": 3, "scaling": "mixed"}, "cluster_representative")
+    assert refused.value.code == ANALYSIS_INPUT_INVALID
+    # A choice that never measures a distance has no space to report.
+    assert "scaling" not in sampling(samples, {"n_samples": 3}, "random")["preview"]

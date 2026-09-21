@@ -95,8 +95,16 @@ describe("restoring controls from a stored analysis row", () => {
       samplingExistingRunId: "run_prev", samplingMinDistance: 0.25,
       samplingBudgetMode: "coverage", samplingCoverage: 80,
     });
+    // Cluster representatives come out of a scaled space too, but that is the
+    // only knob a stored cluster row owns.
+    expect(restore("sampling", "sampling", { algorithm: "cluster", scaling: "standardized" }))
+      .toMatchObject({ samplingAlgorithm: "cluster_representative", samplingScaling: "standardized" });
+    expect(restore("sampling", "sampling", { algorithm: "cluster" }))
+      .not.toHaveProperty("samplingMinDistance");
     expect(restore("sampling", "sampling", { algorithm: "random", target_coverage: 0.8 }))
       .not.toHaveProperty("samplingBudgetMode");
+    expect(restore("sampling", "sampling", { algorithm: "random", scaling: "raw" }))
+      .not.toHaveProperty("samplingScaling");
     expect(restore("sampling", "acquisition", { acquisition_method: "uncertainty_diversity" }))
       .toMatchObject({ samplingAlgorithm: "uncertainty_diversity" });
     expect(restore("sampling", "acquisition", {})).toMatchObject({ samplingAlgorithm: "novelty_fps" });

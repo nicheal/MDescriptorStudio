@@ -551,6 +551,32 @@ test("slow history loads are discarded when a same-module parameter changes", as
   await expect(page.getByText("CLUSTER STRUCTURE", { exact: true })).toBeHidden({ timeout: 5_000 });
 });
 
+test("cluster representatives are chosen in the space the panel names", async ({ page }) => {
+  // Deep review B-5: FPS measured in a scaled space and cluster in the raw one,
+  // so one matrix gave two sampling cards describing two geometries, and the
+  // screen never said which a pick came out of.
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Dataset Sampling", "Representative Sampling");
+
+  const controls = page.locator(".analysis-controls");
+  const method = controls.locator(".ant-select").first();
+  const scaling = controls.getByText(/feature scaling/i);
+  await expect(scaling).toBeVisible();
+
+  await method.click();
+  await page.getByText(/cluster representative/i).last().click();
+  await expect(method.locator(".ant-select-selection-item")).toContainText(/cluster/i);
+  await expect(scaling).toBeVisible();
+  await expect(controls.getByText(/^strategy$/i)).toBeHidden();
+
+  // A choice that never measures a distance has no space to name.
+  await method.click();
+  await page.getByText(/^random$/i).last().click();
+  await expect(method.locator(".ant-select-selection-item")).toHaveText(/random/i);
+  await expect(scaling).toBeHidden();
+});
+
 test("sampling keeps save-view and export actions available for selected frames", async ({ page }) => {
   await page.goto("/preview.html");
   await openAnalysis(page);

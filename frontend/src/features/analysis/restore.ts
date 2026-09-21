@@ -93,13 +93,17 @@ export function restoreAnalysisParams(input: RestoreInput): Partial<AnalysisPara
         mode: mode(p.mode),
         uncertaintyK: intAt(p.uncertainty_k, current.uncertaintyK, 2),
       };
+      // Both distance-based algorithms record the space they measured in; a
+      // stored row that predates the claim restores the backend's default.
+      const scaling = ONE_OF(["robust", "standardized", "raw"] as const, p.scaling, "robust");
+      if (algorithm === "cluster_representative") return { ...restored, samplingScaling: scaling };
       if (algorithm !== "fps") return restored;
       // A stored target coverage is a budget mode as much as a number is.
       const coverage = finite(p.target_coverage);
       return {
         ...restored,
         samplingStrategy: p.strategy === "grouped" ? "grouped" : "global",
-        samplingScaling: ONE_OF(["robust", "standardized", "raw"] as const, p.scaling, "robust"),
+        samplingScaling: scaling,
         samplingMinDistance: Math.max(0, finite(p.min_distance) ?? 0),
         samplingExistingRunId: text(p.existing_run_id) || null,
         samplingBlocks: Array.isArray(p.blocks) ? p.blocks.map(String) : [],

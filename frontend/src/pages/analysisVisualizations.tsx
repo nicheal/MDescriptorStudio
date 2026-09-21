@@ -183,7 +183,9 @@ function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pi
             : undefined
     : undefined;
   const explained = fps ? nums(preview?.pc_explained_variance) : [];
-  const scaling = fps && typeof preview?.scaling === "string" ? preview.scaling : null;
+  // Only the distance-based algorithms publish a scaling, so this is absent for
+  // random/stratified rather than claimed.
+  const scaling = typeof preview?.scaling === "string" ? preview.scaling : null;
   const allocation = fps && preview?.strategy === "grouped" ? records(preview.allocation) : [];
   const blocks = fps ? records(preview?.blocks) : [];
   const metricValues = fps
@@ -200,6 +202,7 @@ function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pi
         { k: t("Selected"), v: preview?.selected_count },
         { k: t("Candidates"), v: preview?.candidate_pool ?? points.length },
         { k: t("Method"), v: preview?.algorithm },
+        { k: t("Feature scaling"), v: scaling },
         { k: uncertaintyDriven ? t("Mean uncertainty") : t("Mean novelty"), v: uncertaintyDriven ? preview?.mean_selected_uncertainty : preview?.mean_selected_novelty },
       ];
   return <>
