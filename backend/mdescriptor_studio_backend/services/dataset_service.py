@@ -89,6 +89,7 @@ class DatasetService:
         self.jobs = jobs
         self.data_dir = Path(data_dir or db.path.parent).resolve(strict=False)
         self._adapters: dict[str, object] = {}
+        self._adapter_lock = threading.Lock()
         # one in-flight scan per dataset: Overview + health rail both call
         # dataset.statistics on stale caches and must share a single job
         self._scan_lock = threading.Lock()
@@ -162,22 +163,35 @@ class DatasetService:
             path = validate_local_path(row["source_path"], field="dataset source path")
         except UnsafePathError as exc:
             raise AppError(INVALID_DATASET, "dataset source path is not a safe local path") from exc
-        cached = self._adapters.get(row["id"])
-        cached_source = getattr(cached[1], "source_path", None) if cached is not None else None
-        if (
-            cached is not None
-            and cached[0] == row["fingerprint"]
-            and (cached_source is None or same_lexical_path(Path(cached_source), path))
-        ):
-            return cached[1]
+        def reuse(entry):
+            # The one rule for a cached adapter worth returning: the fingerprint
+            # the row now carries, and a source that is still the same file.
+            if entry is None or entry[0] != row["fingerprint"]:
+                return None
+            cached_source = getattr(entry[1], "source_path", None)
+            if cached_source is not None and not same_lexical_path(Path(cached_source), path):
+                return None
+            return entry[1]
+
+        adapter = reuse(self._adapters.get(row["id"]))
+        if adapter is not None:
+            return adapter
         if not path.exists():
             raise AppError(INVALID_DATASET, "dataset source path is unavailable")
         detected = detect_format(path)
         if detected != row["format"]:
             raise AppError(INVALID_DATASET, "dataset format no longer matches its source")
-        adapter = create_adapter(path, detected)
-        self._adapters[row["id"]] = (row["fingerprint"], adapter)
-        return adapter
+        # Built under a lock, and re-checked inside it. A cold dataset can be
+        # touched by an analysis job and the viewer in the same instant, and
+        # `create_adapter` reads the source in - a DeepMD set eagerly and in
+        # full - so without this each caller built its own copy and every loser
+        # but the last left memory behind that nothing could reach.
+        with self._adapter_lock:
+            adapter = reuse(self._adapters.get(row["id"]))
+            if adapter is None:
+                adapter = create_adapter(path, detected)
+                self._adapters[row["id"]] = (row["fingerprint"], adapter)
+            return adapter
 
     # -- IPC methods -----------------------------------------------------------
     def list(self, params: dict) -> list[dict]:

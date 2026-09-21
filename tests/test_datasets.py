@@ -226,6 +226,87 @@ def test_force_magnitudes_over_the_budget_are_counted_not_held() -> None:
     assert abs(summary["median"] - reference_summary["median"]) <= FORCE_MAGNITUDE_BIN
 
 
+def test_a_fingerprint_walk_slower_than_the_ttl_is_still_cached(tmp_path: Path, monkeypatch) -> None:
+    """Pass 5, 5-B1: the entry was stamped with the time the call *started*, so a
+    source whose walk outlasted the TTL went into the cache already expired and
+    the next `dataset.list` walked the whole thing again - forever."""
+    from types import SimpleNamespace
+
+    from mdescriptor_studio_backend.datasets import fingerprint as fp
+
+    source = tmp_path / "d.xyz"
+    write_extxyz(source, 3, 8, seed=1)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(fp, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    real_files = fp._files
+
+    def slow_walk(path):
+        # One walk costs more than the whole cache lifetime.
+        clock["now"] += fp.FINGERPRINT_CACHE_TTL_SECONDS + 1
+        return real_files(path)
+
+    monkeypatch.setattr(fp, "_files", slow_walk)
+    first = fp.compute_fingerprint(source, 3)
+
+    walks = 0
+
+    def counting_walk(path):
+        nonlocal walks
+        walks += 1
+        return real_files(path)
+
+    monkeypatch.setattr(fp, "_files", counting_walk)
+    assert fp.compute_fingerprint(source, 3) == first
+    assert walks == 0, "a slow source was entered already expired, so nothing is ever cached"
+
+
+def test_a_cold_dataset_is_loaded_once_under_concurrency(tmp_path: Path, monkeypatch) -> None:
+    """Pass 5, 5-B2: `adapter_for` checked then wrote a plain dict, and three thread
+    pools call it. Two first touches of a DeepMD set each read the whole source
+    into memory and all but the last copy became unreachable."""
+    import threading
+    import time
+
+    from mdescriptor_studio_backend.services.dataset_service import DatasetService
+
+    source = tmp_path / "d.xyz"
+    write_extxyz(source, 3, 8, seed=1)
+    row = {"id": "ds_concurrent", "fingerprint": "fp", "format": "extxyz", "source_path": str(source)}
+
+    class _Stub:
+        def __init__(self) -> None:
+            self._adapters: dict[str, object] = {}
+            self._adapter_lock = threading.Lock()
+            self.builds = 0
+
+    stub = _Stub()
+
+    def slow_create(path, detected):
+        time.sleep(0.05)
+        stub.builds += 1
+        return object()
+
+    monkeypatch.setattr("mdescriptor_studio_backend.services.dataset_service.create_adapter", slow_create)
+
+    start = threading.Barrier(4)
+    results: list[object] = []
+    guard = threading.Lock()
+
+    def load():
+        start.wait(timeout=10)
+        adapter = DatasetService.adapter_for(stub, row)
+        with guard:
+            results.append(adapter)
+
+    threads = [threading.Thread(target=load) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=20)
+    assert stub.builds == 1, f"four first touches built {stub.builds} copies of the same dataset"
+    assert len({id(adapter) for adapter in results}) == 1
+
+
 def test_element_atom_counts_keep_wide_integer_bins() -> None:
     hist = _int_hist([4, 64, 512])
     assert hist is not None

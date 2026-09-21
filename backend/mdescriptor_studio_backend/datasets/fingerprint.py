@@ -161,7 +161,11 @@ def compute_fingerprint(
     fingerprint = FINGERPRINT_VERSION + ":" + h.hexdigest()
     if use_cache:
         with _CACHE_LOCK:
-            _CACHE[key] = (now, fingerprint)
+            # Stamped on the way in, not with the time the call started: a source
+            # whose walk takes longer than the TTL would otherwise be entered
+            # already expired, and every later reader would walk it again and
+            # never cache anything.
+            _CACHE[key] = (time.monotonic(), fingerprint)
             # Keep the cache bounded even when a long-lived process scans many
             # user-selected sources.
             if len(_CACHE) > 256:
