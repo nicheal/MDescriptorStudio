@@ -592,6 +592,29 @@ test("browser preview restores the analysis module it was left on", async ({ pag
   await expect(page.getByRole("tab", { name: "Feature Variance", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
+test("history restores both runs a drift result was computed from", async ({ page }) => {
+  // A stored cross-dataset result is restorable only if its row names both input
+  // runs. The mock's rows named one whatever the submission was given, so the
+  // restore refused with "the source descriptor runs are no longer available" and
+  // every browser run that depended on that shape saw a degenerate row instead
+  // (deep review pass 4, C-7).
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Coverage & Novelty", "Dataset Drift");
+  await page.getByRole("button", { name: /Run Dataset Drift/i }).click();
+  await expect(page.getByText("DATASET DRIFT", { exact: true })).toBeVisible({ timeout: 30_000 });
+
+  // Move the pair out of place first, so "the row restored its inputs" is an
+  // observation and not the leftover of the run above.
+  await page.getByRole("button", { name: "Swap" }).click();
+  await expect(page.locator(".analysis-cross-input-row").nth(1)).not.toContainText("Si Training Set");
+
+  await page.getByRole("button", { name: "Load drift analysis" }).click();
+  await expect(page.getByText("The source descriptor runs are no longer available")).toHaveCount(0);
+  await expect(page.locator(".analysis-cross-input-row").nth(1)).toContainText("Si Training Set");
+});
+
 test("language switch in Settings applies immediately and persists across reload", async ({ page }) => {
   await page.goto("/preview.html");
   await expect(page.getByRole("button", { name: "Analysis" })).toBeVisible({ timeout: 30_000 });

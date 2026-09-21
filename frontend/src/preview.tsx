@@ -404,10 +404,19 @@ const mockAnalysisRows = new Map<string, Record<string, unknown>>();
 // let `analysis.chunk` answer an old id with the newest result's arrays, which
 // is the opposite of what the sidecar does.
 const mockArtifactArrays = new Map<string, Record<string, unknown[]>>();
+/** The two descriptor runs every multi-input submission is computed from: one
+ *  engine over two datasets, which is what the sidecar accepts for the
+ *  cross-dataset methods and what a history row has to carry for `input_run_ids`
+ *  to mean anything (deep review pass 4, C-7). */
+const MOCK_RUN_PAIR = ["run-dpa2", "run-dpa2-si"];
+const MOCK_RUN_PAIR_DATASETS = ["ds-gaas", "ds-si"];
+
 function mockRecordAnalysisRow(id: string, type: string, parameters: Record<string, unknown> = {}, inputRunIds = ["run-dpa2"], datasetIds = ["ds-gaas"]) {
   mockAnalysisRows.set(id, {
     id,
-    descriptor_run_id: "run-dpa2",
+    // The sidecar stores the first input as the primary run; a constant here
+    // made every multi-run row name a run it was never given.
+    descriptor_run_id: inputRunIds[0],
     analysis_type: type,
     status: "COMPLETED",
     parameters,
@@ -1533,14 +1542,14 @@ const METHODS: Record<string, Handler> = {
   "analysis.cluster": (p) => mockAnalysisSubmit("job-cluster-live", "ana-mock-clusters", "clusters", "clusters", { algorithm: p.algorithm, n_clusters: p.n_clusters, mode: p.mode }),
   "analysis.outlier": (p) => mockAnalysisSubmit("job-outlier-live", "ana-mock-outliers", "outliers", "outliers", { algorithm: p.algorithm, k: p.k, contamination: p.contamination, mode: p.mode }),
   "analysis.sampling": (p) => mockAnalysisSubmit("job-sampling-live", "ana-mock-sampling", "sampling", "sampling", { algorithm: p.algorithm, n_samples: p.n_samples, mode: p.mode, strategy: p.strategy, scaling: p.scaling, min_distance: p.min_distance, blocks: p.blocks, target_coverage: p.target_coverage }),
-  "analysis.coverage": (p) => mockAnalysisSubmit("job-coverage-live", "ana-mock-coverage", "coverage", "coverage", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, ["run-dpa2", "run-dpa2-si"], ["ds-gaas", "ds-si"]),
-  "analysis.overlap": (p) => mockAnalysisSubmit("job-overlap-live", "ana-mock-overlap", "overlap", "overlap", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, ["run-dpa2", "run-dpa2-si"], ["ds-gaas", "ds-si"]),
+  "analysis.coverage": (p) => mockAnalysisSubmit("job-coverage-live", "ana-mock-coverage", "coverage", "coverage", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
+  "analysis.overlap": (p) => mockAnalysisSubmit("job-overlap-live", "ana-mock-overlap", "overlap", "overlap", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.acquisition": (p) => {
     mockLatestAcquisitionMethod = String(p.acquisition_method ?? "novelty_fps");
-    return mockAnalysisSubmit("job-acquisition-live", "ana-mock-acquisition", "acquisition", "acquisition", { acquisition_method: p.acquisition_method, n_samples: p.n_samples, mode: p.mode, uncertainty_k: p.uncertainty_k }, ["run-dpa2", "run-dpa2-si"], ["ds-gaas", "ds-si"]);
+    return mockAnalysisSubmit("job-acquisition-live", "ana-mock-acquisition", "acquisition", "acquisition", { acquisition_method: p.acquisition_method, n_samples: p.n_samples, mode: p.mode, uncertainty_k: p.uncertainty_k }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS);
   },
-  "analysis.compare": (p) => mockAnalysisSubmit("job-compare-live", "ana-mock-compare", "compare", "compare", { compare_mode: "geometry", mode: p.mode }),
-  "analysis.mantel": (p) => mockAnalysisSubmit("job-mantel-live", "ana-mock-mantel", "mantel", "mantel", { compare_mode: "mantel", method: p.method, permutations: p.permutations, mode: p.mode }),
+  "analysis.compare": (p) => mockAnalysisSubmit("job-compare-live", "ana-mock-compare", "compare", "compare", { compare_mode: "geometry", mode: p.mode }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
+  "analysis.mantel": (p) => mockAnalysisSubmit("job-mantel-live", "ana-mock-mantel", "mantel", "mantel", { compare_mode: "mantel", method: p.method, permutations: p.permutations, mode: p.mode }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.feature_variance": (p) => {
     const near = Number(p.near_zero_relative_threshold);
     const low = Number(p.low_variance_relative_threshold);
@@ -1573,8 +1582,8 @@ const METHODS: Record<string, Handler> = {
   "analysis.local_diversity": (_p) => mockAnalysisSubmit("job-local-live", "ana-mock-local", "local_diversity"),
   "analysis.kernel": (p) => mockAnalysisSubmit("job-kernel-live", "ana-mock-kernel", "kernel", "kernel", { kernel: p.kernel, mode: p.mode }),
   "analysis.trajectory": (p) => mockAnalysisSubmit("job-trajectory-live", "ana-mock-trajectory", "trajectory", "trajectory", { mode: p.mode }),
-  "analysis.drift": (p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift", "drift", { mode: p.mode }),
-  "analysis.sensitivity": (p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity", "sensitivity", { mode: p.mode }),
+  "analysis.drift": (p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift", "drift", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
+  "analysis.sensitivity": (p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity", "sensitivity", { mode: p.mode, run_ids: MOCK_RUN_PAIR }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.perturbation_sensitivity": (p) => mockAnalysisSubmit("job-perturbation-live", "ana-mock-perturbation", "perturbation_sensitivity", "perturbation_sensitivity", { perturbation: p.perturbation, n_amplitudes: p.n_amplitudes, max_amplitude: p.max_amplitude, max_structures: p.max_structures, metric: p.metric }),
   "analysis.export": (_p) => mockAnalysisSubmit("job-export-live", "ana-mock-export", "projection", null),
   "result.get_pca": (p) => {
