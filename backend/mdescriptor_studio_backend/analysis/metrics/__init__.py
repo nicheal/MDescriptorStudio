@@ -334,7 +334,6 @@ def feature_variance(samples: DescriptorMatrix, params: dict, progress: Callable
         },
         "preview": {
             "kind": "feature_variance",
-            "schema_version": 2,
             "sample_count": sample_count,
             "feature_count": feature_count,
             "ddof": 0,

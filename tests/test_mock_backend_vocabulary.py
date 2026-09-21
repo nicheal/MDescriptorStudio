@@ -175,13 +175,14 @@ def test_the_mock_copies_the_current_analysis_schema_revisions():
     ):
         literals = set(re.findall(rf"{name}:\s*(\d+)", text))
         assert literals == {str(revision)}, f"preview.tsx {name}: {literals} != backend {revision}"
-    # The canned previews carry the same revision under their own field name.
-    for kind, revision in (
-        ("feature_variance", FEATURE_VARIANCE_SCHEMA),
-        ("feature_correlation", FEATURE_CORRELATION_SCHEMA),
-    ):
-        literals = set(re.findall(rf'kind: "{kind}",\s*schema_version: (\d+)', text))
-        assert literals == {str(revision)}, f"preview.tsx {kind} preview schema: {literals}"
+    # The canned previews used to repeat the same revision a second time under
+    # `schema_version`, which nothing read and which was not the number that
+    # gates the cache (pass 5, 5-D6 deleted it on both sides). Assert its absence,
+    # so the copy cannot creep back while the params above stay the real one.
+    for kind in ("feature_variance", "feature_correlation"):
+        assert not re.search(rf'kind: "{kind}",\s*schema_version:', text), (
+            f"preview.tsx publishes a display schema_version for {kind} again"
+        )
 
 
 def test_the_mock_reports_the_current_statistics_revision():

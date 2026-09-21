@@ -20,6 +20,7 @@ from mdescriptor_studio_backend.errors import (
     RESULT_INCOMPATIBLE,
     AppError,
 )
+from mdescriptor_studio_backend.services.analysis_helpers import FEATURE_VARIANCE_SCHEMA
 from mdescriptor_studio_backend.protocol import frames
 from mdescriptor_studio_backend.services.analysis_service import _LIST_COLUMNS, AnalysisService
 from mdescriptor_studio_backend.services.dataset_service import DatasetService
@@ -623,11 +624,10 @@ def test_feature_variance_persists_full_schema_and_invalid_warning(tmp_path: Pat
     response = service.feature_variance({"run_id": "run_1", "top_k": 4, "near_zero_relative_threshold": 0.002, "low_variance_relative_threshold": 0.02})
     assert response["job_id"] == "job_1"
     analysis = service.get({"analysis_id": response["analysis_id"]})
-    assert analysis["parameters"]["feature_variance_schema"] == 2
+    assert analysis["parameters"]["feature_variance_schema"] == FEATURE_VARIANCE_SCHEMA
     assert analysis["parameters"]["near_zero_relative_threshold"] == 0.002
 
     preview = service.preview({"analysis_id": response["analysis_id"], "limit": 20})
-    assert preview["schema_version"] == 2
     assert preview["settings"]["low_variance_relative_threshold"] == 0.02
     assert len(preview["features"]) == 8
     assert "rows" not in preview

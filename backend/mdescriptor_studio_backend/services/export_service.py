@@ -84,7 +84,7 @@ class AnalysisExportMixin:
         if len(input_ids) != 1:
             raise AppError(ANALYSIS_INPUT_INVALID, "export requires exactly one run_id")
         run = self._usable_run(input_ids[0])
-        export_format = str(params.get("format") or params.get("output_format") or "json").lower()
+        export_format = str(params.get("format") or "json").lower()
         if export_format not in ("json", "csv", "extxyz", "deepmd", "indices", "report"):
             raise AppError(ANALYSIS_INPUT_INVALID, "format must be json, csv, extxyz, deepmd, indices, or report")
         mode = str(params.get("mode") or "structure")

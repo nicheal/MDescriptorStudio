@@ -539,7 +539,6 @@ function mockOverviewPreview() {
     return {
       analysis_id: mockLatestAnalysisId,
       kind: "feature_variance",
-      schema_version: 2,
       sample_count: 80,
       feature_count: features.length,
       ddof: 0,
@@ -572,7 +571,6 @@ function mockOverviewPreview() {
     return {
       analysis_id: mockLatestAnalysisId,
       kind: "feature_correlation",
-      schema_version: 3,
       correlation_metric: mockFeatureCorrelationSettings.method,
       correlation_threshold: mockFeatureCorrelationSettings.correlation_threshold,
       feature_count: 256,

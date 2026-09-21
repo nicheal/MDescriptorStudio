@@ -186,7 +186,6 @@ def test_feature_variance_reports_full_stats_robustness_and_invalid_counts() -> 
     preview = result["preview"]
     features = {row["index"]: row for row in preview["features"]}
 
-    assert preview["schema_version"] == 2
     assert preview["ddof"] == 0
     assert len(preview["features"]) == values.shape[1]
     assert features[0]["status"] == "constant"

@@ -69,7 +69,6 @@ def feature_correlation(samples: DescriptorMatrix, params: dict, progress: Calla
         "arrays": arrays,
         "preview": {
             "kind": "feature_correlation",
-            "schema_version": 3,
             "correlation_metric": method,
             "correlation_threshold": correlation_threshold,
             "feature_count": feature_count,

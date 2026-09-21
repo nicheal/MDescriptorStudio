@@ -231,7 +231,7 @@ class AnalysisService(
         """Read a bounded slice of one named artifact array."""
         row = self._analysis_row(params.get("analysis_id") or params.get("id"))
         self._require_artifact(row)
-        name = str(params.get("array") or params.get("array_name") or "")
+        name = str(params.get("array") or "")
         manifest = self._json_load(row.get("artifact_manifest_json"), {})
         files = manifest.get("files", {}) if isinstance(manifest, dict) else {}
         file_meta = files.get(name)
