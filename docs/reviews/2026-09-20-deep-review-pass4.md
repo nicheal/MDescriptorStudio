@@ -3,7 +3,7 @@
 范围：全仓。基线 `7d5605f`（第三轮第 15 批收尾）。本轮是**新一次审阅**，不是上一份报告的续批。
 方法：5 个审阅 agent 分片（算法层 / 服务层 / 解析与协议 / 前端页面 / 状态与 mock），外加散装前端文件、`benchmark/`、`scripts/`、测试与 CI。每条候选结论经我重新读码或实测后才进入下面的清单。
 
-环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。第 4、5 批与第 6 批一部分落地后的当前门禁：pytest 369 passed / 1 skipped；vitest 201；Playwright 40；tsc / eslint 干净（cargo 本轮未跑）。
+环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。第 4、5 批与第 6 批大部分落地后的当前门禁：pytest 371 passed / 1 skipped；vitest 202；Playwright 43；tsc / eslint 干净；cargo test 4 passed。
 
 ## 已落地
 
@@ -30,11 +30,19 @@
 | `918ebbd` | C-12 `preprocessing_json` 两个写点收敛成 `_preprocessing(params)`，落定不再丢 `scaling` | 撤回旧写法测试点名 `scaling` |
 | `baafdec` | C-11 导出记录「写了多少条」而不是「被给了多少个下标」：`_write_export` 返回 `(path, written)` | `[2,2,7,7,7]` 的 indices 导出写 2 行、记 2 |
 | `f5916a2` | C-13 `_group_labels_cache` 成为真 LRU，key 类型不再谎报三元组 | 命中后再塞 1 条即证：撤掉 touch，被刚用过的键先被丢 |
+| `eec90c8` | C-6：mock 的 settings 存下来了（localStorage），重启页面终于能测「读回来」那一半 | 新 Playwright 用例选模块→等写入→reload→断言模块还在；把 `settings.get` 改回字面答复它就红 |
+| `4b94052` | C-7：mock 的分析行带上真实输入（两条 run、两个数据集），`descriptor_run_id` 取首条 | 新用例先 Swap 把配对移开、再从历史载入，要求 query 行回到 Si；drift 退回单输入行即红 |
 | `f93f2b9` | B-7：trajectory / local_diversity / sensitivity 把生效尺度写进 preview（`_preprocess_mode` 与 `_preprocess` 读同一个键），面板用现成的「特征尺度」芯片显示 | 12×4 实测三条默认 `standardized`、显式 `raw` 时如实报 `raw`；撤掉 mock 那行 Playwright 即红 |
 | `77a999f` | C-8：mock 不再广告 `energy.per_atom`（后端把它写死成 False，`Overview` 照它渲染 ✓）；新门禁从 `statistics.py` 读「被写死关闭的能力」并禁止 mock 声称 | 放回 `true` 即点名 `['energy.per_atom']`；`fixed_off == {energy.per_atom}` 一条保证门禁不会静默变空 |
 | `b1c88b0` | C-9：mock 的 `STATS` 改标 `Record<string, Stats>`，两条 payload 补上 `stats_version: 5`，顺带拆掉一个不成立的 cast | `tsc` 自己数出两个缺字段；新门禁绑 `STATS_VERSION`，改成 4 报 `{'4'} != {'5'}` |
 | `3f00938` | C-15：抽屉里三个被打印成裸 RPC 名的作业补标签；`analysis.acquisition` 不再替两种目标断言「新颖性」 | vitest 22→24；两条新断言分别是「标签不得等于方法名」与「不得声称做不到的事」 |
 | `be22297` | D4'：物化目标从「先查后写」改成「先占后写」—— 独占创建 + 落盘前复查占位是否还空 | 去掉 `O_EXCL` 与复查，新测试报 `DID NOT RAISE`；导出（export）**故意不套**这条：覆写同一目标本就是它的文档行为，而定调又排除了 `overwrite` 参数 |
+| `0360986` | C-16：benchmark 的 storage read 行标清「页缓存」，README 单列一句别当 I/O 带宽引用 | 本机实测 write 3 723 / 4 311 MB/s、read 5 120 / 5 461 MB/s；`--suite storage --quick` 跑通，行里带 `cache` 字段 |
+| `4032af7` | E-2：`analysis.chunk` 对任何秩都报「这是数组的一部分」，面板把它并进 narrowed 提示并写出「20 000 / 179 700」 | 既有 cache+chunk 测试钉住 4/12 为 truncated、整页为 false；mock 原来恒报 false，一并改对，于是这条提示在浏览器里第一次可达 |
+| `f393bef` | E-7：后端把 `warnings_json` 读给所有分析（原先只有 feature_variance），渲染移到结果卡片一处 | 新用例聚类一个空特征列并问 preview；撤掉读路径即 `KeyError: 'warnings'` |
+| `2db2e62` | E-5：在飞取帧期间到达的外部跳转被记住并在落地后重放 | 规则抽成 `resolveExternalFrame` 并单测四态；旧的「loading 就丢」在第二条断言上失败 |
+| `373d896` | Q5：mock 补 `descriptor.submit`（含缓存命中与 force）与 `dataset.remove`，其余五个作为具名例外进门禁 | 新 wire-contract 用例走真 RPC：缓存答复、强算、完成后新增 COMPLETED run、未知数据集拒绝、删除后列表里没有它 |
+| `8cb3a38` | A-7：shell 只有一个后端 spawn 名额，重启不再留下杀不掉的 sidecar；前端提交前自测在飞标记 | `cargo test` 4 通过（新断言：第二次 claim 必须失败、guard drop 后重开）；去掉 `compare_exchange` 该测试在断言处 panic |
 
 ## 待修（已核实，按批排列）
 
@@ -78,16 +86,8 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 
 | # | 位置 | 问题 |
 | --- | --- | --- |
-| A-7 | `main.rs:164-177,225-264` + `App.tsx:75-88,250` | `backend_restart` 可重入：`spawn_backend` 先花 ~1 s（release）哈希 ~470 MB bundle 才 `command.spawn()`，然后覆写 `state.child`；两次重叠提交产生两个孩子，输的那个 `Child` 被赋值 drop（Windows 只关句柄不杀进程），`kill_backend` 再也够不到 → 两个 sidecar 打同一个 SQLite 与同一个 webview 通道，第一个 reader 线程收不到 EOF 永不退出。前端 `restartingRef` 只压 toast，`restartBackend` 提交前不测它，Restart 按钮无 `disabled`。修法：`spawn_backend` 整体持锁 + 在飞行时拒绝 + 按钮禁用 + 一个 Rust 测试断言两次重叠提交只剩一个孩子 |
-| C-6 | `preview.tsx:1383-1387` | mock 校验 setting 的 key 然后把值扔掉，`settings.get` 对 6 个 key 里 5 个回字面值/`null` → `hydrateAnalysisUi`（view + slots）、`hydrateActiveRun`、`initLanguage` 在浏览器测试里永远走「什么都没持久化」分支；reload 半边（含 `v:2` 与旧 slot 判别）零 e2e 覆盖，写的那半边是绿的。`test_backend_response_contract.py:28-30` 还专门论证过要抓 `settings.get` |
-| C-7 | `preview.tsx:405-416` | `mockRecordAnalysisRow` 硬编码单 `descriptor_run_id`、默认单 inputRun/单 dataset，而 `analysis.drift`/`sensitivity`/`compare`/`mantel` 不覆盖默认 —— 尽管 `ANALYSIS_RUN_PARAMS` 正在校验它们带两个 run。于是 e2e 看到的每条 `analysis.list` 都是生产不会产出的形状，依赖它的两个前端判据只吃过退化输入 |
-| C-16 | `benchmark/run_benchmarks.py:187-206` | `storage` 的 read 行报 `mb_per_second`，实测 **4 452 / 4 476 MB/s**，write 只有 265–300 MB/s —— 同一文件连读三次测的是页缓存不是存储带宽。README 的措辞勉强算诚实，但一张 MB/s 表会被论文当 I/O 数字引用（要投 CPC/JOSS 的那份）。在行里和 README 标明 cache-warm 即可；绕开缓存要 Windows admin 权限，不成比例 |
 | C-17 | `job_runner.py:_input_ids` | 对 `run_ids` 无长度上限：一次提交带 N 个 id 就有 N 次 `SELECT * FROM descriptor_runs`、N 次 `feature_space_signature`，且 `input_ids` 会被拼进缓存身份。第 4 批把每 id 一次的数据集探针收成每次提交一次之后，剩下的按 N 线性项都在这里 —— 是个契约问题（要不要设上限、上限是多少、超了报什么码），不是性能问题 |
-| E-2 | `analysis_service.py:249-251` + `Analysis.tsx:469,478,483` | `truncated` 只在 `ndim == 2` 时才可能为真，而加载器除 trajectory/effective_dimension 外取一块就 `break`。Mantel/Compare 于是画「全域均匀抽样的前 40 %」—— 有偏子集被当作关联强度，旁边 "Pairs" 写完整数量；property 面板在原子模式常年只覆盖 2 万样本而 KPI 写 "Samples"；同面板散点是跨全域 stride 的，两者描述的不是同一批样本。**S3 定调：如实标注** —— 后端对一维也报 `truncated`，前端把行不足并进 `narrowedArrays` 语义并显示「前 2 万 / N」 |
-| E-5 | `Explore.tsx:384-389` + `exploreFrameLoader.ts:45` | 外部跳转被在飞的取帧吞掉：健康抽屉点一行设 `activeFrameIndex` 并切到 Explore，内部请求还在飞时 effect 因 `loading` bail，而它提交时 `onFrame` 里 `setActiveFrame(idx)` 把外部跳转覆写回它本来在取的那帧 —— 抽屉说「预览第 100 帧」，屏幕停在第 6 帧且无报错。loader 的代际守卫是对的，缺的是重放被跳过的那次导航 |
-| E-7 | `preview_service.py:146-147` + `featureVariance.tsx:225` | 后端 `result["warnings"]` 只在 `analysis_type == "feature_variance"` 时抄进 preview，也只有这一个面板渲染它 → `_preprocess` 丢掉的非有限/零方差列、"pairwise matrix limited to 400 deterministic samples"、trajectory 的 MAD 回落告警、local diversity 的邻居表溢出提示全到不了界面；`DataTable` 还把 `warnings` 显式过滤掉。**注意这条会动响应形状**（preview 多一个键），需重生成金标 keys 并单独说明 |
 | E-8 | `RightRail.tsx:147-197` + `Explore.tsx:55-70` + `Overview.tsx:32-65` + `HealthFindingsDrawer.tsx:76-90` | 「取统计 → 等作业 → 再取一次」四份实现且已漂移：只有 RightRail/HealthFindingsDrawer 等完调 `refetchDatasets()`，所以 Explore/Overview 重算后数据集那一行（`dataset_service.py:635` 重写 `number_of_frames`/`fingerprint`/`last_scan_at`）还是旧的；`loadExploreHealth` 已抽出并单测但另外三处没收进去。次要：rail 的 `rescan()` 自己请求一次后又 `bumpStatsTick()` 触发自己的 mount effect → 多一次往返 + 一帧七行健康项全空 |
-| Q5 | `preview.tsx` 的 METHODS 表 | 7 个前端真发的 RPC 没有 handler（`descriptor.submit`、`job.cancel`、`analysis.delete`、`dataset.remove`、`dataset.rename`、`dataset.view.materialize`、`analysis.fps_quota`），拿到的是 `NO_HANDLER` —— 真后端永远不会发的码。于是 e2e 建不出描述符 run、也走不到任何拒绝/失败分支。**定调：补 `descriptor.submit` 与 `dataset.remove`，其余五个在门禁里显式列例外并写明理由** |
 
 ## 反证记录（不要再报）
 
