@@ -73,8 +73,17 @@ export default function App() {
   }, []);
 
   const restartBackend = useCallback(async () => {
-    setBackendStarting();
+    // One restart in flight. The shell spends about a second hashing the bundled
+    // sidecar before it can spawn it, and a second request landing inside that
+    // window used to produce a second child the app could no longer reach; the
+    // command refuses that now, and not sending it is what keeps this message
+    // honest instead of showing the user a failure they never caused. A guard
+    // rather than a `disabled` attribute because the button disappears with the
+    // error banner the moment `starting` lands - two clicks in one frame are the
+    // case, and only this check sees them.
+    if (restartingRef.current) return;
     restartingRef.current = true;
+    setBackendStarting();
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("backend_restart");

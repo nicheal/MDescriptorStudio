@@ -7,12 +7,12 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tauri::{Emitter, EventTarget, Manager};
 
 const PROTOCOL_VERSION: u64 = 1;
@@ -87,6 +87,18 @@ struct BackendState {
     // webview. This prevents arbitrary sidecar stdout from becoming a browser
     // event.
     pending_ids: Mutex<HashSet<u64>>,
+    // The single restart slot: see `spawn_backend_async`.
+    spawning: Arc<AtomicBool>,
+}
+
+/// Clears the restart slot when the spawn attempt it was taken for ends,
+/// including when it ends in a panic.
+struct SpawnClaim(Arc<AtomicBool>);
+
+impl Drop for SpawnClaim {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 #[tauri::command]
@@ -172,7 +184,7 @@ fn backend_restart(app: tauri::AppHandle, state: tauri::State<BackendState>) -> 
         BACKEND_EXIT_EVENT,
         backend_exit_payload(),
     );
-    spawn_backend_async(app);
+    spawn_backend_async(app)?;
     Ok(())
 }
 
@@ -218,8 +230,38 @@ fn kill_backend(state: &BackendState) {
 // Bundle verification is disk-bound and can take seconds on a cold install.
 // Keep it off Tauri's setup/command thread so the WebView can paint the
 // startup screen while the verified backend is being prepared.
-fn spawn_backend_async(app: tauri::AppHandle) {
-    thread::spawn(move || spawn_backend(&app));
+fn spawn_backend_async(app: tauri::AppHandle) -> Result<(), String> {
+    // One spawn attempt at a time, whichever caller asks for it. Building the
+    // command hashes the bundled sidecar - about a second in a release build -
+    // and only then calls `Command::spawn`, which replaces `state.child`. Two
+    // attempts in flight therefore produce two children, and the loser's `Child`
+    // is dropped: on Windows that closes the handle without killing the process,
+    // so `kill_backend` can no longer reach it and the app is left with two
+    // sidecars on one SQLite database and one webview channel, the first reader
+    // thread never seeing EOF. The command reports the refusal instead of
+    // quietly dropping the request.
+    let claim = {
+        let state = app.state::<BackendState>();
+        state.claim_spawn()?
+    };
+    thread::spawn(move || {
+        let _claim = claim;
+        spawn_backend(&app);
+    });
+    Ok(())
+}
+
+impl BackendState {
+    fn claim_spawn(&self) -> Result<SpawnClaim, String> {
+        if self
+            .spawning
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("a backend restart is already in progress".to_string());
+        }
+        Ok(SpawnClaim(Arc::clone(&self.spawning)))
+    }
 }
 
 fn spawn_backend(app: &tauri::AppHandle) {
@@ -622,6 +664,7 @@ fn main() {
             child: Mutex::new(None),
             ready_line: Mutex::new(None),
             pending_ids: Mutex::new(HashSet::new()),
+            spawning: Arc::new(AtomicBool::new(false)),
         })
         .invoke_handler(tauri::generate_handler![
             backend_request,
@@ -629,7 +672,9 @@ fn main() {
             backend_ready_line
         ])
         .setup(|app| {
-            spawn_backend_async(app.handle().clone());
+            if let Err(error) = spawn_backend_async(app.handle().clone()) {
+                log_line(&format!("initial backend spawn refused: {error}"));
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -664,6 +709,30 @@ mod tests {
         let manifest = serde_json::to_vec(&entries).unwrap();
         fs::write(dir.join("backend-manifest.json"), &manifest).unwrap();
         format!("{:x}", Sha256::digest(&manifest))
+    }
+
+    #[test]
+    fn one_backend_spawn_is_claimed_until_the_attempt_ends() {
+        // The restart command used to be re-entrant, and two overlapping calls
+        // left an unreachable sidecar behind (pass 4, A-7). Spawning a real one
+        // is not what a unit test can check; that the slot admits exactly one
+        // in-flight attempt, and reopens when the guard drops, is.
+        let state = BackendState {
+            child: Mutex::new(None),
+            ready_line: Mutex::new(None),
+            pending_ids: Mutex::new(HashSet::new()),
+            spawning: Arc::new(AtomicBool::new(false)),
+        };
+        let claim = state.claim_spawn().expect("the first claim wins");
+        assert!(
+            state.claim_spawn().is_err(),
+            "a second attempt must be refused while one is in flight"
+        );
+        drop(claim);
+        assert!(
+            state.claim_spawn().is_ok(),
+            "the slot reopens once the attempt is over"
+        );
     }
 
     #[test]
