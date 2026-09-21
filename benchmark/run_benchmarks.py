@@ -200,6 +200,17 @@ def storage_suite(quick, tmp_dir):
                 "spread_seconds": timing["spread_seconds"],
                 "repeats": timing["repeats"],
                 "mb_per_second": round(megabytes / timing["seconds"], 1) if timing["seconds"] else None,
+                # What the throughput number is actually a measurement of. The
+                # read phase re-opens a file this same loop just wrote, three
+                # times over, so it is served from the OS page cache and its
+                # MB/s is an order of magnitude above any device this runs on
+                # (measured: 4 452 / 4 476 MB/s read against 265-300 MB/s write).
+                # Naming it is the fix; flushing or bypassing the cache needs a
+                # privileged handle on Windows, which is out of proportion to a
+                # suite whose purpose is the artifact format's own cost.
+                "cache": "written once by this suite, then read from page cache"
+                if phase == "read"
+                else "fresh file created by this suite",
                 "rss_high_water_mb": timing["rss_high_water_mb"],
                 "rss_growth_mb": timing["rss_growth_mb"],
             })

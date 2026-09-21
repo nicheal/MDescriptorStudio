@@ -12,12 +12,18 @@
 | --- | --- | --- |
 | `descriptor` | ACSF over seeded displaced diamond cells, 256 and 2048 structures, then the same batch at 1 / 2 / all-core thread counts | engine throughput and how well it uses cores |
 | `analysis` | PCA, the RBF kernel eigenspectrum and UMAP at 500 / 2 000 / 8 000 samples | which analyses are quadratic in sample count, and how steeply |
-| `storage` | `values.npy` written and read back at 20 000 × 512, float32 and float64 | the cost of the artifact format on the result path |
+| `storage` | `values.npy` written and read back at 20 000 × 512, float32 and float64 | the cost of the artifact format on the result path. **Cache-warm**: the read row re-opens a file the same run just wrote, so its MB/s is page-cache speed, not device throughput |
 
 Each row reports median wall time over three runs, the min/max spread, a
-throughput and the process working set. Results are written to
+throughput and the process working set, plus a `cache` field saying what each
+throughput number was actually measured against. Results are written to
 `results/<utc>/results.json` (gitignored) next to the `values_*.npy` the storage
 suite produces, so a run can be re-read or diffed later.
+
+**Do not cite the storage rows as I/O bandwidth.** They are cache-warm by
+construction - measured at 4 452 and 4 476 MB/s read against 265-300 MB/s write
+on the same file - and a cold-device number would need a privileged handle on
+Windows, which is not what this suite is for.
 
 ## What this is not
 
