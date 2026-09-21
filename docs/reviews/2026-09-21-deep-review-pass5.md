@@ -47,14 +47,22 @@
 所以「记录数 = 文件字节」这条 C-11 的契约在帧格式上无任何人看守；新用例把 writer 换成返回 3，
 断言行里记的是 3，恢复旧写法即报 `assert 1 == 3`。
 
-### 第 3.5 批 · 报告为「过度防御、可删」，待我逐条复核
+### 第 3.5 批 · 两条「过度防御、可删」的主张 —— 复核后**都留着**，理由如下
 
-agent 只给了读码证据，我自己还没跑过，所以先记账不动手：
+两条都是 agent 的读码结论，我自己按语句顺序重走了一遍，各自不成立：
 
-| # | 位置 | 主张 | 复核要到什么程度 |
-| --- | --- | --- | --- |
-| 5-B6 | `services/job_service.py:45, 50-52, 83-84, 185` | `JobContext.detached` 是同一条件的第三道闸：`cancel()` 先 `ctx.cancel()` 再 `ctx.detach()` 再 `_finalize()`，故 `detached` 恒蕴含 `_cancelled.is_set()`；`progress()` 想挡的「行已结算后仍写进度」实际由 `_update_progress` 的 `WHERE status IN ('QUEUED','RUNNING')` 挡住 | 需要确认没有第四条路径只 detach 不 cancel，且删后亚毫秒窗口里多出的那条 0 行 UPDATE 无副作用 |
-| 5-B7 | `storage/database.py:164` | `_write_lock` 是 `RLock` 而无人重入；更糟的是它让「在 `transaction()` 里调 `self.db.execute(...)`」这种提前提交外层事务的写法静默通过 | 需要确认两个 `transaction()` 使用点确实不回回调 `db.*`，然后换成 `Lock` 看测试是否全绿 |
+- `JobContext.detached`（`job_service.py:45, 50-52, 83-84, 185`）：主张是「`cancel()` 先 `ctx.cancel()` 再 `ctx.detach()`，所以 `detached` 恒蕴含 `_cancelled`，第三道闸永不生效」。
+  顺序确实如此，但 `cancel()` 是 `ctx.cancel() → ctx.detach() → _finalize(...)`，而 `_finalize` 才是把行翻成
+  CANCELLED 的那一步 —— detach 与 settle 之间存在一个窗口，其中 `_update_progress` 的
+  `WHERE status IN ('QUEUED','RUNNING')` **仍然匹配**，所以没有这个标志时，一个刚被叫停的作业仍可写一次进度并
+  广播一帧 `job.progress`。窗口很小、后果可忽略，但「永不触发」是错的：它是这三行存在的唯一理由。留着。
+- `Database._write_lock`（`storage/database.py:164`）：主张是「没人重入，换成 `Lock` 能让『在 `transaction()` 里
+  调 `self.db.execute`』这种提前提交外层事务的写法当场自锁」。今天确实零重入；但改动的收益只是把一种未来的
+  静默错误换成一种未来的挂死，两种都要靠测试发现，而 `RLock` 顺带保住了 `transaction()` 内部调用只读 helper 的
+  自由。没有实测支持它是缺陷，按「不为假想 bug 改并发原语」留着。
+
+（记录这条否决的理由：pass 4 已有同类先例 —— `_json_safe`、`finite_or_none` 的「可删」主张都在读过调用顺序后
+被推翻。凡是「这道闸永不触发」的结论，必须先把写下顺序的两条语句找出来。）
 
 ### 第 4 批 · 契约与死重量 —— 5-D1/5-D2（`fac2a3b`）、5-D6 与 5-D7 的两条别名（`f4b3149`）已落地，其余逐项都需点头
 
