@@ -43,6 +43,7 @@
 | `2db2e62` | E-5：在飞取帧期间到达的外部跳转被记住并在落地后重放 | 规则抽成 `resolveExternalFrame` 并单测四态；旧的「loading 就丢」在第二条断言上失败 |
 | `373d896` | Q5：mock 补 `descriptor.submit`（含缓存命中与 force）与 `dataset.remove`，其余五个作为具名例外进门禁 | 新 wire-contract 用例走真 RPC：缓存答复、强算、完成后新增 COMPLETED run、未知数据集拒绝、删除后列表里没有它 |
 | `8cb3a38` | A-7：shell 只有一个后端 spawn 名额，重启不再留下杀不掉的 sidecar；前端提交前自测在飞标记 | `cargo test` 4 通过（新断言：第二次 claim 必须失败、guard drop 后重开）；去掉 `compare_exchange` 该测试在断言处 panic |
+| `0933533` | E-8（陈旧那一半）：`loadExploreHealth` 增加 `onRecalculated`，Explore 传 `refetchDatasets`，Overview 就地补同一步 | Overview 用例断言顺序 `statistics → dataset.list → statistics`；Explore 用例数出钩子发生在第二次读之前；任一处去掉调用即红 |
 
 ## 待修（已核实，按批排列）
 
@@ -87,7 +88,7 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 | # | 位置 | 问题 |
 | --- | --- | --- |
 | C-17 | `job_runner.py:_input_ids` | 对 `run_ids` 无长度上限：一次提交带 N 个 id 就有 N 次 `SELECT * FROM descriptor_runs`、N 次 `feature_space_signature`，且 `input_ids` 会被拼进缓存身份。第 4 批把每 id 一次的数据集探针收成每次提交一次之后，剩下的按 N 线性项都在这里 —— 是个契约问题（要不要设上限、上限是多少、超了报什么码），不是性能问题 |
-| E-8 | `RightRail.tsx:147-197` + `Explore.tsx:55-70` + `Overview.tsx:32-65` + `HealthFindingsDrawer.tsx:76-90` | 「取统计 → 等作业 → 再取一次」四份实现且已漂移：只有 RightRail/HealthFindingsDrawer 等完调 `refetchDatasets()`，所以 Explore/Overview 重算后数据集那一行（`dataset_service.py:635` 重写 `number_of_frames`/`fingerprint`/`last_scan_at`）还是旧的；`loadExploreHealth` 已抽出并单测但另外三处没收进去。次要：rail 的 `rescan()` 自己请求一次后又 `bumpStatsTick()` 触发自己的 mount effect → 多一次往返 + 一帧七行健康项全空 |
+| E-8 | `RightRail.tsx:147-197` + `HealthFindingsDrawer.tsx:76-90` | 剩下的是重复本身：这两处仍各自实现「取统计 → 等作业 → 再取一次」，并且都各自驱动一条进度条，收进 `loadExploreHealth` 属界面改动而非修错。 陈迹那一半已由 `0933533` 解决：helper 多了 `onRecalculated`，Explore/Overview 重算后会刷新数据集行，两处断言合起来钉住 `statistics → dataset.list → statistics` 的顺序。 |
 
 ## 反证记录（不要再报）
 
