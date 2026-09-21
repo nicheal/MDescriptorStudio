@@ -57,12 +57,37 @@ def test_progress_checkpoints_are_monotonic_and_terminal() -> None:
     assert {message for _, message in seen} == {"fitting UMAP"}
 
 
+def _median_nearest_neighbour_distance(coords) -> float:
+    """How far apart the tightest pairs in an embedding are, in embedding units."""
+    squared = ((coords[:, None, :] - coords[None, :, :]) ** 2).sum(axis=-1)
+    np.fill_diagonal(squared, np.inf)
+    return float(np.median(np.sqrt(squared.min(axis=1))))
+
+
 def test_separable_blobs_preserve_local_structure() -> None:
     from sklearn.manifold import trustworthiness
 
     x, _ = _blobs()
     coords = _fit(x)
-    assert trustworthiness(x, coords, n_neighbors=10) > 0.9
+    # Measured on the variants this file cannot otherwise tell apart: dropping
+    # every repulsive force gives 0.9287 and returning the PCA initialisation
+    # gives 0.9326, so the 0.9 that used to be the whole quality gate accepted
+    # both (pass 5, 5-N2). The seeds sit at 0.9592-0.9595 and a 1200-point run
+    # at 0.9578, so 0.95 still has room.
+    assert trustworthiness(x, coords, n_neighbors=10) > 0.95
+
+
+def test_min_dist_actually_spreads_the_embedding() -> None:
+    """`min_dist` is a slider in the projection panel, and nothing here read it.
+
+    The spread it controls is the contract: a bigger `min_dist` must push the
+    tightest pairs apart. An implementation that ignored the parameter - the
+    ``(a, b) = (1, 1)`` shortcut - scored 0.958 on the gate above, so quality
+    alone cannot catch it; this one does.
+    """
+    x, _ = _blobs()
+    spreads = [_median_nearest_neighbour_distance(_fit(x, min_dist=md)) for md in (0.05, 0.1, 0.5, 0.99)]
+    assert all(narrower < wider for narrower, wider in zip(spreads, spreads[1:])), spreads
 
 
 def test_knn_search_checkpoints_so_a_long_one_stays_cancellable() -> None:

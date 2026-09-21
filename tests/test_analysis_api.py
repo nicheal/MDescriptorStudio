@@ -975,6 +975,61 @@ def test_export_reports_the_entries_it_wrote_not_the_selection_it_was_given(tmp_
     db.close()
 
 
+def test_a_frame_export_records_what_the_writer_counted(tmp_path: Path, monkeypatch) -> None:
+    """extxyz and DeepMD both answer with the frames they wrote.
+
+    The export threw that answer away and re-derived ``len(frames)`` from the
+    request, so the one number tying the stored row to the bytes on disk was the
+    number nothing checked (deep review pass 5, 5-N3 - the half of C-11 the frame
+    formats never got).
+    """
+    db, _jobs, service = _service(tmp_path)
+    result_dir = tmp_path / "results" / "run_export_frame"
+    result_dir.mkdir(parents=True)
+    np.save(result_dir / "values.npy", np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]]))
+    (result_dir / "metadata.json").write_text(
+        json.dumps({"run_id": "run_export_frame", "level": "structure", "row_semantics": "structure", "shape": [4, 2]}),
+        encoding="utf-8",
+    )
+    db.execute(
+        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements, properties, periodicity, fingerprint, created_at)"
+        " VALUES ('ds_export', 'export', 'deepmd', 'source', 8, '[]', '{}', '{}', 'fingerprint', '2026-01-01T00:00:00+00:00')"
+    )
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version, parameters_json,"
+        " scope, frame_index, status, created_at, result_path) VALUES ('run_export_frame', 'ds_export', 'SOAP', 'test', '{}',"
+        " 'frame', 7, 'COMPLETED', '2026-01-01T00:00:03+00:00', ?)",
+        (str(result_dir),),
+    )
+
+    class _Adapter:
+        def __len__(self):
+            return 8
+
+        def get_frame(self, index):
+            pulled.append(index)
+            return index
+
+    class _Datasets:
+        def adapter_for(self, _dataset):
+            return _Adapter()
+
+    service.datasets = _Datasets()
+    run = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_export_frame'")
+
+    pulled: list[int] = []
+
+    def writer(_target, frames):
+        list(frames)  # a writer pulls the generator; the export never saw this count
+        return 3  # what the writer says it wrote, deliberately not len(frames)
+
+    monkeypatch.setattr("mdescriptor_studio_backend.services.export_service.write_extxyz", writer)
+    _path, written = service._write_export(run, [0, 1, 2, 3], "extxyz", "structure", tmp_path / "out.xyz", _Context())
+    assert pulled, "the frames were handed to the writer lazily"
+    assert written == 3, "the row records the writer's count, not the request's length"
+    db.close()
+
+
 def test_identity_records_are_keyed_on_the_sample_not_frame_order() -> None:
     """`indices` exports sample indices, so the JSON/CSV sample_index must mean
     the same thing. Enumerating the deduped frame list relabelled every record

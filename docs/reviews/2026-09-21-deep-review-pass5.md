@@ -33,12 +33,17 @@
 | --- | --- | --- | --- |
 | 5-C6 | `analysis/algorithms/pairs.py:373-390, 399` | Dataset Drift 的指标条把两类总体并排显示：Covered / Marginal / Out of coverage / Mean distance 来自**全部** query 行，而 MMD、Centroid shift、Covariance shift 来自每侧 ≤500 行的等距抽样（`distribution_samples`），预览里既没写出这个数，`analysisMethodGuides.ts` 的 drift 一节也完全没提核方法 | 同一份 4000+4000×20 数据只改抽样上限：500 → mmd 0.15995 / centroid 1.33261，2000 → 0.14654（−9.1 %）/ 1.23278（−8.1 %），而 mean_distance 纹丝不动 3.50525；8 个 seed 得到同一 mmd，所以不是随机性而是样本量与披露。修法是加一个 preview 键并在指标条写明「按 N 行」，不动任何已存数字 |
 
-### 第 3 批 · 门禁质量（不看代码就发现不了的“测了等于没测”）
+### 第 3 批 · 门禁质量 —— 两条已由 `<hash3>` 落地
 
-| # | 位置 | 问题 | 已有测量 |
-| --- | --- | --- | --- |
-| 5-N2 | `tests/test_umap_numpy.py:60-65` | 第四轮反证记录的结论是「UMAP 该修的是门禁，不是公式」。本轮把那句话量出来：唯一质量闸 `trustworthiness > 0.9` 落在「什么都没做」和「做了」之间 —— 删掉全部斥力 0.9287、直接返回 PCA 初值 0.9326、`_ab_params → (1,1)`（`min_dist` 完全失效）仍 0.958 且 9 条测试全绿；用户面板上 0–1 的 `min_dist` 滑杆零测试 | 夹具 `_blobs(300,10,seed=7)`，七种破坏实现逐一实测 TW 与簇分离比；`grep min_dist` 只在 `test_analysis_ipc.py:155` 作为提交参数出现 |
-| 5-N3 | `tests/test_datasets.py::test_statistics` 一族 | 落盘/缓存类断言集中在「键在不在」，`_write_export` 的两个 writer 计数分支此前无任何断言经过 writer（`indices` 早退分支才是唯一检查点），所以 5-A5 那条「记下来的是请求给的数」长期无人看守 | 5-A5 已把两处改为取 writer 返回值；给帧格式补一条真正经过 writer 的计数用例仍是待办 |
+同一条测试文件里唯一涉及质量的断言（`trustworthiness > 0.9`）此前**不可能失败**：
+实测删掉全部斥力 0.9287、直接返回 PCA 初值 0.9326、σ 二分退化 0.9547、`_ab_params → (1,1)`
+（即 `min_dist` 被完全忽略）0.9580 —— 四个破坏实现全都跨过 0.9，而 9 条测试里只有这一条看质量。
+现在阈值收到 0.95（本实现 0.9607，seed 之间 0.9592-0.9595，n=1200 0.9578，PCA 参考 0.9328），
+并新增一条 `min_dist` 单调性：中位最近邻距离 0.1859 → 0.2052 → 0.3872 → 0.4989（0.05/0.1/0.5/0.99）。
+注入「`_ab_params` 返回固定 (1,1)」后，前者仍绿（0.958）、后者报 `assert False` 并把四个 spread 打出来。
+另一条：`_write_export` 的 extxyz/DeepMD 分支此前把 writer 返回的帧数丢掉、改回 `len(frames)`，
+所以「记录数 = 文件字节」这条 C-11 的契约在帧格式上无任何人看守；新用例把 writer 换成返回 3，
+断言行里记的是 3，恢复旧写法即报 `assert 1 == 3`。
 
 ### 第 3.5 批 · 报告为「过度防御、可删」，待我逐条复核
 
