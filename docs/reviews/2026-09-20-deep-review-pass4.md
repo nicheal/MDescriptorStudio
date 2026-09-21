@@ -3,7 +3,7 @@
 范围：全仓。基线 `7d5605f`（第三轮第 15 批收尾）。本轮是**新一次审阅**，不是上一份报告的续批。
 方法：5 个审阅 agent 分片（算法层 / 服务层 / 解析与协议 / 前端页面 / 状态与 mock），外加散装前端文件、`benchmark/`、`scripts/`、测试与 CI。每条候选结论经我重新读码或实测后才进入下面的清单。
 
-环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。第 4、5 批与第 6 批大部分落地后的当前门禁：pytest 371 passed / 1 skipped；vitest 202；Playwright 43；tsc / eslint 干净；cargo test 4 passed。
+环境提醒：跑测试必须用 `.venv/Scripts/python.exe`（mdescriptor 0.3.3 + hdbscan）。用系统 conda 的 python 会有 5 个失败，那是环境漂移（0.2.3、缺 hdbscan），不是代码问题。开轮基线：pytest 343 passed / 1 skipped；vitest 195；Playwright 39；tsc / eslint / cargo 干净。全部批次收尾后的门禁：pytest 378 passed / 1 skipped；vitest 203；Playwright 44；tsc / eslint 干净；`cargo test` 4 passed（最后一次 Rust 改动是 `8cb3a38`，其后的提交没有再碰 Rust）。
 
 ## 已落地
 
@@ -44,12 +44,17 @@
 | `373d896` | Q5：mock 补 `descriptor.submit`（含缓存命中与 force）与 `dataset.remove`，其余五个作为具名例外进门禁 | 新 wire-contract 用例走真 RPC：缓存答复、强算、完成后新增 COMPLETED run、未知数据集拒绝、删除后列表里没有它 |
 | `8cb3a38` | A-7：shell 只有一个后端 spawn 名额，重启不再留下杀不掉的 sidecar；前端提交前自测在飞标记 | `cargo test` 4 通过（新断言：第二次 claim 必须失败、guard drop 后重开）；去掉 `compare_exchange` 该测试在断言处 panic |
 | `0933533` | E-8（陈旧那一半）：`loadExploreHealth` 增加 `onRecalculated`，Explore 传 `refetchDatasets`，Overview 就地补同一步 | Overview 用例断言顺序 `statistics → dataset.list → statistics`；Explore 用例数出钩子发生在第二次读之前；任一处去掉调用即红 |
+| `7c8a837` | C-17：一次提交的逐 run 校验合成一条 `IN` 查询（定调：不设长度上限，去掉线性代价而不是发明拒绝） | 三 run 提交数出恰好一次带三个占位符的读；改回逐 id 循环它报三次；缺失 id 仍点名自己 |
+| `65702c9` | D-8：力幅值在 8 MiB 预算内仍全量保留、逐位不变，超过预算才改流入式计数网格；`STATS_VERSION` 5 → 6 | 11 组差分在保留路径上逐位相等；网格路径边界/min/max/mean 精确、计数最多差 6/970、中位数差半格；480 万值上 115.2 MB/88 ms → 8.6 MB/181 ms；注入「永不切网格」内存断言在 51.4 MB 处红 |
+| `3fb25fc` | B-5：cluster 代表样本改在 FPS 那套尺度空间里选，控件、身份键、恢复与结果卡一起说明用的是哪个空间；`ANALYSIS_ALGORITHM_VERSION` → "studio-analysis-7" | 三列 1:1000 实测 raw 从 `[1,10,22]` 漂到 `[3,15,22]`、两种尺度模式对两份单位都回 `[1,17,22]`；删掉身份键里的 cluster 分支，扫描门禁报 `ignores ["samplingScaling"]` |
 
-## 待修（已核实，按批排列）
+## 待修（已核实，按批排列）—— 本轮清单已清空
 
-### 第 4 批 · 热路径（结果须逐位不变，不 bump）—— 只剩 D-8
+下面三批的每一条要么是**已落地**（见上表），要么在原地标明了**故意不做**及其理由；另有被实测否决的见「反证记录」，需要你裁决而不是修错的见「明确留给你、不动的三件」。
 
-七条里六条进仓（上表 `ff3f69f`…`453253b`）。「逐位不变所以不 bump」这条线是守住了的：
+### 第 4 批 · 热路径（结果须逐位不变，不 bump）—— 已关闭
+
+七条全部进仓（六条见上表 `ff3f69f`…`453253b`，D-8 见 `65702c9`，它不在这批的「不 bump」额度里）。「逐位不变所以不 bump」这条线是守住了的：
 Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —— 换成凝聚索引 gather 后
 实测 0.6–0.8×（更慢），并在 1e-17 上改数，两头好处都没有。
 
@@ -59,19 +64,14 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 落盘，漏网的 numpy 值会让作业当场失败而不是写坏行，所以那条全局遍历已不是唯一防线。
 要做的话这是一个独立决定。
 
-| # | 位置 | 问题 | 已有测量 |
-| --- | --- | --- | --- |
-| D-8 | `statistics.py` 的 `force_magnitudes` 累加 + 末尾 `np.concatenate` | 为一个精确中位数把全数据集每原子力幅值留在内存：峰值 8 B × 总原子数再乘一份 concatenate。该模块里唯一与它自己「streaming statistics」表头矛盾处 | 先确认有没有人依赖精确中位数；否则改表头说明这一处刻意全量驻留 |
+D-8（`statistics.py` 的 `force_magnitudes` 累加 + 末尾 `np.concatenate`）由 `65702c9` 落地，走的不是报告给的那两条路（确认有没有人依赖精确中位数 / 只改表头）里的任何一条，而是第三条：1M 个原子以内仍然全量保留、仍然由 `_hist`/`_summary` 出数，超过预算才改流入式计数网格。因此它不在「逐位不变」这一批的额度里 —— 见下面自我修正第 5 条。
 
-### 第 5 批 · 语义变更 —— `ANALYSIS_ALGORITHM_VERSION` 已在 `546187e` 过到 "6"
+### 第 5 批 · 语义变更 —— 已关闭（两次失效都花掉了）
 
 原定「整批一次 bump」，实际提前收尾：B-3 / B-4 / B-6 已经改了缓存结果所描述的
-样本，让它们继续被旧结果命中不是选项。所以下面每条落地时要**各自**判断是否改数、要不要再一次 bump，而不是假设额度还剩着。B-1 已由 `0905ff1` 按「给面板加控件」落地（而不是摘掉绿点），它不改后端数字；剩下两条：B-5 会改采样结果，真要落地得再谈一次失效；D-8 取决于选哪一半，见第 4 批那一行。
+样本，让它们继续被旧结果命中不是选项。所以下面每条落地时**各自**判断是否改数、要不要再一次 bump。B-1 由 `0905ff1` 按「给面板加控件」落地，不改后端数字；B-5 由 `3fb25fc` 落地，改采样结果，于是你在本轮授权了第二次 bump（`ANALYSIS_ALGORITHM_VERSION` → "studio-analysis-7"）；D-8 由 `65702c9` 落地，但改的是数据集统计而不是分析结果 —— 让它真正失效的是 `STATS_VERSION` 5 → 6，分析版本对它无意义。两个修订号都动了，代价如实记下：每个数据集下次打开重扫一遍统计，每条分析结果下次提交重算一遍。
 
-| # | 位置 | 问题 | 已有测量 |
-| --- | --- | --- | --- |
-| B-5 | `sampling/engine.py:175-191` vs `:96-102` | P1-14 第二半没落地、memo 也没定调：FPS 那支有 `scaling_mode`/`fit_scaling`/`apply_scaling`，cluster 直接 `.fit(x)` 原始值。混合单位矩阵（能量 eV + 维里 + 体积 Å³）上「代表样本」几乎完全沿最宽那一列选，`:201` 的 `_visual_pca(x)` 画的还是同一个原始空间，两张 sampling 卡不可比。`submission.ts` 又只在 fps 时发 `scaling`，屏幕上没人说明空间变了 | 两列 1:1000 的矩阵可复现选择由宽列主导 |
-| D-8 | `statistics.py` | 若改成流式（而非只改表头），随这批一起过 | — |
+两条都已落地：B-5 见 `3fb25fc`（cluster 与 FPS 共用尺度空间，`raw` 仍是恒等、仍可复现旧选择，默认值改数所以带 bump；面板的 Feature scaling 控件、身份键、历史恢复与结果芯片同时跟上，`random`/`stratified`/`per_element` 不声称自己没用过的尺度）；D-8 见 `65702c9`（预算内逐位不变，预算外流式计数）。
 
 已随第 2 批落地的语义变更：A-2 pbc 拼写 + `FINGERPRINT_VERSION` v3→v4。
 
@@ -83,12 +83,14 @@ Mantel 默认的 Pearson 分支**故意**保留从距离矩阵直接 gather —�
 
 4. **C-9 的「mock 也缺 `health_findings.nonphysical_distances`」这条不成立为待办。** 后端确实发这个键，但 `HealthFindings` 类型里没有它、前端也没人读它 —— `Explore` 的最小距离对是从已经拿到的帧现算的（`minimumDistancePair(frame.xyz, ...)`）。把它补进类型只会加一个没有读者的字段；真要它得先有界面用途。落地时按这个结论只做了一半（见 `b1c88b0` 末尾说明）。
 
-### 第 6 批 · 契约与工具诚实
+5. **D-8 的失效不属于第 5 批那份授权的字面对象，而属于另一个修订号。** 报告把 D-8 放在第 4 批（热路径、逐位不变、不 bump），又在第 5 批附一行「若改成流式，随这批一起过」；真落地时它是流式的，改的却是 `dataset_statistics` 里存着的数，而那道门是 `dataset_service._cached_stats` 比对的 `STATS_VERSION`（`analysis_helpers.ANALYSIS_ALGORITHM_VERSION` 对它完全无效）。所以本轮把你授权的「一次 bump」花成了两处：`STATS_VERSION` 6（D-8）与 "studio-analysis-7"（B-5）。记账理由写在这里而不是藏在 diff 里：只动分析版本号的那次提交会带着永远无法失效的旧统计发布出去。
+
+### 第 6 批 · 契约与工具诚实 —— 已关闭
 
 | # | 位置 | 问题 |
 | --- | --- | --- |
-| C-17 | `job_runner.py:_input_ids` | 对 `run_ids` 无长度上限：一次提交带 N 个 id 就有 N 次 `SELECT * FROM descriptor_runs`、N 次 `feature_space_signature`，且 `input_ids` 会被拼进缓存身份。第 4 批把每 id 一次的数据集探针收成每次提交一次之后，剩下的按 N 线性项都在这里 —— 是个契约问题（要不要设上限、上限是多少、超了报什么码），不是性能问题 |
-| E-8 | `RightRail.tsx:147-197` + `HealthFindingsDrawer.tsx:76-90` | 剩下的是重复本身：这两处仍各自实现「取统计 → 等作业 → 再取一次」，并且都各自驱动一条进度条，收进 `loadExploreHealth` 属界面改动而非修错。 陈迹那一半已由 `0933533` 解决：helper 多了 `onRecalculated`，Explore/Overview 重算后会刷新数据集行，两处断言合起来钉住 `statistics → dataset.list → statistics` 的顺序。 |
+| C-17 | `job_runner.py:_input_ids` | **已定调并落地**（`7c8a837`）：不设上限 —— 渲染器发不出的提交不需要新错误码，上限只是给「要得更多」的用户发明一种失败。剩下的按 N 线性项收成一条 `IN` 查询（`_usable_runs`），逐条裁决（缺失点名、STALE 拒绝、无结果 `RESULT_INCOMPATIBLE`）原样保留 |
+| E-8 | `RightRail.tsx:147-197` + `HealthFindingsDrawer.tsx:76-90` | **剩下的重复按你的决定留着**：这两处仍各自实现「取统计 → 等作业 → 再取一次」，并且都各自驱动一条进度条，收进 `loadExploreHealth` 属界面改动而非修错。 陈迹那一半已由 `0933533` 解决：helper 多了 `onRecalculated`，Explore/Overview 重算后会刷新数据集行，两处断言合起来钉住 `statistics → dataset.list → statistics` 的顺序。 |
 
 ## 反证记录（不要再报）
 
