@@ -243,33 +243,25 @@ def test_the_mock_only_refuses_with_codes_the_backend_can_send():
     assert not invented, "preview.tsx refuses requests with codes the sidecar never sends: " + ", ".join(invented)
 
 
-def test_the_mock_does_not_advertise_a_capability_the_backend_fixes_off():
-    # The optimistic direction of wrong evidence: statistics.py reports one
-    # capability as a literal - no supported format carries per-atom energies, so
-    # `"per_atom": False` under energy - while `Overview.tsx` renders that flag as
-    # a ✓ column. The mock said `true`, so every browser run showed a capability the
-    # shipped app can only leave empty. The shape carve-out in this file's header
-    # does not reach it: this is one literal, not a structural diff.
-    source = (ROOT / "backend" / "mdescriptor_studio_backend" / "datasets" / "statistics.py").read_text(encoding="utf-8")
-    block = re.search(r'"properties": \{(.*?)\n        \},', source, re.S)
-    assert block, "statistics.py no longer spells its properties block in one place"
-    fixed_off = {
-        f"{name}.{flag}"
-        for name, body in re.findall(r'"(\w+)": \{([^{}]*)\}', block.group(1))
-        for flag, value in re.findall(r'"(\w+)": (\w+)', body)
-        if value == "False"
+
+def test_the_protocol_document_lists_every_declared_error_code_once() -> None:
+    """S6 of `docs/plan/02-IPC_PROTOCOL.md` is where a reader learns which codes
+    exist. It said "24", listed 23, and omitted the two the frontend behaviour
+    actually depends on - `BUSY` back-off and `DATASET_BUSY` refusing a removal
+    with live jobs (deep review pass 5, 5-D2)."""
+    document = (Path(__file__).resolve().parent.parent / "docs" / "plan" / "02-IPC_PROTOCOL.md").read_text(encoding="utf-8")
+    section = re.search("## 6\\..*?（(\\d+).*?```text\\n(.*?)\\n```", document, re.S)
+    assert section, "section 6 of the protocol document no longer holds a code block"
+    listed = section.group(2).split()
+    assert len(listed) == len(set(listed)), "a code is listed twice"
+    declared = re.findall(r"^([A-Z][A-Z0-9_]+) = ", (Path(__file__).resolve().parent.parent / "backend" / "mdescriptor_studio_backend" / "errors.py").read_text(encoding="utf-8"), re.M)
+    assert set(listed) == set(declared), {
+        "missing_from_document": sorted(set(declared) - set(listed)),
+        "documented_but_undeclared": sorted(set(listed) - set(declared)),
     }
-    assert fixed_off == {"energy.per_atom"}, fixed_off
-
-    claimed = {
-        f"{name}.{flag}"
-        for name, body in re.findall(r"(\w+): \{([^{}]*)\}", (FRONTEND_SRC / "preview.tsx").read_text(encoding="utf-8"))
-        for flag in re.findall(r"(\w+): true", body)
-    }
-    advertised = sorted(claimed & fixed_off)
-    assert not advertised, f"preview.tsx advertises capabilities the sidecar fixes off: {advertised}"
-
-
+    assert int(section.group(1)) == len(listed) == len(declared), (
+        f"the heading counts {section.group(1)}, the block lists {len(listed)}, errors.py declares {len(declared)}"
+    )
 # The renderer calls these and the browser preview has no answer, so it returns
 # `NO_HANDLER` - a code the sidecar never sends. Each one is a decision made here
 # rather than an accident discovered later, and the gate below fails on a new

@@ -37,7 +37,7 @@ backend 初始化完成后，**第一帧**输出：
 规则：
 - `id` 由前端生成（自增整数），响应必须原样携带；**允许多请求并发**（id 关联，ADR-16）。
 - 事件独立下行，可能与响应交错；事件无 `id`。
-- `protocol_version` 不为 1 → 回 `PROTOCOL_VERSION_MISMATCH` 错误帧并退出（exit 2）。
+- `protocol_version` 不为 1 → 只回一帧 `PROTOCOL_VERSION_MISMATCH` 错误帧并**继续服务**：解析失败时没有可关联的请求 id，所以该帧 `id` 为 null；sidecar 的退出码只有 0 与 1，没有为版本不匹配准备的 exit 2。
 - 错误帧只有 `code`/`message`/`error_id` 三个字段。`AppError.details` **不上线**：它可能引用路径，而渲染端不是受信接收者；`Server._handle` 把它按 `error_id` 写进日志。因此 UI 必须把 `error_id` 显示给用户，否则报障信息与日志再也对不上（`util/errors.describeError` 统一这一行）。
 - method 未知 / params 非法 → `INVALID_PARAMS`；job id 不存在 → `JOB_NOT_FOUND`。
 
@@ -46,7 +46,7 @@ backend 初始化完成后，**第一帧**输出：
 预计 > 1s 的方法**同步返回 `{"job_id": "..."}`**（error 帧仅用于立即校验失败），随后：
 - `job.progress` 事件：`{job_id, progress(0–1), completed, total, message}`
 - 终态事件 `job.finished`：`{job_id, status: COMPLETED|FAILED|CANCELLED, result: {...}|null, error: {...}|null}`
-- 查询：`job.list {dataset_id?, status?}`、`job.get {job_id}`、`job.cancel {job_id}`（无 cooperative_cancel 时返回错误码 `JOB_CANCEL_UNSUPPORTED`→ 前端显示 Cancel unavailable）。
+- 查询：`job.list {dataset_id?, status?}`、`job.get {job_id}`、`job.cancel {job_id}`（未知 id → `JOB_NOT_FOUND`；已结束 → `{ok: true, already_finished: true}`，不报错；排队中还没有 context → `INVALID_PARAMS`；正常取消则行立刻翻为 CANCELLED 并广播 `job.finished`，长跑的 runner 之后自己退出）。
 
 Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 
@@ -59,17 +59,17 @@ Job 状态机：`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED`。
 | `dataset.register` | {path, name?, lineage?} → {job_id}（扫描+统计入 cache；lineage 若引用 view，后端校验 parent、view 和 selection_hash 一致） | 是 |
 | `dataset.remove` | {id} → {ok}；级联删除统计缓存与 descriptor runs/results，不碰源文件 | 否 |
 | `dataset.rename` | {id, name} → DatasetMeta（仅改显示名，name 首尾空白被裁剪） | 否 |
-| `dataset.get` | {id} → Dataset + {fingerprint_valid, stats} | 否 |
+| `dataset.get` | {id} → DatasetMeta + {stats}（缓存的统计载荷，无则为 null） | 否 |
 | `dataset.statistics` | {id} → stats（直方图 bins + 摘要 + property availability + compositions（元素组合分布：structures 按精确元素集合分组计数，一元/二元/三元/多元，按元数升序、组内按计数降序）+ formulas（精确组分：Hill 记法化学式（实际原子数，不做比例约简，C2H4≠C4H8）计数的结构数，按计数降序） + element_atom_counts（逐元素原子数分布：每元素一个直方图，统计每个结构含该元素的原子数，整数对齐 bin，未含该元素的结构计 0）+ health：missing_values/energy_anomaly（单原子能量 E/N ≥ 0 eV/atom）/invalid_cell/duplicate_structures/extreme_force/nonphysical_structures（任意原子对——含周期镜像——间距 < 0.7×共价半径和，判据同 NepTrainKit「查找非物理结构」，半径表与 ase.data.covalent_radii 一致）/net_force（‖ΣF‖ > 1e-3 eV/Å，同 NepTrainKit「检查净力」）帧，附 extreme_force_threshold/short_contact_coefficient/net_force_threshold，另附 health_findings（每检查项命中的源文件帧号列表，封顶 5000/项，列表短于计数即截断；duplicate_structures_of 与 duplicate_structures 逐位对齐，记录每个重复副本首次出现的帧号，同封顶）；百分比前端按 structures 计算；精确组分模式前端只画 Top-N + “其他”）；缓存失效**或缓存缺 health（含 energy_anomaly/nonphysical_structures/net_force）/health_findings（含 energy_anomaly/duplicate_structures_of）/compositions/formulas**（旧版缓存）时自动触发重算 job；同数据集进行中的扫描 job 会被复用（Overview/健康栏并发调用共享一个 job） | 否/是 |
 | `dataset.rescan` | {id} → {job_id}；无视缓存有效性强制全量重扫（右侧 Data Health 面板 Rescan 按钮）；与进行中的扫描 job 去重 | 是 |
-| `dataset.frame` | {id, index, bond_cutoff?} → {index,natoms,formula,xyz,atom_rows,energy,energy_per_atom,force_max,virial_present,virial,volume,pbc,cell,ghost_count,bond_cutoff}；`virial` 为源帧原样记录的位力张量（eV，展平行主序 9 值，缺失为 null，不统一各生态的符号约定）；`bond_cutoff` 为 0.1–10 Å，缺省 2.4 Å | 否 |
+| `dataset.frame` | {id, index, bond_cutoff?} → {index,natoms,formula,xyz,atom_rows,energy,energy_per_atom,force_max,virial_present,virial,volume,pbc,cell,ghost_count,ghost_parents,bond_cutoff}；`virial` 为源帧原样记录的位力张量（eV，展平行主序 9 值，缺失为 null，不统一各生态的符号约定）；`bond_cutoff` 为 0.1–10 Å，缺省 2.4 Å；`ghost_parents` 逐个记录成键预览附加的镜像原子来自哪个父原子 | 否 |
 | `dataset.findings` | {id, check, limit?} → {recalculating,total,returned,rows:[{index,natoms,formula,force_max,energy_per_atom,volume,min_distance,missing_props}]}；`check` 从 stats 的 health_findings 解析帧号（missing_values/energy_anomaly/invalid_cell/duplicate_structures/extreme_force/nonphysical_structures/net_force）；行数封顶 limit（≤1000）；`index` 为源文件原始帧号，供 dataset.frame 预览与保存为 dataset view；`energy_per_atom` 为 E/N（eV/atom），`min_distance`（最短原子间距，Å）仅在 check=nonphysical_structures 时计算（其余检查为 null，省去近邻搜索）；`missing_props` 为该帧缺失的声明属性（energy/forces/virial）；缓存缺 health_findings 时返回 recalculating=true + job_id | 否 |
 | `dataset.view.list/create/rename/remove` | view 为同一源数据集上的不可变帧索引集合；create: {dataset_id,name,indices,role?,filter?}；list: {dataset_id?}；返回 selection_hash、dataset_fingerprint、stale，不复制源数据 | 否 |
 | `dataset.view.split` | {dataset_id,view_id?,name_prefix?,seed?,train_ratio?,validation_ratio?} → {views:[train,validation,test]}；确定性打乱，三个集合互斥且穷尽所选范围；view_id 只作输入范围，不生成递归视图层级 | 否 |
 | `dataset.view.materialize` | {view_id,dest_path} → {job_id,dest_path}；job 结果含 path/frames_written/format/name/lineage，前端再以 dataset.register 显式注册为独立数据集 | 是 |
 | `descriptor.list` | {} → [{name,display_name,description,schema_version,descriptor_version,level,backend,execution_engine,category,capabilities,input}] | 否 |
 | `descriptor.describe` | {name} → schema 全文（含 input/execution/asset/parameters） | 否 |
-| `descriptor.submit` | {dataset_id, descriptor_name, parameters, scope: "frame"\|"dataset", frame_index?, output_dtype?, device?} → {job_id, cache?: {existing_run_id, cache_key}}；`device` 须在该描述符 schema `execution.devices` 声明内（默认 `"cpu"`），并参与缓存键 | 是 |
+| `descriptor.submit` | {dataset_id, descriptor_name, parameters, scope: "frame"|"dataset", frame_index?, output_dtype?, device?, num_threads?, force?} → {job_id, cache?: {existing_run_id, cache_key, in_flight}}；`force` 跳过缓存复用，`num_threads` 参与缓存身份；`device` 须在该描述符 schema `execution.devices` 声明内（默认 `"cpu"`），并参与缓存键 | 是 |
 | `result.list` | {dataset_id?, descriptor_name?} → [runs]（含 shape、feature_count、row_semantics、feature_space_signature；签名用于跨数据集输入兼容性筛选） | 否 |
 | `result.get` | {run_id} → metadata + 摘要（不含大数组） | 否 |
 | `result.remove` | {run_id} → {ok}；级联删除该 run 的 analysis_runs 与关联 jobs 行，并尽力删除磁盘结果/分析目录；run 处于 QUEUED/RUNNING 时拒绝（`RESULT_INCOMPATIBLE`，先取消 job） | 否 |
@@ -116,10 +116,13 @@ Analysis API 统一使用同一结果模型：计算型方法立即返回
 空输入、样本不足、未声明且未验证的 atom row_offsets 返回结构化错误；
 zero-variance 特征可确定性忽略并记录 warnings。完整数组以 float64 落盘。
 
-## 6. 错误码全集（24）
+规则（`main.py:build_methods`）：`ANALYSIS_REGISTRY.names()` 里的每个名字都会生成一个 `analysis.<name>` RPC —— 新算法进 registry 即上线路径，不需要再改 main/service；显式的归一方法 (`analysis.cluster` / `analysis.outlier` / `analysis.sampling` / `analysis.coverage` ...) 优先，生成的直通只补空缺。因此 `analysis.kmeans`、`analysis.dbscan`、`analysis.lof`、`analysis.random`、`analysis.per_element` 等别名**不经过**归一包装器：params 原样进算法，`algorithm`/`method` 由调用方自己给对。registry 名解析不到属性就是接线错误，启动时即失败而不是静默漏。
+
+## 6. 错误码全集（25，与 `errors.py` 声明一一对应）
 
 ```text
 DATASET_NOT_FOUND        DATASET_CHANGED         INVALID_DATASET
+DATASET_BUSY             BUSY
 UNSUPPORTED_FORMAT       UNSUPPORTED_PERIODICITY MDESCRIPTOR_INCOMPATIBLE
 DESCRIPTOR_CONFIGURATION_ERROR                   MODEL_NOT_FOUND
 DEVICE_UNAVAILABLE
@@ -132,9 +135,9 @@ ANALYSIS_STALE           ARTIFACT_INVALID
 EXPORT_FAILED
 ```
 
-（`JOB_CANCEL_UNSUPPORTED` 由 job.cancel 以 `INVALID_PARAMS` 携带 details 表达，不单列。`DEVICE_UNAVAILABLE` 为引擎 `code=device_unavailable` 的映射：请求的设备未随 wheel 提供运行时（如无 NVIDIA GPU/driver 的机器）。）
+（`DEVICE_UNAVAILABLE` 为引擎 `code=device_unavailable` 的映射：请求的设备未随 wheel 提供运行时（如无 NVIDIA GPU/driver 的机器）。取消不存在或已结束的作业不单列错误码，由 `job.cancel` 以 `INVALID_PARAMS` 答复，见 §4。）
 
-错误帧 `message` 为面向开发者的英文；用户友好文案由前端按 code 映射；traceback 只进日志。
+错误帧 `message` 为面向开发者的一句英文（后端 `_PUBLIC_MESSAGES` 是唯一措辞归属者，可能引用路径的 `AppError.details` 不上线）；前端**不按 code 映射文案**，只原样渲染 `code: message (error_id)`，唯一的 code 分支是 `BUSY` 触发退避重试。traceback 只进日志。
 
 ## 7. Sidecar 生命周期
 
