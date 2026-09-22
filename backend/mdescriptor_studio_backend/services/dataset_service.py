@@ -205,9 +205,9 @@ class DatasetService:
             raise AppError(INVALID_DATASET, "dataset format no longer matches its source")
         # Built under a lock, and re-checked inside it. A cold dataset can be
         # touched by an analysis job and the viewer in the same instant, and
-        # `create_adapter` reads the source in - a DeepMD set eagerly and in
-        # full - so without this each caller built its own copy and every loser
-        # but the last left memory behind that nothing could reach.
+        # `create_adapter` opens DeepMD arrays through read-only memory maps and
+        # text formats through their frame index. Without this lock each caller
+        # could still build its own adapter and leave duplicate mappings behind.
         with self._adapter_lock:
             adapter = reuse(self._adapters.get(row["id"]))
             if adapter is None:
@@ -275,6 +275,8 @@ class DatasetService:
             ctx.progress(0, 1, "scanning dataset")
             adapter = create_adapter(path, fmt)
             scan = adapter.scan()
+            if scan.number_of_frames <= 0:
+                raise AppError(INVALID_DATASET, "dataset contains no frames")
             total = max(scan.number_of_frames, 1)
             # statistics pass drives progress
             frames_seen = 0
@@ -302,51 +304,76 @@ class DatasetService:
                 elements = [e["symbol"] for e in stats["elements"]]
             periodicity = scan.periodicity if scan.periodicity["flags"] else stats["periodicity"]
             try:
-                self.db.execute(
-                    "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
-                    " properties, periodicity, fingerprint, file_size, created_at, last_scan_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        ds_id,
-                        name,
-                        fmt,
-                        str(path),
-                        scan.number_of_frames,
-                        json.dumps(elements),
-                        json.dumps(stats["properties"]),
-                        json.dumps(periodicity),
-                        fingerprint,
-                        scan.file_size,
-                        _NOW(),
-                        _NOW(),
-                    ),
-                )
+                with self.db.transaction() as conn:
+                    # The caller-side validation prevents ordinary mistakes;
+                    # this second check closes the race with parent/view
+                    # deletion while the child publication is being committed.
+                    if lineage is not None:
+                        parent_id = lineage["parent_dataset_id"]
+                        parent = conn.execute(
+                            "SELECT id FROM datasets WHERE id = ?", (parent_id,)
+                        ).fetchone()
+                        if parent is None:
+                            raise AppError(INVALID_PARAMS, "lineage parent dataset does not exist")
+                        source_view_id = lineage.get("source_view_id")
+                        if source_view_id is not None:
+                            source_view = conn.execute(
+                                "SELECT dataset_id, selection_hash FROM dataset_views WHERE id = ?",
+                                (source_view_id,),
+                            ).fetchone()
+                            if source_view is None or source_view["dataset_id"] != parent_id:
+                                raise AppError(
+                                    INVALID_PARAMS,
+                                    "lineage source view does not belong to its parent dataset",
+                                )
+                            if lineage.get("selection_hash") != source_view["selection_hash"]:
+                                raise AppError(
+                                    INVALID_PARAMS,
+                                    "lineage selection hash does not match its source view",
+                                )
+                    conn.execute(
+                        "INSERT INTO datasets (id, name, format, source_path, number_of_frames, elements,"
+                        " properties, periodicity, fingerprint, file_size, created_at, last_scan_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            ds_id,
+                            name,
+                            fmt,
+                            str(path),
+                            scan.number_of_frames,
+                            json.dumps(elements),
+                            json.dumps(stats["properties"]),
+                            json.dumps(periodicity),
+                            fingerprint,
+                            scan.file_size,
+                            _NOW(),
+                            _NOW(),
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT INTO dataset_statistics (dataset_id, fingerprint, stats_json, created_at)"
+                        " VALUES (?, ?, ?, ?)",
+                        (ds_id, fingerprint, json.dumps(stats, allow_nan=False), _NOW()),
+                    )
+                    if lineage is not None:
+                        conn.execute(
+                            "INSERT INTO dataset_lineage (child_dataset_id, parent_dataset_id, source_view_id, operation, selection_hash, created_at)"
+                            " VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                ds_id,
+                                lineage["parent_dataset_id"],
+                                lineage.get("source_view_id"),
+                                str(lineage.get("operation") or "materialize").strip(),
+                                lineage.get("selection_hash"),
+                                _NOW(),
+                            ),
+                        )
             except Exception as exc:
-                # a concurrent register of the same path loses the source_path
-                # UNIQUE race; surface the domain error, not the raw constraint
+                # A concurrent register of the same path loses the source_path
+                # UNIQUE race; surface the domain error, not the raw constraint.
                 if "UNIQUE constraint failed: datasets.source_path" in str(exc):
-                    raise AppError(
-                        INVALID_DATASET, "dataset is already registered"
-                    ) from exc
+                    raise AppError(INVALID_DATASET, "dataset is already registered") from exc
                 raise
-            self.db.execute(
-                "INSERT INTO dataset_statistics (dataset_id, fingerprint, stats_json, created_at)"
-                " VALUES (?, ?, ?, ?)",
-                (ds_id, fingerprint, json.dumps(stats, allow_nan=False), _NOW()),
-            )
-            if lineage is not None:
-                self.db.execute(
-                    "INSERT INTO dataset_lineage (child_dataset_id, parent_dataset_id, source_view_id, operation, selection_hash, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        ds_id,
-                        lineage["parent_dataset_id"],
-                        lineage.get("source_view_id"),
-                        str(lineage.get("operation") or "materialize").strip(),
-                        lineage.get("selection_hash"),
-                        _NOW(),
-                    ),
-                )
             ctx.progress(total, total, "done")
             return {"dataset_id": ds_id, "number_of_frames": scan.number_of_frames}
 

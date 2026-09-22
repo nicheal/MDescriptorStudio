@@ -60,8 +60,11 @@ export function createAnalysisCache(options: { maxEntries?: number; maxBytes?: n
     setSelectedIndices(key: string, indices: number[]): void {
       const entry = entries.get(key);
       if (!entry) return;
-      bytes += (indices.length - entry.value.selectedIndices.length) * 8;
+      const delta = (indices.length - entry.value.selectedIndices.length) * 8;
+      entry.bytes += delta;
+      bytes += delta;
       entry.value = { ...entry.value, selectedIndices: indices };
+      trim();
     },
     delete(key: string): void {
       const previous = entries.get(key);

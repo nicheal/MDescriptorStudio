@@ -155,17 +155,17 @@ export default function Explore() {
   );
   // Force components live on atom_rows (real atoms only); selection indices
   // always reference real atoms, so a direct index lookup is safe.
-  const selectedForceRow = frame && selectedAtom != null && selectedAtom < frame.atom_rows.length
-    ? frame.atom_rows[selectedAtom]
+  const selectedForceRow = frame && selectedAtom != null
+    ? frame.atom_rows.find((row) => row.i === selectedAtom)
     : undefined;
   // One pass over the frame's forces per frame, not per render: the render body
   // recomputed it on every hover and keystroke, and the viewer effect below
   // computed the same value a second time for the force arrow.
-  const maxForce = useMemo(() => (frame ? frameMaxForce(frame) : 0), [frame]);
+  const maxForce = useMemo(() => (frame ? frame.force_max ?? frameMaxForce(frame) : 0), [frame]);
   // The atom carrying the frame's largest |F| — the target behind a red
   // "Max |F|" row; clicking the row selects it exactly like a table click.
   const maxForceAtom = useMemo(() => {
-    if (!frame) return null;
+    if (!frame || frame.atom_rows_complete === false) return null;
     let best: number | null = null;
     let bestMagnitude = -1;
     for (const row of frame.atom_rows) {
@@ -187,11 +187,17 @@ export default function Explore() {
     () => (frame?.cell && frame.cell.length === 9 ? cellParameters(frame.cell) : null),
     [frame],
   );
-  const minDistancePair = useMemo(() => (frame ? minimumDistancePair(frame.xyz, frame.natoms) : null), [frame]);
+  const minDistancePair = useMemo(
+    () => (frame?.atom_rows_complete === false ? null : frame ? minimumDistancePair(frame.xyz, frame.atom_rows.length) : null),
+    [frame],
+  );
   const minAtomDistance = minDistancePair?.distance ?? null;
-  const netForce = useMemo(() => (frame ? netForceMagnitude(frame.atom_rows) : null), [frame]);
+  const netForce = useMemo(
+    () => (frame?.atom_rows_complete === false ? null : frame ? netForceMagnitude(frame.atom_rows) : null),
+    [frame],
+  );
   const density = useMemo(
-    () => (frame ? massDensity(frame.atom_rows.map((row) => row.el), frame.volume) : null),
+    () => (frame?.atom_rows_complete === false ? null : frame ? massDensity(frame.atom_rows.map((row) => row.el), frame.volume) : null),
     [frame],
   );
   // Virial tensor of the frame as stored in the source (eV); sign conventions
@@ -314,6 +320,20 @@ export default function Explore() {
     if (page != null) setAtomPage(page);
   }, [atomPageSize, frame, selectedAtom]);
   useEffect(() => {
+    if (!d || !frame || frame.atom_rows_complete !== false) return;
+    const offset = (atomPage - 1) * atomPageSize;
+    if (frame.atom_offset === offset && frame.atom_page_size === atomPageSize) return;
+    let disposed = false;
+    void ipc.request<Pick<FramePayload, "index" | "atom_offset" | "atom_page_size" | "atom_total" | "atom_rows_complete" | "atom_rows">>(
+      "dataset.frame_atoms",
+      { id: d.id, index: frame.index, atom_offset: offset, atom_limit: atomPageSize },
+    ).then((page) => {
+      if (disposed) return;
+      setFrame((current) => current && current.index === page.index ? { ...current, ...page } : current);
+    }).catch(() => undefined);
+    return () => { disposed = true; };
+  }, [atomPage, atomPageSize, d, frame]);
+  useEffect(() => {
     if (selectedAtom == null) return;
     const row = atomTableRef.current?.querySelector<HTMLTableRowElement>("tbody tr.explore-atom-row-selected");
     if (!row || typeof row.scrollIntoView !== "function") return;
@@ -359,6 +379,7 @@ export default function Explore() {
         index,
         bondCutoff: cutoff,
         requestCutoff,
+        atomPageSize,
         onLoading: setLoading,
         onFrame: (f, idx) => {
           // Keep the public display threshold separate from the larger
@@ -856,6 +877,7 @@ export default function Explore() {
       {/* Atom table */}
       {/* The body scrolls and the header sticks, so the pager stays reachable
           without scrolling past 50 rows to find it. */}
+      {frame?.atom_rows_complete === false && <Typography.Text type="secondary" style={{ display: "block", marginBottom: 6 }}>{t("Large frame: atom rows are loaded page by page.")}</Typography.Text>}
       <div ref={atomTableRef} style={{ background: "#FFFFFF", border: "1px solid #EAECF0", borderRadius: 6, padding: "0 4px 4px" }}>
         <Table
           size="small"
@@ -865,6 +887,7 @@ export default function Explore() {
             size: "small",
             current: atomPage,
             pageSize: atomPageSize,
+            total: frame?.atom_total ?? frame?.atom_rows.length ?? 0,
             showSizeChanger: true,
             pageSizeOptions: [25, 50, 100, 200],
             showTotal: (total) => t("{count} atoms", { count: String(total) }),

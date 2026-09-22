@@ -139,6 +139,7 @@ class Server:
         finished and blocking reads became safe again.
         """
         pending = b""
+        discarding_oversized = False
         while not self._closed.is_set():
             if self.warmup_finished is not None and self.warmup_finished.is_set() and not pending:
                 return "warm"
@@ -152,18 +153,29 @@ class Server:
             if not chunk:
                 return "eof"
             pending += chunk
-            while b"\n" in pending and not self._closed.is_set():
-                raw, pending = pending.split(b"\n", 1)
-                raw += b"\n"
-                if not self._consume_frame(raw):
-                    return "eof"
-            if len(pending) > frames.MAX_LINE_BYTES:
-                # The blocking loop bounds a line by asking readline() for at
-                # most MAX+1 bytes; this loop accumulates by hand, so an
-                # unterminated line would grow without limit. Report it and keep
-                # the tail, which is where the next frame boundary still may be.
-                self._write(frames.response_err(None, _request_too_large()))
-                pending = pending[frames.MAX_LINE_BYTES:]
+            while not self._closed.is_set():
+                if discarding_oversized:
+                    newline = pending.find(b"\n")
+                    if newline < 0:
+                        pending = b""
+                        break
+                    pending = pending[newline + 1:]
+                    discarding_oversized = False
+                    continue
+                newline = pending.find(b"\n")
+                if newline >= 0:
+                    raw, pending = pending[:newline], pending[newline + 1:]
+                    if not self._consume_frame(raw + b"\n"):
+                        return "eof"
+                    continue
+                if len(pending) > frames.MAX_LINE_BYTES:
+                    # Discard the rest of this physical line. Keeping a tail
+                    # would reinterpret bytes from the oversized request as a
+                    # new JSON frame and could desynchronise every later reply.
+                    self._write(frames.response_err(None, _request_too_large()))
+                    pending = b""
+                    discarding_oversized = True
+                break
         return "eof"
 
     def _consume_frame(self, raw) -> bool:

@@ -3,6 +3,7 @@
 // run — so those three stay one fact in one place instead of a branch inside a
 // 1600-line component.
 import type { AnalysisParams, TabKey } from "./types";
+import { canonicalClusterAlgorithm, canonicalOutlierAlgorithm, canonicalSamplingAlgorithm } from "./identity";
 
 export type Submission =
   | {
@@ -57,21 +58,25 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
       return { kind: "run", method: "analysis.similarity", label: "Similarity", params };
     }
 
-    case "clusters":
-      return { kind: "run", method: "analysis.cluster", label: p.clusterAlgorithm.toUpperCase(), params: { algorithm: p.clusterAlgorithm, n_clusters: p.nClusters, preprocess: "standardized", mode: p.mode, ...viewSuffix(p.viewId) } };
+    case "clusters": {
+      const algorithm = canonicalClusterAlgorithm(p.clusterAlgorithm);
+      return { kind: "run", method: "analysis.cluster", label: algorithm.toUpperCase(), params: { algorithm, n_clusters: p.nClusters, preprocess: "standardized", mode: p.mode, ...viewSuffix(p.viewId) } };
+    }
 
     case "outliers": {
+      const algorithm = canonicalOutlierAlgorithm(p.outlierAlgorithm);
       // LOF and k-NN score against k neighbours; isolation forest and
       // Mahalanobis do not read it at all, so sending it there would make an
       // unrelated k change look like a different analysis.
-      const usesK = p.outlierAlgorithm === "lof" || p.outlierAlgorithm === "knn";
-      return { kind: "run", method: "analysis.outlier", label: p.outlierAlgorithm.toUpperCase(), params: { algorithm: p.outlierAlgorithm, ...(usesK ? { k: p.k } : {}), contamination: p.contamination, preprocess: "standardized", mode: p.mode, ...viewSuffix(p.viewId) } };
+      const usesK = algorithm === "lof" || algorithm === "knn";
+      return { kind: "run", method: "analysis.outlier", label: algorithm.toUpperCase(), params: { algorithm, ...(usesK ? { k: p.k } : {}), contamination: p.contamination, preprocess: "standardized", mode: p.mode, ...viewSuffix(p.viewId) } };
     }
 
     case "sampling": {
-      if (p.samplingAlgorithm === "novelty_fps" || p.samplingAlgorithm === "uncertainty_diversity") {
+      const samplingAlgorithm = canonicalSamplingAlgorithm(p.samplingAlgorithm);
+      if (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity") {
         if (!ctx.crossInputsReady || !p.referenceRunId || !p.queryRunId) return { kind: "warning", message: "Select compatible reference and query runs" };
-        const uncertainty = p.samplingAlgorithm === "uncertainty_diversity";
+        const uncertainty = samplingAlgorithm === "uncertainty_diversity";
         return {
           kind: "run",
           method: "analysis.acquisition",
@@ -90,7 +95,7 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
           },
         };
       }
-      const fpsParams = p.samplingAlgorithm === "fps"
+      const fpsParams = samplingAlgorithm === "fps"
         ? {
             strategy: p.samplingStrategy,
             min_distance: p.samplingMinDistance,
@@ -101,8 +106,8 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
         : {};
       // Only the two algorithms that measure a distance run in a scaled space,
       // so only they send the `scaling` they actually applied.
-      const distanceBased = p.samplingAlgorithm === "fps" || p.samplingAlgorithm === "cluster_representative";
-      return { kind: "run", method: "analysis.sampling", label: "Sampling", params: { algorithm: p.samplingAlgorithm, n_samples: p.nSamples, mode: p.mode, ...(distanceBased ? { scaling: p.samplingScaling } : {}), ...fpsParams, ...viewSuffix(p.viewId) } };
+      const distanceBased = samplingAlgorithm === "fps" || samplingAlgorithm === "cluster_representative";
+      return { kind: "run", method: "analysis.sampling", label: "Sampling", params: { algorithm: samplingAlgorithm, n_samples: p.nSamples, mode: p.mode, ...(distanceBased ? { scaling: p.samplingScaling } : {}), ...fpsParams, ...viewSuffix(p.viewId) } };
     }
 
     case "coverage":

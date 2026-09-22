@@ -39,6 +39,22 @@ _GRAPH_MAX_TOTAL_IMAGES = 1024
 # hundred thousand pairs, which is also what bounds the temporary memory.
 _GRAPH_QUERY_BLOCK = 4096
 
+# sklearn and hdbscan fit calls do not expose a cooperative cancellation hook.
+# Keep their worst-case native sections bounded; JobService still settles a
+# cancellation immediately, and these caps prevent a cancelled black-box run
+# from occupying an analysis worker for an unbounded period.
+_BLACK_BOX_SAMPLE_LIMITS = {
+    "tsne": 10_000,
+    "hdbscan": 30_000,
+    "dbscan": 30_000,
+    "agglomerative": 20_000,
+    "hierarchical": 20_000,
+    "kmeans": 100_000,
+    "lof": 30_000,
+    "isolation_forest": 100_000,
+    "property_correlation": 50_000,
+}
+
 def warmup() -> dict[str, bool]:
     """Import optional numeric backends on the background warmup thread.
 
@@ -189,6 +205,18 @@ def _check_samples(x: np.ndarray, minimum: int = 2) -> None:
             ANALYSIS_INSUFFICIENT_SAMPLES,
             f"at least {minimum} samples are required",
             {"samples": int(x.shape[0]), "minimum": minimum},
+        )
+
+
+def _check_black_box_samples(x: np.ndarray, algorithm: str) -> None:
+    """Bound a fit with no callback between its native start and return."""
+    limit = _BLACK_BOX_SAMPLE_LIMITS.get(str(algorithm).lower())
+    if limit is not None and x.shape[0] > limit:
+        raise AppError(
+            ANALYSIS_INPUT_INVALID,
+            f"{algorithm} is limited to {limit:,} samples because this estimator cannot be cancelled during fit;"
+            " sample the descriptor set first",
+            {"algorithm": str(algorithm), "samples": int(x.shape[0]), "limit": limit},
         )
 
 def _safe_import(module: str, package: str | None = None):

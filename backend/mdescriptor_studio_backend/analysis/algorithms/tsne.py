@@ -8,13 +8,14 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, AppError
 from ..models import DescriptorMatrix
-from ._common import _check_samples, _float_param, _int_param, _preprocess, _safe_import, _seed
+from ._common import _check_black_box_samples, _check_samples, _float_param, _int_param, _preprocess, _safe_import, _seed
 
 MAX_ITERATIONS = 5000
 
 def tsne(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     _check_samples(samples.values, 4)
     x, warnings, keep = _preprocess(samples.values, params, "raw")
+    _check_black_box_samples(x, "tsne")
     default_perplexity = min(30.0, max(2.0, float(x.shape[0] - 1)))
     perplexity = _float_param(params, "perplexity", default_perplexity, 2.0)
     if perplexity >= x.shape[0]:

@@ -144,3 +144,11 @@ export const ARTIFACT_ARRAYS: Record<string, string[]> = {
   sampling: ["coverage_radius_curve", "coverage_mean_curve", "coverage_r2_curve"],
   acquisition: ["pick_scores"],
 };
+
+/** Arrays needed by a result view after its algorithm-specific preview is known. */
+export function artifactArraysForPreview(kind: string, algorithm?: string): string[] {
+  // Only FPS produces the coverage curves. Random, stratified, and the other
+  // sampling methods have no curve to render and should not fetch one.
+  if (kind === "sampling" && algorithm !== "fps") return [];
+  return ARTIFACT_ARRAYS[kind] ?? [];
+}

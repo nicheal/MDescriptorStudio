@@ -170,7 +170,15 @@ class DatasetViewService:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def _insert(self, dataset: dict, name: str, role, filter_spec: dict, indices: list[int]) -> str:
+    def _insert(
+        self,
+        dataset: dict,
+        name: str,
+        role,
+        filter_spec: dict,
+        indices: list[int],
+        conn=None,
+    ) -> str:
         """Validate one view's fields and insert it, returning the new id."""
         if not isinstance(name, str) or not name.strip() or len(name.strip()) > 200:
             raise AppError(INVALID_PARAMS, "dataset view name is invalid")
@@ -184,8 +192,9 @@ class DatasetViewService:
             raise AppError(INVALID_PARAMS, "dataset view filter must be JSON serializable") from exc
         now = _NOW()
         view_id = f"view_{uuid.uuid4().hex[:12]}"
+        execute = conn.execute if conn is not None else self.db.execute
         try:
-            self.db.execute(
+            execute(
                 _INSERT_VIEW,
                 (
                     view_id,
@@ -323,16 +332,18 @@ class DatasetViewService:
             "source_view_id": source_view_id,
         }
         created = []
-        for name, role, group in zip(names, ("train", "validation", "test"), groups):
-            created.append(
-                self._insert(
-                    dataset,
-                    name,
-                    role,
-                    filter_spec,
-                    [int(value) for value in np.sort(group).tolist()],
+        with self.db.transaction() as conn:
+            for name, role, group in zip(names, ("train", "validation", "test"), groups):
+                created.append(
+                    self._insert(
+                        dataset,
+                        name,
+                        role,
+                        filter_spec,
+                        [int(value) for value in np.sort(group).tolist()],
+                        conn=conn,
+                    )
                 )
-            )
         return {"views": [self.meta(self.row_or_raise(view_id)) for view_id in created]}
 
     # -- materialization -----------------------------------------------------

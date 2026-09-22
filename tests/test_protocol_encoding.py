@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 
 from mdescriptor_studio_backend.protocol import frames
+import mdescriptor_studio_backend.protocol.server as server_module
 from mdescriptor_studio_backend.protocol.server import Server
 
 
@@ -151,3 +152,20 @@ def test_both_input_loops_share_one_size_rule():
     assert [frame.get("id") for frame in written] == [7, None]
     assert written[0]["result"] == {"ok": True}
     assert written[1]["error"]["code"] == "INVALID_PARAMS"
+
+
+def test_polled_loop_discards_the_rest_of_an_oversized_line(monkeypatch):
+    server, written = _server(lambda params: {"ok": True})
+    chunks = iter(
+        [
+            b"x" * (frames.MAX_LINE_BYTES + 1),
+            b"tail-that-is-still-the-same-frame\n" + _line(id=9, method="echo"),
+            b"",
+        ]
+    )
+    monkeypatch.setattr(server_module.os, "read", lambda _fd, _size: next(chunks))
+
+    assert server._serve_polled(lambda: True) == "eof"
+    assert [frame.get("id") for frame in written] == [None, 9]
+    assert written[0]["error"]["code"] == "INVALID_PARAMS"
+    assert written[1]["result"] == {"ok": True}

@@ -195,6 +195,13 @@ export interface FramePayload {
     fz: number | null;
     f: number | null;
   }[];
+  atom_offset?: number;
+  atom_page_size?: number;
+  atom_total?: number;
+  atom_rows_complete?: boolean;
+  /** whether the separate viewer geometry contains every real atom */
+  geometry_complete?: boolean;
+  geometry_atom_count?: number;
   energy: number | null;
   energy_per_atom: number | null;
   force_max: number | null;
@@ -210,6 +217,15 @@ export interface FramePayload {
   ghost_parents?: number[];
   bond_cutoff: number;
 }
+
+export type FrameSummaryPayload = Omit<FramePayload, "xyz" | "atom_rows" | "ghost_count" | "ghost_parents">;
+
+export type FrameGeometryPayload = Pick<FramePayload, "index" | "xyz" | "ghost_count" | "ghost_parents" | "bond_cutoff"> & {
+  geometry_complete: boolean;
+  geometry_atom_count: number;
+};
+
+export type FrameAtomsPayload = Pick<FramePayload, "index" | "atom_offset" | "atom_page_size" | "atom_total" | "atom_rows_complete" | "atom_rows">;
 
 export interface DescriptorInfo {
   name: string;

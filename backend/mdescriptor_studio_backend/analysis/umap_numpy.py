@@ -3,10 +3,10 @@
 Replaces umap-learn (and its numba/llvmlite/pynndescent chain) with a
 self-contained implementation of the same algorithm:
 
-1. exact k-nearest-neighbor search — chunked brute force, deterministic and
-   robust in the 100+-dimensional descriptor spaces the Studio feeds it,
+1. deterministic k-nearest-neighbor search — chunked brute force for small
+   inputs and a projected cKDTree candidate search for large descriptor sets,
 2. the fuzzy simplicial set — smooth-kNN sigma calibration plus sparse
-   symmetrization (fuzzy union = max),
+   symmetrization (the standard probabilistic-sum fuzzy union),
 3. SGD layout optimization with negative sampling, vectorized per epoch with
    scatter aggregation instead of numba's per-edge compiled loop. Every edge
    contributes once per epoch (umap-learn visits edges on weight-dependent
@@ -38,13 +38,92 @@ _NEGATIVE_SAMPLES_PER_EDGE = 5
 _NEGATIVE_SAMPLE_CAP = 250_000  # per-epoch repulsive-sample budget on large graphs
 _GAMMA = 1.0
 _SPREAD = 1.0
+_APPROX_KNN_THRESHOLD = 2_048
+_APPROX_PROJECTION_DIM = 8
+_APPROX_CANDIDATE_FACTOR = 8
+
+
+def _tree_knn(
+    x: np.ndarray,
+    k: int,
+    metric: str,
+    progress: Progress | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Find exact or candidate neighbours through a small cKDTree projection."""
+    from scipy.spatial import cKDTree
+
+    n, dimensions = x.shape
+    if metric == "cosine":
+        base = x / np.maximum(np.linalg.norm(x, axis=1, keepdims=True), 1e-12)
+    elif metric == "euclidean":
+        base = x - x.mean(axis=0)
+    else:
+        base = x
+
+    exact_tree = dimensions <= _APPROX_PROJECTION_DIM
+    if exact_tree:
+        projected = base
+        tree_metric = 1 if metric == "manhattan" else 2
+    else:
+        # A fixed sign projection is cheap, reproducible, and keeps the tree's
+        # dimensionality low. Original-space distances are recomputed for the
+        # candidate set, so the projection only decides which rows to inspect.
+        rng = np.random.default_rng(0x4D44434B + dimensions)
+        signs = rng.choice(
+            np.array((-1.0, 1.0), dtype=np.float32),
+            size=(dimensions, _APPROX_PROJECTION_DIM),
+        )
+        projected = base @ (signs / np.sqrt(_APPROX_PROJECTION_DIM))
+        tree_metric = 2
+
+    candidate_count = min(n, max(k + 1, _APPROX_CANDIDATE_FACTOR * k + 1))
+    tree = cKDTree(projected)
+    candidates = np.empty((n, candidate_count), dtype=np.int64)
+    batch = max(1, min(1024, n))
+    total_batches = -(-n // batch)
+    for batch_index, start in enumerate(range(0, n, batch)):
+        stop = min(start + batch, n)
+        _, near = tree.query(projected[start:stop], k=candidate_count, p=tree_metric)
+        candidates[start:stop] = np.asarray(near, dtype=np.int64).reshape(stop - start, candidate_count)
+        if progress is not None:
+            progress(0.05 + 0.04 * (batch_index + 1) / total_batches, "fitting UMAP")
+
+    indices = np.empty((n, k + 1), dtype=np.int64)
+    distances = np.empty((n, k + 1), dtype=np.float32)
+    for row in range(n):
+        near = candidates[row][candidates[row] != row]
+        if near.size < k:
+            # This is only possible for a malformed/degenerate tree result;
+            # keep the contract exact for that row rather than duplicating an
+            # index in the graph.
+            near = np.asarray([index for index in range(n) if index != row], dtype=np.int64)
+        points = base[near]
+        if metric == "manhattan":
+            row_distances = np.abs(points - base[row]).sum(axis=1)
+        else:
+            row_distances = np.sqrt(np.maximum(((points - base[row]) ** 2).sum(axis=1), 0.0))
+        order = np.argsort(row_distances, kind="stable")[:k]
+        indices[row, 0] = row
+        distances[row, 0] = 0.0
+        indices[row, 1:] = near[order]
+        distances[row, 1:] = row_distances[order]
+        if progress is not None and (row + 1 == n or row % max(1, n // 20) == 0):
+            progress(0.09 + 0.05 * (row + 1) / n, "fitting UMAP")
+    return indices, distances
 
 
 def _knn_indices_and_distances(
     x: np.ndarray, k: int, metric: str, progress: Progress | None = None
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Exact kNN with self at column 0, chunked to bound temporary memory."""
+    """kNN with self at column 0 and bounded temporary memory.
+
+    Small runs retain the exact chunked path. Larger runs use a deterministic
+    cKDTree over an eight-dimensional candidate projection and recompute the
+    requested metric in the original feature space for those candidates.
+    """
     n = x.shape[0]
+    if n > _APPROX_KNN_THRESHOLD:
+        return _tree_knn(x, k, metric, progress)
     if metric == "manhattan":
         from scipy.spatial.distance import cdist
     elif metric == "cosine":
@@ -75,11 +154,20 @@ def _knn_indices_and_distances(
         else:
             d2 = sq[start:stop, None] + sq[None, :] - 2.0 * (x[start:stop] @ x.T)
             d = np.sqrt(np.maximum(d2, 0.0))
-        part = np.argpartition(d, k, axis=1)[:, : k + 1]
+        # Remove the query identity before selecting neighbours.  Sorting the
+        # k+1 closest rows and dropping column 0 is wrong for duplicate rows:
+        # a duplicate can tie with self and push the real self index away from
+        # that column, so the slice drops a valid neighbour and keeps self.
+        local_rows = np.arange(stop - start)
+        global_rows = np.arange(start, stop)
+        d[local_rows, global_rows] = np.inf
+        part = np.argpartition(d, k - 1, axis=1)[:, :k]
         near = np.take_along_axis(d, part, 1)
         order = np.argsort(near, axis=1)
-        idx[start:stop] = np.take_along_axis(part, order, 1)
-        dist[start:stop] = np.take_along_axis(near, order, 1)
+        idx[start:stop, 0] = global_rows
+        dist[start:stop, 0] = 0.0
+        idx[start:stop, 1:] = np.take_along_axis(part, order, 1)
+        dist[start:stop, 1:] = np.take_along_axis(near, order, 1)
         # This pass is O(n²·D) and the first thing a large selection set waits
         # through. Without a checkpoint inside it the job cannot be cancelled
         # until the search is already over.
@@ -112,12 +200,13 @@ def _smooth_knn_weights(dist: np.ndarray, k: int) -> np.ndarray:
 def _fuzzy_simplicial_edges(
     idx: np.ndarray, weights: np.ndarray, n: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Symmetrized kNN membership graph (fuzzy union = max) as edge arrays."""
+    """Symmetrized kNN membership graph using UMAP's fuzzy union."""
     from scipy.sparse import coo_matrix
 
     rows = np.repeat(np.arange(n, dtype=np.int64), idx.shape[1] - 1)
     graph = coo_matrix((weights.ravel(), (rows, idx[:, 1:].ravel())), shape=(n, n)).tocsr()
-    graph = graph.maximum(graph.T)
+    transpose = graph.T.tocsr()
+    graph = graph + transpose - graph.multiply(transpose)
     graph.setdiag(0.0)
     graph.eliminate_zeros()
     edges = graph.tocoo()

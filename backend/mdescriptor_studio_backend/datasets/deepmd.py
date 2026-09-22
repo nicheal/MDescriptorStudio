@@ -1,24 +1,24 @@
-"""DeepMD dataset adapter backed by the dpdata package (ADR-19).
+"""Lazy DeepMD ``npy`` dataset adapter (ADR-19).
 
 The hand-written set.*/npy parser was retired; layout and label rules are
 dpdata's `deepmd/npy` semantics: type.raw at the root plus set.*/coord.npy,
 with box.npy (or a `nopbc` marker file) and optional energy/force/virial.npy.
-Frames are concatenated in sorted set order; a dataset is labeled only when
-energy.npy is present (dpdata raises DataError on LabeledSystem otherwise).
-The whole system is loaded eagerly into memory at construction — the old
-memmap lazy path is gone (documented trade-off of ADR-19).
+Frames are concatenated in sorted set order. Each set stays memory-mapped and
+only the requested frame is copied into a :class:`DatasetFrame`, so opening a
+large source does not duplicate all of its arrays in RAM.
 """
 
 from __future__ import annotations
 
 import os
+from bisect import bisect_right
 from pathlib import Path
 
 import numpy as np
 
 from ..errors import AppError, INVALID_DATASET, INVALID_PARAMS
 from ..security import ensure_no_reparse_points
-from .base import DatasetAdapter, DatasetFrame, ScanMeta, pbc_summary
+from .base import DatasetAdapter, DatasetFrame, ScanMeta, is_deepmd_set_dir, pbc_summary
 from .deepmd_symbols import _SYMBOL_TO_Z, _Z_TO_SYMBOL
 
 MAX_DEEPMD_FRAMES = 250_000
@@ -28,7 +28,7 @@ MAX_DEEPMD_FILES = 100_000
 
 
 def _preflight_npy_layout(path: Path, sets: list[Path]) -> None:
-    """Inspect NPY headers before dpdata eagerly materializes the system."""
+    """Inspect NPY headers before opening the source through memory maps."""
     try:
         # One verified-prefix set for this listing: every path below shares the
         # source directory and its set subdirectories, and each call used to
@@ -102,10 +102,8 @@ class DeepMDAdapter(DatasetAdapter):
 
     def __init__(self, source_path: Path):
         super().__init__(source_path)
-        import dpdata  # deferred: heavy import, only needed for DeepMD datasets
-
         path = self.source_path
-        sets = sorted(p for p in path.glob("set.*") if p.is_dir()) if path.is_dir() else []
+        sets = sorted(p for p in path.iterdir() if is_deepmd_set_dir(p)) if path.is_dir() else []
         if not sets or not (path / "type.raw").exists():
             raise AppError(
                 INVALID_DATASET,
@@ -113,19 +111,20 @@ class DeepMDAdapter(DatasetAdapter):
             )
         _preflight_npy_layout(path, sets)
         try:
-            if any((s / "energy.npy").exists() for s in sets):
-                system = dpdata.LabeledSystem(str(path), fmt="deepmd/npy")
-            else:
-                system = dpdata.System(str(path), fmt="deepmd/npy")
+            type_tokens = (path / "type.raw").read_text(encoding="utf-8", errors="strict").split()
+            type_raw = np.asarray([int(token) for token in type_tokens], dtype=np.int64)
+            type_map_path = path / "type_map.raw"
+            if not type_map_path.is_file():
+                raise AppError(INVALID_DATASET, "type_map.raw is required for DeepMD datasets")
+            symbols = type_map_path.read_text(encoding="utf-8", errors="strict").split()
+            if not symbols:
+                raise AppError(INVALID_DATASET, "type_map.raw is empty")
         except AppError:
             raise
-        except Exception as exc:  # noqa: BLE001 - dpdata raises bare OS/Value errors
+        except (OSError, UnicodeError, TypeError, ValueError) as exc:
             raise AppError(
-                INVALID_DATASET, f"invalid DeepMD dataset ({type(exc).__name__}): {exc}"
+                INVALID_DATASET, f"invalid DeepMD type metadata ({type(exc).__name__}): {exc}"
             ) from exc
-
-        data = system.data
-        symbols = list(data["atom_names"])
         z_by_type = [_SYMBOL_TO_Z.get(s) for s in symbols]
         missing = [s for s, z in zip(symbols, z_by_type) if z is None]
         if missing:
@@ -136,12 +135,10 @@ class DeepMDAdapter(DatasetAdapter):
                 f"type_map.raw is missing or holds non-element names {missing};"
                 " a real element type map is required",
             )
-        type_raw = np.asarray(data["atom_types"], dtype=np.int64).reshape(-1)
+        if type_raw.size == 0 or type_raw.size > MAX_DEEPMD_ATOMS:
+            raise AppError(INVALID_DATASET, "DeepMD atom count is outside the supported limit")
         self.natoms = int(type_raw.size)
         if type_raw.size and (type_raw.min() < 0 or type_raw.max() >= len(z_by_type)):
-            # dpdata hands back whatever type.raw contained; indexing with it
-            # would raise a bare IndexError that the job layer can only report
-            # as an internal failure for what is really a broken set.
             raise AppError(
                 INVALID_DATASET,
                 f"type.raw holds atom types outside the {len(z_by_type)} entries"
@@ -149,29 +146,83 @@ class DeepMDAdapter(DatasetAdapter):
             )
         self.numbers = np.asarray([z_by_type[t] for t in type_raw], dtype=np.int64)
 
-        self._coords = data["coords"]
-        raw_cells = data.get("cells")
-        if raw_cells is None:
-            raw_cells = np.zeros((self._coords.shape[0], 3, 3))
-        self._cells = np.asarray(raw_cells, dtype=np.float64)
-        self._energies = data.get("energies")
-        self._forces = data.get("forces")
-        self._virials = data.get("virials")
+        def open_array(file_path: Path) -> np.ndarray:
+            try:
+                array = np.load(file_path, mmap_mode="r", allow_pickle=False)
+            except (OSError, ValueError, TypeError) as exc:
+                raise AppError(
+                    INVALID_DATASET,
+                    f"invalid DeepMD array {file_path.name}: {type(exc).__name__}: {exc}",
+                ) from exc
+            if not np.issubdtype(array.dtype, np.number):
+                raise AppError(INVALID_DATASET, f"DeepMD array {file_path.name} is not numeric")
+            return array
 
-        dets = np.linalg.det(self._cells) if self._cells.size else np.array([])
-        finite = np.isfinite(dets)
-        # a nopbc set (zero boxes throughout, optional marker file) is fine as
-        # isolated; a degenerate box inside an otherwise periodic system is
-        # corrupt data and must stay visible (health panel), not be masked
-        self._periodic_system = bool((finite & (np.abs(dets) > 1e-8)).any())
+        def validate_array(array: np.ndarray, frames: int, width: int, name: str) -> None:
+            actual = int(np.prod(array.shape[1:], dtype=np.int64)) if array.ndim >= 1 else 0
+            if array.ndim == 0 or int(array.shape[0]) != frames or actual != width:
+                raise AppError(
+                    INVALID_DATASET,
+                    f"DeepMD {name}.npy shape is invalid for {frames} frames",
+                )
 
-        if self._coords.ndim != 3 or self._coords.shape[1] != self.natoms:
-            raise AppError(
-                INVALID_DATASET,
-                f"coord.npy holds {self._coords.shape[1] if self._coords.ndim == 3 else '?'}"
-                f" atoms/frame but type.raw declares {self.natoms} atoms",
-            )
-        self.number_of_frames = int(self._coords.shape[0])
+        no_pbc = (path / "nopbc").is_file()
+        records: list[dict[str, object]] = []
+        starts: list[int] = []
+        total_frames = 0
+        for set_path in sets:
+            coord = open_array(set_path / "coord.npy")
+            frames = int(coord.shape[0])
+            validate_array(coord, frames, self.natoms * 3, "coord")
+            starts.append(total_frames)
+            record: dict[str, object] = {"coords": coord, "frames": frames, "cells": None}
+            if not no_pbc and (set_path / "box.npy").is_file():
+                cells = open_array(set_path / "box.npy")
+                validate_array(cells, frames, 9, "box")
+                record["cells"] = cells
+            records.append(record)
+            total_frames += frames
+
+        def attach_optional(filename: str, width: int, key: str) -> None:
+            present = [(set_path / filename).is_file() for set_path in sets]
+            if any(present) and not all(present):
+                raise AppError(
+                    INVALID_DATASET,
+                    f"DeepMD {filename} must be present in every set or none",
+                )
+            if not all(present):
+                return
+            for record, set_path in zip(records, sets):
+                array = open_array(set_path / filename)
+                validate_array(array, int(record["frames"]), width, filename[:-4])
+                record[key] = array
+
+        attach_optional("energy.npy", 1, "energies")
+        attach_optional("force.npy", self.natoms * 3, "forces")
+        attach_optional("virial.npy", 9, "virials")
+
+        self._sets = records
+        self._starts = starts
+        self.number_of_frames = total_frames
+
+        # A nopbc marker explicitly wins. Otherwise inspect boxes in bounded
+        # chunks so periodicity detection never materializes a whole source.
+        self._periodic_system = False
+        if not no_pbc:
+            for record in records:
+                cells = record["cells"]
+                if cells is None:
+                    continue
+                cell_array = cells.reshape(-1, 3, 3)
+                for start in range(0, cell_array.shape[0], 8192):
+                    chunk = np.asarray(cell_array[start : start + 8192], dtype=np.float64)
+                    determinants = np.linalg.det(chunk)
+                    finite = np.isfinite(chunk).all(axis=(1, 2))
+                    if bool((finite & (np.abs(determinants) > 1e-8)).any()):
+                        self._periodic_system = True
+                        break
+                if self._periodic_system:
+                    break
 
     # -- metadata -----------------------------------------------------------
     def scan(self) -> ScanMeta:
@@ -222,7 +273,14 @@ class DeepMDAdapter(DatasetAdapter):
     def get_frame(self, index: int) -> DatasetFrame:
         if index < 0 or index >= self.number_of_frames:
             raise AppError(INVALID_PARAMS, f"frame index out of range: {index}")
-        box = np.asarray(self._cells[index], dtype=np.float64).reshape(3, 3)
+        record_index = bisect_right(self._starts, index) - 1
+        record = self._sets[record_index]
+        local_index = index - self._starts[record_index]
+        cells = record["cells"]
+        if cells is None:
+            box = np.zeros((3, 3), dtype=np.float64)
+        else:
+            box = np.asarray(cells[local_index], dtype=np.float64).reshape(3, 3)
         finite = bool(np.isfinite(box).all())
         det = abs(float(np.linalg.det(box))) if finite else 0.0
         if det > 1e-8:
@@ -237,18 +295,27 @@ class DeepMDAdapter(DatasetAdapter):
         else:
             periodic = False
             box = np.zeros((3, 3))
+        positions = np.asarray(record["coords"][local_index], dtype=np.float64).reshape(self.natoms, 3)
+        if not np.isfinite(positions).all():
+            raise AppError(INVALID_DATASET, f"DeepMD frame {index} contains non-finite positions")
         energy = None
-        if self._energies is not None:
-            energy = float(np.asarray(self._energies[index]).reshape(-1)[0])
+        energies = record.get("energies")
+        if energies is not None:
+            raw_energy = float(np.asarray(energies[local_index]).reshape(-1)[0])
+            energy = raw_energy if np.isfinite(raw_energy) else None
         forces = None
-        if self._forces is not None:
-            forces = np.asarray(self._forces[index], dtype=np.float64).reshape(self.natoms, 3)
+        raw_forces = record.get("forces")
+        if raw_forces is not None:
+            forces = np.asarray(raw_forces[local_index], dtype=np.float64).reshape(self.natoms, 3)
         virial = None
-        if self._virials is not None:
-            virial = np.asarray(self._virials[index], dtype=np.float64).reshape(3, 3)
+        raw_virials = record.get("virials")
+        if raw_virials is not None:
+            virial = np.asarray(raw_virials[local_index], dtype=np.float64).reshape(3, 3)
+            if not np.isfinite(virial).all():
+                virial = None
         return DatasetFrame(
             numbers=self.numbers,
-            positions=np.asarray(self._coords[index], dtype=np.float64).reshape(self.natoms, 3),
+            positions=positions,
             cell=box if periodic else np.zeros((3, 3)),
             pbc=np.array([periodic] * 3),
             energy=energy,

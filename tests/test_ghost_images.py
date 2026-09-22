@@ -43,6 +43,15 @@ def test_corner_image_across_two_faces() -> None:
         assert np.linalg.norm(got - np.array(expected), axis=1).min() < 1e-6
 
 
+def test_partial_periodicity_only_generates_images_on_periodic_axes() -> None:
+    pos = np.array([[0.2, 2.5, 2.5], [4.9, 2.5, 2.5]])
+    ghosts = periodic_boundary_ghosts(
+        ["C", "C"], pos, _cubic(5.0), pbc=np.array([True, False, False])
+    )
+    assert len(ghosts) == 2
+    assert all(np.allclose(point[1:], [2.5, 2.5]) for _symbol, point, _parent in ghosts)
+
+
 def test_cutoff_spanning_multiple_cells_keeps_all_nearby_images() -> None:
     ghosts = periodic_boundary_ghosts(["C"], np.zeros((1, 3)), _cubic(1.0), cutoff=2.1)
     distances = np.asarray([np.linalg.norm(position) for _, position, _parent in ghosts])

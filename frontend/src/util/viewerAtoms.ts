@@ -27,31 +27,48 @@ export type ViewerModel = {
 export function parseViewerAtoms(frame: FramePayload, cutoff: number, includePeriodicImages = false): ViewerAtom[] {
   // atom_rows is always the real-atom block. Periodic images are consumed only
   // by local-shell rendering, so the ordinary viewer remains inside the cell.
-  const realAtomCount = Math.max(0, frame.natoms);
-  const atoms: ViewerAtom[] = frame.atom_rows
-    .slice(0, realAtomCount)
-    .map((row, index) => ({ elem: row.el, x: row.x, y: row.y, z: row.z, bonds: [], bondOrder: [], i: index }));
+  const lines = frame.xyz.trim().split(/\r?\n/);
+  const xyzAtomCount = Number.parseInt(lines[0]?.trim() ?? "", 10);
+  const parsedAtomCount = Number.isFinite(xyzAtomCount)
+    ? Math.max(0, Math.min(xyzAtomCount, lines.length - 2))
+    : 0;
+  const declaredGhostCount = Number.isFinite(frame.ghost_count)
+    ? Math.max(0, Math.floor(frame.ghost_count))
+    : 0;
+  const geometryRealCount = Math.min(
+    Math.max(0, frame.geometry_atom_count ?? frame.natoms),
+    Math.max(0, frame.natoms),
+    Math.max(0, parsedAtomCount - declaredGhostCount),
+  );
+  const rowsByIndex = new Map(frame.atom_rows.map((row) => [row.i, row]));
+  const atoms: ViewerAtom[] = [];
+  for (let index = 0; index < geometryRealCount; index += 1) {
+    const row = rowsByIndex.get(index);
+    if (row) {
+      atoms.push({ elem: row.el, x: row.x, y: row.y, z: row.z, bonds: [], bondOrder: [], i: index });
+      continue;
+    }
+    const parts = lines[index + 2]?.trim().split(/\s+/) ?? [];
+    const x = Number(parts[1]);
+    const y = Number(parts[2]);
+    const z = Number(parts[3]);
+    if (parts.length >= 4 && [x, y, z].every(Number.isFinite)) {
+      atoms.push({ elem: parts[0], x, y, z, bonds: [], bondOrder: [], i: index });
+    }
+  }
   if (!atoms.length) return [];
 
   if (includePeriodicImages && frame.xyz) {
-    const lines = frame.xyz.trim().split(/\r?\n/);
-    const xyzAtomCount = Number.parseInt(lines[0]?.trim() ?? "", 10);
-    const parsedAtomCount = Number.isFinite(xyzAtomCount)
-      ? Math.max(0, Math.min(xyzAtomCount, lines.length - 2))
-      : 0;
-    const declaredGhostCount = Number.isFinite(frame.ghost_count)
-      ? Math.max(0, Math.floor(frame.ghost_count))
-      : Math.max(0, parsedAtomCount - realAtomCount);
-    const displayedAtomCount = Math.min(parsedAtomCount, realAtomCount + declaredGhostCount);
-    for (let xyzIndex = realAtomCount; xyzIndex < displayedAtomCount; xyzIndex += 1) {
+    const displayedAtomCount = Math.min(parsedAtomCount, geometryRealCount + declaredGhostCount);
+    for (let xyzIndex = geometryRealCount; xyzIndex < displayedAtomCount; xyzIndex += 1) {
       const parts = lines[xyzIndex + 2]?.trim().split(/\s+/) ?? [];
       if (parts.length < 4) continue;
       const x = Number(parts[1]);
       const y = Number(parts[2]);
       const z = Number(parts[3]);
       if (![x, y, z].every(Number.isFinite)) continue;
-      const parent = frame.ghost_parents?.[xyzIndex - realAtomCount];
-      const parentIndex = typeof parent === "number" && Number.isInteger(parent) && parent >= 0 && parent < atoms.length ? parent : undefined;
+      const parent = frame.ghost_parents?.[xyzIndex - geometryRealCount];
+      const parentIndex = typeof parent === "number" && Number.isInteger(parent) && parent >= 0 && parent < geometryRealCount ? parent : undefined;
       atoms.push({
         elem: parts[0],
         x,

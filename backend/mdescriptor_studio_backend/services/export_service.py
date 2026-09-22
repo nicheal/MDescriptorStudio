@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -37,11 +38,12 @@ def _cancellable_frames(adapter, frames: list[int], ctx):
         yield adapter.get_frame(frame_index)
 
 
-_DESTINATION_LOCKS: dict[str, threading.Lock] = {}
+_DESTINATION_LOCKS: dict[str, tuple[threading.Lock, int]] = {}
 _DESTINATION_LOCKS_GUARD = threading.Lock()
 
 
-def _destination_lock(target: Path) -> threading.Lock:
+@contextmanager
+def _destination_lock(target: Path):
     """One writer per destination, process-wide.
 
     Overwriting an earlier export is this RPC's documented behaviour (unlike
@@ -52,10 +54,21 @@ def _destination_lock(target: Path) -> threading.Lock:
     """
     key = str(target)
     with _DESTINATION_LOCKS_GUARD:
-        lock = _DESTINATION_LOCKS.get(key)
-        if lock is None:
-            lock = _DESTINATION_LOCKS[key] = threading.Lock()
-    return lock
+        current = _DESTINATION_LOCKS.get(key)
+        lock = current[0] if current is not None else threading.Lock()
+        _DESTINATION_LOCKS[key] = (lock, (current[1] if current is not None else 0) + 1)
+    try:
+        with lock:
+            yield
+    finally:
+        with _DESTINATION_LOCKS_GUARD:
+            current = _DESTINATION_LOCKS.get(key)
+            if current is None or current[0] is not lock:
+                return
+            if current[1] <= 1:
+                _DESTINATION_LOCKS.pop(key, None)
+            else:
+                _DESTINATION_LOCKS[key] = (lock, current[1] - 1)
 
 
 def _identity_records(samples, chosen: list[int]) -> list[dict]:

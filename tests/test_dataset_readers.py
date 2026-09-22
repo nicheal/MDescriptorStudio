@@ -107,7 +107,9 @@ def test_extxyz_pbc_accepts_the_spellings_writers_emit_and_refuses_the_rest(tmp_
         frame = read(spelling)
         assert not bool(frame.pbc.any()), spelling
         assert not frame.cell.any(), "an isolated frame keeps no cell"
-    assert read("T F T").cell is not None  # mixed still flattens to periodic: ADR-28
+    mixed = read("T F T")
+    assert mixed.pbc.tolist() == [True, False, True]
+    assert mixed.cell[0, 0] == pytest.approx(5.0)
     for garbage in ("X X X", "maybe yes no", "T T"):
         with pytest.raises(AppError) as exc:
             read(garbage)
@@ -135,6 +137,17 @@ def test_extxyz_refuses_a_number_spelling_xyz_cannot_mean(tmp_path: Path) -> Non
     # An underscore is only forbidden inside a number; a species token is still
     # whatever the symbol table knows, and a comment may hold any text at all.
     assert read("2.5").numbers.tolist() == [14]
+
+
+def test_extxyz_refuses_atomic_numbers_outside_the_periodic_table(tmp_path: Path) -> None:
+    path = tmp_path / "invalid_z.xyz"
+    path.write_text(
+        '1\nProperties=species:S:1:pos:R:3\n999 0 0 0\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(AppError) as exc:
+        create_adapter(path).get_frame(0)
+    assert exc.value.code == INVALID_DATASET
 
 
 def test_extxyz_opens_a_file_saved_with_a_byte_order_mark(tmp_path: Path) -> None:

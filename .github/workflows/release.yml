@@ -69,6 +69,10 @@ jobs:
         shell: pwsh
         run: .\scripts\prepare_sidecar.ps1
 
+      - name: Smoke test frozen backend bundle
+        shell: pwsh
+        run: .\scripts\validate_sidecar.ps1
+
       - name: Build and publish Release
         uses: tauri-apps/tauri-action@v1
         env:

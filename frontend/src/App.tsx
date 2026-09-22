@@ -129,14 +129,16 @@ export default function App() {
     let poller: ReturnType<typeof setInterval> | null = null;
     let offReady: (() => void) | null = null;
     let readyHandled = false;
-    const handleReady = async () => {
-      if (disposed || readyHandled) return;
+    let armGeneration = 0;
+    const handleReady = async (generation: number) => {
+      if (disposed || generation !== armGeneration || readyHandled) return;
       readyHandled = true;
       restartingRef.current = false;
       restartExitRef.current = false;
       try {
         // apply the persisted UI language before the main UI renders
         await initLanguage();
+        if (disposed || generation !== armGeneration) return;
         const info = await ipc.request<{
           mdescriptor_version: string;
           mdescriptor_api_version: number;
@@ -144,15 +146,16 @@ export default function App() {
           mdescriptor_descriptor_info_schema_version?: number;
           cpu_threads?: number;
         }>("system.info");
+        if (disposed || generation !== armGeneration) return;
         // restore the persisted analysis view + active run before any page
         // renders so the Analysis page mounts on what was last on screen
         await Promise.all([hydrateActiveRun(), hydrateAnalysisUi()]);
-        if (disposed) return;
+        if (disposed || generation !== armGeneration) return;
         setBackendReady(info.mdescriptor_version, info.cpu_threads ?? null);
         await refreshDatasets();
       } catch (e) {
         console.error(e);
-        if (!disposed) setBackendError();
+        if (!disposed && generation === armGeneration) setBackendError();
       }
     };
     const stopPoller = () => {
@@ -180,6 +183,7 @@ export default function App() {
       try {
         do {
           reArmRequested = false;
+          const generation = ++armGeneration;
           offReady?.();
           offReady = null;
           readyHandled = false;
@@ -204,15 +208,15 @@ export default function App() {
             useWorkspace.getState().setBackendError(logDir);
             void arm();
           });
-          if (disposed) break;
+          if (disposed || generation !== armGeneration) break;
           if (!ipc.isReady) continue;
-          offReady = ipc.on("backend.ready", handleReady);
+          offReady = ipc.on("backend.ready", () => { void handleReady(generation); });
           wireJobEvents(useWorkspace.getState().setRunningJobs);
           // pull the ready snapshot in case the line arrived before our listener
           const { invoke } = await import("@tauri-apps/api/core");
           const started = Date.now();
           poller = setInterval(async () => {
-            if (disposed) return;
+            if (disposed || generation !== armGeneration) return;
             try {
               const line = await invoke<string | null>("backend_ready_line");
               if (line) {

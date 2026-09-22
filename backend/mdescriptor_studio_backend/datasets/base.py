@@ -54,11 +54,15 @@ class DatasetAdapter(ABC):
             yield self.get_frame(i)
 
 
+def is_deepmd_set_dir(path: Path) -> bool:
+    """Whether one directory has the DeepMD set shape consumed by the reader."""
+    return path.is_dir() and path.name.startswith("set.") and (path / "coord.npy").is_file()
+
+
 def detect_format(path: Path) -> str:
     if path.is_dir():
         if (path / "type.raw").exists() and any(
-            d.is_dir() and (d / "coord.npy").exists()
-            for d in path.iterdir() if d.name.startswith("set")
+            is_deepmd_set_dir(d) for d in path.iterdir()
         ):
             return "deepmd"
         raise AppError(

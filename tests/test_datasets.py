@@ -378,10 +378,8 @@ def test_declared_isolated_box_is_not_periodic(tmp_path: Path) -> None:
     assert periodic_boundary_ghosts(["H", "H"], frame.positions, frame.cell) == []
 
 
-def test_mixed_periodicity_still_flattens_to_periodic(tmp_path: Path) -> None:
-    """Pinned deliberately: a slab keeps computing as fully periodic. Per-axis
-    fidelity would make descriptors that do not advertise mixed_periodicity
-    fail instead, which is an open product decision (see the extxyz reader)."""
+def test_mixed_periodicity_preserves_each_axis(tmp_path: Path) -> None:
+    """A slab keeps its non-periodic vacuum direction throughout the reader."""
     p = tmp_path / "slab.xyz"
     p.write_text(
         '2\nLattice="3.0 0.0 0.0 0.0 3.0 0.0 0.0 0.0 15.0"'
@@ -391,7 +389,7 @@ def test_mixed_periodicity_still_flattens_to_periodic(tmp_path: Path) -> None:
     )
     adapter = create_adapter(p)
     assert adapter.scan().periodicity["flags"] == ["XY."]
-    assert adapter.get_frame(0).pbc.tolist() == [True, True, True]
+    assert adapter.get_frame(0).pbc.tolist() == [True, True, False]
 
 
 def test_unsupported_format(tmp_path: Path) -> None:
@@ -426,7 +424,7 @@ def test_exporters_round_trip_through_the_readers(tmp_path: Path) -> None:
     frames = [adapter.get_frame(index) for index in range(len(adapter))]
 
     deepmd_copy = tmp_path / "deepmd_copy"
-    assert exporters.write_deepmd(deepmd_copy, frames) == 3
+    assert exporters.write_deepmd(deepmd_copy, iter(frames)) == 3
     exported = create_adapter(deepmd_copy)
     assert len(exported) == 3
     for index in range(3):
@@ -438,6 +436,25 @@ def test_exporters_round_trip_through_the_readers(tmp_path: Path) -> None:
     assert len(exported) == 3
     for index in range(3):
         _assert_same_frame(frames[index], exported.get_frame(index))
+
+
+def test_deepmd_reader_maps_source_arrays_instead_of_concatenating_them(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    write_deepmd(source, 4, 8, seed=6)
+    adapter = create_adapter(source)
+    assert all(isinstance(record["coords"], np.memmap) for record in adapter._sets)
+    assert adapter.get_frame(3).positions.shape == (8, 3)
+
+
+def test_deepmd_export_rejects_species_order_changes(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    write_deepmd(source, 2, 4, seed=8)
+    adapter = create_adapter(source)
+    frames = [adapter.get_frame(index) for index in range(len(adapter))]
+    frames[1].numbers = frames[1].numbers[::-1]
+    with pytest.raises(AppError, match="same species and atom order"):
+        exporters.write_deepmd(tmp_path / "bad", frames)
+
 
 
 def test_element_histogram_pads_structures_that_lack_the_element(tmp_path: Path) -> None:

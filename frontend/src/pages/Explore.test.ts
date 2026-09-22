@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { loadExploreHealth } from "./Explore";
 import { createExploreFrameLoader, resolveExternalFrame } from "./exploreFrameLoader";
 import type { ExploreStatisticsResponse } from "./Explore";
-import type { DatasetHealth, FramePayload, HealthFindings } from "../types/protocol";
+import type { DatasetHealth, FrameAtomsPayload, FrameGeometryPayload, FramePayload, FrameSummaryPayload, HealthFindings } from "../types/protocol";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -16,6 +16,20 @@ function deferred<T>() {
 
 function frame(index: number): FramePayload {
   return { index, xyz: "", atoms: [] } as unknown as FramePayload;
+}
+
+function frameSummary(index: number): FrameSummaryPayload {
+  const value = frame(index);
+  const { xyz: _xyz, atom_rows: _rows, ghost_count: _ghostCount, ghost_parents: _parents, ...summary } = value;
+  return summary as FrameSummaryPayload;
+}
+
+function frameGeometry(index: number): FrameGeometryPayload {
+  return { index, xyz: "", ghost_count: 0, ghost_parents: [], bond_cutoff: 2.4, geometry_atom_count: 0, geometry_complete: true };
+}
+
+function frameAtoms(index: number): FrameAtomsPayload {
+  return { index, atom_offset: 0, atom_page_size: 0, atom_total: 0, atom_rows_complete: true, atom_rows: [] };
 }
 
 function healthStatistics(marker: number): ExploreStatisticsResponse {
@@ -42,6 +56,7 @@ function requestFor(
     index,
     bondCutoff: 2.4,
     requestCutoff: 2.4,
+    atomPageSize: 50,
     onLoading,
     onFrame,
     onError,
@@ -52,9 +67,11 @@ describe("Explore frame loading", () => {
   it("commits only the newest production frame request", async () => {
     const oldResponse = deferred<FramePayload>();
     const newResponse = deferred<FramePayload>();
-    const request = vi.fn()
-      .mockReturnValueOnce(oldResponse.promise)
-      .mockReturnValueOnce(newResponse.promise);
+    const summaries = [oldResponse.promise, newResponse.promise];
+    const request = vi.fn((method: string, params: { index: number }) => {
+      if (method === "dataset.frame_summary") return summaries.shift()!;
+      return Promise.resolve(method === "dataset.frame_geometry" ? frameGeometry(params.index) : frameAtoms(params.index));
+    });
     const committed: number[] = [];
     const loading: boolean[] = [];
     const loader = createExploreFrameLoader(request, () => "dataset-a");
@@ -66,12 +83,12 @@ describe("Explore frame loading", () => {
       committed.push(value.index);
     }));
 
-    newResponse.resolve(frame(7));
+    newResponse.resolve(frameSummary(7) as FramePayload);
     await newLoad;
-    oldResponse.resolve(frame(3));
+    oldResponse.resolve(frameSummary(3) as FramePayload);
     await oldLoad;
 
-    expect(request).toHaveBeenNthCalledWith(1, "dataset.frame", {
+    expect(request).toHaveBeenNthCalledWith(1, "dataset.frame_summary", {
       id: "dataset-a",
       index: 3,
       bond_cutoff: 2.4,

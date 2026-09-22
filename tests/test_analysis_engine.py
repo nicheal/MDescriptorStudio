@@ -324,6 +324,13 @@ def test_tsne_caps_iterations_it_cannot_report_progress_for() -> None:
     assert any("max_iter reduced" in warning for warning in result["warnings"])
 
 
+def test_uncancellable_tsne_refuses_oversized_input() -> None:
+    values = np.zeros((10_001, 2), dtype=np.float64)
+    with pytest.raises(AppError, match="cannot be cancelled") as exc:
+        tsne(StructureDescriptorMatrix(values, np.arange(values.shape[0])), {})
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
+
+
 def test_single_feature_matrix_runs_do_not_crash_unstructured() -> None:
     """One descriptor is a thin but legitimate input: the projection either
     returns finite coordinates or says so with a structured analysis error."""

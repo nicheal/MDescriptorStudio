@@ -10,7 +10,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mdescriptor_studio_backend.analysis.umap_numpy import _knn_indices_and_distances, fit_umap
+from mdescriptor_studio_backend.analysis.umap_numpy import (
+    _fuzzy_simplicial_edges,
+    _knn_indices_and_distances,
+    fit_umap,
+)
 
 
 def _blobs(n: int = 300, d: int = 10, seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
@@ -117,3 +121,19 @@ def test_shared_feature_offset_does_not_reorder_neighbours() -> None:
     overlap = np.mean([len(set(row.tolist()) & set(known.tolist())) for row, known in zip(indices, exact)])
     assert overlap > 0.98
     assert (indices[:, 0] == np.arange(x.shape[0])).all(), "self must stay in column 0"
+
+
+def test_duplicate_rows_keep_identity_out_of_the_neighbour_columns() -> None:
+    x = np.array([[0.0, 0.0], [0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
+    indices, distances = _knn_indices_and_distances(x, 2, "euclidean")
+    assert np.array_equal(indices[:, 0], np.arange(x.shape[0]))
+    assert all(row not in neighbours for row, neighbours in enumerate(indices[:, 1:].tolist()))
+    assert np.all(distances[:, 0] == 0.0)
+
+
+def test_fuzzy_union_uses_probabilistic_sum() -> None:
+    indices = np.array([[0, 1], [1, 0]], dtype=np.int64)
+    weights = np.array([[0.2], [0.7]], dtype=np.float32)
+    heads, tails, values = _fuzzy_simplicial_edges(indices, weights, 2)
+    assert set(zip(heads.tolist(), tails.tolist())) == {(0, 1), (1, 0)}
+    np.testing.assert_allclose(values, [0.76, 0.76], atol=1e-6)

@@ -37,4 +37,23 @@ describe("analysis cache", () => {
     expect(cache.bytes).toBe(before + 24);
     expect(() => cache.setSelectedIndices("absent", [1])).not.toThrow();
   });
+
+  it("keeps entry bytes in sync when the selection is deleted", () => {
+    const cache = createAnalysisCache({ maxEntries: 2, maxBytes: 100_000 });
+    cache.set("a", value(10));
+    const before = cache.bytes;
+    cache.setSelectedIndices("a", [1, 2, 3]);
+    expect(cache.bytes).toBe(before + 24);
+    cache.delete("a");
+    expect(cache.size).toBe(0);
+    expect(cache.bytes).toBe(0);
+  });
+
+  it("trims after a selection grows past the byte budget", () => {
+    const cache = createAnalysisCache({ maxEntries: 2, maxBytes: 200 });
+    cache.set("a", value(1));
+    cache.setSelectedIndices("a", Array.from({ length: 100 }, (_, index) => index));
+    expect(cache.size).toBe(0);
+    expect(cache.bytes).toBe(0);
+  });
 });

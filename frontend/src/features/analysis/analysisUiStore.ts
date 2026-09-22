@@ -15,6 +15,7 @@ interface AnalysisUiState {
   setOverviewAnalysis: (overviewAnalysis: OverviewAnalysis) => void;
   setCoverageMode: (coverageMode: CoverageMode) => void;
   setMode: (mode: AnalysisView["mode"]) => void;
+  setModeTransient: (mode: AnalysisView["mode"]) => void;
   setPreprocess: (preprocess: string) => void;
   setEffectiveDimensionPreprocess: (preprocess: EffectiveDimensionPreprocess) => void;
   setColorBy: (colorBy: ColorBy) => void;
@@ -41,6 +42,7 @@ export const useAnalysisUi = create<AnalysisUiState>()(() => ({
   setOverviewAnalysis: (overviewAnalysis) => applyView({ overviewAnalysis }),
   setCoverageMode: (coverageMode) => applyView({ coverageMode }),
   setMode: (mode) => applyView({ mode }),
+  setModeTransient: (mode) => applyView({ mode }, false),
   setPreprocess: (preprocess) => applyView({ preprocess }),
   setEffectiveDimensionPreprocess: (effectiveDimensionPreprocess) => applyView({ effectiveDimensionPreprocess }),
   setColorBy: (colorBy) => applyView({ colorBy }),
@@ -88,10 +90,10 @@ export const useAnalysisUi = create<AnalysisUiState>()(() => ({
   },
 }));
 
-function applyView(partial: Partial<AnalysisView>): void {
+function applyView(partial: Partial<AnalysisView>, persist = true): void {
   const view = { ...useAnalysisUi.getState().view, ...partial };
   useAnalysisUi.setState({ view });
-  persistView(view);
+  if (persist) persistView(view);
 }
 
 export async function hydrateAnalysisUi(): Promise<void> {

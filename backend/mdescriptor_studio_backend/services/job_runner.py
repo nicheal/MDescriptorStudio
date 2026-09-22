@@ -25,6 +25,7 @@ from .analysis_helpers import (
     CROSS_DATASET_TYPES,
     _NOW,
     _block_names,
+    canonical_analysis_request,
     _view_id,
 )
 
@@ -52,6 +53,13 @@ class AnalysisRunMixin:
         version, so changing implementation cannot reuse an old artifact.
         """
         params = dict(params or {})
+        has_algorithm_selector = "algorithm" in params or "method" in params
+        analysis_type, params = canonical_analysis_request(analysis_type, params)
+        # Direct registry RPCs (analysis.fps, analysis.kmeans, ...) historically
+        # had no selector field, while wrapper RPCs carry one. Keep those two
+        # public routes from colliding in the cache after canonicalization.
+        if not has_algorithm_selector:
+            params.pop("algorithm", None)
         if analysis_type == "pca":
             mode = str(params.get("mode") or "structure")
             if mode not in ("structure", "atom"):
@@ -146,91 +154,17 @@ class AnalysisRunMixin:
                 return early
 
             def runner(ctx):
-                artifact_path: Path | None = None
-                try:
-                    self._mark_run_running(analysis_id)
-                    ctx.progress(0, 1, "loading descriptor results")
-                    view_ids = (
-                        [params.get("reference_view_id"), params.get("query_view_id")]
-                        if cross_dataset
-                        else [params.get("view_id"), None]
-                        if warm_start_fps
-                        else [params.get("view_id")] * len(run_rows)
-                    )
-                    samples = [
-                        self._load_samples(
-                            row,
-                            params,
-                            analysis_type,
-                            check=ctx.check_cancelled,
-                            view_id=view_ids[index],
-                        )
-                        for index, row in enumerate(run_rows)
-                    ]
-                    ctx.check_cancelled()
-                    result = self._run_engine(analysis_type, params, run_rows, samples, ctx)
-                    ctx.check_cancelled()
-                    preview_samples = samples[1] if cross_dataset else samples[0]
-                    preview = self._build_preview(
-                        result,
-                        preview_samples,
-                        analysis_type,
-                        reference_samples=samples[0] if cross_dataset else None,
-                    )
-                    if analysis_type == "pca" and isinstance(preview.get("points"), list):
-                        frame_of = {int(point["frame"]) for point in preview["points"] if isinstance(point, dict) and "frame" in point}
-                        # The colour-by decorations are looked up by frame index,
-                        # so the frames present are the frames worth reading. This
-                        # used to pass `frame.max() + 1`: a view selecting frames
-                        # 10 and 11 of a 12 000-frame source decoded 12 frames, and
-                        # the extXYZ reader opens the source file once per frame.
-                        properties = self._frame_properties_by_frame(run_rows[0], sorted(frame_of))
-                        preview["points"] = [
-                            {**point, **properties[int(point["frame"])]}
-                            if isinstance(point, dict) and "frame" in point and int(point["frame"]) in properties
-                            else point
-                            for point in preview["points"]
-                        ]
-                    artifact_path, manifest = self._commit_artifact(
-                        analysis_id,
-                        analysis_type,
-                        input_ids,
-                        canonical_params,
-                        result,
-                        preview,
-                        ctx,
-                    )
-                    if analysis_type == "pca":
-                        # Keep result.get_pca usable for databases created by the
-                        # legacy frontend. New code reads the generic preview.
-                        self._write_legacy_pca_compatibility(artifact_path, analysis_id, input_ids[0], params, preview)
-                    self._complete_analysis_run(
-                        analysis_id,
-                        {
-                            "result_path": str(artifact_path),
-                            "finished_at": _NOW(),
-                            "warnings_json": json.dumps(result.get("warnings", []), ensure_ascii=False),
-                            "artifact_manifest_json": json.dumps(manifest, ensure_ascii=False),
-                            # allow_nan=False is the backstop, not the fix: the
-                            # preview is already sanitised. Writing a bare NaN
-                            # here would settle the row COMPLETED and then make
-                            # every later read of it fail to encode.
-                            "preview_json": json.dumps(preview, ensure_ascii=False, allow_nan=False),
-                            "preprocessing_json": json.dumps(_preprocessing(params), ensure_ascii=False),
-                            "updated_at": _NOW(),
-                        },
-                        artifact_path,
-                    )
-                    ctx.progress(1, 1, "analysis complete")
-                    n_points = preview_samples.n_samples if cross_dataset else samples[0].n_samples
-                    return {"analysis_id": analysis_id, "n_points": n_points, "analysis_type": analysis_type, "warnings": result.get("warnings", [])}
-
-                except BaseException:
-                    # Keep failed runs atomic: a committed artifact must
-                    # never outlive the run row that failed to settle.
-                    if artifact_path is not None:
-                        self._artifacts.remove_quiet(artifact_path)
-                    raise
+                return self._execute_analysis_job(
+                    analysis_id,
+                    analysis_type,
+                    params,
+                    input_ids,
+                    canonical_params,
+                    run_rows,
+                    ctx,
+                    cross_dataset=cross_dataset,
+                    warm_start_fps=warm_start_fps,
+                )
             try:
                 job_id = self.jobs.submit(
                     f"analysis.{analysis_type}",
@@ -243,6 +177,97 @@ class AnalysisRunMixin:
                     self.db.execute("DELETE FROM analysis_runs WHERE id = ?", (analysis_id,))
                 raise
             return {"job_id": job_id, "analysis_id": analysis_id, "cache": None}
+
+    def _execute_analysis_job(
+        self,
+        analysis_id: str,
+        analysis_type: str,
+        params: dict,
+        input_ids: list[str],
+        canonical_params: dict,
+        run_rows: list[dict],
+        ctx,
+        *,
+        cross_dataset: bool,
+        warm_start_fps: bool,
+    ) -> dict:
+        """Run one claimed analysis row; submission stays focused on identity."""
+        artifact_path: Path | None = None
+        try:
+            self._mark_run_running(analysis_id)
+            ctx.progress(0, 1, "loading descriptor results")
+            view_ids = (
+                [params.get("reference_view_id"), params.get("query_view_id")]
+                if cross_dataset
+                else [params.get("view_id"), None]
+                if warm_start_fps
+                else [params.get("view_id")] * len(run_rows)
+            )
+            samples = [
+                self._load_samples(
+                    row,
+                    params,
+                    analysis_type,
+                    check=ctx.check_cancelled,
+                    view_id=view_ids[index],
+                )
+                for index, row in enumerate(run_rows)
+            ]
+            ctx.check_cancelled()
+            result = self._run_engine(analysis_type, params, run_rows, samples, ctx)
+            ctx.check_cancelled()
+            preview_samples = samples[1] if cross_dataset else samples[0]
+            preview = self._build_preview(
+                result,
+                preview_samples,
+                analysis_type,
+                reference_samples=samples[0] if cross_dataset else None,
+            )
+            if analysis_type == "pca" and isinstance(preview.get("points"), list):
+                frame_of = {int(point["frame"]) for point in preview["points"] if isinstance(point, dict) and "frame" in point}
+                # Only colour the frames present in the bounded preview. A view
+                # selecting frames 10 and 11 must not decode frames 0..11.
+                properties = self._frame_properties_by_frame(run_rows[0], sorted(frame_of))
+                preview["points"] = [
+                    {**point, **properties[int(point["frame"])]}
+                    if isinstance(point, dict) and "frame" in point and int(point["frame"]) in properties
+                    else point
+                    for point in preview["points"]
+                ]
+            artifact_path, manifest = self._commit_artifact(
+                analysis_id,
+                analysis_type,
+                input_ids,
+                canonical_params,
+                result,
+                preview,
+                ctx,
+            )
+            if analysis_type == "pca":
+                # Keep result.get_pca usable for legacy frontend databases.
+                self._write_legacy_pca_compatibility(artifact_path, analysis_id, input_ids[0], params, preview)
+            self._complete_analysis_run(
+                analysis_id,
+                {
+                    "result_path": str(artifact_path),
+                    "finished_at": _NOW(),
+                    "warnings_json": json.dumps(result.get("warnings", []), ensure_ascii=False),
+                    "artifact_manifest_json": json.dumps(manifest, ensure_ascii=False),
+                    "preview_json": json.dumps(preview, ensure_ascii=False, allow_nan=False),
+                    "preprocessing_json": json.dumps(_preprocessing(params), ensure_ascii=False),
+                    "updated_at": _NOW(),
+                },
+                artifact_path,
+            )
+            ctx.progress(1, 1, "analysis complete")
+            n_points = preview_samples.n_samples if cross_dataset else samples[0].n_samples
+            return {"analysis_id": analysis_id, "n_points": n_points, "analysis_type": analysis_type, "warnings": result.get("warnings", [])}
+        except BaseException:
+            # Keep failed runs atomic: a committed artifact must never outlive
+            # the run row that failed to settle.
+            if artifact_path is not None:
+                self._artifacts.remove_quiet(artifact_path)
+            raise
 
     def _mark_run_running(self, analysis_id: str) -> None:
         """Flip the analysis run to RUNNING when its job actually starts.

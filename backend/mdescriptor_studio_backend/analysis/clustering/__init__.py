@@ -8,11 +8,12 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, AppError
 from ..models import DescriptorMatrix
-from ..algorithms._common import _check_samples, _float_param, _int_param, _nearest_distances, _preprocess, _safe_import, _seed, _visual_pca
+from ..algorithms._common import _check_black_box_samples, _check_samples, _float_param, _int_param, _nearest_distances, _preprocess, _safe_import, _seed, _visual_pca
 
 def cluster(samples: DescriptorMatrix, params: dict, algorithm: str, progress: Callable[[float, str], None] | None = None) -> dict:
     x, warnings, keep = _preprocess(samples.values, params, "standardized")
     algorithm = algorithm.lower()
+    _check_black_box_samples(x, algorithm)
     if algorithm == "kmeans":
         k = _int_param(params, "n_clusters", 6, 2)
         if k > x.shape[0]:
@@ -60,6 +61,7 @@ def outlier(samples: DescriptorMatrix, params: dict, algorithm: str, progress: C
         threshold = float(np.quantile(scores, 1.0 - (0.01 if contamination == "auto" else contamination)))
         labels = (scores > threshold).astype(np.int64)
     elif algorithm == "lof":
+        _check_black_box_samples(x, algorithm)
         _check_samples(x, 3)
         cls = _safe_import("sklearn.neighbors", "scikit-learn").LocalOutlierFactor
         model = cls(n_neighbors=min(_int_param(params, "k", 20, 2), x.shape[0] - 1), contamination=contamination)
@@ -67,6 +69,7 @@ def outlier(samples: DescriptorMatrix, params: dict, algorithm: str, progress: C
         scores = -np.asarray(model.negative_outlier_factor_, dtype=np.float64)
         labels = (predicted < 0).astype(np.int64)
     elif algorithm in ("isolation_forest", "isolation-forest", "iforest"):
+        _check_black_box_samples(x, "isolation_forest")
         cls = _safe_import("sklearn.ensemble", "scikit-learn").IsolationForest
         model = cls(contamination=contamination, random_state=_seed(params), n_estimators=_int_param(params, "n_estimators", 200, 10), n_jobs=1)
         model.fit(x)

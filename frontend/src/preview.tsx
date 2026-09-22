@@ -946,6 +946,8 @@ function mockFramePayload(index: number, bondCutoff = 2.4) {
     ghost_count: ghosts.length,
     ghost_parents: ghostParents,
     bond_cutoff: Math.min(10, Math.max(0.1, bondCutoff || 2.4)),
+    geometry_atom_count: rows.length,
+    geometry_complete: true,
   };
 }
 
@@ -1283,7 +1285,7 @@ const METHODS: Record<string, Handler> = {
     mdescriptor_api_version: 3,
     mdescriptor_baseline_version: "2",
     mdescriptor_descriptor_info_schema_version: 3,
-    analysis_algorithm_version: "studio-analysis-8",
+    analysis_algorithm_version: "studio-analysis-9",
     data_dir: "C:\\Users\\preview\\AppData\\Roaming\\mdescriptor-studio",
     cpu_threads: 16,
   }),
@@ -1358,6 +1360,39 @@ const METHODS: Record<string, Handler> = {
   "dataset.frame": (p) => {
     requireDataset(p.id);
     return mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4));
+  },
+  "dataset.frame_summary": (p) => {
+    requireDataset(p.id);
+    const frame = mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4));
+    const { xyz: _xyz, atom_rows: _rows, ghost_count: _ghostCount, ghost_parents: _parents, ...summary } = frame;
+    return { ...summary, atom_offset: 0, atom_page_size: 0, atom_total: frame.natoms, atom_rows_complete: false };
+  },
+  "dataset.frame_geometry": (p) => {
+    requireDataset(p.id);
+    const frame = mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4));
+    return {
+      index: frame.index,
+      xyz: frame.xyz,
+      ghost_count: frame.ghost_count,
+      ghost_parents: frame.ghost_parents,
+      bond_cutoff: frame.bond_cutoff,
+      geometry_atom_count: frame.natoms,
+      geometry_complete: true,
+    };
+  },
+  "dataset.frame_atoms": (p) => {
+    requireDataset(p.id);
+    const frame = mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4));
+    const offset = Math.max(0, Number(p.atom_offset ?? 0));
+    const limit = Math.max(1, Number(p.atom_limit ?? frame.atom_rows.length));
+    return {
+      index: frame.index,
+      atom_offset: offset,
+      atom_total: frame.atom_rows.length,
+      atom_page_size: frame.atom_rows.slice(offset, offset + limit).length,
+      atom_rows_complete: offset === 0 && offset + limit >= frame.atom_rows.length,
+      atom_rows: frame.atom_rows.slice(offset, offset + limit),
+    };
   },
   "dataset.findings": (p) => {
     requireDataset(p.id);

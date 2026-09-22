@@ -185,6 +185,15 @@ const CASES: Case[] = TABS.flatMap((tab) =>
 );
 
 describe("analysis identity keys", () => {
+  it("canonicalizes legacy algorithm aliases before building a slot key", () => {
+    expect(buildParamsKey("clusters", params({ clusterAlgorithm: "hierarchical" })))
+      .toBe(buildParamsKey("clusters", params({ clusterAlgorithm: "agglomerative" })));
+    expect(buildParamsKey("outliers", params({ outlierAlgorithm: "iforest" })))
+      .toBe(buildParamsKey("outliers", params({ outlierAlgorithm: "isolation_forest" })));
+    expect(buildParamsKey("sampling", params({ samplingAlgorithm: "element" })))
+      .toBe(buildParamsKey("sampling", params({ samplingAlgorithm: "per_element" })));
+  });
+
   it.each(CASES.map((item) => [item.label, item] as const))("%s covers every parameter it submits", (_label, item) => {
     const { tab, base } = item;
     // A field the request never reads may move freely: that is what keeps an

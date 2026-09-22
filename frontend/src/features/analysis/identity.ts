@@ -10,6 +10,25 @@ import type {
 export const slotKey = (slot: Pick<AnalysisSlot, "moduleKey" | "inputKey" | "parameterKey">): string =>
   `${slot.moduleKey}|${slot.inputKey}|${slot.parameterKey}`;
 
+export function canonicalClusterAlgorithm(value: string): string {
+  return value.toLowerCase() === "hierarchical" ? "agglomerative" : value.toLowerCase();
+}
+
+export function canonicalOutlierAlgorithm(value: string): string {
+  const normalized = value.toLowerCase();
+  if (normalized === "isolation-forest" || normalized === "iforest") return "isolation_forest";
+  if (normalized === "mahalanobis_distance") return "mahalanobis";
+  if (normalized === "k-nearest-neighbor") return "knn";
+  return normalized;
+}
+
+export function canonicalSamplingAlgorithm(value: string): string {
+  const normalized = value.toLowerCase();
+  if (normalized === "cluster") return "cluster_representative";
+  if (normalized === "element") return "per_element";
+  return normalized;
+}
+
 export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
   switch (tab) {
     case "projection":
@@ -20,29 +39,32 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
       // a different analysis and re-run an identical one.
       return [p.similarityMode, p.mode, p.similarityMode === "pairwise" ? "" : p.k, p.similarityMode === "query" ? String(p.queryIndex) : "", p.viewId ?? "full"].join("|");
     case "clusters":
-      return [p.clusterAlgorithm, p.nClusters, p.mode, p.viewId ?? "full"].join("|");
+      return [canonicalClusterAlgorithm(p.clusterAlgorithm), p.nClusters, p.mode, p.viewId ?? "full"].join("|");
     case "outliers":
       // Only LOF and k-NN read k, so only they key on it - otherwise a k moved
       // on another panel would blank this module's cached-result dot without
       // changing the computation, with no control on screen to move it back.
-      return [p.outlierAlgorithm, p.outlierAlgorithm === "lof" || p.outlierAlgorithm === "knn" ? p.k : "", p.contamination, p.mode, p.viewId ?? "full"].join("|");
-    case "sampling":
+      const outlierAlgorithm = canonicalOutlierAlgorithm(p.outlierAlgorithm);
+      return [outlierAlgorithm, outlierAlgorithm === "lof" || outlierAlgorithm === "knn" ? p.k : "", p.contamination, p.mode, p.viewId ?? "full"].join("|");
+    case "sampling": {
+      const samplingAlgorithm = canonicalSamplingAlgorithm(p.samplingAlgorithm);
       return [
-        p.samplingAlgorithm,
+        samplingAlgorithm,
         p.nSamples,
         p.mode,
-        p.samplingAlgorithm === "uncertainty_diversity" ? p.uncertaintyK : "",
+        samplingAlgorithm === "uncertainty_diversity" ? p.uncertaintyK : "",
         // FPS and cluster representatives both measure in a scaled space, so a
         // moved scaling is a different computation for them; the rest never read it.
-        p.samplingAlgorithm === "fps"
+        samplingAlgorithm === "fps"
           ? [p.samplingStrategy, p.samplingScaling, p.samplingMinDistance, p.samplingExistingRunId ?? "none", p.samplingBlocks.length ? p.samplingBlocks.join("+") : "descriptor", p.samplingBudgetMode === "coverage" ? `cov${p.samplingCoverage}` : "count"].join(":")
-          : p.samplingAlgorithm === "cluster_representative"
+          : samplingAlgorithm === "cluster_representative"
             ? p.samplingScaling
             : "",
-        p.samplingAlgorithm === "novelty_fps" || p.samplingAlgorithm === "uncertainty_diversity"
+        samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity"
           ? [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")
           : p.viewId ?? "full",
       ].join("|");
+    }
     case "coverage":
       return [p.coverageMode, p.mode, p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join("|");
     case "compare":

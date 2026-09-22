@@ -39,7 +39,9 @@ _ANALYSIS_SCHEMA_VERSION = 1
 # studio-analysis-8 is the two follow-ups from pass 5: a comparison's kNN overlap
 # stops counting a duplicated row as its own neighbour, and a sampling artifact's
 # `selection_distances` is stored in the order its `selected_indices` are.
-ANALYSIS_ALGORITHM_VERSION = "studio-analysis-8"
+# studio-analysis-9 fixes UMAP's duplicate-row self column, uses the standard
+# fuzzy union, and bounds large neighbour searches with deterministic paths.
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-9"
 _MAX_PREVIEW_POINTS = 20_000
 # Written into the canonical parameters of the two feature analyses, so bumping
 # one invalidates that analysis' stored results without touching the others.
@@ -66,6 +68,37 @@ PHYSICAL_BLOCKS = ("lattice", "composition", "energy", "force")
 # page the *query* side.  Three call sites used to spell this set out by hand
 # and one of them had already drifted.
 CROSS_DATASET_TYPES = ("coverage", "overlap", "acquisition", "drift")
+
+_ANALYSIS_ALIASES = {
+    "hierarchical": "agglomerative",
+    "isolation-forest": "isolation_forest",
+    "iforest": "isolation_forest",
+    "mahalanobis_distance": "mahalanobis",
+    "k-nearest-neighbor": "knn",
+    "cluster": "cluster_representative",
+    "element": "per_element",
+}
+
+
+def canonical_analysis_request(analysis_type: str, params: dict | None = None) -> tuple[str, dict]:
+    """Collapse legacy algorithm spellings before cache/history identity is built."""
+    normalized = dict(params or {})
+    requested = str(analysis_type or "").strip().lower()
+    if requested in {"cluster", "clusters"}:
+        requested = str(normalized.get("algorithm") or normalized.get("method") or "kmeans").strip().lower()
+    elif requested in {"outlier", "outliers"}:
+        requested = str(normalized.get("algorithm") or normalized.get("method") or "lof").strip().lower()
+    elif requested == "sampling":
+        requested = str(normalized.get("algorithm") or normalized.get("method") or "random").strip().lower()
+    canonical = _ANALYSIS_ALIASES.get(requested, requested)
+    if canonical in {
+        "kmeans", "dbscan", "hdbscan", "agglomerative",
+        "knn", "lof", "isolation_forest", "mahalanobis",
+        "fps", "random", "stratified", "cluster_representative", "per_element",
+    }:
+        normalized["algorithm"] = canonical
+        normalized.pop("method", None)
+    return canonical, normalized
 
 # Per-sample array keys the preview builder maps onto points/rows.
 _PREVIEW_ARRAY_KEYS = (

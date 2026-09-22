@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import re
 from pathlib import Path
 
 from ..errors import AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
@@ -18,6 +19,7 @@ from ..security import (
 from .analysis_helpers import MANAGED_ID_RE, _MAX_CHUNK_VALUES
 
 log = logging.getLogger(__name__)
+_STAGING_NAME_RE = re.compile(r"^\.ana_[A-Za-z0-9_-]{1,64}\.tmp-[0-9a-f]{8}$")
 
 
 class ResultService:
@@ -34,15 +36,38 @@ class ResultService:
         are unreachable by construction, so startup is the only safe moment to
         delete them: no job is running yet and no live row references them.
         """
-        for table, root in (("descriptor_runs", "results"), ("analysis_runs", "analysis")):
+        for table, root, prefix in (
+            ("descriptor_runs", "results", "run_"),
+            ("analysis_runs", "analysis", "ana_"),
+        ):
             for row in self.db.query(
                 f"SELECT id FROM {table} WHERE result_path IS NULL AND status IN ('FAILED', 'CANCELLED')"
             ):
-                remove_managed_tree(self.data_dir / root / row["id"])
+                identifier = row.get("id")
+                if (
+                    not isinstance(identifier, str)
+                    or not MANAGED_ID_RE.fullmatch(identifier)
+                    or not identifier.startswith(prefix)
+                ):
+                    log.warning("skip abandoned %s with invalid managed id %r", table, identifier)
+                    continue
+                root_path = self.data_dir / root
+                try:
+                    target = validate_managed_path(root_path, str(root_path / identifier), identifier)
+                    remove_managed_tree(target)
+                except (OSError, UnsafePathError) as exc:
+                    log.warning("skip abandoned %s %r: %s", table, identifier, exc)
         staging_root = self.data_dir / "analysis"
         if staging_root.is_dir():
             for staging in staging_root.glob(".*.tmp-*"):
-                remove_managed_tree(staging)
+                if not _STAGING_NAME_RE.fullmatch(staging.name):
+                    log.warning("skip analysis staging path with invalid name %r", staging.name)
+                    continue
+                try:
+                    target = validate_managed_path(staging_root, str(staging), staging.name)
+                    remove_managed_tree(target)
+                except (OSError, UnsafePathError) as exc:
+                    log.warning("skip analysis staging path %r: %s", staging, exc)
 
     def managed_result_path(self, run_id: str, stored: object) -> Path:
         if not MANAGED_ID_RE.fullmatch(run_id or "") or not str(run_id).startswith("run_"):

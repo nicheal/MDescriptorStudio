@@ -31,6 +31,8 @@ if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
 
 & "$root\scripts\prepare_sidecar.ps1"
 if ($LASTEXITCODE -ne 0) { throw "sidecar preparation failed" }
+& "$root\scripts\validate_sidecar.ps1"
+if ($LASTEXITCODE -ne 0) { throw "frozen sidecar smoke validation failed" }
 
 Push-Location $root
 & node "$root\node_modules\@tauri-apps\cli\tauri.js" build

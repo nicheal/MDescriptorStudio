@@ -12,6 +12,7 @@ DEFAULT_BOND_CUTOFF = 2.4
 def periodic_boundary_ghosts(
     symbols: list[str], positions: np.ndarray, cell: np.ndarray,
     cutoff: float = DEFAULT_BOND_CUTOFF, max_ghosts: int = 3000,
+    pbc: np.ndarray | None = None,
 ) -> list[tuple[str, np.ndarray, int]]:
     """Periodic-image atoms that complete bonds cut by the cell boundary.
 
@@ -28,6 +29,10 @@ def periodic_boundary_ghosts(
     pos = np.asarray(positions, dtype=np.float64)
     if len(symbols) == 0:
         return []
+    periodic_axes = np.ones(3, dtype=bool) if pbc is None else np.asarray(pbc, dtype=bool).reshape(3)
+    axes = tuple(int(axis) for axis in np.flatnonzero(periodic_axes))
+    if not axes:
+        return []
     try:
         a_inv = np.linalg.inv(cell)
     except np.linalg.LinAlgError:
@@ -36,25 +41,22 @@ def periodic_boundary_ghosts(
     frac_w = frac - np.floor(frac)  # face test needs in-cell fraction
     spacing = 1.0 / np.linalg.norm(a_inv, axis=0)  # interplanar distance per axis
     near_face = (frac_w * spacing < cutoff) | ((1.0 - frac_w) * spacing < cutoff)
+    near_face &= periodic_axes[None, :]
     cand = np.nonzero(near_face.any(axis=1))[0]
     if cand.size == 0:
         return []
     # The shared bound keeps local-shell visualization correct when the cutoff
     # spans more than one unit cell, and refuses the degenerate cells whose
     # shift count would otherwise explode into the billions.
-    limits = image_shift_limits(cell, cutoff)
+    limits = image_shift_limits(cell, cutoff, axes=axes)
     if limits is None:
         return []  # no image stencil for this cell/cutoff: draw no ghosts
-    shifts = np.array(
-        [
-            (dx, dy, dz)
-            for dx in range(-limits[0], limits[0] + 1)
-            for dy in range(-limits[1], limits[1] + 1)
-            for dz in range(-limits[2], limits[2] + 1)
-            if (dx, dy, dz) != (0, 0, 0)
-        ],
-        dtype=np.float64,
-    ) @ cell
+    offsets = np.array(
+        np.meshgrid(*[np.arange(-limit, limit + 1) for limit in limits], indexing="ij")
+    ).reshape(len(axes), -1).T
+    shifts = np.zeros((offsets.shape[0], 3), dtype=np.float64)
+    shifts[:, axes] = offsets
+    shifts = shifts[np.any(shifts != 0.0, axis=1)] @ cell
     pos_sq = (pos * pos).sum(axis=1)
     out: list[tuple[str, np.ndarray, int]] = []
     # One block holds (candidates x shifts) x atoms of squared distances, so the

@@ -8,7 +8,7 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, AppError
 from ..models import DescriptorMatrix
-from ._common import _as_float64, _bounded_indices, _check_samples, _clustered_feature_order, _connected_component_count, _float_param, _int_param, _meaningful_scale, _preprocess, _rank_correlation, _safe_correlation, _safe_import, _seed
+from ._common import _as_float64, _bounded_indices, _check_black_box_samples, _check_samples, _clustered_feature_order, _connected_component_count, _float_param, _int_param, _meaningful_scale, _preprocess, _rank_correlation, _safe_correlation, _safe_import, _seed
 
 def feature_correlation(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     x = _as_float64(samples.values)
@@ -118,6 +118,7 @@ def property_correlation(samples: DescriptorMatrix, params: dict, progress: Call
     raw_x = _as_float64(samples.values[valid])
     x, warnings, keep = _preprocess(raw_x, {"preprocess": "standardized"}, "standardized")
     model_x = raw_x[:, keep]
+    _check_black_box_samples(model_x, "property_correlation")
     standardized_target = (y - y.mean()) / y.std()
     correlations = (x.T @ standardized_target) / max(x.shape[0], 1)
     stats = _safe_import("scipy.stats", "scipy")

@@ -206,10 +206,11 @@ class ExtXYZAdapter(DatasetAdapter):
         cell = lattice.reshape(3, 3) if lattice is not None else np.zeros((3, 3))
         # A Lattice with no periodic axis is a box around an isolated structure
         # (ASE writes clusters this way), not a crystal: claiming periodicity
-        # there folds atoms across the vacuum into sub-Å contacts. Mixed
-        # periodicity still flattens to fully periodic, which the engine accepts;
-        # per-axis fidelity for it is an open product decision.
-        periodic = bool(np.abs(cell).sum() > 1e-8) and any(meta["pbc"])
+        # there folds atoms across the vacuum into sub-Å contacts. Keep the
+        # source's per-axis periodicity instead of flattening ``T F T`` to
+        # ``T T T`` and folding atoms through a non-periodic direction.
+        pbc = np.asarray(meta["pbc"], dtype=bool)
+        periodic = bool(np.abs(cell).sum() > 1e-8) and bool(pbc.any())
         energy = meta.get("energy")
         virial = None
         if meta.get("virial") is not None:
@@ -218,7 +219,7 @@ class ExtXYZAdapter(DatasetAdapter):
             numbers=numbers,
             positions=positions,
             cell=cell if periodic else np.zeros((3, 3)),
-            pbc=np.array([periodic] * 3),
+            pbc=pbc if periodic else np.zeros(3, dtype=bool),
             energy=float(energy) if energy is not None else None,
             forces=forces,
             virial=virial,
@@ -259,7 +260,7 @@ def _atomic_number(symbol: str, frame: int, row: int) -> int:
     z = _SYMBOL_TO_Z.get(symbol) or _SYMBOL_TO_Z.get(symbol.capitalize())
     if z is None and symbol.isascii() and symbol.isdigit():
         z = int(symbol)  # writers that store the nuclear charge directly
-    if not z:
+    if z is None or not 1 <= int(z) <= 118:
         raise AppError(INVALID_DATASET, f"frame {frame} row {row}: unknown species {symbol!r}")
     return int(z)
 

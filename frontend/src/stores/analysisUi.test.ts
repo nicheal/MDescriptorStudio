@@ -242,6 +242,12 @@ describe("useAnalysisUi", () => {
     });
   });
 
+  it("can restore a row's mode without overwriting the persisted workspace mode", () => {
+    useAnalysisUi.getState().setModeTransient("atom");
+    expect(useAnalysisUi.getState().view.mode).toBe("atom");
+    expect(requestMock).not.toHaveBeenCalled();
+  });
+
   it("updates navigation target atomically and persists once", () => {
     useAnalysisUi.getState().setNavigationTarget({ tab: "coverage", coverageMode: "overlap" });
     expect(useAnalysisUi.getState().view).toMatchObject({ tab: "coverage", coverageMode: "overlap" });

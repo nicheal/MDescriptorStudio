@@ -607,10 +607,13 @@ export const zhDict: Record<string, string> = {
   "Feature scale": "特征尺度",
   "Nearest-reference distance": "最近参考距离",
   "distance": "距离",
+  "Large frame: atom rows are loaded page by page.": "大帧数据：原子行按页加载。",
 
   // analysisVisualizations
   "Purpose-built visual summary": "专用可视化摘要",
   "Loading bounded analysis arrays…": "正在加载有界分析数组…",
+  "Some analysis arrays failed to load.": "部分分析数组加载失败。",
+  "Retry": "重试",
   "Some arrays were narrowed to fit one response: {names}": "部分数组为适配单次响应已截窄：{names}",
   "No neighbors were returned.": "未返回近邻结果。",
   "Neighbors": "近邻数",

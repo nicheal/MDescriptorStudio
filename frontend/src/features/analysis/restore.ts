@@ -6,6 +6,7 @@
 // page, so those rules are one tested function instead of a branch inside a
 // render body.
 import type { AnalysisParams, TabKey } from "./types";
+import { canonicalClusterAlgorithm, canonicalOutlierAlgorithm, canonicalSamplingAlgorithm } from "./identity";
 import type { PcaMode } from "../../stores/workspace";
 
 const finite = (value: unknown): number | null =>
@@ -197,23 +198,18 @@ function restoreOverview(analysisType: string, p: Record<string, unknown>, curre
 }
 
 function restoreClusterAlgorithm(requested: string, fallback: string): string {
-  if (requested === "hierarchical") return "agglomerative";
-  return ONE_OF(["kmeans", "dbscan", "hdbscan", "agglomerative"] as const, requested, fallback);
+  return ONE_OF(["kmeans", "dbscan", "hdbscan", "agglomerative"] as const, canonicalClusterAlgorithm(requested), fallback);
 }
 
 function restoreOutlierAlgorithm(requested: string, fallback: string): string {
-  if (requested === "isolation-forest" || requested === "iforest") return "isolation_forest";
-  if (requested === "mahalanobis_distance") return "mahalanobis";
-  return ONE_OF(["lof", "knn", "isolation_forest", "mahalanobis"] as const, requested, fallback);
+  return ONE_OF(["lof", "knn", "isolation_forest", "mahalanobis"] as const, canonicalOutlierAlgorithm(requested), fallback);
 }
 
 function restoreSamplingAlgorithm(analysisType: string, p: Record<string, unknown>, fallback: string): string {
   if (analysisType === "acquisition") {
     return p.acquisition_method === "uncertainty_diversity" ? "uncertainty_diversity" : "novelty_fps";
   }
-  const requested = (text(p.algorithm) || analysisType).toLowerCase();
-  if (requested === "cluster") return "cluster_representative";
-  if (requested === "element") return "per_element";
+  const requested = canonicalSamplingAlgorithm(text(p.algorithm) || analysisType);
   return ONE_OF(
     ["fps", "novelty_fps", "uncertainty_diversity", "random", "stratified", "cluster_representative", "per_element"] as const,
     requested,

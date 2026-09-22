@@ -43,7 +43,6 @@ import {
   analysisNavModuleForAnalysisType,
   analysisNavModuleForKey,
   analysisNavModuleForView,
-  ARTIFACT_ARRAYS,
   slotForParams,
   slotKey,
   useAnalysisUi,
@@ -54,14 +53,13 @@ import {
 import { useT } from "../i18n";
 import StructurePreview from "../components/StructurePreview";
 import SaveViewModal from "../components/SaveViewModal";
-import { hasColorByData, narrowedArrays, normalizePoints, previewRowFields, selectedDisplayIndices, stalenessNote } from "./analysisPreview";
+import { hasColorByData, normalizePoints, previewRowFields, selectedDisplayIndices, stalenessNote } from "./analysisPreview";
 import AnalysisResultVisualization from "./analysisVisualizations";
 import { getAnalysisMethodGuide } from "./analysisMethodGuides";
 import { HIGH_CONTRAST_COLORSCALE, overviewLayout, plotData } from "./analysisChartKit";
 import { analysisCache, type CachedAnalysis } from "./analysisCache";
 import type {
   AnalysisJobResponse,
-  AnalysisChunk,
   AnalysisPreview,
   AnalysisRow,
   DatasetView,
@@ -87,10 +85,10 @@ import {
   withCacheMarks,
   type CacheOption,
   type CompareMode,
-  type NumericArrays,
   type Point,
   type ProjectionOverrides,
 } from "./analysisShared";
+import { useAnalysisArtifactArrays } from "./useAnalysisArtifactArrays";
 import { describeError } from "../util/errors";
 
 
@@ -119,6 +117,7 @@ export default function Analysis() {
   const setNavigationTarget = useAnalysisUi((s) => s.setNavigationTarget);
   const rememberNavigationModule = useAnalysisUi((s) => s.rememberNavigationModule);
   const setMode = useAnalysisUi((s) => s.setMode);
+  const setModeTransient = useAnalysisUi((s) => s.setModeTransient);
   const setPreprocess = useAnalysisUi((s) => s.setPreprocess);
   const setEffectiveDimensionPreprocess = useAnalysisUi((s) => s.setEffectiveDimensionPreprocess);
   const setColorBy = useAnalysisUi((s) => s.setColorBy);
@@ -188,10 +187,15 @@ export default function Analysis() {
   const [perturbationStructures, setPerturbationStructures] = useState(64);
   const [perturbationMetric, setPerturbationMetric] = useState("euclidean");
   const [tsnePerplexity, setTsnePerplexity] = useState(30);
-  const [overviewArrays, setOverviewArrays] = useState<NumericArrays>({});
-  const [overviewArraysNarrowed, setOverviewArraysNarrowed] = useState<string[]>([]);
-  const [overviewArraysBusy, setOverviewArraysBusy] = useState(false);
+  const [overviewArraysRetry, setOverviewArraysRetry] = useState(0);
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
+  const {
+    arrays: overviewArrays,
+    setArrays: setOverviewArrays,
+    narrowed: overviewArraysNarrowed,
+    busy: overviewArraysBusy,
+    error: overviewArraysError,
+  } = useAnalysisArtifactArrays({ analysisId, preview, retry: overviewArraysRetry });
   const activeNavModule = useMemo(() => analysisNavModuleForView(tab, overviewAnalysis, coverageMode), [coverageMode, overviewAnalysis, tab]);
   const activeNavGroup = useMemo(
     () => ANALYSIS_NAV_GROUPS.find((group) => group.modules.some((module) => module.key === activeNavModule?.key)) ?? ANALYSIS_NAV_GROUPS[0],
@@ -454,88 +458,6 @@ export default function Analysis() {
       .finally(() => { if (!disposed) setSelectedFrameBusy(false); });
     return () => { disposed = true; };
   }, [localCutoff, pointDataset, preview?.kind, selectedPoint]);
-
-  useEffect(() => {
-    const kind = String(preview?.kind ?? "");
-    const arrayNames = ARTIFACT_ARRAYS[kind] ?? [];
-    if (!analysisId || !arrayNames.length) {
-      setOverviewArrays({});
-      setOverviewArraysNarrowed([]);
-      setOverviewArraysBusy(false);
-      return;
-    }
-
-    const cached = analysisCache.get(analysisId);
-    const cachedArrays = cached?.arrays ?? {};
-    const missingArrays = arrayNames.filter((name) => !Object.prototype.hasOwnProperty.call(cachedArrays, name));
-    if (!missingArrays.length) {
-      setOverviewArrays(cachedArrays);
-      setOverviewArraysNarrowed(cached?.narrowed ?? []);
-      setOverviewArraysBusy(false);
-      return;
-    }
-
-    let disposed = false;
-    setOverviewArraysBusy(true);
-    void Promise.all(missingArrays.map(async (name) => {
-      try {
-        // One frame per row: these arrays can legitimately exceed a single
-        // chunk, so every trajectory series is stitched back together.
-        const loadAll = (kind === "effective_dimension" && name === "explained_variance") || kind === "trajectory";
-        const values: unknown[] = [];
-        let offset = 0;
-        let truncated = false;
-        let rowsTotal = Number.NaN;
-        while (true) {
-          const chunk = await ipc.request<AnalysisChunk>("analysis.chunk", {
-            analysis_id: analysisId,
-            array: name,
-            offset,
-            limit: 20_000,
-            column_end: 2_000,
-          });
-          values.push(...chunk.data);
-          truncated = truncated || chunk.truncated;
-          rowsTotal = Number(chunk.shape?.[0]);
-          if (!loadAll) break;
-          const nextOffset = Number(chunk.next_offset);
-          if (!chunk.data.length || !Number.isFinite(nextOffset) || nextOffset <= offset || (Number.isFinite(rowsTotal) && nextOffset >= rowsTotal)) break;
-          offset = nextOffset;
-        }
-        return { array: name, values, truncated, rows: values.length, total: rowsTotal } as const;
-      } catch {
-        // Stay "missing" rather than caching an empty array: hasOwnProperty is
-        // what counts as loaded, so [] told every later visit that a result
-        // that merely failed once had been fetched — the panel then reported
-        // the matrix as unavailable until the app was restarted.
-        return null;
-      }
-    })).then((entries) => {
-      if (disposed) return;
-      const loaded = entries.filter(
-        (entry): entry is { array: string; values: unknown[]; truncated: boolean; rows: number; total: number } => entry !== null,
-      );
-      const arrays = { ...cachedArrays, ...Object.fromEntries(loaded.map((entry) => [entry.array, entry.values] as const)) };
-      const current = analysisCache.get(analysisId);
-      const narrowed = narrowedArrays([
-        ...loaded,
-        ...Array.from(new Set([...(current?.narrowed ?? []), ...(cached?.narrowed ?? [])])).map((array) => ({ array, truncated: true })),
-      ]);
-      analysisCache.set(analysisId, {
-        preview: current?.preview ?? cached?.preview ?? preview,
-        points: current?.points ?? cached?.points ?? normalizePoints(preview ?? { analysis_id: analysisId }),
-        selectedIndices: current?.selectedIndices ?? cached?.selectedIndices ?? selectedIndicesFromPreview(preview ?? { analysis_id: analysisId }),
-        arrays,
-        narrowed,
-      });
-      setOverviewArrays(arrays);
-      setOverviewArraysNarrowed(narrowed);
-    }).finally(() => {
-      if (!disposed) setOverviewArraysBusy(false);
-    });
-
-    return () => { disposed = true; };
-  }, [analysisId, preview]);
 
   // Grouped-FPS budget preview: how the requested sample count splits across
   // element sets, fetched before running so the allocation is never a surprise.
@@ -805,7 +727,7 @@ export default function Analysis() {
     // parameters. A parameter the row does not carry keeps its current value,
     // so these assignments are no-ops in that case.
     setProjection(loadedParams.projection);
-    setMode(loadedParams.mode);
+    setModeTransient(loadedParams.mode);
     setPreprocess(loadedParams.preprocess);
     setTsnePerplexity(loadedParams.tsnePerplexity);
     setSimilarityMode(loadedParams.similarityMode as "query" | "all_neighbors" | "pairwise");
@@ -916,7 +838,7 @@ export default function Analysis() {
         setLoadingAnalysisId(null);
       }
     }
-  }, [allRuns, commitAnalysis, dataset, fetchAnalysisPoints, message, rememberNavigationModule, secondRun, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setMode, setNearZeroThreshold, setNavigationTarget, setPreprocess, setProjection, t]);
+  }, [allRuns, commitAnalysis, dataset, fetchAnalysisPoints, message, rememberNavigationModule, secondRun, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setModeTransient, setNearZeroThreshold, setNavigationTarget, setPreprocess, setProjection, t]);
 
   // Keep the displayed result in step with the current module + parameters:
   // an exact slot match is re-displayed from the backend artifacts instead of
@@ -1427,6 +1349,7 @@ export default function Analysis() {
           {tab === "projection" && <section className="analysis-card analysis-plot-card"><SectionHeading title={t("DESCRIPTOR SPACE")} meta={`${t("{n} preview points", { n: points.length.toLocaleString() })}${selectedIndices.length ? t(" · {n} selected", { n: selectedIndices.length }) : ""}`} />{points.length ? <div className="analysis-plot-frame">{plot}</div> : <Empty description={t("Run PCA, UMAP, or t-SNE to populate the Plotly canvas.")} />}</section>}
           {legacyOverview && <OverviewResultVisualization preview={preview} arrays={overviewArrays} loading={overviewArraysBusy} analysisId={analysisId} />}
           {tab !== "projection" && !legacyOverview && <AnalysisResultVisualization preview={preview} arrays={overviewArrays} narrowed={overviewArraysNarrowed} points={points} loading={overviewArraysBusy} selectedIndices={selectedIndices} onSelect={handlePoint} />}
+          {overviewArraysError && <section className="analysis-card"><Space><Typography.Text type="warning">{t("Some analysis arrays failed to load.")}</Typography.Text><Button size="small" icon={<ArrowSync16Regular />} onClick={() => setOverviewArraysRetry((value) => value + 1)}>{t("Retry")}</Button></Space></section>}
           {tab !== "projection" && selectedFrames.length > 0 && (
             <section className="analysis-card">
               <Space wrap>

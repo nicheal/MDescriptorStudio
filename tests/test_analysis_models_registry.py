@@ -15,6 +15,7 @@ from mdescriptor_studio_backend.analysis import (
     validate_matrix_consistency,
 )
 from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, AppError
+from mdescriptor_studio_backend.services.analysis_helpers import canonical_analysis_request
 
 
 def test_typed_matrices_reject_inconsistent_aligned_arrays() -> None:
@@ -66,3 +67,15 @@ def test_registry_rejects_a_missing_input_matrix() -> None:
     registry.register(AlgorithmSpec("demo_engine", "engine", lambda data, params, progress=None: {"arrays": {}}))
     with pytest.raises(ValueError, match="requires an input"):
         registry.run("demo_engine", [], {})
+
+
+def test_analysis_aliases_share_one_canonical_request_identity() -> None:
+    assert canonical_analysis_request("hierarchical", {}) == ("agglomerative", {"algorithm": "agglomerative"})
+    assert canonical_analysis_request("outlier", {"method": "iforest"}) == (
+        "isolation_forest",
+        {"algorithm": "isolation_forest"},
+    )
+    assert canonical_analysis_request("sampling", {"algorithm": "element"}) == (
+        "per_element",
+        {"algorithm": "per_element"},
+    )

@@ -105,7 +105,7 @@ describe("analysis submission payloads", () => {
     // isForest never reads k, so it must not be sent: an unrelated k change on
     // another panel would otherwise look like a different analysis here.
     expect(run("outliers", { outlierAlgorithm: "iforest", contamination: 0.05 }).params).toEqual({
-      algorithm: "iforest", contamination: 0.05, preprocess: "standardized", mode: "structure",
+      algorithm: "isolation_forest", contamination: 0.05, preprocess: "standardized", mode: "structure",
     });
     expect(run("outliers", { outlierAlgorithm: "lof", k: 7 }).params).toMatchObject({ algorithm: "lof", k: 7 });
     expect(run("outliers", { outlierAlgorithm: "mahalanobis" }).params).not.toHaveProperty("k");

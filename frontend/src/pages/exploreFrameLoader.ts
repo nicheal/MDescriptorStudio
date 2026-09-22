@@ -1,10 +1,10 @@
 import { createAsyncRequestGuard } from "../util/asyncRequestGuard";
-import type { FramePayload } from "../types/protocol";
+import type { FrameAtomsPayload, FrameGeometryPayload, FramePayload, FrameSummaryPayload } from "../types/protocol";
 
 export type RequestFrame = (
-  method: "dataset.frame",
-  params: { id: string; index: number; bond_cutoff: number },
-) => Promise<FramePayload>;
+  method: "dataset.frame_summary" | "dataset.frame_geometry" | "dataset.frame_atoms",
+  params: { id: string; index: number; bond_cutoff?: number; atom_offset?: number; atom_limit?: number },
+) => Promise<FrameSummaryPayload | FrameGeometryPayload | FrameAtomsPayload | FramePayload>;
 
 export interface ExploreFrameLoad {
   datasetId: string;
@@ -12,6 +12,7 @@ export interface ExploreFrameLoad {
   index: number;
   bondCutoff: number;
   requestCutoff: number;
+  atomPageSize: number;
   onLoading: (loading: boolean) => void;
   onFrame: (frame: FramePayload, index: number) => void;
   onError?: (error: unknown) => void;
@@ -36,11 +37,31 @@ export function createExploreFrameLoader(
       activeLoad = { requestId, onLoading: request.onLoading };
       request.onLoading(true);
       try {
-        const frame = await requestFrame("dataset.frame", {
+        const summary = await requestFrame("dataset.frame_summary", {
           id: request.datasetId,
           index,
           bond_cutoff: request.requestCutoff,
-        });
+        }) as FrameSummaryPayload;
+        const [geometry, atoms] = await Promise.all([
+          requestFrame("dataset.frame_geometry", {
+            id: request.datasetId,
+            index,
+            bond_cutoff: request.requestCutoff,
+          }) as Promise<FrameGeometryPayload>,
+          requestFrame("dataset.frame_atoms", {
+            id: request.datasetId,
+            index,
+            atom_offset: 0,
+            atom_limit: request.atomPageSize,
+          }) as Promise<FrameAtomsPayload>,
+        ]);
+        const frame: FramePayload = {
+          ...summary,
+          ...geometry,
+          ...atoms,
+          xyz: geometry.xyz,
+          atom_rows: atoms.atom_rows,
+        };
         if (!guard.isCurrent(requestId) || getActiveDatasetId() !== request.datasetId) return;
         request.onFrame({ ...frame, bond_cutoff: request.bondCutoff }, index);
       } catch (error) {
@@ -64,7 +85,7 @@ export function createExploreFrameLoader(
 /**
  * Where an external frame pointer sends the viewer while a fetch is in flight.
  *
- * A running `dataset.frame` request cannot be interrupted, so a jump arriving
+ * A running frame bundle request cannot be interrupted, so a jump arriving
  * mid-flight used to be dropped outright: the response then wrote the shared
  * pointer back to the frame it had been fetching, and the screen stayed put
  * while the panel that asked for the jump said it had made it (deep review pass

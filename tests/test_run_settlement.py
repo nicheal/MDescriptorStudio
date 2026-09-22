@@ -191,11 +191,20 @@ def test_abandoned_run_directories_are_reclaimed_on_startup(tmp_path: Path) -> N
     (completed / "values.npy").write_bytes(b"whole matrix")
     staging = tmp_path / "analysis" / ".ana_x.tmp-01234567"
     staging.mkdir(parents=True)
+    escaped = tmp_path / "escape"
+    escaped.mkdir()
+    (escaped / "sentinel").write_text("keep", encoding="utf-8")
+    db.execute(
+        "INSERT INTO descriptor_runs (id, dataset_id, descriptor_name, engine_version,"
+        " parameters_json, scope, status, created_at)"
+        " VALUES ('../escape', 'ds_1', 'ACE', 'test', '{}', 'dataset', 'FAILED', '2026-01-01T00:00:00+00:00')"
+    )
 
     ResultService(db, tmp_path).sweep_abandoned()
 
     assert not abandoned.exists()
     assert not staging.exists()
+    assert (escaped / "sentinel").is_file()
     assert completed.exists() and (completed / "values.npy").is_file()
     db.close()
 
