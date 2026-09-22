@@ -271,18 +271,18 @@ def feature_variance(samples: DescriptorMatrix, params: dict, progress: Callable
                     "whisker_max": whisker_max,
                     "outlier_count": outlier_count,
                     "distribution_sample_count": int(sample_count_for_feature),
-                    "status": "constant" if is_constant else "pending",
+                    "status": "insufficient" if count == 1 else "constant" if is_constant else "pending",
                 }
             )
         feature_records.append(record)
 
-    finite_variances = variance[finite_counts > 0]
+    finite_variances = variance[finite_counts >= 2]
     max_variance = float(np.max(finite_variances)) if finite_variances.size else 0.0
     relative_variance = variance / max_variance if max_variance > 0 else np.zeros(feature_count, dtype=np.float64)
     for index, record in enumerate(feature_records):
         if record["status"] == "invalid":
             continue
-        if record["status"] == "constant":
+        if record["status"] in ("constant", "insufficient"):
             continue
         relative = float(relative_variance[index])
         record["status"] = (
@@ -302,6 +302,7 @@ def feature_variance(samples: DescriptorMatrix, params: dict, progress: Callable
     status_values = np.asarray([record["status"] for record in feature_records], dtype=object)
     near_zero = status_values == "near_zero"
     constant = status_values == "constant"
+    insufficient = status_values == "insufficient"
     low_variation = status_values == "low_variation"
     active = status_values == "active"
     invalid = status_values == "invalid"
@@ -325,6 +326,7 @@ def feature_variance(samples: DescriptorMatrix, params: dict, progress: Callable
             "std_robust_ratio": std_robust_ratio,
             "near_zero_mask": near_zero.astype(np.int64),
             "constant_mask": constant.astype(np.int64),
+            "insufficient_mask": insufficient.astype(np.int64),
             "finite_count": finite_counts,
             "invalid_count": invalid_counts,
             "histogram_edges": histogram_edges,
@@ -350,6 +352,7 @@ def feature_variance(samples: DescriptorMatrix, params: dict, progress: Callable
                 "min_variance": float(np.min(summary_variances)),
                 "near_zero_count": int(near_zero.sum()),
                 "constant_count": int(constant.sum()),
+                "insufficient_count": int(insufficient.sum()),
                 "low_variation_count": int(low_variation.sum()),
                 "active_count": int(active.sum()),
                 "invalid_count": int(invalid.sum()),
@@ -511,7 +514,7 @@ def effective_dimension(samples: DescriptorMatrix, params: dict, progress: Calla
     if preprocess is None or preprocess == "":
         preprocess = "standardized"
         effective_params["preprocess"] = preprocess
-    x, warnings, keep = _preprocess(samples.values, effective_params, "standardized")
+    x, warnings, keep = _preprocess(samples.values, effective_params, "standardized", allow_empty=True)
     _check_samples(x, 2)
     singular = np.linalg.svd(x, compute_uv=False, full_matrices=False)
     eigen = (singular * singular) / max(x.shape[0] - 1, 1)
@@ -557,10 +560,14 @@ def trajectory(samples: DescriptorMatrix, params: dict, progress: Callable[[floa
     start = _int_param(params, "frame_start", int(frames.min()) if frames.size else 0, 0)
     end = _int_param(params, "frame_end", int(frames.max()) if frames.size else start, start)
     step = _int_param(params, "frame_step", 1, 1)
-    selected = np.flatnonzero((frames >= start) & (frames <= end) & (((frames - start) % step) == 0))
-    if selected.size < 2:
-        raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "trajectory range contains fewer than two samples")
-    x, warnings, _keep = _preprocess(samples.values[selected], params, "standardized")
+    display_indices = np.flatnonzero((frames >= start) & (frames <= end) & (((frames - start) % step) == 0))
+    if frames.size < 2:
+        raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "trajectory contains fewer than two samples")
+    # Frame range and interval are display filters.  Thresholds, ranks, and
+    # cumulative statistics must describe the full ordered trajectory, or a
+    # narrow view would silently change the scientific result.
+    analysis_indices = np.arange(frames.size, dtype=np.int64)
+    x, warnings, _keep = _preprocess(samples.values[analysis_indices], params, "standardized")
     # Three distinct quantities: how much the descriptor moves between
     # neighbouring frames, how far it has drifted from the reference frame,
     # and how long the explored path is.  Only the first one detects events.
@@ -571,10 +578,10 @@ def trajectory(samples: DescriptorMatrix, params: dict, progress: Callable[[floa
     coords, pc_explained_variance = _visual_pca_components(x)
     if params.get("timestep") is not None:
         timestep = _float_param(params, "timestep", 1.0, 0.0)
-        time_axis = frames[selected].astype(np.float64) * timestep
+        time_axis = frames[analysis_indices].astype(np.float64) * timestep
         time_unit = str(params.get("time_unit") or "arb. units")
     else:
-        time_axis = frames[selected].astype(np.float64)
+        time_axis = frames[analysis_indices].astype(np.float64)
         time_unit = "frame"
     time_delta = np.diff(time_axis, prepend=time_axis[0])
     speed = np.divide(step_distance, time_delta, out=np.zeros_like(step_distance), where=time_delta > 0)
@@ -589,7 +596,7 @@ def trajectory(samples: DescriptorMatrix, params: dict, progress: Callable[[floa
     event_details = [
         {
             "index": int(index),
-            "frame": int(frames[selected][index]),
+            "frame": int(frames[analysis_indices][index]),
             "step_distance": float(step_distance[index]),
             "threshold_ratio": float(step_distance[index] / event_threshold) if event_threshold > 0 else None,
             "percentile": float((step_ranks[index - 1] + 1) / deltas.size),
@@ -604,8 +611,8 @@ def trajectory(samples: DescriptorMatrix, params: dict, progress: Callable[[floa
         "arrays": {
             # `sample_indices` only: the second name for the same array was a
             # stored duplicate no reader asked for (deep review pass 5, 5-D5).
-            "sample_indices": selected.astype(np.int64),
-            "frames": frames[selected],
+            "sample_indices": analysis_indices,
+            "frames": frames[analysis_indices],
             "time": time_axis,
             "step_distance": step_distance,
             "reference_distance": reference_distance.astype(np.float64),
@@ -622,7 +629,8 @@ def trajectory(samples: DescriptorMatrix, params: dict, progress: Callable[[floa
             "frame_end": end,
             "frame_step": step,
             "time_unit": time_unit,
-            "sample_count": int(selected.size),
+            "sample_count": int(analysis_indices.size),
+            "display_sample_count": int(display_indices.size),
             "total_distance": float(deltas.sum()),
             "max_step_distance": float(deltas.max()),
             "max_reference_distance": float(reference_distance.max()),

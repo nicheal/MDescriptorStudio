@@ -41,7 +41,9 @@ _ANALYSIS_SCHEMA_VERSION = 1
 # `selection_distances` is stored in the order its `selected_indices` are.
 # studio-analysis-10 restores exact chunked UMAP neighbours for every sample
 # count; approximate projected candidates could silently change the graph.
-ANALYSIS_ALGORITHM_VERSION = "studio-analysis-10"
+# studio-analysis-11 makes sampling, constant-feature handling, and effective
+# parameters explicit contracts instead of silently producing different results.
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-11"
 _MAX_PREVIEW_POINTS = 20_000
 # Written into the canonical parameters of the two feature analyses, so bumping
 # one invalidates that analysis' stored results without touching the others.

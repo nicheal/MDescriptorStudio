@@ -11,6 +11,12 @@ from ._common import _check_samples, _preprocess
 def pca(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     _check_samples(samples.values, 2)
     x, warnings, keep = _preprocess(samples.values, params, "center")
+    preprocess = str(params.get("preprocess") or "center")
+    if preprocess == "raw":
+        # PCA is conventionally a decomposition of the centered covariance.
+        # "raw" means no scale normalization, not an uncentered second-moment
+        # decomposition (the latter is reserved for effective_dimension).
+        x = x - x.mean(axis=0)
     if progress:
         progress(0.2, "preparing PCA")
     _, singular, vt = np.linalg.svd(x, full_matrices=False)
@@ -30,6 +36,7 @@ def pca(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str]
             "x_label": f"PC1 ({explained[0] * 100:.1f}%)" if explained.size else "PC1",
             "y_label": f"PC2 ({explained[1] * 100:.1f}%)" if explained.size > 1 else "PC2",
             "explained_variance": explained[: min(10, explained.size)].tolist(),
+            "pca_basis": "correlation" if preprocess == "standardized" else "covariance",
         },
         "warnings": warnings,
         "feature_indices": np.flatnonzero(keep).astype(np.int64),

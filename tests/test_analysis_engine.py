@@ -72,7 +72,7 @@ def test_drift_states_how_many_rows_its_kernel_numbers_describe() -> None:
         ("outlier-mahalanobis", lambda s: outlier(s, {}, "mahalanobis")),
         ("fps", lambda s: sampling(s, {"n_samples": 8}, "fps")),
         ("random", lambda s: sampling(s, {"n_samples": 8}, "random")),
-        ("stratified", lambda s: sampling(s, {"n_samples": 8}, "stratified")),
+        ("stratified", lambda s: sampling(s, {"n_samples": 8, "stratification_source": "composition"}, "stratified", group_labels=s.frame % 4)),
         ("cluster-representative", lambda s: sampling(s, {"n_samples": 8}, "cluster_representative")),
         ("per-element", lambda s: sampling(StructureDescriptorMatrix(s.values, s.frame, elements=np.where(s.frame % 2, 31, 33)), {"n_samples": 8}, "per_element")),
         ("coverage", lambda s: coverage(s, s, {})),
@@ -132,7 +132,12 @@ def test_grouped_sampling_returns_exact_target_count() -> None:
     values = np.arange(40, dtype=np.float64).reshape(20, 2)
     frames = np.repeat(np.arange(4, dtype=np.int64), 5)
     structure_samples = StructureDescriptorMatrix(values, frames)
-    stratified = sampling(structure_samples, {"n_samples": 10, "seed": 7}, "stratified")
+    stratified = sampling(
+        structure_samples,
+        {"n_samples": 10, "seed": 7, "stratification_source": "composition"},
+        "stratified",
+        group_labels=frames,
+    )
     assert stratified["arrays"]["selected_indices"].size == 10
     assert np.unique(frames[stratified["arrays"]["selected_indices"]]).size == 4
 
@@ -164,7 +169,7 @@ def test_invalid_numeric_inputs_are_structured(samples: StructureDescriptorMatri
     assert exc.value.code == ANALYSIS_INPUT_INVALID
 
     with pytest.raises(AppError) as exc:
-        trajectory(samples, {"frame_start": 0, "frame_end": 0})
+        trajectory(StructureDescriptorMatrix(np.zeros((1, 2)), np.array([0])), {})
     assert exc.value.code == ANALYSIS_INSUFFICIENT_SAMPLES
 
 
@@ -202,6 +207,16 @@ def test_feature_variance_reports_full_stats_robustness_and_invalid_counts() -> 
     assert result["arrays"]["histogram_counts"].shape == (6, 32)
     assert not any(np.isnan(np.asarray(array, dtype=np.float64)).any() for array in result["arrays"].values())
     assert any("non-finite" in warning for warning in result["warnings"])
+
+    singleton = feature_variance(
+        StructureDescriptorMatrix(
+            np.array([[np.nan], [np.nan], [2.31], [np.nan]], dtype=np.float64),
+            np.arange(4),
+        ),
+        {},
+    )
+    assert singleton["preview"]["features"][0]["status"] == "insufficient"
+    assert singleton["preview"]["summary"]["insufficient_count"] == 1
 
     zero = feature_variance(StructureDescriptorMatrix(np.zeros((4, 2)), np.arange(4)), {})
     assert zero["preview"]["summary"]["max_variance"] == 0.0
@@ -277,9 +292,23 @@ def test_property_correlation_reports_oof_encoding_association_and_reliability()
     assert preview["property_unit"] == "eV/atom"
     assert preview["distance_metric"] == "cosine"
     assert preview["reliability_k"] == 3
+    assert preview["requested_reliability_k"] == 3
+    assert preview["effective_reliability_k_min"] == 3
+    assert preview["effective_reliability_k_max"] == 3
     assert preview["sparse_threshold"] < preview["ood_threshold"]
     assert -1.0 <= preview["distance_error_spearman"] <= 1.0
     assert preview["baseline_rmse"] > preview["rmse"]
+
+
+def test_property_correlation_rejects_an_empty_informative_descriptor_space() -> None:
+    values = np.ones((8, 3), dtype=np.float64)
+    target = np.arange(8, dtype=np.float64)
+    with pytest.raises(AppError) as exc:
+        property_correlation(
+            StructureDescriptorMatrix(values, np.arange(8), properties={"energy_per_atom": target}),
+            {"property": "energy_per_atom", "folds": 3},
+        )
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
 
 
 def test_effective_dimension_reports_zero_thresholds_for_constant_input() -> None:
@@ -441,6 +470,20 @@ def test_trajectory_includes_reference_distance_and_projection(samples: Structur
     assert result["arrays"]["cumulative_distance"][-1] >= result["arrays"]["step_distance"][-1]
     assert result["arrays"]["pc_explained_variance"].shape == (2,)
     assert 0.0 <= float(result["arrays"]["pc_explained_variance"].sum()) <= 1.0
+
+
+def test_trajectory_display_filter_does_not_change_full_trajectory_statistics() -> None:
+    values = np.column_stack([np.linspace(0.0, 1.0, 40), np.zeros(40)]).astype(np.float64)
+    values[20:] += 40.0
+    samples = StructureDescriptorMatrix(values, np.arange(40, dtype=np.int64))
+
+    full = trajectory(samples, {})
+    filtered = trajectory(samples, {"frame_start": 8, "frame_end": 20, "frame_step": 3})
+
+    assert filtered["preview"]["sample_count"] == 40
+    assert filtered["preview"]["display_sample_count"] == 5
+    assert filtered["arrays"]["step_distance"].shape == (40,)
+    assert filtered["preview"]["event_threshold"] == pytest.approx(full["preview"]["event_threshold"])
 
 
 def test_trajectory_event_detection_is_explicit_about_threshold_and_space() -> None:
@@ -685,11 +728,12 @@ def test_pairwise_minimum_ignores_the_zero_diagonal() -> None:
     truth = float(distances[np.triu_indices(4, 1)].min())
     assert result["preview"]["distance_min"] == truth
     assert result["preview"]["distance_min"] > 0.0
-    only = pairwise(
-        StructureDescriptorMatrix(values[:1], np.arange(1, dtype=np.int64), sample_ids=["frame:0"]),
-        {"max_samples": 4},
-    )
-    assert only["preview"]["distance_min"] is None, "one sample has no pairs to take a minimum of"
+    with pytest.raises(AppError) as exc:
+        pairwise(
+            StructureDescriptorMatrix(values[:1], np.arange(1, dtype=np.int64), sample_ids=["frame:0"]),
+            {"max_samples": 4},
+        )
+    assert exc.value.code == ANALYSIS_INPUT_INVALID
 
 
 def test_mantel_reports_observed_statistic_and_permutation_p_value(samples: StructureDescriptorMatrix) -> None:

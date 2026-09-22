@@ -171,7 +171,20 @@ def _preprocess_mode(params: dict, default: str) -> str:
     """
     return str((params or {}).get("preprocess", default))
 
-def _preprocess(x: np.ndarray, params: dict, default: str) -> tuple[np.ndarray, list[str], np.ndarray]:
+def _preprocess(
+    x: np.ndarray,
+    params: dict,
+    default: str,
+    *,
+    allow_empty: bool = False,
+) -> tuple[np.ndarray, list[str], np.ndarray]:
+    """Return a single, explicitly informative feature space.
+
+    Geometric and correlation analyses cannot produce a meaningful result from
+    an empty informative space.  The one intentional exception is
+    ``effective_dimension``: zero informative dimensions is itself the result
+    it reports, so that caller opts in with ``allow_empty=True``.
+    """
     x = _as_float64(x)
     mode = params.get("preprocess", default)
     if mode not in ("raw", "center", "standardized"):
@@ -184,11 +197,16 @@ def _preprocess(x: np.ndarray, params: dict, default: str) -> tuple[np.ndarray, 
     keep = _meaningful_scale(means, scale)
     if not bool(keep.all()):
         warnings.append(f"ignored {int((~keep).sum())} zero-variance feature(s)")
-    # Keeping at least one column makes constant descriptors report a useful
-    # structured error in algorithms that need a non-empty feature space.
     if not bool(keep.any()):
-        keep = np.ones(x.shape[1], dtype=bool)
-        scale = np.ones(x.shape[1], dtype=np.float64)
+        if not allow_empty:
+            raise AppError(
+                ANALYSIS_INPUT_INVALID,
+                "analysis requires at least one informative feature",
+                {"informative_feature_count": 0, "feature_count": int(x.shape[1])},
+            )
+        # Preserve the all-false mask.  Re-adding constant columns here would
+        # contradict the warning and let downstream geometry divide by zero.
+        return x[:, :0], warnings, keep
     if mode == "raw":
         # Fancy indexing with an all-True mask would copy a matrix that is
         # already the one the caller wanted. (The centred copy above stays:

@@ -135,6 +135,15 @@ class AnalysisArtifactStore:
                 array = np.asarray(value)
                 if np.issubdtype(array.dtype, np.floating):
                     array = array.astype(np.float64, copy=False)
+                    # Sensitivity keeps unavailable optional RSS readings as
+                    # NaN so the preview can distinguish "not measured" from
+                    # zero.  All scientific result arrays must still be
+                    # finite; this is the sole nullable metric exception.
+                    if not bool(np.isfinite(array).all()) and name != "memory_peak_bytes":
+                        raise AppError(
+                            ARTIFACT_INVALID,
+                            f"analysis artifact array {name!r} contains NaN or Inf",
+                        )
                 if not isinstance(name, str) or not name:
                     raise AppError(ARTIFACT_INVALID, "analysis artifact contains an invalid array name")
                 normalized_name = unicodedata.normalize("NFKC", name)

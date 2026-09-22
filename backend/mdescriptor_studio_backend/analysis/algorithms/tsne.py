@@ -14,8 +14,8 @@ MAX_ITERATIONS = 5000
 
 def tsne(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     _check_samples(samples.values, 4)
+    _check_black_box_samples(samples.values, "tsne")
     x, warnings, keep = _preprocess(samples.values, params, "raw")
-    _check_black_box_samples(x, "tsne")
     default_perplexity = min(30.0, max(2.0, float(x.shape[0] - 1)))
     perplexity = _float_param(params, "perplexity", default_perplexity, 2.0)
     if perplexity >= x.shape[0]:
@@ -42,7 +42,7 @@ def tsne(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str
         progress(1.0, "t-SNE complete")
     return {
         "arrays": {"coords": coords},
-        "preview": {"kind": "projection", "x_label": "t-SNE-1", "y_label": "t-SNE-2", "parameters": {"perplexity": perplexity, "max_iter": max_iter}},
+        "preview": {"kind": "projection", "x_label": "t-SNE-1", "y_label": "t-SNE-2", "parameters": {"perplexity": perplexity, "effective_perplexity": perplexity, "max_iter": max_iter}},
         "warnings": warnings,
         "feature_indices": np.flatnonzero(keep).astype(np.int64),
     }

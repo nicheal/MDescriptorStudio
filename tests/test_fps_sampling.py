@@ -330,6 +330,20 @@ def test_grouped_fps_warm_start_covers_every_group_against_the_existing_set() ->
     assert result.selection_distances.tolist() == pytest.approx([1.0, 11.0])
 
 
+def test_grouped_fps_truncates_a_quota_when_global_coverage_is_reached() -> None:
+    values = np.linspace(0.0, 1.0, 100, dtype=np.float64).reshape(-1, 1)
+    x = np.vstack([values, values])
+    labels = np.array(["A"] * 100 + ["B"] * 100, dtype=object)
+    result = grouped_farthest_point_sampling(x, labels, n_samples=20, target_coverage=0.95)
+
+    # The first group's geometry already covers the duplicated global space;
+    # once the target is reached, the remaining group quota must not be run.
+    assert result.group_quota.tolist() == [10, 10]
+    assert result.n_selected < int(result.group_quota.sum())
+    assert result.stopped_by == "coverage"
+    assert result.coverage_r2 >= 0.95
+
+
 def test_grouped_fps_rejects_integer_initial_and_misaligned_labels() -> None:
     x = np.ones((4, 2))
     labels = np.array(["A", "A", "B", "B"], dtype=object)
@@ -533,7 +547,7 @@ def test_engine_grouped_sampling_preview_encodes() -> None:
 
     from mdescriptor_studio_backend.protocol import frames
 
-    x = np.zeros((6, 2))
+    x = np.arange(12, dtype=np.float64).reshape(6, 2)
     samples = StructureDescriptorMatrix(x, np.arange(6))
     result = sampling(
         samples,
@@ -626,6 +640,21 @@ def test_cluster_scaling_matches_an_already_scaled_matrix() -> None:
     x = _two_blob_matrix()
     scaled = (x - x.mean(axis=0)) / x.std(axis=0)
     assert _cluster_selection(x, "standardized") == _cluster_selection(scaled, "raw")
+
+
+def test_cluster_representatives_are_permutation_invariant_and_default_to_target_clusters() -> None:
+    x = _two_blob_matrix()
+    base_samples = StructureDescriptorMatrix(x, np.arange(x.shape[0]))
+    base = sampling(base_samples, {"n_samples": 9, "seed": 5}, "cluster_representative")
+    order = np.random.default_rng(17).permutation(x.shape[0])
+    shuffled = sampling(
+        StructureDescriptorMatrix(x[order], order),
+        {"n_samples": 9, "seed": 5},
+        "cluster_representative",
+    )
+
+    assert base["preview"]["n_clusters"] == 9
+    assert set(base["arrays"]["selected_indices"].tolist()) == set(order[shuffled["arrays"]["selected_indices"]].tolist())
 
 
 def test_cluster_preview_names_the_space_it_used() -> None:

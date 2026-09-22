@@ -107,7 +107,7 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
       // Only the two algorithms that measure a distance run in a scaled space,
       // so only they send the `scaling` they actually applied.
       const distanceBased = samplingAlgorithm === "fps" || samplingAlgorithm === "cluster_representative";
-      return { kind: "run", method: "analysis.sampling", label: "Sampling", params: { algorithm: samplingAlgorithm, n_samples: p.nSamples, mode: p.mode, ...(distanceBased ? { scaling: p.samplingScaling } : {}), ...fpsParams, ...viewSuffix(p.viewId) } };
+      return { kind: "run", method: "analysis.sampling", label: "Sampling", params: { algorithm: samplingAlgorithm, n_samples: p.nSamples, mode: p.mode, ...(samplingAlgorithm === "stratified" ? { stratification_source: p.samplingStratificationSource ?? "composition" } : {}), ...(distanceBased ? { scaling: p.samplingScaling } : {}), ...fpsParams, ...viewSuffix(p.viewId) } };
     }
 
     case "coverage":

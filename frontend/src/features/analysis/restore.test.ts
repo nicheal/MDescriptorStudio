@@ -105,6 +105,10 @@ describe("restoring controls from a stored analysis row", () => {
       .not.toHaveProperty("samplingBudgetMode");
     expect(restore("sampling", "sampling", { algorithm: "random", scaling: "raw" }))
       .not.toHaveProperty("samplingScaling");
+    expect(restore("sampling", "sampling", { algorithm: "stratified", stratification_source: "element_set" }))
+      .toMatchObject({ samplingAlgorithm: "stratified", samplingStratificationSource: "element_set" });
+    expect(restore("sampling", "sampling", { algorithm: "stratified", stratification_source: "unknown" }))
+      .toMatchObject({ samplingStratificationSource: "composition" });
     expect(restore("sampling", "acquisition", { acquisition_method: "uncertainty_diversity" }))
       .toMatchObject({ samplingAlgorithm: "uncertainty_diversity" });
     expect(restore("sampling", "acquisition", {})).toMatchObject({ samplingAlgorithm: "novelty_fps" });
@@ -122,6 +126,9 @@ describe("restoring controls from a stored analysis row", () => {
     expect(restore("overview", "property_correlation", {
       property: "force_max", folds: 3.6, reliability_k: 0, sparse_quantile: 0.75, ood_quantile: 0.9, mode: "atom",
     })).toMatchObject({ propertyName: "force_max", propertyFolds: 4, propertyReliabilityK: 1, propertySparsePercentile: 75, propertyOodPercentile: 90, mode: "atom" });
+    expect(restore("overview", "property_correlation", {
+      reliability_k: null, requested_reliability_k: 11,
+    })).toMatchObject({ propertyReliabilityK: 11 });
     expect(restore("overview", "feature_correlation", { method: "spearman", redundancy_threshold: 2 })).toMatchObject({
       featureCorrelationMethod: "spearman", featureCorrelationThreshold: 1,
     });

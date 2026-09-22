@@ -8,7 +8,7 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, AppError
 from ..models import DescriptorMatrix
-from ..algorithms._common import _as_float64, _float_param, _int_param, _safe_import, _seed, _visual_pca, _visual_pca_components
+from ..algorithms._common import _as_float64, _float_param, _int_param, _meaningful_scale, _safe_import, _seed, _visual_pca, _visual_pca_components
 
 from .preprocessing import SCALING_MODES
 from .preprocessing import apply_scaling
@@ -45,6 +45,14 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
             raise AppError(ANALYSIS_INPUT_INVALID, str(exc)) from exc
         warnings.extend(scale_warnings)
         return apply_scaling(scaling, x)
+
+    def require_informative_space(values: np.ndarray) -> None:
+        if not bool(_meaningful_scale(values.mean(axis=0), values.std(axis=0)).any()):
+            raise AppError(
+                ANALYSIS_INPUT_INVALID,
+                "sampling requires at least one informative feature",
+                {"informative_feature_count": 0, "feature_count": int(values.shape[1])},
+            )
 
     def choose_grouped(labels: np.ndarray) -> np.ndarray:
         """Choose exactly ``target`` rows while preserving group coverage."""
@@ -114,6 +122,7 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
                 warnings.extend(scale_warnings)
                 space = apply_scaling(scaling, x)
                 existing_space = apply_scaling(scaling, fit_on) if existing is not None else None
+            require_informative_space(space)
             run = grouped_farthest_point_sampling if strategy == "grouped" else farthest_point_sampling
             run_kwargs = {"groups": group_labels} if strategy == "grouped" else {}
             result = run(
@@ -186,11 +195,20 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
             "warnings": warnings,
         }
     elif algorithm == "stratified":
-        labels = samples.elements
-        if labels is None or len(labels) != n:
-            # Structure-level stratification has a stable frame fallback.
-            labels = samples.frame
-        selected = choose_grouped(np.asarray(labels))
+        source = str(params.get("stratification_source") or "").strip().lower()
+        if source not in {"composition", "element_set"}:
+            raise AppError(
+                ANALYSIS_INPUT_INVALID,
+                "stratified sampling requires an explicit supported grouping variable",
+                {"supported_sources": ["composition", "element_set"]},
+            )
+        if group_labels is None or len(group_labels) != n:
+            raise AppError(
+                ANALYSIS_INPUT_INVALID,
+                "stratified sampling requires a grouping variable",
+                {"stratification_source": params.get("stratification_source")},
+            )
+        selected = choose_grouped(np.asarray(group_labels))
     elif algorithm in ("cluster", "cluster_representative"):
         # KMeans assigns every sample to its nearest centre and then keeps the
         # member closest to each centre, so it is distance-based exactly like
@@ -198,23 +216,61 @@ def sampling(samples: DescriptorMatrix, params: dict, algorithm: str, progress: 
         # (energy in eV, virial, volume in Å³) the raw values hand the whole
         # choice to the widest column.
         space = scaled_space()
-        space_claim = {"scaling": scaling_mode}
-        k = _int_param(params, "n_clusters", min(6, max(2, target)), 2)
-        cls = _safe_import("sklearn.cluster", "scikit-learn").KMeans
-        model = cls(n_clusters=min(k, n), random_state=_seed(params), n_init=10).fit(space)
-        selected_list = []
-        for label, center in enumerate(model.cluster_centers_):
-            # KMeans can leave a cluster empty, so the label a centre owns is
-            # its own index, not however many representatives exist so far.
-            members = np.flatnonzero(model.labels_ == label)
-            if len(members):
-                distances = ((space[members] - center) ** 2).sum(axis=1)
-                selected_list.append(int(members[int(np.argmin(distances))]))
-        selected = np.asarray(selected_list, dtype=np.int64)
-        if selected.size < target:
-            remaining = np.setdiff1d(np.arange(n), selected, assume_unique=False)
-            selected = np.concatenate([selected, remaining[: target - selected.size]])
-        selected = np.sort(selected[:target])
+        require_informative_space(space)
+        k = _int_param(params, "n_clusters", target, 1)
+        if k > target:
+            raise AppError(ANALYSIS_INPUT_INVALID, "n_clusters cannot exceed n_samples")
+        space_claim = {"scaling": scaling_mode, "n_clusters": int(k), "representative_strategy": "cluster_fps"}
+        if target == n:
+            # Every row is already required; avoiding KMeans also prevents a
+            # large all-singleton request from doing an unnecessary fit.
+            selected = np.arange(n, dtype=np.int64)
+        else:
+            cls = _safe_import("sklearn.cluster", "scikit-learn").KMeans
+            # KMeans' seeded initialization samples row positions.  Canonical
+            # lexicographic ordering makes that random stream a function of the
+            # physical feature matrix rather than of the caller's row order.
+            canonical_order = np.lexsort(tuple(space[:, column] for column in range(space.shape[1] - 1, -1, -1)))
+            canonical_space = space[canonical_order]
+            model = cls(n_clusters=k, random_state=_seed(params), n_init=10).fit(canonical_space)
+            nonempty = [
+                np.flatnonzero(model.labels_ == label)
+                for label in range(k)
+            ]
+            nonempty = [members for members in nonempty if members.size]
+            if not nonempty:
+                raise AppError(ANALYSIS_INPUT_INVALID, "cluster representative sampling found no non-empty clusters")
+            sizes = np.asarray([members.size for members in nonempty], dtype=np.int64)
+            ideal = target * sizes.astype(np.float64) / max(n, 1)
+            counts = np.maximum(1, np.floor(ideal).astype(np.int64))
+            counts = np.minimum(counts, sizes)
+            while int(counts.sum()) < target:
+                candidates = np.flatnonzero(counts < sizes)
+                if not candidates.size:
+                    break
+                residual = ideal[candidates] - counts[candidates]
+                counts[int(candidates[int(np.argmax(residual))])] += 1
+            while int(counts.sum()) > target:
+                candidates = np.flatnonzero(counts > 1)
+                if not candidates.size:
+                    break
+                residual = ideal[candidates] - counts[candidates]
+                counts[int(candidates[int(np.argmin(residual))])] -= 1
+
+            selected_parts: list[np.ndarray] = []
+            for members, count in zip(nonempty, counts.tolist()):
+                # The first pick is the cluster medoid and additional picks
+                # are within-cluster FPS.  No row-order filler is allowed:
+                # every selected sample remains justified by the cluster
+                # geometry, including explicit k < n_samples requests.
+                run = farthest_point_sampling(
+                    canonical_space[members],
+                    n_samples=int(count),
+                    initial="center",
+                    seed=_seed(params),
+                )
+                selected_parts.append(canonical_order[members[run.indices]])
+            selected = np.sort(np.concatenate(selected_parts).astype(np.int64, copy=False))
     elif algorithm in ("per_element", "element"):
         labels = samples.elements
         if labels is None or len(labels) != n:

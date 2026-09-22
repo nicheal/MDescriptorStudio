@@ -162,6 +162,7 @@ def property_correlation(samples: DescriptorMatrix, params: dict, progress: Call
     if distance_metric not in ("euclidean", "cosine"):
         raise AppError(ANALYSIS_INPUT_INVALID, "property reliability distance_metric must be euclidean or cosine")
     reliability_k = _int_param(params, "reliability_k", 5, 1)
+    effective_k_values: list[int] = []
     predictions = np.empty(y.shape[0], dtype=np.float64)
     baseline_predictions = np.empty(y.shape[0], dtype=np.float64)
     oof_distances = np.empty(y.shape[0], dtype=np.float64)
@@ -177,6 +178,7 @@ def property_correlation(samples: DescriptorMatrix, params: dict, progress: Call
         train_scaled = scaler.fit_transform(model_x[train_indices])
         test_scaled = scaler.transform(model_x[test_indices])
         fold_k = min(reliability_k, train_indices.size)
+        effective_k_values.append(int(fold_k))
         neighbor_model = sklearn_neighbors.NearestNeighbors(n_neighbors=fold_k, metric=distance_metric, n_jobs=1)
         neighbor_model.fit(train_scaled)
         distances, _neighbor_indices = neighbor_model.kneighbors(test_scaled)
@@ -233,6 +235,13 @@ def property_correlation(samples: DescriptorMatrix, params: dict, progress: Call
     pair_distance = np.linalg.norm(x[pair_i] - x[pair_j], axis=1)
     pair_property_delta = np.abs(y[pair_i] - y[pair_j])
     distance_property_correlation = _safe_correlation(pair_distance, pair_property_delta)
+    effective_reliability_k_min = min(effective_k_values)
+    effective_reliability_k_max = max(effective_k_values)
+    effective_reliability_k = (
+        effective_reliability_k_min
+        if effective_reliability_k_min == effective_reliability_k_max
+        else None
+    )
     property_units = {
         "energy_per_atom": "eV/atom",
         "energy": "eV",
@@ -310,7 +319,10 @@ def property_correlation(samples: DescriptorMatrix, params: dict, progress: Call
             "distance_definition": "mean OOF training-fold kNN distance",
             "distance_metric": distance_metric,
             "distance_standardized": True,
-            "reliability_k": reliability_k,
+            "reliability_k": effective_reliability_k,
+            "requested_reliability_k": reliability_k,
+            "effective_reliability_k_min": effective_reliability_k_min,
+            "effective_reliability_k_max": effective_reliability_k_max,
             "distance_error_pearson": distance_error_pearson,
             "distance_error_spearman": distance_error_spearman,
             "sparse_quantile": sparse_quantile,

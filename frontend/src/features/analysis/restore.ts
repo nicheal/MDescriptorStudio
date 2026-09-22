@@ -93,6 +93,11 @@ export function restoreAnalysisParams(input: RestoreInput): Partial<AnalysisPara
         nSamples: intAt(p.n_samples, current.nSamples, 1),
         mode: mode(p.mode),
         uncertaintyK: intAt(p.uncertainty_k, current.uncertaintyK, 2),
+        samplingStratificationSource: ONE_OF(
+          ["composition", "element_set"] as const,
+          p.stratification_source,
+          current.samplingStratificationSource === "element_set" ? "element_set" : "composition",
+        ),
       };
       // Both distance-based algorithms record the space they measured in; a
       // stored row that predates the claim restores the backend's default.
@@ -173,7 +178,7 @@ function restoreOverview(analysisType: string, p: Record<string, unknown>, curre
       return {
         propertyName: String(p.property ?? "energy_per_atom"),
         propertyFolds: intAt(p.folds, 5, 2),
-        propertyReliabilityK: intAt(p.reliability_k, 5, 1),
+        propertyReliabilityK: intAt(p.requested_reliability_k ?? p.reliability_k, 5, 1),
         propertyDistanceMetric: p.distance_metric === "cosine" ? "cosine" : "euclidean",
         propertySparsePercentile: Math.round((finite(p.sparse_quantile) ?? 0.9) * 100),
         propertyOodPercentile: Math.round((finite(p.ood_quantile) ?? 0.99) * 100),

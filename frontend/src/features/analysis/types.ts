@@ -105,6 +105,7 @@ export interface AnalysisParams {
   nSamples: number;
   uncertaintyK: number;
   samplingStrategy: string;
+  samplingStratificationSource?: string;
   samplingScaling: string;
   samplingMinDistance: number;
   samplingExistingRunId: string | null;

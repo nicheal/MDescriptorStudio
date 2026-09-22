@@ -94,6 +94,7 @@ const alternates: Record<keyof AnalysisParams, unknown> = {
   samplingMinDistance: 0.5,
   samplingExistingRunId: "run_prev",
   samplingBlocks: ["energy"],
+  samplingStratificationSource: "element_set",
   samplingBudgetMode: "coverage",
   samplingCoverage: 90,
   coverageMode: "overlap",

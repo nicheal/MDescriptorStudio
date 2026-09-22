@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from collections.abc import Sequence
+from math import gcd
 from pathlib import Path
 
 import numpy as np
@@ -113,17 +115,45 @@ class AnalysisDataMixin:
             raise AppError(ANALYSIS_INPUT_INVALID, f"{analysis_type} requires reference and query run IDs")
         return ids
 
-    def _element_group_labels(self, run_row: dict, samples: DescriptorMatrix, scope: tuple) -> np.ndarray:
-        """One element-set label ("C", "C-O-Si", …) per sample, for grouped FPS.
+    @staticmethod
+    def _group_label(numbers: np.ndarray, source: str) -> str:
+        """Return one stable composition or element-set label for a frame."""
+        from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
+
+        counts = Counter(_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in np.asarray(numbers).tolist())
+        if not counts:
+            return "unknown"
+        if source == "element_set":
+            return "-".join(sorted(counts))
+        divisor = 0
+        for count in counts.values():
+            divisor = gcd(divisor, int(count))
+        return "-".join(f"{symbol}:{count // max(divisor, 1)}" for symbol, count in sorted(counts.items()))
+
+    def _element_group_labels(
+        self,
+        run_row: dict,
+        samples: DescriptorMatrix,
+        scope: tuple,
+        source: str = "element_set",
+    ) -> np.ndarray:
+        """One composition or element-set label per sample, for grouped sampling.
 
         Atom-mode rows already carry their central element; structure-mode rows
-        resolve their composition through the dataset adapter.  A failure here
-        is fatal for grouped FPS — silently degrading the groups would change
-        the scientific result without telling anyone.  ``scope`` identifies the
-        sample set (view selection hash + size) for the label cache; completed
-        runs are immutable, so cached labels cannot go stale.
+        resolve frame composition through the dataset adapter.  A failure here
+        is fatal for grouped sampling — silently degrading the groups would
+        change the scientific result without telling anyone.  ``scope`` and
+        ``source`` identify the label cache entry; completed runs are immutable,
+        so cached labels cannot go stale.
         """
-        cache_key = (str(run_row["id"]), "atom" if samples.elements is not None else "structure") + tuple(str(part) for part in scope)
+        source = str(source or "element_set").strip().lower()
+        if source not in {"composition", "element_set"}:
+            raise AppError(
+                ANALYSIS_INPUT_INVALID,
+                "grouping source must be composition or element_set",
+                {"supported_sources": ["composition", "element_set"]},
+            )
+        cache_key = (str(run_row["id"]), source, "atom" if samples.elements is not None else "structure") + tuple(str(part) for part in scope)
         with self._group_labels_lock:
             cached = self._group_labels_cache.get(cache_key)
             if cached is not None and len(cached) == samples.n_samples:
@@ -136,11 +166,9 @@ class AnalysisDataMixin:
                 # KeyError that kills the job for no reason but the bookkeeping.
                 self._group_labels_cache[cache_key] = self._group_labels_cache.pop(cache_key)
                 return cached
-        from ..datasets.deepmd_symbols import _Z_TO_SYMBOL
-
-        if samples.elements is not None and len(samples.elements) == samples.n_samples:
+        if source == "element_set" and samples.elements is not None and len(samples.elements) == samples.n_samples:
             labels = np.asarray(
-                [_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in np.asarray(samples.elements).tolist()],
+                [self._group_label(np.asarray([z]), source) for z in np.asarray(samples.elements).tolist()],
                 dtype=object,
             )
         else:
@@ -159,7 +187,7 @@ class AnalysisDataMixin:
                     if not 0 <= frame_index < count:
                         raise AppError(ANALYSIS_INPUT_INVALID, f"sample frame {frame_index} is outside dataset {dataset['id']}")
                     frame = adapter.get_frame(frame_index)
-                    label = "-".join(sorted({_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in np.asarray(frame.numbers).tolist()}))
+                    label = self._group_label(np.asarray(frame.numbers), source)
                     frame_cache[frame_index] = label
                 labels_list.append(label)
             labels = np.asarray(labels_list, dtype=object)

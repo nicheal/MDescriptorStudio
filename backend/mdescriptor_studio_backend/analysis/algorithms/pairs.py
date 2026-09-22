@@ -146,18 +146,21 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
     min_diversity = np.full(pool_size, np.inf, dtype=np.float64)
     acquisition_score = np.zeros(pool_size, dtype=np.float64)
     diversity_scale = 0.0
+    # `cdist` is already the backend used for the cross-dataset scan. Reusing
+    # it here avoids rebuilding a pool-sized difference matrix in Python/NumPy
+    # for every greedy pick, while keeping the metric definitions unchanged.
+    cdist = _safe_import("scipy.spatial.distance", "scipy").cdist
+    pool_values = qry[pool]
+    distance_metric = {"euclidean": "euclidean", "manhattan": "cityblock", "cosine": "cosine"}[metric]
+    pool_norm = np.linalg.norm(pool_values, axis=1) if metric == "cosine" else None
     for step in range(1, target):
-        last = qry[pool[selected_local[-1]]]
-        delta = qry[pool] - last
-        if metric == "euclidean":
-            distances = np.linalg.norm(delta, axis=1)
-        elif metric == "manhattan":
-            distances = np.abs(delta).sum(axis=1)
-        else:
-            pool_norm = np.linalg.norm(qry[pool], axis=1)
+        last = pool_values[selected_local[-1]]
+        if metric == "cosine":
             last_norm = float(np.linalg.norm(last))
             denominator = np.maximum(pool_norm * max(last_norm, 1e-15), 1e-15)
-            distances = np.maximum(1.0 - (qry[pool] @ last) / denominator, 0.0)
+            distances = np.maximum(1.0 - (pool_values @ last) / denominator, 0.0)
+        else:
+            distances = cdist(pool_values, last[None, :], metric=distance_metric)[:, 0]
         min_diversity = np.minimum(min_diversity, distances)
         if step == 1:
             # The pool's radius around the first pick. min_diversity can only
@@ -171,7 +174,10 @@ def acquisition(reference: DescriptorMatrix, query: DescriptorMatrix, params: di
         chosen = int(np.argmax(acquisition_score))
         pick_scores.append(float(acquisition_score[chosen]))
         selected_local.append(chosen)
-        if progress and (step % 50 == 0 or step == target - 1):
+        # JobContext throttles database/event writes; calling it every step
+        # keeps cancellation and the visible progress bar responsive even when
+        # one high-dimensional distance pass takes noticeable time.
+        if progress:
             progress(0.5 + 0.5 * (step + 1) / max(target, 1), f"{acquisition_method} acquisition")
     selected = pool[np.asarray(selected_local, dtype=np.int64)]
     full_scores = np.zeros(qry.shape[0], dtype=np.float64)
@@ -345,11 +351,6 @@ def compare(left: DescriptorMatrix, right: DescriptorMatrix, params: dict, progr
         "right_components_for_threshold": right_thresholds,
         "comparison_level": "aligned descriptor-space geometry",
     }
-    if left.n_features == right.n_features:
-        mean_delta = b.mean(axis=0) - a.mean(axis=0)
-        var_delta = b.var(axis=0) - a.var(axis=0)
-        result.update({"mean_delta": mean_delta, "variance_delta": var_delta})
-        preview.update({"feature_count": left.n_features, "mean_absolute_delta": float(np.mean(np.abs(mean_delta))), "variance_absolute_delta": float(np.mean(np.abs(var_delta)))})
     if progress:
         progress(1.0, "comparison complete")
     return {"arrays": result, "preview": preview, "warnings": [*left_warnings, *right_warnings]}

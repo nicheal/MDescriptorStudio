@@ -32,6 +32,7 @@ type AnalysisModuleControlSetters = Pick<AnalysisParameterState,
   | "setNSamples"
   | "setUncertaintyK"
   | "setSamplingStrategy"
+  | "setSamplingStratificationSource"
   | "setSamplingScaling"
   | "setSamplingBlocks"
   | "setSamplingBudgetMode"
@@ -76,6 +77,7 @@ export interface AnalysisModuleControlsProps {
   tab: TabKey;
   overviewAnalysis: OverviewAnalysis;
   params: AnalysisParams;
+  effectiveTsnePerplexity?: number | null;
   secondRun: string | null;
   datasets: DatasetMeta[];
   referenceDatasetId: string | null;
@@ -105,6 +107,7 @@ export default function AnalysisModuleControls({
   tab,
   overviewAnalysis,
   params,
+  effectiveTsnePerplexity,
   secondRun,
   datasets,
   referenceDatasetId,
@@ -140,6 +143,7 @@ export default function AnalysisModuleControls({
       preprocess={params.preprocess}
       onPreprocessChange={onPreprocessChange}
       tsnePerplexity={params.tsnePerplexity}
+      effectiveTsnePerplexity={effectiveTsnePerplexity}
       setTsnePerplexity={setters.setTsnePerplexity}
       markOptions={markOptions}
       cachedParam={cachedParam}
@@ -176,6 +180,7 @@ export default function AnalysisModuleControls({
         mode: setMode,
         uncertaintyK: setters.setUncertaintyK,
         samplingStrategy: setters.setSamplingStrategy,
+        samplingStratificationSource: setters.setSamplingStratificationSource,
         samplingScaling: setters.setSamplingScaling,
         samplingBlocks: setters.setSamplingBlocks,
         samplingBudgetMode: (value: string) => setters.setSamplingBudgetMode(value as "count" | "coverage"),

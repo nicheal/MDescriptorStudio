@@ -170,6 +170,15 @@ class AnalysisRunMixin:
             # Validate the composite block vocabulary before enqueuing: a typo
             # should fail the request, not create a job that fails a minute later.
             _block_names(params)
+        if analysis_type == "stratified":
+            source = str(params.get("stratification_source") or "").strip().lower()
+            if source not in {"composition", "element_set"}:
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    "stratified sampling requires an explicit supported grouping variable",
+                    {"supported_sources": ["composition", "element_set"]},
+                )
+            params["stratification_source"] = source
         canonical_params = self._canonical_params(params)
         cache_key = self._analysis_cache_key(analysis_type, input_ids, canonical_params)
         with self._submit_lock:
@@ -266,11 +275,31 @@ class AnalysisRunMixin:
                     else point
                     for point in preview["points"]
                 ]
+            # The estimator may clamp an omitted/default parameter to the
+            # available sample count.  Store the value actually used so a
+            # history restore and the artifact metadata describe the same run.
+            settled_params = dict(canonical_params)
+            if analysis_type == "tsne" and isinstance(preview.get("parameters"), dict):
+                effective = preview["parameters"].get("perplexity")
+                if isinstance(effective, (int, float)) and np.isfinite(effective):
+                    # Keep the UI's 30-valued auto mode restorable while also
+                    # recording the concrete value used for this sample count.
+                    settled_params.setdefault("perplexity", 30.0)
+                    settled_params["effective_perplexity"] = float(effective)
+            if analysis_type == "property_correlation":
+                for key in (
+                    "requested_reliability_k",
+                    "effective_reliability_k_min",
+                    "effective_reliability_k_max",
+                    "reliability_k",
+                ):
+                    if key in preview:
+                        settled_params[key] = preview[key]
             artifact_path, manifest = self._commit_artifact(
                 analysis_id,
                 analysis_type,
                 input_ids,
-                canonical_params,
+                settled_params,
                 result,
                 preview,
                 ctx,
@@ -286,6 +315,7 @@ class AnalysisRunMixin:
                     "warnings_json": json.dumps(result.get("warnings", []), ensure_ascii=False),
                     "artifact_manifest_json": json.dumps(manifest, ensure_ascii=False),
                     "preview_json": json.dumps(preview, ensure_ascii=False, allow_nan=False),
+                    "params_json": json.dumps(settled_params, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
                     "preprocessing_json": json.dumps(_preprocessing(params), ensure_ascii=False),
                     "updated_at": _NOW(),
                 },
@@ -319,6 +349,7 @@ class AnalysisRunMixin:
             "warnings_json",
             "artifact_manifest_json",
             "preview_json",
+            "params_json",
             "preprocessing_json",
             "updated_at",
         }
@@ -469,6 +500,20 @@ class AnalysisRunMixin:
                     blocks = self._sampling_blocks(rows[0], samples[0], block_names, params, element_list)
                     if existing is not None:
                         existing_blocks = self._sampling_blocks(rows[1], samples[1], block_names, params, element_list)
+            elif analysis_type == "stratified":
+                source = str(params.get("stratification_source") or "").strip().lower()
+                if source not in {"composition", "element_set"}:
+                    raise AppError(
+                        ANALYSIS_INPUT_INVALID,
+                        "stratified sampling requires an explicit supported grouping variable",
+                        {"supported_sources": ["composition", "element_set"]},
+                    )
+                group_labels = self._element_group_labels(
+                    rows[0],
+                    samples[0],
+                    (params.get("selection_hash") or "", samples[0].n_samples),
+                    source=source,
+                )
             return ANALYSIS_REGISTRY.run(
                 analysis_type,
                 samples,

@@ -17,9 +17,9 @@ import type { AnalysisChunk, AnalysisPreview } from "../types/protocol";
 
 type FeatureVarianceMetric = "variance" | "relative_variance" | "std" | "iqr" | "mad";
 type FeatureVarianceSort = "variance_desc" | "variance_asc" | "index";
-type FeatureVarianceDisplay = "all" | "top" | "bottom" | "near_zero" | "low_variation" | "constant";
+type FeatureVarianceDisplay = "all" | "top" | "bottom" | "near_zero" | "low_variation" | "constant" | "insufficient";
 type FeatureVariancePane = "chart" | "stats";
-type FeatureVarianceStatus = "constant" | "near_zero" | "low_variation" | "active" | "invalid";
+type FeatureVarianceStatus = "constant" | "near_zero" | "low_variation" | "active" | "invalid" | "insufficient";
 
 type FeatureVarianceRow = {
   index: number;
@@ -60,6 +60,7 @@ const FEATURE_VARIANCE_STATUS_LABELS: Record<FeatureVarianceStatus, Pair> = {
   low_variation: { en: "Low variation", zh: "低变化" },
   active: { en: "Active", zh: "活跃" },
   invalid: { en: "Invalid", zh: "无效数据" },
+  insufficient: { en: "Insufficient samples", zh: "样本不足" },
 };
 
 const FEATURE_VARIANCE_STATUS_COLORS: Record<FeatureVarianceStatus, string> = {
@@ -68,6 +69,7 @@ const FEATURE_VARIANCE_STATUS_COLORS: Record<FeatureVarianceStatus, string> = {
   low_variation: "#F7630C",
   active: "#0F6CBD",
   invalid: "#D13438",
+  insufficient: "#C239B3",
 };
 
 export function FeatureVarianceChart({ preview, analysisId }: { preview: AnalysisPreview; analysisId: string | null }) {
@@ -132,6 +134,7 @@ export function FeatureVarianceChart({ preview, analysisId }: { preview: Analysi
   const minVariance = finiteNumber(summary?.min_variance) ?? (varianceValues.length ? Math.min(...varianceValues) : 0);
   const nearZeroCount = finiteNumber(summary?.near_zero_count) ?? features.filter((feature) => feature.status === "near_zero").length;
   const constantCount = finiteNumber(summary?.constant_count) ?? features.filter((feature) => feature.status === "constant").length;
+  const insufficientCount = finiteNumber(summary?.insufficient_count) ?? features.filter((feature) => feature.status === "insufficient").length;
   const featureCount = finiteNumber(preview.feature_count) ?? features.length;
   const sampleCount = finiteNumber(preview.sample_count);
   const settings = recordValue(preview.settings);
@@ -144,6 +147,7 @@ export function FeatureVarianceChart({ preview, analysisId }: { preview: Analysi
       if (display === "near_zero") return feature.status === "near_zero";
       if (display === "low_variation") return feature.status === "low_variation";
       if (display === "constant") return feature.status === "constant";
+      if (display === "insufficient") return feature.status === "insufficient";
       return true;
     });
     const compare = (left: FeatureVarianceRow, right: FeatureVarianceRow) => {
@@ -211,13 +215,16 @@ export function FeatureVarianceChart({ preview, analysisId }: { preview: Analysi
       <button type="button" className={`analysis-metric analysis-metric-action${display === "constant" ? " is-selected" : ""}`} aria-pressed={display === "constant"} onClick={() => chooseFilter("constant")}>
         <Typography.Text type="secondary">{t("Constant")}</Typography.Text><Typography.Text strong>{formatCount(constantCount)}</Typography.Text>
       </button>
+      <button type="button" className={`analysis-metric analysis-metric-action${display === "insufficient" ? " is-selected" : ""}`} aria-pressed={display === "insufficient"} onClick={() => chooseFilter("insufficient")}>
+        <Typography.Text type="secondary">{t("Insufficient samples")}</Typography.Text><Typography.Text strong>{formatCount(insufficientCount)}</Typography.Text>
+      </button>
     </div>
     <Typography.Text type="secondary" className="feature-variance-summary-note">{t("Summary cards always show absolute variance, independent of the selected metric.")}</Typography.Text>
 
     <div className="feature-variance-toolbar" role="group" aria-label={t("Feature variance controls")}>
       <label className="feature-variance-control"><span>{t("Metric")}</span><Select aria-label={t("Variance metric")} value={metric} onChange={setMetric} options={[{ value: "variance", label: t("Absolute variance") }, { value: "relative_variance", label: t("Normalized variance") }, { value: "std", label: t("Standard deviation") }, { value: "iqr", label: t("IQR") }, { value: "mad", label: t("MAD") }]} /></label>
       <label className="feature-variance-control"><span>{t("Sort")}</span><Select aria-label={t("Variance sort order")} value={sort} onChange={setSort} options={[{ value: "variance_desc", label: t("Variance descending") }, { value: "variance_asc", label: t("Variance ascending") }, { value: "index", label: t("Feature index") }]} /></label>
-      <label className="feature-variance-control"><span>{t("Display")}</span><Select aria-label={t("Feature display filter")} value={display} onChange={setDisplay} options={[{ value: "all", label: t("All features") }, { value: "top", label: t("Highest variation") }, { value: "bottom", label: t("Lowest variation") }, { value: "near_zero", label: t("Near-zero") }, { value: "low_variation", label: t("Low variation") }, { value: "constant", label: t("Constant") }]} /></label>
+      <label className="feature-variance-control"><span>{t("Display")}</span><Select aria-label={t("Feature display filter")} value={display} onChange={setDisplay} options={[{ value: "all", label: t("All features") }, { value: "top", label: t("Highest variation") }, { value: "bottom", label: t("Lowest variation") }, { value: "near_zero", label: t("Near-zero") }, { value: "low_variation", label: t("Low variation") }, { value: "constant", label: t("Constant") }, { value: "insufficient", label: t("Insufficient samples") }]} /></label>
       <label className={`feature-variance-control feature-variance-k-control${topKEnabled ? "" : " is-disabled"}`} title={topKEnabled ? undefined : t("Top/Bottom K applies only to highest/lowest variation views.")}><span>{t("Top/Bottom K")}</span><InputNumber aria-label={t("Top/Bottom K")} disabled={!topKEnabled} min={1} max={Math.max(1, features.length)} value={topK} onChange={(value) => setTopK(Math.min(Math.max(1, value ?? 20), Math.max(1, features.length)))} /></label>
       <label className="feature-variance-control"><span>{t("Coordinate scale")}</span><Select aria-label={t("Coordinate scale")} value={scale} onChange={setScale} options={[{ value: "linear", label: t("Linear") }, { value: "log", label: t("Log") }]} /></label>
     </div>
@@ -340,7 +347,7 @@ function FeatureVarianceDetail({ feature, distribution, histogram, kde, statusTe
   return <div className="feature-variance-detail">
     <div className="analysis-section-heading"><Typography.Text strong>{t("Feature detail")}</Typography.Text><Typography.Text type="secondary">{t("Feature {index}", { index: feature.index })}</Typography.Text></div>
     <div className="feature-variance-detail-meta"><Tag color={FEATURE_VARIANCE_STATUS_COLORS[feature.status]}>{statusText}</Tag>{robustDiagnostic && <Tag color={robustDiagnostic.color}>{robustDiagnostic.label}</Tag>}{feature.invalid_count > 0 && <Typography.Text type="warning">{t("{n} invalid values were excluded.", { n: feature.invalid_count })}</Typography.Text>}</div>
-    {feature.status === "invalid" ? <OverviewNoData message={t("This feature has no finite values.")} /> : <div className="feature-variance-detail-charts">
+    {feature.status === "invalid" ? <OverviewNoData message={t("This feature has no finite values.")} /> : feature.status === "insufficient" ? <OverviewNoData message={t("Not enough finite values to assess variation.")} /> : <div className="feature-variance-detail-charts">
       {histogram.counts.length ? <OverviewPlot compact ariaLabel={t("Feature value histogram and KDE")} data={[{ type: "bar", x: histogramCenters, y: histogram.counts, width: histogramWidths, marker: { color: "#0F6CBD", opacity: 0.7 }, hovertemplate: `${t("Value")}=%{x:.5g}<br>${t("Samples")}=%{y}<extra></extra>` }, ...(kde.x.length ? [{ type: "scatter", mode: "lines", x: kde.x, y: kde.y, name: "KDE", line: { color: "#D13438", width: 2 }, hovertemplate: `${t("KDE")}=%{y:.5g}<extra></extra>` }] : [])] as Data[]} layout={overviewLayout({ xaxis: { title: { text: t("Value") } }, yaxis: { title: { text: t("Samples") } }, legend: { orientation: "h" } })} /> : <OverviewNoData message={t("Distribution data is unavailable.")} />}
       {boxData ? <OverviewPlot compact ariaLabel={t("Feature value box plot")} data={[...boxData, ...(sampledOutliers.length ? [{ type: "scatter", mode: "markers", x: sampledOutliers, y: sampledOutliers.map(() => t("Feature {index}", { index: feature.index })), name: t("Outliers"), marker: { color: "#D13438", size: 7, symbol: "circle-open" }, hovertemplate: `${t("Outliers")}=%{x:.5g}<extra></extra>` } as Data] : [])]} layout={overviewLayout({ xaxis: { title: { text: t("Value") } }, yaxis: { automargin: true }, legend: { orientation: "h" } })} /> : <OverviewNoData message={t("Box plot data is unavailable.")} />}
     </div>}
@@ -386,7 +393,7 @@ function parseFeatureVarianceRows(preview: AnalysisPreview): FeatureVarianceRow[
   if (records.length) {
     return records.map((record) => {
       const rawStatus = String(record.status ?? "active");
-      const status: FeatureVarianceStatus = rawStatus === "constant" || rawStatus === "near_zero" || rawStatus === "low_variation" || rawStatus === "invalid" ? rawStatus : "active";
+      const status: FeatureVarianceStatus = rawStatus === "constant" || rawStatus === "near_zero" || rawStatus === "low_variation" || rawStatus === "invalid" || rawStatus === "insufficient" ? rawStatus : "active";
       return {
         index: Math.round(finiteNumber(record.index) ?? 0),
         mean: finiteNumber(record.mean),

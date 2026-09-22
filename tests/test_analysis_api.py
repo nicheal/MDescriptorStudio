@@ -1314,6 +1314,8 @@ def test_element_group_labels_use_shared_element_sets(tmp_path: Path) -> None:
     samples = service._load_samples(run, {"mode": "structure"}, "fps")
     labels = service._element_group_labels(run, samples, ("", samples.n_samples))
     assert labels.tolist() == ["C-Si", "C", "Si", "C-O-Si"]
+    composition = service._element_group_labels(run, samples, ("", samples.n_samples), source="composition")
+    assert composition.tolist() == ["C:1-Si:1", "C:1", "Si:1", "C:1-O:1-Si:1"]
 
     quota = service.fps_quota({"run_id": "run_grouped", "mode": "structure", "n_samples": 4})
     assert [row["group"] for row in quota["groups"]] == ["C", "C-O-Si", "C-Si", "Si"]
@@ -1337,7 +1339,7 @@ def test_the_group_label_cache_evicts_the_least_recently_used(tmp_path: Path) ->
     db, _jobs, service = _grouped_service(tmp_path, frames)
     run = db.query_one("SELECT * FROM descriptor_runs WHERE id = 'run_grouped'")
     samples = service._load_samples(run, {"mode": "structure"}, "fps")
-    cached_scopes = lambda: {entry[2] for entry in service._group_labels_cache}
+    cached_scopes = lambda: {entry[3] for entry in service._group_labels_cache}
 
     service._element_group_labels(run, samples, ("kept", samples.n_samples))
     for name in ("s0", "s1", "s2", "s3", "s4", "s5", "s6"):

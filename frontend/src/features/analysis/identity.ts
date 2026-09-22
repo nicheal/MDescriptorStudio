@@ -60,6 +60,8 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
           ? [p.samplingStrategy, p.samplingScaling, p.samplingMinDistance, p.samplingExistingRunId ?? "none", p.samplingBlocks.length ? p.samplingBlocks.join("+") : "descriptor", p.samplingBudgetMode === "coverage" ? `cov${p.samplingCoverage}` : "count"].join(":")
           : samplingAlgorithm === "cluster_representative"
             ? p.samplingScaling
+            : samplingAlgorithm === "stratified"
+              ? p.samplingStratificationSource ?? "composition"
             : "",
         samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity"
           ? [p.referenceRunId, p.referenceViewId ?? "full", p.queryRunId, p.queryViewId ?? "full"].join(":")

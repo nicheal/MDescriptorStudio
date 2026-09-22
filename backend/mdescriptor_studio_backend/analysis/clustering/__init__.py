@@ -21,12 +21,14 @@ def cluster(samples: DescriptorMatrix, params: dict, algorithm: str, progress: C
         cls = _safe_import("sklearn.cluster", "scikit-learn").KMeans
         model = cls(n_clusters=k, random_state=_seed(params), n_init=10, max_iter=_int_param(params, "max_iter", 300, 1))
     elif algorithm == "dbscan":
-        eps = _float_param(params, "eps", 0.5, 0.0)
+        eps = _float_param(params, "eps", 0.5, np.finfo(np.float64).eps)
         min_samples = _int_param(params, "min_samples", 5, 1)
         model = _safe_import("sklearn.cluster", "scikit-learn").DBSCAN(eps=eps, min_samples=min_samples, metric=params.get("metric", "euclidean"))
     elif algorithm == "hdbscan":
         hdb = _safe_import("hdbscan", "hdbscan")
-        model = hdb.HDBSCAN(min_cluster_size=_int_param(params, "min_cluster_size", 5, 2), min_samples=params.get("min_samples"), metric=params.get("metric", "euclidean"), prediction_data=False)
+        raw_min_samples = params.get("min_samples")
+        min_samples = None if raw_min_samples in (None, "") else _int_param(params, "min_samples", 5, 1)
+        model = hdb.HDBSCAN(min_cluster_size=_int_param(params, "min_cluster_size", 5, 2), min_samples=min_samples, metric=params.get("metric", "euclidean"), prediction_data=False)
     elif algorithm in ("agglomerative", "hierarchical"):
         k = _int_param(params, "n_clusters", 6, 2)
         if k > x.shape[0]:
@@ -49,6 +51,7 @@ def cluster(samples: DescriptorMatrix, params: dict, algorithm: str, progress: C
 
 
 def outlier(samples: DescriptorMatrix, params: dict, algorithm: str, progress: Callable[[float, str], None] | None = None) -> dict:
+    _check_samples(samples.values, 2)
     x, warnings, keep = _preprocess(samples.values, params, "standardized")
     algorithm = algorithm.lower()
     contamination = _float_param(params, "contamination", 0.01, 0.0, 0.5)

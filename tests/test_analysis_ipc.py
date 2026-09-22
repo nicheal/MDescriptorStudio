@@ -177,7 +177,7 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
         for algorithm, params in (
             ("fps", {"n_samples": 4}),
             ("random", {"n_samples": 4}),
-            ("stratified", {"n_samples": 4}),
+            ("stratified", {"n_samples": 4, "stratification_source": "composition"}),
             ("cluster_representative", {"n_samples": 4, "n_clusters": 2}),
             ("per_element", {"n_samples": 4, "mode": "atom"}),
         ):

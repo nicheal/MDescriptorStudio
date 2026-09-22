@@ -43,6 +43,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
   const [outlierAlgorithm, setOutlierAlgorithm] = useState("lof");
   const [samplingAlgorithm, setSamplingAlgorithm] = useState("fps");
   const [samplingStrategy, setSamplingStrategy] = useState("global");
+  const [samplingStratificationSource, setSamplingStratificationSource] = useState("composition");
   const [samplingScaling, setSamplingScaling] = useState("robust");
   const [samplingMinDistance, setSamplingMinDistance] = useState(0);
   const [samplingExistingRunId, setSamplingExistingRunId] = useState<string | null>(null);
@@ -110,6 +111,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     nSamples,
     uncertaintyK,
     samplingStrategy,
+    samplingStratificationSource,
     samplingScaling,
     samplingMinDistance,
     samplingExistingRunId,
@@ -183,6 +185,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     samplingMinDistance,
     samplingScaling,
     samplingStrategy,
+    samplingStratificationSource,
     similarityMode,
     tsnePerplexity,
     uncertaintyK,
@@ -202,6 +205,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     setNSamples(loaded.nSamples);
     setUncertaintyK(loaded.uncertaintyK);
     setSamplingStrategy(loaded.samplingStrategy);
+    setSamplingStratificationSource(loaded.samplingStratificationSource ?? "composition");
     setSamplingScaling(loaded.samplingScaling);
     setSamplingMinDistance(loaded.samplingMinDistance);
     setSamplingExistingRunId(loaded.samplingExistingRunId);
@@ -233,6 +237,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     outlierAlgorithm, setOutlierAlgorithm,
     samplingAlgorithm, setSamplingAlgorithm,
     samplingStrategy, setSamplingStrategy,
+    samplingStratificationSource, setSamplingStratificationSource,
     samplingScaling, setSamplingScaling,
     samplingMinDistance, setSamplingMinDistance,
     samplingExistingRunId, setSamplingExistingRunId,

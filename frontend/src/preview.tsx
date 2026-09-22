@@ -1285,7 +1285,7 @@ const METHODS: Record<string, Handler> = {
     mdescriptor_api_version: 3,
     mdescriptor_baseline_version: "2",
     mdescriptor_descriptor_info_schema_version: 3,
-    analysis_algorithm_version: "studio-analysis-10",
+    analysis_algorithm_version: "studio-analysis-11",
     data_dir: "C:\\Users\\preview\\AppData\\Roaming\\mdescriptor-studio",
     cpu_threads: 16,
   }),
@@ -1630,7 +1630,7 @@ const METHODS: Record<string, Handler> = {
   "analysis.pairwise": (p) => mockAnalysisSubmit("job-pairwise-live", "ana-mock-pairwise", "pairwise_similarity", "pairwise_similarity", { similarity_mode: "pairwise", mode: p.mode }),
   "analysis.cluster": (p) => mockAnalysisSubmit("job-cluster-live", "ana-mock-clusters", "clusters", "clusters", { algorithm: p.algorithm, n_clusters: p.n_clusters, mode: p.mode }),
   "analysis.outlier": (p) => mockAnalysisSubmit("job-outlier-live", "ana-mock-outliers", "outliers", "outliers", { algorithm: p.algorithm, k: p.k, contamination: p.contamination, mode: p.mode }),
-  "analysis.sampling": (p) => mockAnalysisSubmit("job-sampling-live", "ana-mock-sampling", "sampling", "sampling", { algorithm: p.algorithm, n_samples: p.n_samples, mode: p.mode, strategy: p.strategy, scaling: p.scaling, min_distance: p.min_distance, blocks: p.blocks, target_coverage: p.target_coverage }),
+  "analysis.sampling": (p) => mockAnalysisSubmit("job-sampling-live", "ana-mock-sampling", "sampling", "sampling", { algorithm: p.algorithm, n_samples: p.n_samples, mode: p.mode, ...(p.stratification_source ? { stratification_source: p.stratification_source } : {}), strategy: p.strategy, scaling: p.scaling, min_distance: p.min_distance, blocks: p.blocks, target_coverage: p.target_coverage }),
   "analysis.coverage": (p) => mockAnalysisSubmit("job-coverage-live", "ana-mock-coverage", "coverage", "coverage", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.overlap": (p) => mockAnalysisSubmit("job-overlap-live", "ana-mock-overlap", "overlap", "overlap", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.acquisition": (p) => {

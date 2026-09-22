@@ -187,6 +187,17 @@ function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pi
             ? t("Target reached")
             : undefined
     : undefined;
+  const coverageStopMessage = fps && typeof preview?.target_coverage === "number"
+    ? preview.stop_reason === "coverage"
+      ? t("Stopped on target coverage of {percent}.", { percent: formatPercent(preview.target_coverage) })
+      : preview.stop_reason === "target"
+        ? t("Reached sample budget before target coverage.")
+        : preview.stop_reason === "min_distance"
+          ? t("Stopped by minimum-distance criterion.")
+          : preview.stop_reason === "exhausted"
+            ? t("Candidate set exhausted before target coverage.")
+            : null
+    : null;
   const explained = fps ? nums(preview?.pc_explained_variance) : [];
   // Only the distance-based algorithms publish a scaling, so this is absent for
   // random/stratified rather than claimed.
@@ -255,8 +266,8 @@ function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pi
         : <PlotFrame compact ariaLabel={t("Selection score distribution")} data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? uncertaintyDriven ? point.uncertainty ?? 0 : point.distance ?? 0 : point.x), marker: { color: uncertaintyDriven ? "#D13438" : "#8764B8" } }]} layout={layout({ xaxis: { title: { text: kind === "acquisition" ? uncertaintyDriven ? t("kNN extrapolation uncertainty") : t("Novelty distance") : t("PC1 distribution") } }, yaxis: { title: { text: t("Samples") } } })} />}
     </div>
     {pickScores.length > 0 && <Typography.Text type="secondary">{t("Bars show the objective each pick maximised; the stored scores rank every candidate by the loop's final state.")}</Typography.Text>}
-    {fps && r2Curve.length > 0 && <PlotFrame compact ariaLabel={t("Coverage R² curve")} data={[{ type: "scatter", mode: "lines", x: r2Curve.map((_, index) => index + 1), y: r2Curve, line: { color: "#107C10", width: 2 }, hovertemplate: `${t("Selected samples")}=%{x}<br>R²=%{y:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Selected samples") } }, yaxis: { title: { text: "R²" }, range: [0, 1] } })} />}
-    {fps && typeof preview?.target_coverage === "number" && <Typography.Text type="secondary">{t("Stopped on target coverage of {percent}.", { percent: formatPercent(preview.target_coverage) })}</Typography.Text>}
+    {fps && r2Curve.length > 0 && <PlotFrame compact ariaLabel={t("Coverage R² curve")} data={[{ type: "scatter", mode: "lines", x: r2Curve.map((_, index) => index + 1), y: r2Curve, line: { color: "#107C10", width: 2 }, hovertemplate: `${t("Selected samples")}=%{x}<br>R²=%{y:.4f}<extra></extra>` }]} layout={layout({ xaxis: { title: { text: t("Selected samples") } }, yaxis: { title: { text: "R²" }, range: [Math.min(0, ...r2Curve), 1] }, shapes: [{ type: "line", x0: 0, x1: 1, xref: "paper", y0: 0, y1: 0, line: { color: "#616161", dash: "dash" } }] })} />}
+    {coverageStopMessage && <Typography.Text type="secondary">{coverageStopMessage}</Typography.Text>}
     {fps && explained.length === 2 && <Typography.Text type="secondary">{t("FPS ran in the full scaled descriptor space; the plot is only a PC1–PC2 projection ({percent} variance).", { percent: formatPercent(explained[0] + explained[1]) })}</Typography.Text>}
   </>;
 }
@@ -438,6 +449,14 @@ function PropertyView({ preview, arrays, onSelect }: { preview: AnalysisPreview;
   const identityMax = identityBounds.length ? Math.max(...identityBounds) : 1;
   const unit = String(preview.property_unit ?? "");
   const unitSuffix = unit ? ` (${unit})` : "";
+  const requestedReliabilityK = num(preview.requested_reliability_k);
+  const effectiveReliabilityKMin = num(preview.effective_reliability_k_min);
+  const effectiveReliabilityKMax = num(preview.effective_reliability_k_max);
+  const effectiveReliabilityK = effectiveReliabilityKMin != null && effectiveReliabilityKMax != null
+    ? effectiveReliabilityKMin === effectiveReliabilityKMax
+      ? String(Math.round(effectiveReliabilityKMin))
+      : `${Math.round(effectiveReliabilityKMin)}–${Math.round(effectiveReliabilityKMax)}`
+    : formatCount(preview.reliability_k);
   const residualLimit = quantile(residuals.map(Math.abs), 0.99);
   const visibleResiduals = residualView === "center99" && residualLimit !== null
     ? residuals.filter((value) => Math.abs(value) <= residualLimit)
@@ -526,7 +545,8 @@ function PropertyView({ preview, arrays, onSelect }: { preview: AnalysisPreview;
       <PropertySectionHeading number="03" title={t("Representation Reliability")} question={t("Where does the descriptor representation become unreliable?")} />
       <div className="property-method-strip">
         <Tag>{String(preview.distance_metric ?? "euclidean")}</Tag>
-        <Typography.Text>{t("Mean kNN distance to the OOF training fold · k={k}", { k: formatCount(preview.reliability_k) })}</Typography.Text>
+        <Typography.Text>{t("Mean kNN distance to the OOF training fold · k={k}", { k: effectiveReliabilityK })}</Typography.Text>
+        {requestedReliabilityK != null && effectiveReliabilityKMin != null && <Typography.Text type="secondary">{t("Requested k={k}", { k: Math.round(requestedReliabilityK) })}</Typography.Text>}
         <Typography.Text type="secondary">{preview.distance_standardized ? t("Descriptor standardized within each fold") : t("Descriptor not standardized")}</Typography.Text>
       </div>
       <Metrics values={[

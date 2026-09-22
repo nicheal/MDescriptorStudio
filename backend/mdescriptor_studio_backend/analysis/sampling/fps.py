@@ -456,15 +456,29 @@ def grouped_farthest_point_sampling(
         )
         if run.n_selected < count:
             stopped_by = _STOP_MIN_DISTANCE
-        picked_indices.append(members[run.indices])
-        picked_distances.append(run.selection_distances)
-        for index in picked_indices[-1].tolist():
+        group_indices: list[int] = []
+        group_distances: list[float] = []
+        for local_position, index in enumerate(members[run.indices].tolist()):
             np.minimum(global_d2, _sqdist_to_point(x, x[index]), out=global_d2)
             radius_curve[filled], mean_curve[filled] = _residual_stats(global_d2)
             r2_curve[filled] = _r2_coverage(global_d2, total_spread)
+            group_indices.append(int(index))
+            group_distances.append(float(run.selection_distances[local_position]))
             filled += 1
+            # The global target is a per-pick stopping condition even though
+            # the candidate ordering is generated inside one group at a time.
+            # Truncate this group's quota as soon as the merged coverage goal
+            # is met; later group picks must not become hidden overshoot.
+            if target_coverage is not None and r2_curve[filled - 1] >= target_coverage:
+                stopped_by = _STOP_COVERAGE
+                break
+        if group_indices:
+            picked_indices.append(np.asarray(group_indices, dtype=np.int64))
+            picked_distances.append(np.asarray(group_distances, dtype=np.float64))
         if progress:
             progress(filled / max(int(quota.sum()), 1), "grouped farthest-point sampling")
+        if stopped_by == _STOP_COVERAGE:
+            break
 
     indices = np.concatenate(picked_indices) if picked_indices else np.empty(0, dtype=np.int64)
     selection_distances = np.concatenate(picked_distances) if picked_distances else np.empty(0, dtype=np.float64)

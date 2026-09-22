@@ -132,6 +132,7 @@ export default function Analysis() {
     outlierAlgorithm, setOutlierAlgorithm,
     samplingAlgorithm, setSamplingAlgorithm,
     samplingStrategy, setSamplingStrategy,
+    setSamplingStratificationSource,
     setSamplingScaling,
     setSamplingMinDistance,
     setSamplingExistingRunId,
@@ -187,6 +188,29 @@ export default function Analysis() {
     featureCorrelationMethod,
     featureCorrelationThreshold,
   });
+  const selectedRunShape = runs.find((run) => run.id === selectedRun)?.shape ?? null;
+  const selectedSampleCount = useMemo(() => {
+    if (!selectedRunShape) return null;
+    try {
+      const parsed = JSON.parse(selectedRunShape) as unknown;
+      const value = Array.isArray(parsed) ? Number(parsed[0]) : NaN;
+      return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+    } catch {
+      const match = selectedRunShape.match(/\[\s*(\d+)/);
+      const value = match ? Number(match[1]) : NaN;
+      return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+    }
+  }, [selectedRunShape]);
+  const previewEffectiveTsnePerplexity = useMemo(() => {
+    if (projection !== "tsne" || tsnePerplexity !== 30 || !preview?.parameters || typeof preview.parameters !== "object") return null;
+    const value = Number((preview.parameters as Record<string, unknown>).effective_perplexity);
+    return Number.isFinite(value) ? value : null;
+  }, [preview, projection, tsnePerplexity]);
+  const effectiveTsnePerplexity = tsnePerplexity === 30
+    ? previewEffectiveTsnePerplexity ?? (viewId == null && selectedSampleCount != null
+      ? Math.min(30, Math.max(2, selectedSampleCount - 1))
+      : null)
+    : tsnePerplexity;
   const [overviewArraysRetry, setOverviewArraysRetry] = useState(0);
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
   const {
@@ -306,7 +330,7 @@ export default function Analysis() {
   // Whether the (module, input, parameter combination) result is already computed
   // and can be re-displayed without rerunning. One parameter can be probed
   // with a candidate value; the others stay at their current value.
-  const isCached = (param: string, value: string | number | string[] | null) =>
+  const isCached = (param: string, value: string | number | string[] | null | undefined) =>
     !!activeNavModule && slotForParams(slots, activeNavModule.key, inputKey, buildParamsKey(tab, { ...analysisParams, [param]: value } as AnalysisParams)) !== null;
   // Cache dot helpers: select options marked per value, numeric labels per current value.
   const markOptions = (param: string, options: CacheOption[]) => withCacheMarks((value) => isCached(param, value), options);
@@ -942,6 +966,7 @@ export default function Analysis() {
               tab={tab}
               overviewAnalysis={overviewAnalysis}
               params={analysisParams}
+              effectiveTsnePerplexity={effectiveTsnePerplexity}
               secondRun={secondRun}
               datasets={datasets}
               referenceDatasetId={referenceDatasetId}
@@ -974,6 +999,7 @@ export default function Analysis() {
                 setNSamples,
                 setUncertaintyK,
                 setSamplingStrategy,
+                setSamplingStratificationSource,
                 setSamplingScaling,
                 setSamplingBlocks,
                 setSamplingBudgetMode,
