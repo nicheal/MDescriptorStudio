@@ -12,13 +12,11 @@ import {
   App as AntApp,
   Button,
   Empty,
-  InputNumber,
   Progress,
   Select,
   Space,
   Tabs,
   Tag,
-  Tooltip,
   Typography,
 } from "antd";
 import {
@@ -65,19 +63,16 @@ import type {
 import {
   AnalysisMethodGuideModal,
   AnalysisRunLabel,
-  CrossDatasetPicker,
   OverviewResultVisualization,
-  ParamLabel,
-  ProjectionControls,
   ResultPanel,
   SectionHeading,
-  SamplingControls,
   SamplingExportCard,
   withCacheMarks,
   type CacheOption,
   type Point,
 } from "./analysisShared";
 import { useAnalysisArtifactArrays } from "./useAnalysisArtifactArrays";
+import AnalysisModuleControls from "./AnalysisModuleControls";
 import { useAnalysisExecution, type AnalysisRunContext, type AnalysisRunningInfo } from "./useAnalysisExecution";
 import { useAnalysisParameters } from "./useAnalysisParameters";
 import { useAnalysisSelection } from "./useAnalysisSelection";
@@ -147,14 +142,14 @@ export default function Analysis() {
     samplingQuotaBusy, setSamplingQuotaBusy,
     similarityMode, setSimilarityMode,
     compareMode, setCompareMode,
-    mantelMethod, setMantelMethod,
-    mantelPermutations, setMantelPermutations,
-    propertyName, setPropertyName,
-    propertyFolds, setPropertyFolds,
-    propertyReliabilityK, setPropertyReliabilityK,
-    propertyDistanceMetric, setPropertyDistanceMetric,
-    propertySparsePercentile, setPropertySparsePercentile,
-    propertyOodPercentile, setPropertyOodPercentile,
+    setMantelMethod,
+    setMantelPermutations,
+    setPropertyName,
+    setPropertyFolds,
+    setPropertyReliabilityK,
+    setPropertyDistanceMetric,
+    setPropertySparsePercentile,
+    setPropertyOodPercentile,
     kernelName, setKernelName,
     localCutoff, setLocalCutoff,
     secondRun, setSecondRun,
@@ -162,23 +157,23 @@ export default function Analysis() {
     queryDatasetId, setQueryDatasetId,
     referenceRunId, setReferenceRunId,
     queryRunId, setQueryRunId,
-    referenceViewId, setReferenceViewId,
-    queryViewId, setQueryViewId,
+    setReferenceViewId,
+    setQueryViewId,
     viewId, setViewId,
     exportFormat, setExportFormat,
     exportPath, setExportPath,
-    k, setK,
-    nClusters, setNClusters,
+    setK,
+    setNClusters,
     nSamples, setNSamples,
     setUncertaintyK,
-    contamination, setContamination,
-    queryIndex, setQueryIndex,
+    setContamination,
+    setQueryIndex,
     methodGuideOpen, setMethodGuideOpen,
-    perturbationType, setPerturbationType,
-    perturbationCount, setPerturbationCount,
-    perturbationMaximum, setPerturbationMaximum,
-    perturbationStructures, setPerturbationStructures,
-    perturbationMetric, setPerturbationMetric,
+    setPerturbationType,
+    setPerturbationCount,
+    setPerturbationMaximum,
+    setPerturbationStructures,
+    setPerturbationMetric,
     tsnePerplexity, setTsnePerplexity,
   } = useAnalysisParameters({
     projection,
@@ -943,114 +938,83 @@ export default function Analysis() {
       <div className="analysis-workspace">
         <main className="analysis-main">
           <section className={`analysis-card analysis-controls${tab === "overview" && overviewAnalysis === "property_correlation" ? " analysis-controls-property" : ""}`}>
-            {tab === "projection" && <ProjectionControls projection={projection} setProjection={setProjection} mode={mode} setMode={setMode} preprocess={preprocess} onPreprocessChange={handlePreprocessChange} tsnePerplexity={tsnePerplexity} setTsnePerplexity={setTsnePerplexity} markOptions={markOptions} cachedParam={cachedParam} />}
-            {tab === "similarity" && <Space wrap><Typography.Text>{t("View")}</Typography.Text><Select value={similarityMode} onChange={setSimilarityMode} options={markOptions("similarityMode", [{ value: "query", label: t("Query neighbors") }, { value: "all_neighbors", label: t("All-neighbor graph") }, { value: "pairwise", label: t("Pairwise matrix") }])} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
-            {tab === "clusters" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={clusterAlgorithm} onChange={setClusterAlgorithm} options={markOptions("clusterAlgorithm", ["kmeans", "dbscan", "hdbscan", "agglomerative"].map((value) => ({ value, label: value.toUpperCase() })))} /><ParamLabel label={t("Clusters")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
-            {tab === "outliers" && <Space wrap><Typography.Text>{t("Algorithm")}</Typography.Text><Select value={outlierAlgorithm} onChange={setOutlierAlgorithm} options={markOptions("outlierAlgorithm", ["lof", "knn", "isolation_forest", "mahalanobis"].map((value) => ({ value, label: value.toUpperCase() })))} />{(outlierAlgorithm === "lof" || outlierAlgorithm === "knn") && <><ParamLabel label="k" cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></>}<ParamLabel label={t("Contamination")} cached={cachedParam("contamination")} /><InputNumber min={0.001} max={0.5} step={0.001} value={contamination} onChange={(value) => setContamination(value ?? 0.01)} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
-            {tab === "sampling" && (
-              <SamplingControls
-                params={analysisParams}
-                setters={{
-                  samplingAlgorithm: setSamplingAlgorithm,
-                  nSamples: setNSamples,
-                  mode: setMode,
-                  uncertaintyK: setUncertaintyK,
-                  samplingStrategy: setSamplingStrategy,
-                  samplingScaling: setSamplingScaling,
-                  samplingBlocks: setSamplingBlocks,
-                  samplingBudgetMode: (value: string) => setSamplingBudgetMode(value as "count" | "coverage"),
-                  samplingCoverage: setSamplingCoverage,
-                  samplingMinDistance: setSamplingMinDistance,
-                  samplingExistingRunId: setSamplingExistingRunId,
-                }}
-                warmStartRuns={warmStartRuns}
-                quota={samplingQuota}
-                quotaBusy={samplingQuotaBusy}
-                markOptions={markOptions}
-                cachedParam={cachedParam}
-              />
-            )}
-           {tab === "coverage" && <Space wrap><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
-            {tab === "local" && <Space wrap><ParamLabel label={t("Clusters / element")} cached={cachedParam("nClusters")} /><InputNumber min={2} value={nClusters} onChange={(value) => setNClusters(value ?? 6)} /><ParamLabel label={t("Descriptor kNN")} cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /><ParamLabel label={t("Neighbor cutoff")} cached={cachedParam("localCutoff")} /><InputNumber min={0.1} max={10} step={0.1} precision={2} value={localCutoff} onChange={(value) => setLocalCutoff(value == null ? 3 : Math.max(0.1, Math.min(10, value)))} addonAfter="Å" /><Typography.Text type="secondary">{t("Coordinates and periodic images determine coordination.")}</Typography.Text></Space>}
-            {tab === "kernel" && <Space wrap><Typography.Text>{t("Kernel")}</Typography.Text><Select value={kernelName} onChange={setKernelName} options={markOptions("kernelName", ["rbf", "linear", "cosine", "polynomial"].map((value) => ({ value, label: value.toUpperCase() })))} /><Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
-            {crossDatasetModule && <CrossDatasetPicker
+            <AnalysisModuleControls
+              tab={tab}
+              overviewAnalysis={overviewAnalysis}
+              params={analysisParams}
+              secondRun={secondRun}
               datasets={datasets}
               referenceDatasetId={referenceDatasetId}
               queryDatasetId={queryDatasetId}
-              referenceRunId={referenceRunId}
-              queryRunId={queryRunId}
-              referenceViewId={referenceViewId}
-              queryViewId={queryViewId}
               referenceRuns={referenceRuns}
               queryRuns={queryRuns}
               referenceViews={referenceViews}
               queryViews={queryViews}
-              compatible={crossInputsReady}
+              warmStartRuns={warmStartRuns}
+              samplingQuota={samplingQuota}
+              samplingQuotaBusy={samplingQuotaBusy}
+              referenceInputsReady={crossInputsReady}
+              crossDatasetModule={crossDatasetModule}
               disabled={busy}
-              onReferenceDataset={(value) => { setReferenceDatasetId(value); setReferenceRunId(null); setReferenceViewId(null); }}
-              onQueryDataset={(value) => { setQueryDatasetId(value); setQueryRunId(null); setQueryViewId(null); }}
-              onReferenceRun={setReferenceRunId}
-              onQueryRun={setQueryRunId}
-              onReferenceView={setReferenceViewId}
-              onQueryView={setQueryViewId}
-              onSwap={() => {
-                const nextReferenceDataset = queryDatasetId;
-                const nextReferenceRun = queryRunId;
-                const nextReferenceView = queryViewId;
-                setQueryDatasetId(referenceDatasetId);
-                setQueryRunId(referenceRunId);
-                setQueryViewId(referenceViewId);
-                setReferenceDatasetId(nextReferenceDataset);
-                setReferenceRunId(nextReferenceRun);
-                setReferenceViewId(nextReferenceView);
+              selectedRun={selectedRun}
+              completedRuns={completedRuns}
+              pairRuns={pairRuns}
+              sensitivityPair={sensitivityPair}
+              setters={{
+                setProjection,
+                setMode,
+                setTsnePerplexity,
+                setSimilarityMode,
+                setClusterAlgorithm,
+                setNClusters,
+                setOutlierAlgorithm,
+                setK,
+                setContamination,
+                setSamplingAlgorithm,
+                setNSamples,
+                setUncertaintyK,
+                setSamplingStrategy,
+                setSamplingScaling,
+                setSamplingBlocks,
+                setSamplingBudgetMode,
+                setSamplingCoverage,
+                setSamplingMinDistance,
+                setSamplingExistingRunId,
+                setReferenceDatasetId,
+                setQueryDatasetId,
+                setReferenceRunId,
+                setQueryRunId,
+                setReferenceViewId,
+                setQueryViewId,
+                setSecondRun,
+                setCompareMode,
+                setMantelMethod,
+                setMantelPermutations,
+                setQueryIndex,
+                setLocalCutoff,
+                setKernelName,
+                setPropertyName,
+                setPropertyFolds,
+                setPropertyReliabilityK,
+                setPropertyDistanceMetric,
+                setPropertySparsePercentile,
+                setPropertyOodPercentile,
+                setPerturbationType,
+                setPerturbationCount,
+                setPerturbationMaximum,
+                setPerturbationStructures,
+                setPerturbationMetric,
+                setEffectiveDimensionPreprocess,
+                setNearZeroThreshold,
+                setLowVariationThreshold,
+                setFeatureCorrelationMethod,
+                setFeatureCorrelationThreshold,
               }}
-            />}
-            {tab === "overview" && overviewAnalysis === "feature_variance" && <Space wrap>
-              <ParamLabel label={t("Near-zero threshold")} cached={cachedParam("nearZeroThreshold")} />
-              <InputNumber min={0} max={1} step={0.0001} precision={6} value={nearZeroThreshold} onChange={(value) => setNearZeroThreshold(value ?? 1e-4)} />
-              <ParamLabel label={t("Low variation threshold")} cached={cachedParam("lowVariationThreshold")} />
-              <InputNumber min={0} max={1} step={0.0001} precision={6} value={lowVariationThreshold} onChange={(value) => setLowVariationThreshold(value ?? 1e-2)} />
-            </Space>}
-            {tab === "overview" && overviewAnalysis === "feature_correlation" && <Space wrap>
-              <ParamLabel label={t("Correlation method")} cached={cachedParam("featureCorrelationMethod")} />
-              <Select aria-label={t("Correlation method")} value={featureCorrelationMethod} onChange={setFeatureCorrelationMethod} options={markOptions("featureCorrelationMethod", [{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }])} />
-              <ParamLabel label={t("High-correlation threshold")} cached={cachedParam("featureCorrelationThreshold")} />
-              <InputNumber min={0.8} max={0.999} step={0.01} precision={2} value={featureCorrelationThreshold} onChange={(value) => setFeatureCorrelationThreshold(Math.min(0.999, Math.max(0.8, value ?? 0.95)))} />
-              <Typography.Text type="secondary">{t("High when |correlation| ≥ threshold")}</Typography.Text>
-            </Space>}
-            {tab === "overview" && overviewAnalysis === "effective_dimension" && <Space wrap>
-              <ParamLabel label={t("PCA preprocessing")} cached={cachedParam("effectiveDimensionPreprocess")} />
-              <Select
-                aria-label={t("PCA preprocessing")}
-                value={effectiveDimensionPreprocess}
-                onChange={setEffectiveDimensionPreprocess}
-                options={markOptions("effectiveDimensionPreprocess", [
-                  { value: "standardized", label: t("Standardized") },
-                  { value: "center", label: t("Centered") },
-                ])}
-              />
-              <Typography.Text type="secondary">{effectiveDimensionPreprocess === "standardized" ? t("Correlation basis") : t("Covariance basis")}</Typography.Text>
-            </Space>}
-            {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap><Typography.Text>{t("Perturbation")}</Typography.Text><Select value={perturbationType} onChange={setPerturbationType} options={markOptions("perturbationType", [{ value: "jitter", label: t("Atomic jitter (Å)") }, { value: "strain", label: t("Isotropic strain") }])} /><ParamLabel label={t("Steps")} cached={cachedParam("perturbationCount")} /><InputNumber min={2} max={32} value={perturbationCount} onChange={(value) => setPerturbationCount(value ?? 8)} /><ParamLabel label={t("Maximum")} cached={cachedParam("perturbationMaximum")} /><InputNumber min={0.001} step={0.01} precision={3} value={perturbationMaximum} onChange={(value) => setPerturbationMaximum(value ?? 0.2)} /><ParamLabel label={t("Max structures")} cached={cachedParam("perturbationStructures")} /><Tooltip title={t("Structures sampled evenly across the run; every one is recomputed per amplitude.")} placement="top"><InputNumber aria-label={t("Max structures")} min={1} max={2048} step={8} value={perturbationStructures} onChange={(value) => setPerturbationStructures(Math.max(1, Math.min(2048, Math.round(value ?? 64))))} /></Tooltip><Typography.Text>{t("Metric")}</Typography.Text><Select value={perturbationMetric} onChange={setPerturbationMetric} options={markOptions("perturbationMetric", ["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value })))} /></Space>}
-            {(tab === "compare" || (tab === "overview" && overviewAnalysis === "sensitivity")) && <Space wrap><Typography.Text>{tab === "compare" ? t("Left") : t("Reference")}</Typography.Text><Select value={selectedRun ?? undefined} style={{ width: 220 }} disabled={busy} options={completedRuns.map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSelectedRun} /><Typography.Text>{tab === "compare" ? t("Right") : t("Query")}</Typography.Text><Select value={secondRun ?? undefined} style={{ width: 220 }} disabled={busy} notFoundContent={sensitivityPair ? t("No other completed run for this descriptor") : undefined} options={pairRuns.filter((run) => run.id !== selectedRun).map((run) => ({ value: run.id, label: run.descriptor_name + " · " + run.id }))} onChange={setSecondRun} /></Space>}
-            {tab === "compare" && <Space wrap><Typography.Text>{t("Test")}</Typography.Text><Select value={compareMode} onChange={setCompareMode} options={markOptions("compareMode", [{ value: "geometry", label: t("Geometry comparison") }, { value: "mantel", label: t("Mantel permutation test") }])} />{compareMode === "mantel" && <><Typography.Text>{t("Statistic")}</Typography.Text><Select value={mantelMethod} onChange={setMantelMethod} options={markOptions("mantelMethod", [{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }])} /><ParamLabel label={t("Permutations")} cached={cachedParam("mantelPermutations")} /><InputNumber min={1} max={5000} value={mantelPermutations} onChange={(value) => setMantelPermutations(value ?? 999)} /></>}</Space>}
-            {tab === "similarity" && similarityMode !== "pairwise" && <Space wrap>{similarityMode === "query" && <><ParamLabel label={t("Query index")} cached={cachedParam("queryIndex")} /><InputNumber min={0} value={queryIndex} onChange={(value) => setQueryIndex(value ?? 0)} /></>}<ParamLabel label="k" cached={cachedParam("k")} /><InputNumber min={1} value={k} onChange={(value) => setK(value ?? 10)} /></Space>}
-            {tab === "overview" && overviewAnalysis === "trajectory" && <Typography.Text type="secondary">{t("Frame range, trajectory sampling interval, event method, sensitivity, and coloring live in the trajectory result itself.")}</Typography.Text>}
-            {/* Drift measures whichever matrix its two runs share, so granularity
-                is one of its inputs and its identity key already carries it. With
-                no control here, changing the mode elsewhere dropped the reference
-                points with nothing on screen to explain or undo it. */}
-            {tab === "overview" && overviewAnalysis === "drift" && <Space wrap><ParamLabel label={t("Granularity")} cached={cachedParam("mode")} /><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} /></Space>}
-            {tab === "overview" && overviewAnalysis === "property_correlation" && <Space className="analysis-property-controls" wrap>
-              <Typography.Text>{t("Property")}</Typography.Text><Select value={propertyName} onChange={(value) => { setPropertyName(value); if (value === "force_magnitude") setMode("atom"); }} options={markOptions("propertyName", [{ value: "energy_per_atom", label: t("Energy / atom") }, { value: "energy", label: t("Energy") }, { value: "force_max", label: t("Max |F|") }, { value: "force_magnitude", label: t("Atom |F|") }, { value: "volume", label: t("Volume") }])} />
-              <Typography.Text>{t("Granularity")}</Typography.Text><Select value={mode} onChange={setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure") }, { value: "atom", label: t("Atom / local") }])} />
-              <Typography.Text>{t("Model")}</Typography.Text><Tag>Ridge</Tag>
-              <Typography.Text>{t("CV folds")}</Typography.Text><InputNumber aria-label={t("CV folds")} min={2} max={20} value={propertyFolds} onChange={(value) => setPropertyFolds(value ?? 5)} />
-              <Typography.Text>kNN k</Typography.Text><InputNumber aria-label="kNN k" min={1} max={50} value={propertyReliabilityK} onChange={(value) => setPropertyReliabilityK(value ?? 5)} />
-              <Typography.Text>{t("Distance metric")}</Typography.Text><Select aria-label={t("Distance metric")} value={propertyDistanceMetric} onChange={setPropertyDistanceMetric} options={[{ value: "euclidean", label: "Euclidean" }, { value: "cosine", label: "Cosine" }]} />
-              <Typography.Text>{t("Sparse threshold (%)")}</Typography.Text><InputNumber aria-label={t("Sparse threshold")} min={50} max={98} value={propertySparsePercentile} onChange={(value) => setPropertySparsePercentile(Math.min(propertyOodPercentile - 1, value ?? 90))} />
-              <Typography.Text>{t("OOD-like threshold (%)")}</Typography.Text><InputNumber aria-label={t("OOD-like threshold")} min={propertySparsePercentile + 1} max={99} value={propertyOodPercentile} onChange={(value) => setPropertyOodPercentile(Math.max(propertySparsePercentile + 1, value ?? 99))} />
-            </Space>}
+              setSelectedRun={setSelectedRun}
+              onPreprocessChange={handlePreprocessChange}
+              markOptions={markOptions}
+              cachedParam={cachedParam}
+            />
             <div className="analysis-controls-actions">
               <Space wrap>
                 <Button type="primary" icon={<CheckmarkCircle16Regular />} loading={busy && runningInfo !== null && runningInfo.moduleKey === activeNavModule?.key && (tab !== "projection" || runningInfo.method === `analysis.${projection}`)} disabled={crossDatasetModule ? !crossInputsReady : !selectedRun} onClick={() => void runTabAnalysis()}>{t("Run {name}", { name: tab === "projection" ? projection.toUpperCase() : activeModuleLabel })}</Button>
