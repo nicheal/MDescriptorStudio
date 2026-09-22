@@ -18,6 +18,12 @@ import { normalizePoints } from "./analysisPreview";
 import { pcaPayloadPoints, selectedIndicesFromPreview, type NumericArrays, type Point, type ProjectionOverrides } from "./analysisShared";
 import { describeError } from "../util/errors";
 
+// A result preview is also fed to Plotly and the Ant Design table. Keeping
+// that payload at the backend's normal bounded-preview size prevents a large
+// acquisition result from monopolising the WebView2 renderer after the job
+// itself has finished.
+const ANALYSIS_PREVIEW_LIMIT = 5_000;
+
 export interface AnalysisRunContext {
   tab: TabKey;
   moduleKey: AnalysisModuleKey | null;
@@ -107,7 +113,7 @@ export function useAnalysisExecution({
       const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: id });
       return { preview: null, points: pcaPayloadPoints(payload), selectedIndices: [], arrays: {}, narrowed: [] };
     }
-    const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: id, limit: 20_000 });
+    const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: id, limit: ANALYSIS_PREVIEW_LIMIT });
     return { preview: result, points: normalizePoints(result), selectedIndices: selectedIndicesFromPreview(result), arrays: {}, narrowed: [] };
   }, []);
 

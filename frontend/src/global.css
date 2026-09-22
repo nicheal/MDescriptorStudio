@@ -678,6 +678,10 @@ body {
   width: 100%;
   height: min(62vh, 620px);
   min-height: 380px;
+  box-sizing: border-box;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .analysis-plot-frame .js-plotly-plot,
@@ -695,6 +699,10 @@ body {
   width: 100%;
   height: min(50vh, 430px);
   min-height: 320px;
+  box-sizing: border-box;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .analysis-overview-chart-frame.compact {
@@ -946,6 +954,10 @@ body {
   width: 100%;
   height: min(50vh, 430px);
   min-height: 320px;
+  box-sizing: border-box;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .analysis-purpose-chart.compact {

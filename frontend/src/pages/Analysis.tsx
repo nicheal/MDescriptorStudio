@@ -343,6 +343,18 @@ export default function Analysis() {
   // answer used to bounce the selection back to the first completed run and
   // persist a run from the dataset the user had already left (pass 5, 5-B3).
   const refreshGeneration = useRef(0);
+  const viewRefreshGeneration = useRef(0);
+  const refreshViews = useCallback(async () => {
+    const generation = ++viewRefreshGeneration.current;
+    try {
+      const viewRows = await ipc.request<DatasetView[]>("dataset.view.list", {});
+      if (generation === viewRefreshGeneration.current) setDatasetViews(viewRows);
+    } catch (error) {
+      const err = error as { code?: string; message?: string };
+      message.error(describeError(err, "DATASET_VIEW", t("Could not load dataset views")));
+    }
+  }, [message, t]);
+
   const refresh = useCallback(async () => {
     const generation = ++refreshGeneration.current;
     if (!dataset) {
@@ -353,29 +365,37 @@ export default function Analysis() {
       return;
     }
     try {
-      const [allResultRows, analysisRows, viewRows] = await Promise.all([
+      const [allResultRows, analysisRows] = await Promise.all([
         ipc.request<RunRow[]>("result.list", {}),
         ipc.request<AnalysisRow[]>("analysis.list", { }),
-        ipc.request<DatasetView[]>("dataset.view.list", {}),
       ]);
       if (generation !== refreshGeneration.current) return;
       const resultRows = allResultRows.filter((row) => row.dataset_id === dataset.id);
       setRuns(resultRows);
       setAllRuns(allResultRows);
-      setDatasetViews(viewRows);
       setAnalyses(analysisRows.filter((row) => (row.dataset_ids ?? []).includes(dataset.id) || row.descriptor_run_id && resultRows.some((run) => run.id === row.descriptor_run_id)));
       const current = useWorkspace.getState().activeDescriptorRunId;
       const completedRuns = resultRows.filter((row) => row.status === "COMPLETED");
       setSelectedRun(current && completedRuns.some((row) => row.id === current) ? current : completedRuns[0]?.id ?? null);
+      await refreshViews();
     } catch (error) {
       const err = error as { code?: string; message?: string };
       message.error(describeError(err, "ANALYSIS", t("Could not load analysis runs")));
     }
-  }, [dataset, message, setSelectedRun, t]);
+  }, [dataset, message, refreshViews, setSelectedRun, t]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Views can be created from Explore, the sidebar, or the Save View action
+  // while Analysis is still mounted. Keep cross-dataset scopes in sync rather
+  // than leaving only the always-present full-dataset option until navigation.
+  useEffect(() => {
+    const onViewsChanged = () => { void refreshViews(); };
+    window.addEventListener("dataset-views-changed", onViewsChanged);
+    return () => window.removeEventListener("dataset-views-changed", onViewsChanged);
+  }, [refreshViews]);
 
   useEffect(() => {
     if (!dataset) return;
@@ -1073,7 +1093,10 @@ export default function Analysis() {
               totalFrames={pointDataset.number_of_frames}
               defaultName={`${activeModuleLabel} ${selectedFrames.length}`}
               source={{ source: "analysis", analysis_type: String(preview?.kind ?? "") }}
-              onSaved={(view) => setDatasetViews((prev) => [...prev, view])}
+              onSaved={(view) => setDatasetViews((prev) => [
+                ...prev.filter((item) => item.id !== view.id),
+                view,
+              ])}
             />
           )}
 

@@ -49,10 +49,11 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
     }
     case "sampling": {
       const samplingAlgorithm = canonicalSamplingAlgorithm(p.samplingAlgorithm);
+      const samplingMode = samplingAlgorithm === "per_element" ? "atom" : p.mode;
       return [
         samplingAlgorithm,
         p.nSamples,
-        p.mode,
+        samplingMode,
         samplingAlgorithm === "uncertainty_diversity" ? p.uncertaintyK : "",
         // FPS and cluster representatives both measure in a scaled space, so a
         // moved scaling is a different computation for them; the rest never read it.

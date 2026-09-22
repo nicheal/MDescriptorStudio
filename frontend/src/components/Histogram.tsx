@@ -5,6 +5,7 @@ import UIChart from "../viz/UIChart";
 import type { Hist } from "../types/protocol";
 import { createCartesianDataZoom } from "./chartInteraction";
 import { useT } from "../i18n";
+import { CHART_COLORS, SCIENTIFIC_PALETTE } from "../viz/chartTheme";
 
 const GRID_LEFT = 58;
 const GRID_RIGHT = 12;
@@ -50,11 +51,11 @@ export default function Histogram({
           name: xLabel,
           nameLocation: "middle",
           nameGap: 26,
-          nameTextStyle: { fontSize: 10, color: "#616161" },
+          nameTextStyle: { fontSize: 10, color: CHART_COLORS.secondaryText },
           min: hist?.edges[0],
           max: hist?.edges[hist.edges.length - 1],
-          axisLabel: { fontSize: 11, color: "#616161" },
-          axisLine: { lineStyle: { color: "#E1E4E8" } },
+          axisLabel: { fontSize: 11, color: CHART_COLORS.secondaryText },
+          axisLine: { lineStyle: { color: CHART_COLORS.axis } },
           splitLine: { show: false },
         },
         yAxis: {
@@ -62,9 +63,9 @@ export default function Histogram({
           name: countLabel,
           nameLocation: "middle",
           nameGap: 42,
-          nameTextStyle: { fontSize: 10, color: "#616161" },
-          axisLabel: { fontSize: 11, color: "#616161" },
-          splitLine: { lineStyle: { color: "#F0F1F3" } },
+          nameTextStyle: { fontSize: 10, color: CHART_COLORS.secondaryText },
+          axisLabel: { fontSize: 11, color: CHART_COLORS.secondaryText },
+          splitLine: { lineStyle: { color: CHART_COLORS.grid } },
         },
         dataZoom: createCartesianDataZoom(),
         series: [
@@ -76,7 +77,7 @@ export default function Histogram({
                 (hist.edges[i] + hist.edges[i + 1]) / 2,
                 c,
               ]) ?? [],
-            itemStyle: { color: "#0F6CBD", borderRadius: [1, 1, 0, 0] },
+            itemStyle: { color: SCIENTIFIC_PALETTE[0], borderColor: CHART_COLORS.paper, borderWidth: 1, borderRadius: [1, 1, 0, 0] },
             barCategoryGap: "8%",
           },
         ],

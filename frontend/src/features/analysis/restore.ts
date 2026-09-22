@@ -91,7 +91,7 @@ export function restoreAnalysisParams(input: RestoreInput): Partial<AnalysisPara
       const restored: Partial<AnalysisParams> = {
         samplingAlgorithm: algorithm,
         nSamples: intAt(p.n_samples, current.nSamples, 1),
-        mode: mode(p.mode),
+        mode: algorithm === "per_element" ? "atom" : mode(p.mode),
         uncertaintyK: intAt(p.uncertainty_k, current.uncertaintyK, 2),
         samplingStratificationSource: ONE_OF(
           ["composition", "element_set"] as const,

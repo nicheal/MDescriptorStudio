@@ -58,6 +58,11 @@ _HARD_CANCEL_ANALYSES = frozenset(
         "iforest",
         "mahalanobis",
         "mahalanobis_distance",
+        # Exact reference/query nearest-neighbour scanning followed by the
+        # greedy FPS loop can saturate native numeric workers for a while.
+        # Keep that load out of the RPC process so the desktop shell remains
+        # responsive and cancellation can terminate it on Windows.
+        "acquisition",
     }
 )
 

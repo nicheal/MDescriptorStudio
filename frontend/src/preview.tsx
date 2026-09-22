@@ -142,6 +142,21 @@ let MOCK_DATASET_VIEWS: DatasetView[] = [
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
   },
+  {
+    id: "view-si-validation",
+    dataset_id: "ds-si",
+    dataset_name: "Si Training Set",
+    name: "Validation split",
+    role: "validation",
+    filter: { type: "split", seed: 42 },
+    frame_indices: Array.from({ length: 64 }, (_, index) => index),
+    number_of_frames: 1264,
+    selection_hash: "mock-view-si-validation",
+    dataset_fingerprint: "mock-si",
+    stale: false,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
 ];
 
 // integer-aligned histogram from [value, count] pairs (half-integer edges)
@@ -1241,12 +1256,12 @@ function refuseSubmit(method: string, params: Record<string, unknown>): void {
   if (method === "analysis.sensitivity" && new Set(runs.map((run) => run.descriptor_name)).size > 1) {
     throw new MockError("ANALYSIS_INPUT_INVALID", "parameter sensitivity requires the same descriptor; use Compare for different descriptors");
   }
-  const scope = runs[0];
   for (const key of ["view_id", "reference_view_id", "query_view_id"]) {
     const value = params[key];
     if (value == null || value === "") continue;
     const view = MOCK_DATASET_VIEWS.find((item) => item.id === value);
     if (!view) throw new MockError("DATASET_NOT_FOUND", `dataset view ${String(value)} does not exist`);
+    const scope = key === "query_view_id" ? runs[1] ?? runs[0] : runs[0];
     if (view.dataset_id !== scope.dataset_id) throw new MockError("ANALYSIS_INPUT_INVALID", "dataset view does not belong to the descriptor run dataset");
     if (view.stale) throw new MockError("ANALYSIS_STALE", `dataset view ${String(value)} is stale`);
   }
@@ -1635,7 +1650,7 @@ const METHODS: Record<string, Handler> = {
   "analysis.overlap": (p) => mockAnalysisSubmit("job-overlap-live", "ana-mock-overlap", "overlap", "overlap", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.acquisition": (p) => {
     mockLatestAcquisitionMethod = String(p.acquisition_method ?? "novelty_fps");
-    return mockAnalysisSubmit("job-acquisition-live", "ana-mock-acquisition", "acquisition", "acquisition", { acquisition_method: p.acquisition_method, n_samples: p.n_samples, mode: p.mode, uncertainty_k: p.uncertainty_k }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS);
+    return mockAnalysisSubmit("job-acquisition-live", "ana-mock-acquisition", "acquisition", "acquisition", { acquisition_method: p.acquisition_method, n_samples: p.n_samples, mode: p.mode, uncertainty_k: p.uncertainty_k, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS);
   },
   "analysis.compare": (p) => mockAnalysisSubmit("job-compare-live", "ana-mock-compare", "compare", "compare", { compare_mode: "geometry", mode: p.mode }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.mantel": (p) => mockAnalysisSubmit("job-mantel-live", "ana-mock-mantel", "mantel", "mantel", { compare_mode: "mantel", method: p.method, permutations: p.permutations, mode: p.mode }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),

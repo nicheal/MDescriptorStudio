@@ -55,7 +55,7 @@ describe("restoring controls from a stored analysis row", () => {
     expect(restore("outliers", "outlier", { algorithm: "iForest" })).toMatchObject({ outlierAlgorithm: "isolation_forest" });
     expect(restore("outliers", "outlier", { algorithm: "mahalanobis_distance" })).toMatchObject({ outlierAlgorithm: "mahalanobis" });
     expect(restore("sampling", "sampling", { algorithm: "Cluster" })).toMatchObject({ samplingAlgorithm: "cluster_representative" });
-    expect(restore("sampling", "sampling", { algorithm: "element" })).toMatchObject({ samplingAlgorithm: "per_element" });
+    expect(restore("sampling", "sampling", { algorithm: "element", mode: "structure" })).toMatchObject({ samplingAlgorithm: "per_element", mode: "atom" });
     // an algorithm the controls cannot express leaves the current one alone
     expect(restore("kernel", "kernel", { kernel: "laplacian" })).toMatchObject({ kernelName: "rbf" });
   });

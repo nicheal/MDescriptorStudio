@@ -195,6 +195,16 @@ describe("analysis identity keys", () => {
       .toBe(buildParamsKey("sampling", params({ samplingAlgorithm: "per_element" })));
   });
 
+  it("forces per-element sampling onto atom granularity", () => {
+    const structureParams = params({ samplingAlgorithm: "per_element", mode: "structure" });
+    const atomParams = params({ samplingAlgorithm: "per_element", mode: "atom" });
+    expect(buildSubmission("sampling", structureParams, context)).toMatchObject({
+      kind: "run",
+      params: { algorithm: "per_element", mode: "atom" },
+    });
+    expect(buildParamsKey("sampling", structureParams)).toBe(buildParamsKey("sampling", atomParams));
+  });
+
   it.each(CASES.map((item) => [item.label, item] as const))("%s covers every parameter it submits", (_label, item) => {
     const { tab, base } = item;
     // A field the request never reads may move freely: that is what keeps an

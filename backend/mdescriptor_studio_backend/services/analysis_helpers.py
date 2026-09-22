@@ -93,6 +93,10 @@ def canonical_analysis_request(analysis_type: str, params: dict | None = None) -
     elif requested == "sampling":
         requested = str(normalized.get("algorithm") or normalized.get("method") or "random").strip().lower()
     canonical = _ANALYSIS_ALIASES.get(requested, requested)
+    if canonical == "per_element":
+        # Element labels are defined on atom/local-environment rows.  Keep the
+        # wrapper and direct algorithm RPCs on the only meaningful granularity.
+        normalized["mode"] = "atom"
     if canonical in {
         "kmeans", "dbscan", "hdbscan", "agglomerative",
         "knn", "lof", "isolation_forest", "mahalanobis",

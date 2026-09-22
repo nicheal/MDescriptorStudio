@@ -42,3 +42,23 @@ describe("plotData", () => {
     }
   });
 });
+
+describe("chart layout", () => {
+  it("keeps a consistent scientific frame while preserving axis-specific overrides", async () => {
+    const { layout } = await importFresh();
+    const result = layout({
+      xaxis: { title: { text: "Feature" }, showgrid: false },
+      margin: { l: 92 },
+    });
+
+    expect(result.plot_bgcolor).toBe("#FBFCFE");
+    expect(result.colorway).toEqual(["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#000000"]);
+    expect(result.margin).toMatchObject({ l: 92, r: 26, b: 58 });
+    expect(result.xaxis).toMatchObject({
+      showgrid: false,
+      showline: true,
+      gridcolor: "#E5E7EB",
+      title: { text: "Feature" },
+    });
+  });
+});

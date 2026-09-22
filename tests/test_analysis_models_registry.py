@@ -77,5 +77,5 @@ def test_analysis_aliases_share_one_canonical_request_identity() -> None:
     )
     assert canonical_analysis_request("sampling", {"algorithm": "element"}) == (
         "per_element",
-        {"algorithm": "per_element"},
+        {"algorithm": "per_element", "mode": "atom"},
     )
