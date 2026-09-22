@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import pickle
+import queue
+import subprocess
+import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,6 +25,7 @@ from ..errors import (
     ANALYSIS_INSUFFICIENT_SAMPLES,
     AppError,
     INVALID_PARAMS,
+    INTERNAL_ERROR,
     JOB_CANCELLED,
 )
 from .analysis_helpers import (
@@ -27,6 +34,31 @@ from .analysis_helpers import (
     _block_names,
     canonical_analysis_request,
     _view_id,
+)
+# These algorithms enter sklearn/LAPACK calls that expose no cancellation
+# callback.  A process boundary is the only reliable way to stop them on
+# Windows; algorithms with their own progress checkpoints remain in-process.
+_HARD_CANCEL_ANALYSES = frozenset(
+    {
+        "pca",
+        "tsne",
+        "kernel",
+        "feature_correlation",
+        "property_correlation",
+        "effective_dimension",
+        "kmeans",
+        "dbscan",
+        "hdbscan",
+        "agglomerative",
+        "hierarchical",
+        "knn",
+        "lof",
+        "isolation_forest",
+        "isolation-forest",
+        "iforest",
+        "mahalanobis",
+        "mahalanobis_distance",
+    }
 )
 
 
@@ -307,7 +339,7 @@ class AnalysisRunMixin:
         self._artifacts.remove_quiet(artifact_path)
         raise AppError(JOB_CANCELLED, f"analysis run {analysis_id} was cancelled")
 
-    def _apply_thread_limit(self) -> None:
+    def _apply_thread_limit(self) -> int | None:
         """Apply the user's `compute.default_threads` setting to the numeric
         stack used by analysis compute (BLAS/OpenMP pools via threadpoolctl).
 
@@ -319,23 +351,99 @@ class AnalysisRunMixin:
         """
         raw = self.db.get_setting("compute.default_threads")
         if not raw:
-            return
+            return None
         try:
             limit = int(str(raw).strip())
         except (TypeError, ValueError):
-            return
+            return None
         if limit <= 0:
-            return
+            return None
         from threadpoolctl import threadpool_limits
 
         threadpool_limits(limits=limit)
+        return limit
+
+    @staticmethod
+    def _stop_analysis_process(process) -> None:
+        """Terminate a black-box worker and reap it without blocking forever."""
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2.0)
+
+    @staticmethod
+    def _analysis_worker_command() -> list[str]:
+        if getattr(sys, "frozen", False):
+            return [sys.executable, "--mdescriptor-analysis-worker"]
+        return [
+            sys.executable,
+            "-c",
+            "from mdescriptor_studio_backend.services.analysis_worker import run_analysis_subprocess; run_analysis_subprocess()",
+        ]
+
+    def _run_isolated_analysis(self, analysis_type: str, params: dict, samples: list[DescriptorMatrix], ctx, *, thread_limit: int | None = None) -> dict:
+        """Run a non-cooperative numerical call in a killable child process."""
+        ctx.check_cancelled()
+        ctx.progress(None, None, f"running {analysis_type}", fraction=0.1)
+        package_root = str(Path(__file__).resolve().parents[2])
+        env = os.environ.copy()
+        env["PYTHONPATH"] = os.pathsep.join(filter(None, (package_root, env.get("PYTHONPATH"))))
+        process = subprocess.Popen(
+            self._analysis_worker_command(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        result_queue: queue.Queue[object] = queue.Queue(maxsize=1)
+
+        def read_result() -> None:
+            try:
+                assert process.stdout is not None
+                result_queue.put(pickle.load(process.stdout))
+            except BaseException as exc:  # noqa: BLE001 - parent turns it into AppError
+                result_queue.put(("reader_error", type(exc).__name__, str(exc)))
+
+        reader = threading.Thread(target=read_result, name=f"analysis-reader-{analysis_type}", daemon=True)
+        reader.start()
+        try:
+            assert process.stdin is not None
+            pickle.dump((analysis_type, samples, dict(params), thread_limit), process.stdin, protocol=pickle.HIGHEST_PROTOCOL)
+            process.stdin.close()
+            packet = None
+            while packet is None:
+                try:
+                    packet = result_queue.get(timeout=0.05)
+                except queue.Empty:
+                    ctx.check_cancelled()
+            if not packet or packet[0] == "ok":
+                if not packet:
+                    raise AppError(INTERNAL_ERROR, f"analysis worker returned no result for {analysis_type}")
+                ctx.check_cancelled()
+                ctx.progress(None, None, f"{analysis_type} complete", fraction=0.95)
+                return packet[1]
+            if packet[0] == "app_error":
+                raise AppError(packet[1], packet[2], packet[3], public_message=packet[4])
+            if packet[0] == "reader_error":
+                raise AppError(INTERNAL_ERROR, f"analysis worker output could not be read: {packet[2]}")
+            raise AppError(INTERNAL_ERROR, f"{analysis_type} worker failed: {packet[2]}")
+        finally:
+            if process.poll() is None:
+                self._stop_analysis_process(process)
+            reader.join(timeout=0.2)
 
     def _run_engine(self, analysis_type: str, params: dict, rows: list[dict], samples: list[DescriptorMatrix], ctx) -> dict:
         progress = lambda fraction, message: (ctx.check_cancelled(), ctx.progress(None, None, message, fraction=0.1 + 0.85 * float(fraction)))
-        self._apply_thread_limit()
+        thread_limit = self._apply_thread_limit()
         spec = ANALYSIS_REGISTRY.get(analysis_type)
         if spec.category == "perturbation":
             return self._run_perturbation_sensitivity(params, rows[0], samples[0], ctx)
+        if analysis_type in _HARD_CANCEL_ANALYSES:
+            return self._run_isolated_analysis(analysis_type, params, samples, ctx, thread_limit=thread_limit)
         if spec.category in ("engine", "pair", "cluster", "outlier"):
             return ANALYSIS_REGISTRY.run(analysis_type, samples, params, progress)
         if spec.category == "sensitivity":

@@ -25,7 +25,7 @@ def umap(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str
     fit_x = x[sample_indices]
     if fit_x.shape[0] > 2_048:
         warnings.append(
-            "UMAP used a deterministic approximate neighbour search for this selection"
+            "UMAP used an exact chunked neighbour search for this selection"
         )
     n_neighbors = _int_param(params, "n_neighbors", 15, 2)
     if n_neighbors >= fit_x.shape[0]:

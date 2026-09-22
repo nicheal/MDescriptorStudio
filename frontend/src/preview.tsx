@@ -1285,7 +1285,7 @@ const METHODS: Record<string, Handler> = {
     mdescriptor_api_version: 3,
     mdescriptor_baseline_version: "2",
     mdescriptor_descriptor_info_schema_version: 3,
-    analysis_algorithm_version: "studio-analysis-9",
+    analysis_algorithm_version: "studio-analysis-10",
     data_dir: "C:\\Users\\preview\\AppData\\Roaming\\mdescriptor-studio",
     cpu_threads: 16,
   }),
@@ -1364,7 +1364,11 @@ const METHODS: Record<string, Handler> = {
   "dataset.frame_summary": (p) => {
     requireDataset(p.id);
     const frame = mockFramePayload(Number(p.index ?? 0), Number(p.bond_cutoff ?? 2.4));
-    const { xyz: _xyz, atom_rows: _rows, ghost_count: _ghostCount, ghost_parents: _parents, ...summary } = frame;
+    const { xyz, atom_rows, ghost_count, ghost_parents, ...summary } = frame;
+    void xyz;
+    void atom_rows;
+    void ghost_count;
+    void ghost_parents;
     return { ...summary, atom_offset: 0, atom_page_size: 0, atom_total: frame.natoms, atom_rows_complete: false };
   },
   "dataset.frame_geometry": (p) => {

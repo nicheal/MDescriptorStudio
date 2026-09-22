@@ -40,12 +40,13 @@ export function buildParamsKey(tab: TabKey, p: AnalysisParams): string {
       return [p.similarityMode, p.mode, p.similarityMode === "pairwise" ? "" : p.k, p.similarityMode === "query" ? String(p.queryIndex) : "", p.viewId ?? "full"].join("|");
     case "clusters":
       return [canonicalClusterAlgorithm(p.clusterAlgorithm), p.nClusters, p.mode, p.viewId ?? "full"].join("|");
-    case "outliers":
+    case "outliers": {
       // Only LOF and k-NN read k, so only they key on it - otherwise a k moved
       // on another panel would blank this module's cached-result dot without
       // changing the computation, with no control on screen to move it back.
       const outlierAlgorithm = canonicalOutlierAlgorithm(p.outlierAlgorithm);
       return [outlierAlgorithm, outlierAlgorithm === "lof" || outlierAlgorithm === "knn" ? p.k : "", p.contamination, p.mode, p.viewId ?? "full"].join("|");
+    }
     case "sampling": {
       const samplingAlgorithm = canonicalSamplingAlgorithm(p.samplingAlgorithm);
       return [

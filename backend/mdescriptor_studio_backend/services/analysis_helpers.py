@@ -39,9 +39,9 @@ _ANALYSIS_SCHEMA_VERSION = 1
 # studio-analysis-8 is the two follow-ups from pass 5: a comparison's kNN overlap
 # stops counting a duplicated row as its own neighbour, and a sampling artifact's
 # `selection_distances` is stored in the order its `selected_indices` are.
-# studio-analysis-9 fixes UMAP's duplicate-row self column, uses the standard
-# fuzzy union, and bounds large neighbour searches with deterministic paths.
-ANALYSIS_ALGORITHM_VERSION = "studio-analysis-9"
+# studio-analysis-10 restores exact chunked UMAP neighbours for every sample
+# count; approximate projected candidates could silently change the graph.
+ANALYSIS_ALGORITHM_VERSION = "studio-analysis-10"
 _MAX_PREVIEW_POINTS = 20_000
 # Written into the canonical parameters of the two feature analyses, so bumping
 # one invalidates that analysis' stored results without touching the others.

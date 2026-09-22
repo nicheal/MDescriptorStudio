@@ -5,6 +5,7 @@ import threading
 import time
 from pathlib import Path
 
+import numpy as np
 import pytest
 from make_fixtures import write_deepmd
 
@@ -14,7 +15,9 @@ from mdescriptor_studio_backend.datasets.fingerprint import FINGERPRINT_VERSION
 from mdescriptor_studio_backend.services.dataset_service import DatasetService
 from mdescriptor_studio_backend.services.descriptor_service import DescriptorService
 from mdescriptor_studio_backend.services.job_service import JobContext, JobService
+from mdescriptor_studio_backend.services.job_runner import AnalysisRunMixin
 from mdescriptor_studio_backend.storage.database import Database
+from mdescriptor_studio_backend.analysis.models import StructureDescriptorMatrix
 
 
 def _insert_run(db: Database, run_id: str, status: str) -> None:
@@ -35,6 +38,52 @@ def _bare_descriptor_service(db: Database) -> DescriptorService:
 class _BuildFails:
     def build(self, *args, **kwargs):
         raise AppError(JOB_CANCELLED, "stop after the status flip")
+
+
+class _AnalysisContext:
+    job_id = "analysis-worker-test"
+
+    def check_cancelled(self) -> None:
+        return None
+
+    def progress(self, *args, **kwargs) -> None:
+        return None
+
+
+class _CancelAfterWorkerStarts(_AnalysisContext):
+    def __init__(self) -> None:
+        self.checks = 0
+
+    def check_cancelled(self) -> None:
+        self.checks += 1
+        if self.checks >= 2:
+            raise AppError(JOB_CANCELLED, "stop the isolated worker")
+
+
+def test_uncancellable_analysis_runs_in_a_reaped_worker() -> None:
+    samples = StructureDescriptorMatrix(
+        np.arange(24, dtype=np.float64).reshape(12, 2),
+        np.arange(12, dtype=np.int64),
+    )
+    result = AnalysisRunMixin()._run_isolated_analysis("pca", {}, [samples], _AnalysisContext())
+    assert result["arrays"]["coords"].shape == (12, 2)
+    projection = AnalysisRunMixin()._run_isolated_analysis(
+        "tsne", {"perplexity": 3, "max_iter": 250, "seed": 42}, [samples], _AnalysisContext()
+    )
+    assert projection["arrays"]["coords"].shape == (12, 2)
+
+
+def test_cancel_terminates_an_isolated_black_box_analysis() -> None:
+    rng = np.random.default_rng(4)
+    samples = StructureDescriptorMatrix(rng.normal(size=(5_000, 2)), np.arange(5_000, dtype=np.int64))
+    with pytest.raises(AppError) as exc:
+        AnalysisRunMixin()._run_isolated_analysis(
+            "tsne",
+            {"perplexity": 30, "max_iter": 5_000, "seed": 42},
+            [samples],
+            _CancelAfterWorkerStarts(),
+        )
+    assert exc.value.code == JOB_CANCELLED
 
 
 def test_cancelled_compute_cannot_resurrect_its_run_row(tmp_path: Path) -> None:

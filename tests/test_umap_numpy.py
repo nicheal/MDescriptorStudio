@@ -106,6 +106,21 @@ def test_knn_search_checkpoints_so_a_long_one_stays_cancellable() -> None:
     assert all(left <= right for left, right in zip(seen, seen[1:]))
 
 
+def test_large_knn_path_is_exact_against_direct_distances() -> None:
+    """The former >2048 branch must not silently drop true neighbours."""
+    from scipy.spatial.distance import cdist
+
+    rng = np.random.default_rng(17)
+    x = rng.normal(size=(2_049, 5)).astype(np.float32)
+    rows = np.array([0, 1_024, 2_048], dtype=np.int64)
+    indices, distances = _knn_indices_and_distances(x, 7, "euclidean")
+    direct = cdist(x[rows].astype(np.float64), x.astype(np.float64))
+    direct[np.arange(rows.size), rows] = np.inf
+    expected = np.argsort(direct, axis=1, kind="stable")[:, :7]
+    np.testing.assert_array_equal(indices[rows, 1:], expected)
+    np.testing.assert_allclose(distances[rows, 1:], np.take_along_axis(direct, expected, axis=1), rtol=2e-5, atol=2e-6)
+
+
 def test_shared_feature_offset_does_not_reorder_neighbours() -> None:
     """A common shift changes no euclidean distance, yet rebuilding distances
     as |a|^2 + |b|^2 - 2ab gives float32 away exactly in the low-order bits

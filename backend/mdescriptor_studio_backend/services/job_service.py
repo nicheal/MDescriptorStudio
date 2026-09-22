@@ -39,9 +39,10 @@ class JobContext:
         self.job_id = job_id
         self.control = None  # engine ComputeControl, attached by compute jobs
         self._cancelled = threading.Event()
-        # cancel() settles the job rows immediately; a runner stuck in a long
-        # native call (t-SNE fit, SVD) keeps the thread alive until it returns,
-        # so a detached context must not write progress or resurrect the rows.
+        # cancel() settles the job rows immediately. Descriptor/native calls
+        # that still run in the parent may keep a thread alive until their
+        # engine checkpoint returns; isolated analysis workers are terminated
+        # by the analysis runner itself.
         self.detached = False
         self._last_emit = 0.0
         self._last_fraction = -1.0
@@ -291,12 +292,11 @@ class JobService:
         if ctx is None:
             raise AppError(INVALID_PARAMS, f"job {job_id} is queued but has no context yet")
         ctx.cancel()
-        # Long native calls (t-SNE fit, SVD, umap) only hit the cooperative
-        # checkpoint when they return, so waiting for the runner to notice the
-        # flag looks like "stop does nothing" for minutes. Settle the job now:
-        # rows flip to CANCELLED, job.finished is emitted, and the detached
-        # runner's eventual output is discarded (progress no-ops, its next
-        # check_cancelled raises before any commit).
+        # Settle the job now so the UI does not wait on a native call. Analysis
+        # black-box workers are terminated by job_runner on their next poll;
+        # descriptor/native calls still unwind through their engine control or
+        # the detached context's next checkpoint. In both cases the eventual
+        # output is discarded and cannot resurrect a settled row.
         ctx.detach()
         with self._lock:
             self._contexts.pop(job_id, None)
@@ -362,10 +362,10 @@ class JobService:
         return rows
 
     def shutdown(self, wait_seconds: float = 3.0) -> None:
-        # Cooperatively cancel live jobs first: cancel() settles the job rows
-        # AND its linked run rows, detaches the runner, and (for compute jobs)
-        # cancels the engine ComputeControl so the native call unwinds at its
-        # next checkpoint instead of blocking this shutdown until it returns.
+        # Cancel live jobs first: cancel() settles the job rows AND linked run
+        # rows, detaches the runner, and (for compute jobs) cancels the engine
+        # ComputeControl. Analysis workers terminate themselves on the next
+        # parent poll; descriptor native calls unwind at their next checkpoint.
         with self._lock:
             job_ids = list(self._contexts)
         for job_id in job_ids:

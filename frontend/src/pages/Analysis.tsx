@@ -22,10 +22,8 @@ import {
   Typography,
 } from "antd";
 import {
-  ArrowRight16Regular,
   ArrowSync16Regular,
   CheckmarkCircle16Regular,
-  Delete16Regular,
   Info16Regular,
 } from "@fluentui/react-icons";
 import { ipc } from "../ipc/client";
@@ -48,23 +46,19 @@ import {
   useAnalysisUi,
   type AnalysisModuleKey,
   type AnalysisParams,
-  type TabKey,
 } from "../features/analysis";
 import { useT } from "../i18n";
-import StructurePreview from "../components/StructurePreview";
 import SaveViewModal from "../components/SaveViewModal";
-import { hasColorByData, normalizePoints, previewRowFields, selectedDisplayIndices, stalenessNote } from "./analysisPreview";
+import { hasColorByData, previewRowFields, selectedDisplayIndices } from "./analysisPreview";
 import AnalysisResultVisualization from "./analysisVisualizations";
 import { getAnalysisMethodGuide } from "./analysisMethodGuides";
 import { HIGH_CONTRAST_COLORSCALE, overviewLayout, plotData } from "./analysisChartKit";
-import { analysisCache, type CachedAnalysis } from "./analysisCache";
+import { analysisCache } from "./analysisCache";
 import type {
   AnalysisJobResponse,
   AnalysisPreview,
   AnalysisRow,
   DatasetView,
-  FramePayload,
-  PcaPayload,
   RunRow,
 } from "../types/protocol";
 
@@ -76,19 +70,18 @@ import {
   ParamLabel,
   ProjectionControls,
   ResultPanel,
-  Row,
   SectionHeading,
-  pcaPayloadPoints,
-  selectedIndicesFromPreview,
   SamplingControls,
   SamplingExportCard,
   withCacheMarks,
   type CacheOption,
-  type CompareMode,
   type Point,
-  type ProjectionOverrides,
 } from "./analysisShared";
 import { useAnalysisArtifactArrays } from "./useAnalysisArtifactArrays";
+import { useAnalysisExecution, type AnalysisRunContext, type AnalysisRunningInfo } from "./useAnalysisExecution";
+import { useAnalysisParameters } from "./useAnalysisParameters";
+import { useAnalysisSelection } from "./useAnalysisSelection";
+import AnalysisInspector from "./AnalysisInspector";
 import { describeError } from "../util/errors";
 
 
@@ -101,7 +94,7 @@ export default function Analysis() {
   const selectedRun = useWorkspace((state) => state.activeDescriptorRunId);
   const setSelectedRun = useWorkspace((state) => state.setActiveRun);
   const dataset = datasets.find((item) => item.id === activeDatasetId);
-  const { t, tr, locale } = useT();
+  const { t, tr } = useT();
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [allRuns, setAllRuns] = useState<RunRow[]>([]);
   const [datasetViews, setDatasetViews] = useState<DatasetView[]>([]);
@@ -133,60 +126,72 @@ export default function Analysis() {
   // toolbar names it explicitly and Run buttons only spin for their own
   // module — a background t-SNE must not read as "PCA is running" after the
   // user switches methods or tabs mid-job.
-  const [runningInfo, setRunningInfo] = useState<{ label: string; tab: TabKey; moduleKey: AnalysisModuleKey | null; method: string | null } | null>(null);
+  const [runningInfo, setRunningInfo] = useState<AnalysisRunningInfo | null>(null);
   const [lastJobProgress, setLastJobProgress] = useState<number | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [saveViewOpen, setSaveViewOpen] = useState(false);
-  const [inspectedPoint, setInspectedPoint] = useState<Point | null>(null);
-  const [selectedFrame, setSelectedFrame] = useState<FramePayload | null>(null);
-  const [selectedFrameBusy, setSelectedFrameBusy] = useState(false);
-  const [clusterAlgorithm, setClusterAlgorithm] = useState("kmeans");
-  const [outlierAlgorithm, setOutlierAlgorithm] = useState("lof");
-  const [samplingAlgorithm, setSamplingAlgorithm] = useState("fps");
-  const [samplingStrategy, setSamplingStrategy] = useState("global");
-  const [samplingScaling, setSamplingScaling] = useState("robust");
-  const [samplingMinDistance, setSamplingMinDistance] = useState(0);
-  const [samplingExistingRunId, setSamplingExistingRunId] = useState<string | null>(null);
-  const [samplingBlocks, setSamplingBlocks] = useState<string[]>([]);
-  const [samplingBudgetMode, setSamplingBudgetMode] = useState<"count" | "coverage">("count");
-  const [samplingCoverage, setSamplingCoverage] = useState(95);
-  const [samplingQuota, setSamplingQuota] = useState<{ groups: { group: string; structures: number; quota: number }[]; n_candidates: number } | null>(null);
-  const [samplingQuotaBusy, setSamplingQuotaBusy] = useState(false);
-  const [similarityMode, setSimilarityMode] = useState<"query" | "all_neighbors" | "pairwise">("query");
-  const [compareMode, setCompareMode] = useState<CompareMode>("geometry");
-  const [mantelMethod, setMantelMethod] = useState<"pearson" | "spearman">("pearson");
-  const [mantelPermutations, setMantelPermutations] = useState(999);
-  const [propertyName, setPropertyName] = useState("energy_per_atom");
-  const [propertyFolds, setPropertyFolds] = useState(5);
-  const [propertyReliabilityK, setPropertyReliabilityK] = useState(5);
-  const [propertyDistanceMetric, setPropertyDistanceMetric] = useState<"euclidean" | "cosine">("euclidean");
-  const [propertySparsePercentile, setPropertySparsePercentile] = useState(90);
-  const [propertyOodPercentile, setPropertyOodPercentile] = useState(99);
-  const [kernelName, setKernelName] = useState("rbf");
-  const [localCutoff, setLocalCutoff] = useState(3.0);
-  const [secondRun, setSecondRun] = useState<string | null>(null);
-  const [referenceDatasetId, setReferenceDatasetId] = useState<string | null>(null);
-  const [queryDatasetId, setQueryDatasetId] = useState<string | null>(null);
-  const [referenceRunId, setReferenceRunId] = useState<string | null>(null);
-  const [queryRunId, setQueryRunId] = useState<string | null>(null);
-  const [referenceViewId, setReferenceViewId] = useState<string | null>(null);
-  const [queryViewId, setQueryViewId] = useState<string | null>(null);
-  const [viewId, setViewId] = useState<string | null>(null);
-  const [exportFormat, setExportFormat] = useState("csv");
-  const [exportPath, setExportPath] = useState("");
-  const [k, setK] = useState(10);
-  const [nClusters, setNClusters] = useState(6);
-  const [nSamples, setNSamples] = useState(1000);
-  const [uncertaintyK, setUncertaintyK] = useState(8);
-  const [contamination, setContamination] = useState(0.01);
-  const [queryIndex, setQueryIndex] = useState(0);
-  const [methodGuideOpen, setMethodGuideOpen] = useState(false);
-  const [perturbationType, setPerturbationType] = useState<"jitter" | "strain">("jitter");
-  const [perturbationCount, setPerturbationCount] = useState(8);
-  const [perturbationMaximum, setPerturbationMaximum] = useState(0.2);
-  const [perturbationStructures, setPerturbationStructures] = useState(64);
-  const [perturbationMetric, setPerturbationMetric] = useState("euclidean");
-  const [tsnePerplexity, setTsnePerplexity] = useState(30);
+  const {
+    analysisParams,
+    restoreParameters,
+    clusterAlgorithm, setClusterAlgorithm,
+    outlierAlgorithm, setOutlierAlgorithm,
+    samplingAlgorithm, setSamplingAlgorithm,
+    samplingStrategy, setSamplingStrategy,
+    setSamplingScaling,
+    setSamplingMinDistance,
+    setSamplingExistingRunId,
+    samplingBlocks, setSamplingBlocks,
+    samplingBudgetMode, setSamplingBudgetMode,
+    setSamplingCoverage,
+    samplingQuota, setSamplingQuota,
+    samplingQuotaBusy, setSamplingQuotaBusy,
+    similarityMode, setSimilarityMode,
+    compareMode, setCompareMode,
+    mantelMethod, setMantelMethod,
+    mantelPermutations, setMantelPermutations,
+    propertyName, setPropertyName,
+    propertyFolds, setPropertyFolds,
+    propertyReliabilityK, setPropertyReliabilityK,
+    propertyDistanceMetric, setPropertyDistanceMetric,
+    propertySparsePercentile, setPropertySparsePercentile,
+    propertyOodPercentile, setPropertyOodPercentile,
+    kernelName, setKernelName,
+    localCutoff, setLocalCutoff,
+    secondRun, setSecondRun,
+    referenceDatasetId, setReferenceDatasetId,
+    queryDatasetId, setQueryDatasetId,
+    referenceRunId, setReferenceRunId,
+    queryRunId, setQueryRunId,
+    referenceViewId, setReferenceViewId,
+    queryViewId, setQueryViewId,
+    viewId, setViewId,
+    exportFormat, setExportFormat,
+    exportPath, setExportPath,
+    k, setK,
+    nClusters, setNClusters,
+    nSamples, setNSamples,
+    setUncertaintyK,
+    contamination, setContamination,
+    queryIndex, setQueryIndex,
+    methodGuideOpen, setMethodGuideOpen,
+    perturbationType, setPerturbationType,
+    perturbationCount, setPerturbationCount,
+    perturbationMaximum, setPerturbationMaximum,
+    perturbationStructures, setPerturbationStructures,
+    perturbationMetric, setPerturbationMetric,
+    tsnePerplexity, setTsnePerplexity,
+  } = useAnalysisParameters({
+    projection,
+    mode,
+    preprocess,
+    effectiveDimensionPreprocess,
+    coverageMode,
+    overviewAnalysis,
+    nearZeroThreshold,
+    lowVariationThreshold,
+    featureCorrelationMethod,
+    featureCorrelationThreshold,
+  });
   const [overviewArraysRetry, setOverviewArraysRetry] = useState(0);
   const [loadingAnalysisId, setLoadingAnalysisId] = useState<string | null>(null);
   const {
@@ -221,27 +226,12 @@ export default function Analysis() {
   // remains exact-only.
   const lastLookedModuleRef = useRef<AnalysisModuleKey | null>(null);
 
-  // Stable key of every parameter that changes what the current module computes.
-  const analysisParams = useMemo<AnalysisParams>(() => ({
-    projection, mode, preprocess, effectiveDimensionPreprocess, tsnePerplexity, similarityMode, k, queryIndex,
-    clusterAlgorithm, nClusters, outlierAlgorithm, contamination, samplingAlgorithm,
-    nSamples, uncertaintyK, samplingStrategy, samplingScaling, samplingMinDistance, samplingExistingRunId,
-    samplingBlocks, samplingBudgetMode, samplingCoverage,
-    coverageMode, compareMode, mantelMethod, mantelPermutations,
-    localCutoff, kernelName, overviewAnalysis, propertyName,
-    propertyFolds, propertyReliabilityK, propertyDistanceMetric, propertySparsePercentile, propertyOodPercentile,
-    perturbationType, perturbationCount, perturbationMaximum, perturbationStructures, perturbationMetric,
-    nearZeroThreshold, lowVariationThreshold, featureCorrelationMethod, featureCorrelationThreshold,
-    referenceRunId, queryRunId, referenceViewId, queryViewId, viewId,
-  }), [
-    clusterAlgorithm, compareMode, contamination, coverageMode, effectiveDimensionPreprocess, featureCorrelationMethod, featureCorrelationThreshold, k, kernelName, localCutoff, lowVariationThreshold, mantelMethod, mantelPermutations, mode, nClusters, nSamples, nearZeroThreshold, outlierAlgorithm, overviewAnalysis, perturbationCount, perturbationMaximum, perturbationMetric, perturbationStructures, perturbationType, preprocess, projection, propertyDistanceMetric, propertyFolds, propertyName, propertyOodPercentile, propertyReliabilityK, propertySparsePercentile, queryIndex, queryRunId, queryViewId, referenceRunId, referenceViewId, samplingAlgorithm, samplingBlocks, samplingBudgetMode, samplingCoverage, samplingExistingRunId, samplingMinDistance, samplingScaling, samplingStrategy, similarityMode, tsnePerplexity, uncertaintyK, viewId,
-  ]);
   const paramsKey = buildParamsKey(tab, analysisParams);
   const inputKey = buildAnalysisInputKey(tab, analysisParams, selectedRun, secondRun);
   // {tab, moduleKey, paramsKey, inputKey, params} as of the latest render. Runs capture this when
   // they start so their slots always record the context the run belongs to,
   // never whatever the user has navigated to by completion time.
-  const runContextRef = useRef<{ tab: TabKey; moduleKey: AnalysisModuleKey | null; paramsKey: string; inputKey: string; params: AnalysisParams }>({
+  const runContextRef = useRef<AnalysisRunContext>({
     tab,
     moduleKey: activeNavModule?.key ?? null,
     paramsKey,
@@ -249,15 +239,6 @@ export default function Analysis() {
     params: analysisParams,
   });
   runContextRef.current = { tab, moduleKey: activeNavModule?.key ?? null, paramsKey, inputKey, params: analysisParams };
-
-  const clearDisplayedAnalysis = useCallback(() => {
-    setAnalysisId(null);
-    setPreview(null);
-    setPoints([]);
-    setSelectedIndices([]);
-    setInspectedPoint(null);
-    setOverviewArrays({});
-  }, []);
 
   const crossDatasetModule = tab === "coverage"
     || (tab === "sampling" && (samplingAlgorithm === "novelty_fps" || samplingAlgorithm === "uncertainty_diversity"))
@@ -293,25 +274,39 @@ export default function Analysis() {
     : dataset;
   const pointRunId = crossDatasetModule ? queryRunId : selectedRun;
   const analysisContextRunId = crossDatasetModule ? referenceRunId : selectedRun;
-  const selectedPoint = inspectedPoint ?? points.find((point) => point.i === selectedIndices[0]) ?? null;
-  // Dataset frames behind the current selection, for saving a purification
-  // view. The scatter and the preview rows both name the frame of a sample
-  // index; an index neither names has no frame we may claim, so it is dropped
-  // rather than saved as its own number — under a Scope, or in atom mode, the
-  // two are different things and the wrong one silently changes the dataset.
-  const selectedFrames = useMemo(() => {
-    if (tab === "projection") return [];
-    const frameOf = new Map<number, number>();
-    for (const point of points) frameOf.set(point.i, point.frame);
-    for (const row of preview?.selected ?? []) {
-      const index = Number(row.i ?? row.sample_index);
-      const frame = Number(row.frame);
-      if (Number.isInteger(index) && index >= 0 && Number.isInteger(frame)) frameOf.set(index, frame);
-    }
-    const unmapped = selectedIndices.filter((index) => !frameOf.has(index));
-    if (unmapped.length) console.warn("saving a view without a frame for", unmapped.length, "selected sample(s)");
-    return [...new Set(selectedIndices.map((index) => frameOf.get(index)).filter((frame): frame is number => frame !== undefined))].sort((a, b) => a - b);
-  }, [points, preview, selectedIndices, tab]);
+  const {
+    selectedPoint,
+    selectedFrames,
+    selectedFrame,
+    selectedFrameBusy,
+    inspectPoint,
+    clearInspectedPoint,
+    clearFrame,
+    openPointInExplore,
+    updateCachedSelection,
+    handlePoint,
+    handlePreviewAtomSelect,
+  } = useAnalysisSelection({
+    analysisId,
+    pointDataset: pointDataset ?? null,
+    pointRunId,
+    preview,
+    points,
+    selectedIndices,
+    setSelectedIndices,
+    tab,
+    mode,
+    localCutoff,
+  });
+
+  const clearDisplayedAnalysis = useCallback(() => {
+    setAnalysisId(null);
+    setPreview(null);
+    setPoints([]);
+    setSelectedIndices([]);
+    clearInspectedPoint();
+    setOverviewArrays({});
+  }, [clearInspectedPoint, setOverviewArrays]);
 
   // Whether the (module, input, parameter combination) result is already computed
   // and can be re-displayed without rerunning. One parameter can be probed
@@ -366,7 +361,7 @@ export default function Analysis() {
   useEffect(() => {
     if (!dataset) return;
     setReferenceDatasetId((current) => datasets.some((item) => item.id === current) ? current : dataset.id);
-  }, [dataset, datasets]);
+  }, [dataset, datasets, setReferenceDatasetId]);
 
   useEffect(() => {
     if (!referenceDatasetId) return;
@@ -376,7 +371,7 @@ export default function Analysis() {
       return referenceRuns[0]?.id ?? null;
     });
     setReferenceViewId((current) => referenceViews.some((view) => view.id === current) ? current : null);
-  }, [referenceDatasetId, referenceRuns, referenceViews, selectedRun]);
+  }, [referenceDatasetId, referenceRuns, referenceViews, selectedRun, setReferenceRunId, setReferenceViewId]);
 
   useEffect(() => {
     if (!referenceRunRow) return;
@@ -390,16 +385,16 @@ export default function Analysis() {
       return datasets.find((item) => item.id !== referenceDatasetId && compatibleDatasetIds.has(item.id))?.id
         ?? (compatibleDatasetIds.has(referenceDatasetId ?? "") ? referenceDatasetId : null);
     });
-  }, [completedAllRuns, referenceDatasetId, referenceRunRow, datasets]);
+  }, [completedAllRuns, referenceDatasetId, referenceRunRow, datasets, setQueryDatasetId]);
 
   useEffect(() => {
     setQueryRunId((current) => queryRuns.some((run) => run.id === current) ? current : queryRuns[0]?.id ?? null);
     setQueryViewId((current) => queryViews.some((view) => view.id === current) ? current : null);
-  }, [queryRuns, queryViews]);
+  }, [queryRuns, queryViews, setQueryRunId, setQueryViewId]);
 
   useEffect(() => {
     setViewId((current) => activeViews.some((view) => view.id === current) ? current : null);
-  }, [activeViews]);
+  }, [activeViews, setViewId]);
 
   useEffect(() => {
     operationRef.current += 1;
@@ -411,13 +406,11 @@ export default function Analysis() {
     setPreview(null);
     setAnalysisId(null);
     setSelectedIndices([]);
-    setInspectedPoint(null);
-    setSelectedFrame(null);
-    setSelectedFrameBusy(false);
+    clearInspectedPoint();
     setSecondRun(null);
     setOverviewArrays({});
     setLoadingAnalysisId(null);
-  }, [dataset?.id, selectedRun]);
+  }, [clearInspectedPoint, dataset?.id, selectedRun, setOverviewArrays, setSecondRun]);
 
   useEffect(() => {
     const selectedRow = runs.find((run) => run.id === selectedRun);
@@ -430,34 +423,12 @@ export default function Analysis() {
     if (secondRun && (secondRun === selectedRun || !secondRow || secondRow.status !== "COMPLETED" || sensitivityDescriptorMismatch)) {
       setSecondRun(null);
     }
-  }, [overviewAnalysis, runs, secondRun, selectedRun, tab]);
+  }, [overviewAnalysis, runs, secondRun, selectedRun, tab, setSecondRun]);
 
   useEffect(() => {
     const offFinished = ipc.on("job.finished", () => void refresh());
     return offFinished;
   }, [refresh]);
-
-  useEffect(() => {
-    if (!pointDataset || !selectedPoint) {
-      // A request still in flight when the selection disappears will not report
-      // its result (its cleanup has already set `disposed`), so nothing else
-      // ever clears this - and the inspector then shows a loading line for a
-      // structure that is no longer pending at all.
-      setSelectedFrame(null);
-      setSelectedFrameBusy(false);
-      return;
-    }
-    let disposed = false;
-    setSelectedFrameBusy(true);
-    const localShellActive = preview?.kind === "local_diversity" && selectedPoint.row != null;
-    const displayCutoff = 2.4;
-    const requestedCutoff = Math.min(10, Math.max(displayCutoff, localShellActive ? localCutoff : displayCutoff));
-    void ipc.request<FramePayload>("dataset.frame", { id: pointDataset.id, index: selectedPoint.frame, bond_cutoff: requestedCutoff })
-      .then((frame) => { if (!disposed) setSelectedFrame({ ...frame, bond_cutoff: displayCutoff }); })
-      .catch(() => { if (!disposed) setSelectedFrame(null); })
-      .finally(() => { if (!disposed) setSelectedFrameBusy(false); });
-    return () => { disposed = true; };
-  }, [localCutoff, pointDataset, preview?.kind, selectedPoint]);
 
   // Grouped-FPS budget preview: how the requested sample count splits across
   // element sets, fetched before running so the allocation is never a surprise.
@@ -486,178 +457,36 @@ export default function Analysis() {
       });
     }, 400);
     return () => { disposed = true; window.clearTimeout(timer); };
-  }, [tab, samplingAlgorithm, samplingStrategy, selectedRun, mode, nSamples, viewId]);
+  }, [mode, nSamples, samplingAlgorithm, samplingStrategy, selectedRun, setSamplingQuota, setSamplingQuotaBusy, tab, viewId]);
 
-  // The two points-fetch variants behind an analysis: bounded preview arrays
-  // (with normalized points) and the PCA payload (points only).
-  const fetchAnalysisPoints = useCallback(async (id: string, source: "preview" | "pca"): Promise<CachedAnalysis> => {
-    if (source === "pca") {
-      const payload = await ipc.request<PcaPayload>("result.get_pca", { analysis_id: id });
-      return { preview: null, points: pcaPayloadPoints(payload), selectedIndices: [], arrays: {}, narrowed: [] };
-    }
-    const result = await ipc.request<AnalysisPreview>("analysis.preview", { analysis_id: id, limit: 20_000 });
-    return { preview: result, points: normalizePoints(result), selectedIndices: selectedIndicesFromPreview(result), arrays: {}, narrowed: [] };
-  }, []);
-
-  // Cache + display: the single place a resolved analysis lands on screen.
-  const commitAnalysis = useCallback((id: string, next: CachedAnalysis) => {
-    const cached = analysisCache.get(id);
-    // Whatever arrays are kept are the ones `narrowed` describes, so the two
-    // travel together: a history load must not lose the notice that the cached
-    // matrix arrived column-truncated.
-    analysisCache.set(id, { ...next, arrays: cached?.arrays ?? next.arrays, narrowed: cached ? cached.narrowed : next.narrowed });
-    setAnalysisId(id);
-    setPreview(next.preview);
-    setPoints(next.points);
-    setSelectedIndices(next.selectedIndices);
-    setOverviewArrays(next.arrays);
-  }, []);
-
-  const watchAnalysisJob = useCallback(async (jobId: string, method: string, label: string, isCurrent: () => boolean): Promise<{ failed: true } | { failed: false; analysisId: string | null }> => {
-    trackJob(jobId, method);
-    const offProgress = ipc.on("job.progress", (data) => {
-      const event = data as { job_id: string; progress: number };
-      if (event.job_id === jobId) setLastJobProgress(event.progress);
-    });
-    const done = await watchJob(jobId);
-    offProgress();
-    // The page-level history normally refreshes from job.finished. The
-    // watcher also recovers terminal state by polling, so refresh explicitly
-    // to cover a missed finished event.
-    void refresh();
-    if (done.status !== "COMPLETED") {
-      if (isCurrent()) message.error(`${label} ${jobStatusLabel(tr, done.status)}: ${done.error?.message ?? ""}`);
-      return { failed: true };
-    }
-    return { failed: false, analysisId: typeof done.result?.analysis_id === "string" ? done.result.analysis_id : null };
-  }, [message, refresh, tr]);
-
-  const runRequest = useCallback(async (
-    method: string,
-    params: Record<string, unknown>,
-    label: string,
-    options?: {
-      contextRunId?: string | null;
-      followActiveRun?: boolean;
-      /** Start under a context this render does not have yet — the PCA
-       * preprocess select reruns before React has re-rendered with it. */
-      context?: { moduleKey: AnalysisModuleKey; paramsKey: string };
-      /** Replaces the captured-paramsKey freshness test for an overridden
-       * context, which that comparison cannot express. */
-      isFresh?: () => boolean;
+  const { fetchAnalysisPoints, commitAnalysis, runRequest, runProjection, handlePreprocessChange } = useAnalysisExecution({
+    datasetId: dataset?.id,
+    selectedRun,
+    projection,
+    mode,
+    preprocess,
+    tsnePerplexity,
+    viewId,
+    setPreprocess,
+    operationRef,
+    runContextRef,
+    refresh,
+    message,
+    t,
+    tr,
+    display: {
+      clearInspectedPoint,
+      setAnalysisId,
+      setPreview,
+      setPoints,
+      setSelectedIndices,
+      setOverviewArrays,
+      setLoadingAnalysisId,
+      setBusy,
+      setRunningInfo,
+      setLastJobProgress,
     },
-  ) => {
-    const contextRunId = options?.contextRunId ?? selectedRun;
-    if (!contextRunId) {
-      message.warning(t("Select a completed descriptor run first"));
-      return null;
-    }
-    const requestRunId = contextRunId;
-    const requestDatasetId = dataset?.id;
-  // The (module, input, parameters) context the run was started under: the result and
-    // its cache slot belong there even if the user navigates while the job is
-    // in flight.
-    const requestContext = { ...runContextRef.current, ...(options?.context ?? {}) };
-    const operation = ++operationRef.current;
-    const isCurrent = () => operationRef.current === operation
-      && (options?.followActiveRun === false || useWorkspace.getState().activeDescriptorRunId === requestRunId)
-      && useWorkspace.getState().activeDatasetId === requestDatasetId
-      && analysisNavModuleForView(
-        useAnalysisUi.getState().view.tab,
-        useAnalysisUi.getState().view.overviewAnalysis,
-        useAnalysisUi.getState().view.coverageMode,
-      )?.key === requestContext.moduleKey
-      && (options?.isFresh ? options.isFresh() : runContextRef.current.paramsKey === requestContext.paramsKey)
-      && runContextRef.current.inputKey === requestContext.inputKey;
-    setLoadingAnalysisId(null);
-    setBusy(true);
-    setRunningInfo({ label, tab: requestContext.tab, moduleKey: requestContext.moduleKey, method });
-    setLastJobProgress(0);
-    setPoints([]);
-    setPreview(null);
-    setAnalysisId(null);
-    setOverviewArrays({});
-    setSelectedIndices([]);
-    setInspectedPoint(null);
-    useWorkspace.getState().setSelectedSample(null);
-    try {
-      const response = await ipc.request<AnalysisJobResponse>(method, { ...params, run_id: requestRunId, seed: params.seed ?? 42 });
-      let id = response.analysis_id;
-      if (response.job_id) {
-        const watched = await watchAnalysisJob(response.job_id, method, label, isCurrent);
-        if (watched.failed) return null;
-        if (watched.analysisId !== null) id = watched.analysisId;
-      }
-      if (!id) throw new Error(`${method} returned no analysis_id`);
-      // Record the slot under the request context before the display checks:
-      // the computed artifacts stay restorable even when the user has moved to
-      // another tab and the result will not land on screen.
-      if (!requestContext.moduleKey) throw new Error(`${method} has no analysis module`);
-      useAnalysisUi.getState().rememberResult({ analysisId: id, moduleKey: requestContext.moduleKey, inputKey: requestContext.inputKey, parameterKey: requestContext.paramsKey });
-      if (!isCurrent()) return null;
-      const frontendCached = response.job_id ? undefined : analysisCache.get(id);
-      if (frontendCached) {
-        commitAnalysis(id, frontendCached);
-        setLastJobProgress(1);
-        message.success(t("{label} loaded from cache", { label }));
-        return id;
-      }
-      const fetched = await fetchAnalysisPoints(id, "preview");
-      if (!isCurrent()) return null;
-      commitAnalysis(id, fetched);
-      setLastJobProgress(1);
-      message.success(response.job_id ? t("{label} complete", { label }) : t("{label} loaded from cache", { label }));
-      return id;
-    } catch (error) {
-      const err = error as { code?: string; message?: string };
-      if (isCurrent()) message.error(describeError(err, label, t("analysis failed")));
-      return null;
-    } finally {
-      if (operationRef.current === operation) {
-        setBusy(false);
-        setRunningInfo(null);
-      }
-    }
-  }, [commitAnalysis, dataset?.id, fetchAnalysisPoints, message, selectedRun, t, watchAnalysisJob]);
-
-  const runProjection = useCallback(async ({ mode: requestedMode, preprocess: requestedPreprocess }: ProjectionOverrides = {}) => {
-    if (!selectedRun) return;
-    const activeMode = requestedMode ?? mode;
-    const activePreprocess = requestedPreprocess ?? preprocess;
-    setLoadingAnalysisId(null);
-    if (projection === "pca") {
-      // PCA is the one run that can start before a re-render (the preprocess
-      // select reruns it directly), so its context comes from the effective
-      // mode/preprocess rather than the captured render state.
-      return runRequest("analysis.pca", {
-        mode: activeMode,
-        preprocess: activePreprocess,
-        ...(viewId ? { view_id: viewId } : {}),
-      }, "PCA", {
-        context: {
-          moduleKey: "descriptor_space",
-          paramsKey: buildParamsKey("projection", {
-            ...runContextRef.current.params, projection: "pca", mode: activeMode, preprocess: activePreprocess,
-          }),
-        },
-        isFresh: () => {
-          const view = useAnalysisUi.getState().view;
-          return view.projection === "pca" && view.mode === activeMode && view.preprocess === activePreprocess;
-        },
-      });
-    }
-    const projectionParams = projection === "umap"
-      ? { mode: activeMode, preprocess: activePreprocess, n_neighbors: 15, min_dist: 0.1, ...(viewId ? { view_id: viewId } : {}) }
-      : { mode: activeMode, preprocess: activePreprocess, perplexity: tsnePerplexity === 30 ? undefined : tsnePerplexity, max_iter: 1000, ...(viewId ? { view_id: viewId } : {}) };
-    await runRequest(`analysis.${projection}`, projectionParams, projection.toUpperCase());
-  }, [mode, preprocess, projection, runRequest, selectedRun, tsnePerplexity, viewId]);
-
-  const handlePreprocessChange = useCallback((value: string) => {
-    setPreprocess(value);
-    if (projection === "pca" && selectedRun && value !== preprocess) {
-      void runProjection({ preprocess: value });
-    }
-  }, [preprocess, projection, runProjection, selectedRun, setPreprocess]);
+  });
 
   const loadAnalysis = useCallback(async (row: AnalysisRow, opts?: { silent?: boolean }) => {
     if (!dataset || row.status !== "COMPLETED") return;
@@ -729,45 +558,12 @@ export default function Analysis() {
     setProjection(loadedParams.projection);
     setModeTransient(loadedParams.mode);
     setPreprocess(loadedParams.preprocess);
-    setTsnePerplexity(loadedParams.tsnePerplexity);
-    setSimilarityMode(loadedParams.similarityMode as "query" | "all_neighbors" | "pairwise");
-    setK(loadedParams.k);
-    setQueryIndex(loadedParams.queryIndex);
-    setClusterAlgorithm(loadedParams.clusterAlgorithm);
-    setNClusters(loadedParams.nClusters);
-    setOutlierAlgorithm(loadedParams.outlierAlgorithm);
-    setContamination(loadedParams.contamination);
-    setSamplingAlgorithm(loadedParams.samplingAlgorithm);
-    setNSamples(loadedParams.nSamples);
-    setUncertaintyK(loadedParams.uncertaintyK);
-    setSamplingStrategy(loadedParams.samplingStrategy);
-    setSamplingScaling(loadedParams.samplingScaling);
-    setSamplingMinDistance(loadedParams.samplingMinDistance);
-    setSamplingExistingRunId(loadedParams.samplingExistingRunId);
-    setSamplingBlocks(loadedParams.samplingBlocks);
-    setSamplingBudgetMode(loadedParams.samplingBudgetMode as "count" | "coverage");
-    setSamplingCoverage(loadedParams.samplingCoverage);
-    setCompareMode(loadedParams.compareMode as CompareMode);
-    setMantelMethod(loadedParams.mantelMethod as "pearson" | "spearman");
-    setMantelPermutations(loadedParams.mantelPermutations);
-    setLocalCutoff(loadedParams.localCutoff);
-    setKernelName(loadedParams.kernelName);
+    restoreParameters(loadedParams);
     setNearZeroThreshold(loadedParams.nearZeroThreshold);
     setLowVariationThreshold(loadedParams.lowVariationThreshold);
     setFeatureCorrelationMethod(loadedParams.featureCorrelationMethod);
     setFeatureCorrelationThreshold(loadedParams.featureCorrelationThreshold);
     setEffectiveDimensionPreprocess(loadedParams.effectiveDimensionPreprocess);
-    setPropertyName(loadedParams.propertyName);
-    setPropertyFolds(loadedParams.propertyFolds);
-    setPropertyReliabilityK(loadedParams.propertyReliabilityK);
-    setPropertyDistanceMetric(loadedParams.propertyDistanceMetric as "euclidean" | "cosine");
-    setPropertySparsePercentile(loadedParams.propertySparsePercentile);
-    setPropertyOodPercentile(loadedParams.propertyOodPercentile);
-    setPerturbationType(loadedParams.perturbationType as "jitter" | "strain");
-    setPerturbationCount(loadedParams.perturbationCount);
-    setPerturbationMaximum(loadedParams.perturbationMaximum);
-    setPerturbationStructures(loadedParams.perturbationStructures);
-    setPerturbationMetric(loadedParams.perturbationMetric);
 
     const loadedContext = {
       moduleKey: analysisModule.key,
@@ -806,8 +602,8 @@ export default function Analysis() {
     setAnalysisId(null);
     setOverviewArrays({});
     setSelectedIndices([]);
-    setInspectedPoint(null);
-    setSelectedFrame(null);
+    clearInspectedPoint();
+    clearFrame();
     useWorkspace.getState().setSelectedSample(null);
 
     try {
@@ -838,7 +634,7 @@ export default function Analysis() {
         setLoadingAnalysisId(null);
       }
     }
-  }, [allRuns, commitAnalysis, dataset, fetchAnalysisPoints, message, rememberNavigationModule, secondRun, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setModeTransient, setNearZeroThreshold, setNavigationTarget, setPreprocess, setProjection, t]);
+  }, [allRuns, clearFrame, clearInspectedPoint, commitAnalysis, dataset, fetchAnalysisPoints, message, rememberNavigationModule, restoreParameters, secondRun, selectedRun, setEffectiveDimensionPreprocess, setFeatureCorrelationMethod, setFeatureCorrelationThreshold, setLowVariationThreshold, setModeTransient, setNearZeroThreshold, setNavigationTarget, setOverviewArrays, setPreprocess, setProjection, setQueryDatasetId, setQueryRunId, setQueryViewId, setReferenceDatasetId, setReferenceRunId, setReferenceViewId, setSecondRun, setViewId, t]);
 
   // Keep the displayed result in step with the current module + parameters:
   // an exact slot match is re-displayed from the backend artifacts instead of
@@ -878,7 +674,7 @@ export default function Analysis() {
         setSelectedIndices(cached.selectedIndices);
         setOverviewArrays(cached.arrays);
         // The inspector belongs to the previous analysis, not this one.
-        setInspectedPoint(null);
+        clearInspectedPoint();
         return;
       }
     }
@@ -898,7 +694,7 @@ export default function Analysis() {
       return;
     }
     void loadAnalysis(row, { silent: true });
-  }, [activeNavModule?.key, analyses, analysisContextRunId, analysisId, busy, clearDisplayedAnalysis, inputKey, loadAnalysis, loadingAnalysisId, paramsKey, tab]);
+  }, [activeNavModule?.key, analyses, analysisContextRunId, analysisId, busy, clearDisplayedAnalysis, clearInspectedPoint, inputKey, loadAnalysis, loadingAnalysisId, paramsKey, setOverviewArrays, tab]);
 
   const runTabAnalysis = useCallback(async () => {
     const submission = buildSubmission(tab, analysisParams, {
@@ -926,61 +722,6 @@ export default function Analysis() {
       submission.anchoredToReference ? { contextRunId: referenceRunId, followActiveRun: false } : undefined,
     );
   }, [activeNavModule, analysisParams, crossInputsReady, message, referenceRunId, runProjection, runRequest, runs, secondRun, selectedRun, tab, t, tr]);
-
-  const inspectPoint = useCallback((point: Point) => {
-    setInspectedPoint(point);
-    if (pointDataset && pointRunId) {
-      useWorkspace.getState().setSelectedSample({ datasetId: pointDataset.id, runId: pointRunId, mode: point.row == null ? mode : "atom", frame: point.frame, atom: point.row });
-      useWorkspace.getState().setActiveFrame(point.frame);
-    }
-  }, [mode, pointDataset, pointRunId]);
-
-  const openPointInExplore = useCallback(() => {
-    if (!pointDataset || !selectedPoint) return;
-    const workspace = useWorkspace.getState();
-    workspace.setActiveDataset(pointDataset.id);
-    const next = useWorkspace.getState();
-    next.setActiveFrame(selectedPoint.frame);
-    next.setSelectedSample({ datasetId: pointDataset.id, ...(pointRunId ? { runId: pointRunId } : {}), mode: selectedPoint.row == null ? mode : "atom", frame: selectedPoint.frame, atom: selectedPoint.row });
-    next.setPage("explore");
-  }, [mode, pointDataset, pointRunId, selectedPoint]);
-
-  // Keep the cached entry in sync with the on-chart selection so leaving the
-  // page and coming back restores it together with the chart.
-  const updateCachedSelection = useCallback(
-    (indices: number[]) => {
-      if (!analysisId) return;
-      analysisCache.setSelectedIndices(analysisId, indices);
-    },
-    [analysisId],
-  );
-
-  const handlePoint = useCallback((point: Point) => {
-    setSelectedIndices([point.i]);
-    updateCachedSelection([point.i]);
-    inspectPoint(point);
-  }, [inspectPoint, updateCachedSelection]);
-
-  // Structure Preview click-to-select: mirror the chart's point pipeline so
-  // the preview highlight, inspector, and workspace sample stay in sync. A
-  // synthetic point (like the result-table path) covers atoms with no
-  // counterpart among the current projection's points.
-  const handlePreviewAtomSelect = useCallback((atom: number) => {
-    if (!pointDataset || !selectedFrame) return;
-    if (selectedPoint?.row === atom && selectedPoint.frame === selectedFrame.index) {
-      setInspectedPoint(null);
-      setSelectedIndices([]);
-      updateCachedSelection([]);
-      useWorkspace.getState().setSelectedSample(null);
-      return;
-    }
-    const existing = points.find((point) => point.frame === selectedFrame.index && point.row === atom);
-    if (existing) {
-      handlePoint(existing);
-      return;
-    }
-    handlePoint({ i: selectedPoint?.i ?? selectedIndices[0] ?? points.length, frame: selectedFrame.index, row: atom, x: 0, y: 0 });
-  }, [handlePoint, pointDataset, points, selectedFrame, selectedPoint, selectedIndices, updateCachedSelection]);
 
   const plot = useMemo(() => {
     if (!points.length) return null;
@@ -1017,13 +758,13 @@ export default function Analysis() {
           const first = displayIndices[0];
           if (first != null && points[first]) inspectPoint(points[first]);
           else {
-            setInspectedPoint(null);
+            clearInspectedPoint();
             useWorkspace.getState().setSelectedSample(null);
           }
         }}
       />
     );
-  }, [analysisId, colorBy, handlePoint, inspectPoint, mode, points, preprocess, projection, selectedIndices, t, updateCachedSelection]);
+  }, [analysisId, clearInspectedPoint, colorBy, handlePoint, inspectPoint, mode, points, preprocess, projection, selectedIndices, t, updateCachedSelection]);
 
   const exportSelection = async () => {
     if (!selectedRun || !exportPath.trim()) {
@@ -1369,11 +1110,19 @@ export default function Analysis() {
           {tab === "sampling" && <SamplingExportCard format={exportFormat} onFormat={setExportFormat} destination={exportPath} onChoose={() => void chooseExportPath()} onExport={() => void exportSelection()} />}
         </main>
 
-        <aside className="analysis-inspector">
-          <section className="analysis-card"><SectionHeading title={t("INSPECTOR")} meta={selectedPoint ? t("Frame {index}", { index: selectedPoint.frame }) : undefined} />{selectedPoint ? <><Row k={t("Sample")} v={selectedPoint.sample_id ?? String(selectedPoint.i)} /><Row k={t("Frame")} v={String(selectedPoint.frame)} />{selectedPoint.row != null && <Row k={t("Row")} v={String(selectedPoint.row)} />}<Button size="small" icon={<ArrowRight16Regular />} onClick={openPointInExplore}>{t("Open in Explore")}</Button></> : <Typography.Text type="secondary">{t("Click a point, or use box/lasso selection, to inspect a structure.")}</Typography.Text>}</section>
-          <section className="analysis-card"><SectionHeading title={t("STRUCTURE PREVIEW")} meta={selectedFrame ? t("Frame {index}", { index: selectedFrame.index }) : undefined} />{selectedFrame ? <StructurePreview frame={selectedFrame} selectedAtom={selectedPoint?.row} localCutoff={preview?.kind === "local_diversity" && selectedPoint?.row != null ? localCutoff : undefined} onOpen={openPointInExplore} onSelectAtom={handlePreviewAtomSelect} /> : <div className="analysis-empty-small">{selectedFrameBusy ? t("Loading structure…") : t("Select a sample to preview it.")}</div>}</section>
-          <section className="analysis-card"><SectionHeading title={t("ANALYSIS HISTORY")} meta={`${visibleAnalyses.length}`} />{visibleAnalyses.length ? <div className="analysis-history-list">{visibleAnalyses.slice(0, 10).map((row) => { const note = stalenessNote(row.status, row.stale_reason); return <div className="analysis-history-row" key={row.id}><div><Typography.Text strong>{row.analysis_type}</Typography.Text><Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>{new Date(row.created_at).toLocaleString(locale)}</Typography.Text></div><Space size={4}><Tag color={row.status === "COMPLETED" ? "green" : row.status === "STALE" ? "orange" : undefined} title={note ?? undefined} style={note ? { cursor: "help" } : undefined}>{jobStatusLabel(tr, row.status)}</Tag><Button size="small" type="text" icon={<ArrowRight16Regular />} aria-label={t("Load {name} analysis", { name: row.analysis_type })} title={t("Load cached analysis")} loading={loadingAnalysisId === row.id} disabled={row.status !== "COMPLETED" || (loadingAnalysisId !== null && loadingAnalysisId !== row.id)} onClick={() => void loadAnalysis(row)} /><Button size="small" type="text" icon={<Delete16Regular />} aria-label={t("Delete {name} analysis", { name: row.analysis_type })} disabled={row.status === "RUNNING" || row.status === "QUEUED"} onClick={() => void deleteAnalysis(row)} /></Space></div>; })}</div> : <Typography.Text type="secondary">{t("No analysis artifacts for this descriptor run yet.")}</Typography.Text>}</section>
-        </aside>
+        <AnalysisInspector
+          selectedPoint={selectedPoint}
+          selectedFrame={selectedFrame}
+          selectedFrameBusy={selectedFrameBusy}
+          preview={preview}
+          localCutoff={localCutoff}
+          visibleAnalyses={visibleAnalyses}
+          loadingAnalysisId={loadingAnalysisId}
+          onOpenPoint={openPointInExplore}
+          onSelectAtom={handlePreviewAtomSelect}
+          onLoadAnalysis={(row) => loadAnalysis(row)}
+          onDeleteAnalysis={(row) => deleteAnalysis(row)}
+        />
       </div>
     </div>
   );

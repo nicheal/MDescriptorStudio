@@ -20,7 +20,11 @@ function frame(index: number): FramePayload {
 
 function frameSummary(index: number): FrameSummaryPayload {
   const value = frame(index);
-  const { xyz: _xyz, atom_rows: _rows, ghost_count: _ghostCount, ghost_parents: _parents, ...summary } = value;
+  const { xyz, atom_rows, ghost_count, ghost_parents, ...summary } = value;
+  void xyz;
+  void atom_rows;
+  void ghost_count;
+  void ghost_parents;
   return summary as FrameSummaryPayload;
 }
 
