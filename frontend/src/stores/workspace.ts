@@ -4,8 +4,15 @@ import { ipc } from "../ipc/client";
 import type { DatasetMeta } from "../types/protocol";
 
 export type BackendStatus = "starting" | "ready" | "error";
-export type Page = "overview" | "explore" | "descriptors" | "results" | "analysis";
+export type Page = "overview" | "explore" | "descriptors" | "results" | "analysis" | "generation";
 export type PcaMode = "structure" | "atom";
+
+export interface AnalysisSampleScope {
+  datasetId: string;
+  runId: string;
+  mode: PcaMode;
+  viewId: string | null;
+}
 
 export interface SelectedSample {
   datasetId: string;
@@ -24,6 +31,7 @@ interface WorkspaceState {
   activeFrameIndex: number;
   activeDescriptorRunId: string | null;
   selectedSample: SelectedSample | null;
+  analysisSampleScope: AnalysisSampleScope | null;
   datasets: DatasetMeta[];
   runningJobs: number;
   page: Page;
@@ -64,6 +72,7 @@ export const useWorkspace = create<WorkspaceState>((set) => ({
   activeFrameIndex: 0,
   activeDescriptorRunId: null,
   selectedSample: null,
+  analysisSampleScope: null,
   datasets: [],
   runningJobs: 0,
   page: "overview",

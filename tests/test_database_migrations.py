@@ -87,6 +87,51 @@ def test_schema_v8_upgrade_drops_legacy_exclusions(
     assert not _table_exists(db_path, "dataset_excluded_frames")
 
 
+def test_migration_12_adds_generation_runs(tmp_path: Path) -> None:
+    db = Database(tmp_path / "database.sqlite")
+    try:
+        row = db.query_one(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'generation_runs'"
+        )
+        assert row == {"1": 1}
+        columns = {r["name"] for r in db.query("PRAGMA table_info(generation_runs)")}
+        assert {
+            "id",
+            "dataset_id",
+            "descriptor_run_id",
+            "optimizer",
+            "objective",
+            "params_json",
+            "status",
+            "evaluations",
+            "accepted_count",
+            "result_path",
+            "artifact_manifest_json",
+            "preview_json",
+            "warnings_json",
+            "cache_key",
+            "stale_reason",
+        } <= columns
+        job_columns = {r["name"] for r in db.query("PRAGMA table_info(jobs)")}
+        assert "generation_run_id" in job_columns
+        indexes = {
+            r["name"]
+            for r in db.query(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'generation_runs'"
+            )
+        }
+        assert {"idx_generation_dataset", "idx_generation_status"} <= indexes
+        # A run row round-trips with the columns the service writes.
+        db.execute(
+            "INSERT INTO generation_runs (id, dataset_id, descriptor_run_id, optimizer, objective,"
+            " params_json, status, created_at) VALUES ('gen_x', 'ds_x', 'run_x', 'random', 'novelty',"
+            " '{}', 'QUEUED', '2026-01-01T00:00:00+00:00')"
+        )
+        assert db.query_one("SELECT status FROM generation_runs WHERE id = 'gen_x'")["status"] == "QUEUED"
+    finally:
+        db.close()
+
+
 def test_failed_migration_rolls_back_and_can_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -6,6 +6,7 @@ import {
   Options16Regular,
   Sparkle16Regular,
   DocumentTableRegular,
+  ArrowSwap16Regular,
 } from "@fluentui/react-icons";
 import Sidebar from "./components/layout/Sidebar";
 import ContextBar from "./components/layout/ContextBar";
@@ -30,6 +31,7 @@ const Explore = lazy(() => import("./pages/Explore"));
 const Descriptors = lazy(() => import("./pages/Descriptors"));
 const Results = lazy(() => import("./pages/DescriptorResults"));
 const Analysis = lazy(() => import("./pages/Analysis"));
+const Generation = lazy(() => import("./pages/Generation"));
 
 function PageLoading() {
   return <div style={{ padding: 24, color: "#616161" }}>Loading…</div>;
@@ -37,12 +39,13 @@ function PageLoading() {
 
 // Jobs is not a tab — the top-right Jobs button/drawer is the single jobs
 // surface, and the Descriptors/Results rail shows recent descriptor computes.
-const TABS: { key: "overview" | "explore" | "descriptors" | "results" | "analysis"; label: string; icon: ReactNode }[] = [
+const TABS: { key: "overview" | "explore" | "descriptors" | "results" | "analysis" | "generation"; label: string; icon: ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <Grid16Regular /> },
   { key: "explore", label: "Explore", icon: <Image16Regular /> },
   { key: "descriptors", label: "Descriptors", icon: <Sparkle16Regular /> },
   { key: "results", label: "Results", icon: <DocumentTableRegular /> },
   { key: "analysis", label: "Analysis", icon: <Options16Regular /> },
+  { key: "generation", label: "Generation", icon: <ArrowSwap16Regular /> },
 ];
 
 export default function App() {
@@ -361,6 +364,7 @@ export default function App() {
                   {page === "descriptors" && <Descriptors />}
                   {page === "results" && <Results />}
                   {page === "analysis" && <Analysis />}
+                  {page === "generation" && <Generation />}
                 </Suspense>
               </ErrorBoundary>
             </div>

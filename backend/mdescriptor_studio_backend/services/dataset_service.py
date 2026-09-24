@@ -675,6 +675,7 @@ class DatasetService:
 
                 stats = compute_statistics(_CountingAdapter(adapter, counting_iter))
                 ctx.check_cancelled()  # a cancelled scan commits nothing
+                scan = adapter.scan()
                 fingerprint = compute_fingerprint(source, len(adapter), use_cache=False)
                 upgraded = not is_versioned_fingerprint(old_fingerprint) or (
                     old_fingerprint.partition(":")[0] != FINGERPRINT_VERSION
@@ -695,8 +696,8 @@ class DatasetService:
                     (ds_id, fingerprint, json.dumps(stats, allow_nan=False), _NOW()),
                 )
                 self.db.execute(
-                    "UPDATE datasets SET number_of_frames = ?, fingerprint = ?, last_scan_at = ? WHERE id = ?",
-                    (len(adapter), fingerprint, _NOW(), ds_id),
+                    "UPDATE datasets SET number_of_frames = ?, fingerprint = ?, file_size = ?, last_scan_at = ? WHERE id = ?",
+                    (len(adapter), fingerprint, scan.file_size, _NOW(), ds_id),
                 )
                 return {"dataset_id": ds_id}
 

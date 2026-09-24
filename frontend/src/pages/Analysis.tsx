@@ -293,6 +293,13 @@ export default function Analysis() {
     : dataset;
   const pointRunId = crossDatasetModule ? queryRunId : selectedRun;
   const analysisContextRunId = crossDatasetModule ? referenceRunId : selectedRun;
+  const pointDatasetId = pointDataset?.id;
+  useEffect(() => {
+    useWorkspace.setState({ analysisSampleScope: pointDatasetId && pointRunId ? {
+      datasetId: pointDatasetId, runId: pointRunId, mode,
+      viewId: crossDatasetModule ? analysisParams.queryViewId : viewId,
+    } : null });
+  }, [pointDatasetId, pointRunId, mode, crossDatasetModule, analysisParams.queryViewId, viewId]);
   const {
     selectedPoint,
     selectedFrames,
@@ -963,7 +970,7 @@ export default function Analysis() {
                 disabled={busy}
                 options={[
                   { value: "__full__", label: t("Full dataset") },
-                  ...activeViews.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString()}` })),
+                  ...activeViews.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString("en-US", { useGrouping: false })}` })),
                 ]}
                 onChange={(value) => setViewId(value === "__full__" ? null : value)}
               />
@@ -1100,14 +1107,14 @@ export default function Analysis() {
             />
           )}
 
-          {tab === "projection" && <section className="analysis-card analysis-plot-card"><SectionHeading title={t("DESCRIPTOR SPACE")} meta={`${t("{n} preview points", { n: points.length.toLocaleString() })}${selectedIndices.length ? t(" · {n} selected", { n: selectedIndices.length }) : ""}`} />{points.length ? <div className="analysis-plot-frame">{plot}</div> : <Empty description={t("Run PCA, UMAP, or t-SNE to populate the Plotly canvas.")} />}</section>}
+          {tab === "projection" && <section className="analysis-card analysis-plot-card"><SectionHeading title={t("DESCRIPTOR SPACE")} meta={`${t("{n} preview points", { n: points.length.toLocaleString("en-US", { useGrouping: false }) })}${selectedIndices.length ? t(" · {n} selected", { n: selectedIndices.length }) : ""}`} />{points.length ? <div className="analysis-plot-frame">{plot}</div> : <Empty description={t("Run PCA, UMAP, or t-SNE to populate the Plotly canvas.")} />}</section>}
           {legacyOverview && <OverviewResultVisualization preview={preview} arrays={overviewArrays} loading={overviewArraysBusy} analysisId={analysisId} />}
           {tab !== "projection" && !legacyOverview && <AnalysisResultVisualization preview={preview} arrays={overviewArrays} narrowed={overviewArraysNarrowed} points={points} loading={overviewArraysBusy} selectedIndices={selectedIndices} onSelect={handlePoint} />}
           {overviewArraysError && <section className="analysis-card"><Space><Typography.Text type="warning">{t("Some analysis arrays failed to load.")}</Typography.Text><Button size="small" icon={<ArrowSync16Regular />} onClick={() => setOverviewArraysRetry((value) => value + 1)}>{t("Retry")}</Button></Space></section>}
           {tab !== "projection" && selectedFrames.length > 0 && (
             <section className="analysis-card">
               <Space wrap>
-                <Typography.Text type="secondary">{t("{n} frames selected", { n: selectedFrames.length.toLocaleString() })}</Typography.Text>
+                <Typography.Text type="secondary">{t("{n} frames selected", { n: selectedFrames.length.toLocaleString("en-US", { useGrouping: false }) })}</Typography.Text>
                 <Button size="small" disabled={busy} onClick={() => setSaveViewOpen(true)}>{t("Save selection as view")}</Button>
               </Space>
             </section>
@@ -1140,4 +1147,3 @@ export default function Analysis() {
     </div>
   );
 }
-

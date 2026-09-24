@@ -209,8 +209,8 @@ function StatsTable({
   );
   return (
     <div>
-      {row(t("Structures"), d.number_of_frames.toLocaleString())}
-      {row(t("Atoms"), stats ? stats.atoms_total.toLocaleString() : "—")}
+      {row(t("Structures"), d.number_of_frames.toLocaleString("en-US", { useGrouping: false }))}
+      {row(t("Atoms"), stats ? stats.atoms_total.toLocaleString("en-US", { useGrouping: false }) : "—")}
       {row(
         t("Elements"),
         <span style={{ display: "inline-flex", gap: 4 }}>

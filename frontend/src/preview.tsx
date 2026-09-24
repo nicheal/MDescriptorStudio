@@ -416,6 +416,8 @@ function mockAnalysisSubmit(
 // Completed analysis rows the mock analysis.list serves; every submit
 // registers one so computed results stay restorable and visible in history.
 const mockAnalysisRows = new Map<string, Record<string, unknown>>();
+// Generation runs the mock has handed out (one scripted lifecycle).
+const MOCK_GENERATION_ROWS = new Map<string, Record<string, unknown>>();
 // Arrays belong to the analysis whose preview published them: one shared table
 // let `analysis.chunk` answer an old id with the newest result's arrays, which
 // is the opposite of what the sidecar does.
@@ -1314,7 +1316,7 @@ const METHODS: Record<string, Handler> = {
       dataset_id: dataset.id,
       dataset_name: dataset.name,
       name: String(p.name ?? "Selection"),
-      role: "filtered",
+      role: (p.role as DatasetView["role"]) ?? "filtered",
       filter: (p.filter as Record<string, unknown>) ?? {},
       frame_indices: indices,
       number_of_frames: indices.length,
@@ -1509,6 +1511,151 @@ const METHODS: Record<string, Handler> = {
     }, 800);
     return handOut({ job_id: "job-register" });
   },
+  // Generation (dataset expansion): canned vocabulary + one scripted run so
+  // the e2e suite can walk config → running → results without the engine.
+  "generation.catalog": () => ({
+    optimizers: [{ name: "random", params: { children_per_seed: 8, batch_accept: 8 } }],
+    objectives: [
+      { name: "novelty", params: {} },
+      {
+        name: "local_environment_novelty",
+        params: { aggregation: ["mean", "top_fraction_mean", "quantile", "max"], top_fraction: 0.2, quantile: 0.5, novelty_threshold: 0.25 },
+      },
+      { name: "composite", params: { structure_weight: 0.3, local_weight: 0.7 } },
+      { name: "coverage", params: {} },
+    ],
+    operators: [
+      { name: "atomic_displacement", params: { max_sigma: 0.15 } },
+      { name: "isotropic_strain", params: { max_strain: 0.05 } },
+      { name: "anisotropic_strain", params: { max_strain: 0.05 } },
+      { name: "cell_shear", params: { max_shear: 0.05 } },
+    ],
+    constraints: { min_distance_mode: ["none", "absolute", "covalent"], min_distance_factor: 0.7, max_volume_change: 0.2 },
+    budget: { max_evaluations: 10_000, max_accepted: 500, max_generations: 200 },
+  }),
+  "generation.submit": (p) => {
+    const id = "gen-mock-run1";
+    const jobId = "job-gen-submit";
+    const rounds = Array.from({ length: 6 }, (_, i) => ({
+      generation: i + 1,
+      evaluations: (i + 1) * 32,
+      proposed: 32,
+      rejected_geometry: 4 * (i + 1),
+      rejected_duplicate: 2 * i,
+      accepted: 4 * (i + 1),
+      best_fitness: 1.2 + 0.4 * (i + 1),
+      best_novelty: 0.8 + 0.3 * (i + 1),
+      mean_novelty: 0.5 + 0.1 * (i + 1),
+      coverage_radius: Math.max(0.2, 2.4 - 0.3 * (i + 1)),
+      novel_environments: 12 * (i + 1),
+    }));
+    MOCK_GENERATION_ROWS.set(id, {
+      id,
+      dataset_id: String(p?.dataset_id ?? "ds-mock"),
+      descriptor_run_id: String(p?.descriptor_run_id ?? "run-mock"),
+      descriptor_name: "ACSF",
+      optimizer: "random",
+      objective: String((p?.objective as { type?: string } | undefined)?.type ?? "novelty"),
+      params_json: JSON.stringify({ budget: { max_evaluations: 10000 } }),
+      status: "COMPLETED",
+      created_at: new Date().toISOString(),
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      evaluations: 192,
+      accepted_count: 24,
+      result_path: "mock",
+      cache_key: null,
+      artifact_complete: true,
+      preview: { status: "COMPLETED", stopped_by: "max_accepted", accepted: 24, evaluations: 192, rounds },
+    });
+    window.setTimeout(() => {
+      mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { generation_id: id, accepted: 24, evaluations: 192 }, error: null });
+    }, 800);
+    return handOut({ generation_id: id, job_id: jobId, cached: false });
+  },
+  "generation.get": (p) => {
+    const row = MOCK_GENERATION_ROWS.get(String(p?.id ?? ""));
+    if (!row) throw new MockError("INVALID_PARAMS", `generation run ${String(p?.id ?? "")} does not exist`);
+    return row;
+  },
+  "generation.list": (p) => {
+    const rows = Array.from(MOCK_GENERATION_ROWS.values());
+    return p?.dataset_id ? rows.filter((row) => row.dataset_id === p.dataset_id) : rows;
+  },
+  "generation.preview": (p) => {
+    const row = MOCK_GENERATION_ROWS.get(String(p?.id ?? ""));
+    if (!row) throw new MockError("INVALID_PARAMS", `generation run ${String(p?.id ?? "")} does not exist`);
+    return row.preview;
+  },
+  "generation.cancel": () => ({ ok: true, already_finished: true }),
+  "generation.pca": (p) => {
+    if (!MOCK_GENERATION_ROWS.has(String(p?.id ?? ""))) throw new MockError("INVALID_PARAMS", "unknown generation run");
+    const ring = (n: number, radius: number, jitter: number) =>
+      Array.from({ length: n }, (_, i) => {
+        const angle = (i / n) * Math.PI * 2;
+        return [
+          Math.cos(angle) * radius + (Math.sin(i * 7.3) * jitter) / radius,
+          Math.sin(angle) * radius + (Math.cos(i * 5.1) * jitter) / radius,
+        ];
+      });
+    const evaluated = 192;
+    return {
+      x_label: "PC1 (41.2%)",
+      y_label: "PC2 (18.7%)",
+      original: ring(600, 1.0, 0.12),
+      original_frames: Array.from({ length: 600 }, (_, i) => i),
+      evaluated: ring(evaluated, 1.0 + 0.9 * Math.random(), 0.08),
+      evaluated_generation: Array.from({ length: evaluated }, (_, i) => 1 + Math.floor(i / 32)),
+      evaluated_novelty: Array.from({ length: evaluated }, (_, i) => 0.2 + (i / evaluated) * 2.4),
+      evaluated_accepted: Array.from({ length: evaluated }, (_, i) => (i + 1) % 8 === 0),
+      discovery: {
+        original_structures: 600,
+        accepted_structures: 24,
+        original_environments: 38400,
+        generated_environments: 1536,
+        novel_environments: 231,
+      },
+    };
+  },
+  "generation.structure": (p) => {
+    if (!MOCK_GENERATION_ROWS.has(String(p?.id ?? ""))) throw new MockError("INVALID_PARAMS", "unknown generation run");
+    return mockFramePayload(Number(p?.index ?? 0));
+  },
+  "generation.materialize": (p) => {
+    const jobId = "job-gen-materialize";
+    window.setTimeout(() => {
+      mockEmit("job.finished", {
+        job_id: jobId,
+        status: "COMPLETED",
+        result: {
+          path: String(p?.path ?? "expanded.extxyz"),
+          name: "mock_expanded",
+          lineage: { parent_dataset_id: "ds-mock", operation: "dataset_generation", generation_run_id: "gen-mock-run1" },
+        },
+        error: null,
+      });
+    }, 800);
+    return handOut({ job_id: jobId, dest_path: String(p?.path ?? "expanded.extxyz") });
+  },
+  "generation.add_to_dataset": () => {
+    const jobId = "job-gen-add-to-dataset";
+    window.setTimeout(() => {
+      mockEmit("job.finished", {
+        job_id: jobId,
+        status: "COMPLETED",
+        result: { appended_frame_start: 32, appended_structures: 24, scan_job_id: null },
+        error: null,
+      });
+    }, 800);
+    return handOut({ job_id: jobId });
+  },
+  "generation.export": (p) => {
+    const jobId = "job-gen-export";
+    window.setTimeout(() => {
+      mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { path: String(p?.path ?? "export.extxyz"), what: String(p?.what ?? "accepted") }, error: null });
+    }, 800);
+    return handOut({ job_id: jobId, dest_path: String(p?.path ?? "export.extxyz") });
+  },
   "job.list": () => JOB_ROWS.map(jobRow),
   "job.get": (p) => {
     const id = String(p.id ?? "");
@@ -1605,6 +1752,10 @@ const METHODS: Record<string, Handler> = {
     return handOut({ job_id: "job-pca-live", analysis_id: "ana-mock-pca" });
   },
   "analysis.list": () => Array.from(mockAnalysisRows.values()),
+  "analysis.sample_identity": (p) => {
+    const i = Math.max(0, Math.floor(Number(p?.i ?? 0) || 0));
+    return { dataset_id: "ds-mock", total: 1000, i, frame: i, row: null };
+  },
   "analysis.preview": (p) => {
     const id = String(p.analysis_id ?? "");
     const row = mockAnalysisRows.get(id);

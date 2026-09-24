@@ -111,7 +111,7 @@ function JobCard({ job }: { job: JobState }) {
       )}
       <Typography.Text type="secondary" style={{ fontSize: 11 }}>
         {job.completed != null && job.total != null
-          ? `${job.completed.toLocaleString()} / ${job.total.toLocaleString()} · ${job.message ?? ""}`
+          ? `${job.completed.toLocaleString("en-US", { useGrouping: false })} / ${job.total.toLocaleString("en-US", { useGrouping: false })} · ${job.message ?? ""}`
           : (job.message ?? "")}
         {job.error ? ` · ${job.error.code}: ${job.error.message}` : ""}
       </Typography.Text>

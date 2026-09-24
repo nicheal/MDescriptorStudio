@@ -4,7 +4,7 @@ import { Select, Space, Switch, Table, Tag, Typography } from "antd";
 import { useT, type Pair } from "../i18n";
 import { formatLabel } from "../util/format";
 import type { AnalysisPreview } from "../types/protocol";
-import { matrixExtent } from "./analysisPreview";
+import { SAMPLE_COLUMN_LABELS, matrixExtent } from "./analysisPreview";
 import type { AnalysisPoint } from "./analysisPreview";
 import TrajectoryView from "./trajectoryView";
 import { HIGH_CONTRAST_COLORSCALE, Metrics, NoData, PlotFrame, fmt, formatCount, formatFixed, formatPercent, layout, matrix, num, nums, quantile, records, strings } from "./analysisChartKit";
@@ -122,7 +122,6 @@ function NeighborView({ preview }: { preview: AnalysisPreview }) {
       marker: { color: hasSimilarity ? "#107C10" : "#0F6CBD" },
       hovertemplate: `%{y}<br>${hasSimilarity ? t("similarity") : t("distance")}=%{x:.5g}<extra></extra>`,
     }]} layout={layout({ xaxis: { title: { text: hasSimilarity ? t("Similarity") : t("Distance") } }, yaxis: { automargin: true } })} />
-    <DataTable rows={rows} />
   </>;
 }
 
@@ -698,9 +697,10 @@ function AssociationBars({ rows, method }: { rows: { feature: number; value: num
 }
 
 function DataTable({ rows }: { rows: Record<string, unknown>[] }) {
+  const { t } = useT();
   if (!rows.length) return null;
   const keys = Object.keys(rows[0]).filter((key) => key !== "parameters" && key !== "warnings").slice(0, 8);
-  return <Table className="analysis-data-table" size="small" pagination={{ pageSize: 8, hideOnSinglePage: true }} rowKey={(row, index) => `${row.sample_id ?? row.run_id ?? index}`} dataSource={rows} columns={keys.map((key) => ({ title: key.replaceAll("_", " "), dataIndex: key, key, render: (value: unknown) => fmt(value) }))} />;
+  return <Table className="analysis-data-table" size="small" pagination={{ pageSize: 8, hideOnSinglePage: true }} rowKey={(row, index) => `${row.sample_id ?? row.run_id ?? index}`} dataSource={rows} columns={keys.map((key) => ({ title: t(SAMPLE_COLUMN_LABELS[key] ?? key.replaceAll("_", " ")), dataIndex: key, key, render: (value: unknown) => fmt(value) }))} />;
 }
 
 function coverageMetrics(preview: AnalysisPreview, t: (key: string) => string): { k: string; v: unknown }[] {

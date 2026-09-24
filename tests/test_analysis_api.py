@@ -24,7 +24,7 @@ from mdescriptor_studio_backend.services.analysis_helpers import FEATURE_VARIANC
 from mdescriptor_studio_backend.protocol import frames
 from mdescriptor_studio_backend.services.analysis_service import _LIST_COLUMNS, AnalysisService
 from mdescriptor_studio_backend.services.dataset_service import DatasetService
-from mdescriptor_studio_backend.services.job_runner import AnalysisRunMixin
+from mdescriptor_studio_backend.generation.operators import strained
 from mdescriptor_studio_backend.services.export_service import _cancellable_frames, _identity_records
 from mdescriptor_studio_backend.services import preview_service
 from mdescriptor_studio_backend.services.result_service import ResultService
@@ -96,6 +96,41 @@ def _dataset_and_view(db: Database, frame_indices: list[int], selection_hash: st
         " '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')",
         (json.dumps(frame_indices),),
     )
+
+
+@pytest.mark.parametrize("mode", ["atom", "structure"])
+@pytest.mark.parametrize("subset", [False, True])
+def test_sample_identity_matches_analysis_rows(tmp_path: Path, mode: str, subset: bool) -> None:
+    db, _, service = _service(tmp_path)
+    root = tmp_path / "results" / "run_1"
+    np.save(root / "row_offsets.npy", np.array([0, 2, 2, 7, 12]))
+    (root / "metadata.json").write_text(json.dumps({"level": "atom", "row_semantics": "atom"}), encoding="utf-8")
+    params = {"run_id": "run_1", "mode": mode}
+    if subset:
+        _dataset_and_view(db, [2, 3])
+        params["view_id"] = "view_1"
+    run = service.results.get({"run_id": "run_1"})
+    samples = service._load_samples(run, params, "similarity", view_id=params.get("view_id"))
+    for i in range(samples.n_samples):
+        result = service.sample_identity({**params, "i": i})
+        assert result["frame"] == int(samples.frame[i])
+        assert result["row"] == (int(samples.row[i]) if mode == "atom" else None)
+        assert result["total"] == samples.n_samples
+        reverse = service.sample_identity({**params, "frame": result["frame"], "row": result["row"]})
+        assert reverse["i"] == i
+    if subset:
+        assert service.sample_identity({**params, "frame": 0, "row": 0})["i"] is None
+    for invalid in [-1, samples.n_samples, 0.5, True]:
+        with pytest.raises(AppError):
+            service.sample_identity({**params, "i": invalid})
+
+
+def test_sample_identity_structure_frame_run(tmp_path: Path) -> None:
+    db, _, service = _service(tmp_path)
+    db.execute("UPDATE descriptor_runs SET scope = 'frame', frame_index = 8 WHERE id = 'run_1'")
+    assert service.sample_identity({"run_id": "run_1", "i": 0})["frame"] == 8
+    with pytest.raises(AppError):
+        service.sample_identity({"run_id": "run_1", "mode": "atom", "i": 0})
 
 
 def test_export_repeats_when_the_written_file_disappears(tmp_path: Path) -> None:
@@ -1764,7 +1799,7 @@ def test_strain_perturbation_is_affine_about_the_cell_origin() -> None:
         pbc=np.ones(3, dtype=bool),
     )
 
-    perturbed = AnalysisRunMixin._perturb_frame(frame, 0.1, "strain", np.zeros_like(positions))
+    perturbed = strained(frame, 1.1)
 
     assert np.allclose(perturbed.cell, cell * 1.1)
     assert np.allclose(perturbed.positions, positions * 1.1)
@@ -1781,8 +1816,8 @@ def test_strain_perturbation_is_affine_about_the_cell_origin() -> None:
         pbc=frame.pbc,
     )
     for source in (frame, shifted):
-        strained = AnalysisRunMixin._perturb_frame(source, 0.1, "strain", np.zeros_like(positions))
+        strained_frame = strained(source, 1.1)
         assert np.allclose(
-            strained.positions @ np.linalg.inv(strained.cell),
+            strained_frame.positions @ np.linalg.inv(strained_frame.cell),
             source.positions @ np.linalg.inv(source.cell),
         )

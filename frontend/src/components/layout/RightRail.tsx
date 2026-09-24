@@ -11,8 +11,9 @@
 // Fits the viewport by design — no scrollbar at default window sizes; below
 // 1280px window width it hides so pages keep their working area.
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
-import { App as AntApp, Button, Progress, Tooltip, Typography } from "antd";
+import { App as AntApp, Button, Progress, Space, Tag, Tooltip, Typography } from "antd";
 import {
+  ArrowRight16Regular,
   ArrowSync16Regular,
   BroadActivityFeed16Regular,
   Calculator16Regular,
@@ -21,6 +22,7 @@ import {
   Clock16Regular,
   Copy16Regular,
   Cube16Regular,
+  Delete16Regular,
   Flash16Regular,
   GridDots16Regular,
   Info16Regular,
@@ -31,6 +33,8 @@ import { ipc } from "../../ipc/client";
 import { refetchDatasets, useActiveDataset, useWorkspace } from "../../stores/workspace";
 import { DATASET_PROPERTY_LABELS } from "../../util/properties";
 import { useT, type T } from "../../i18n";
+import { useGenerationStore } from "../../features/generation/generationStore";
+import { GENERATION_OBJECTIVE_LABELS, GENERATION_OPTIMIZER_LABELS } from "../../features/generation/labels";
 import {
   JOB_STATUS_COLOR as STATUS_COLOR,
   waitForSuccessfulJob,
@@ -41,6 +45,7 @@ import {
   type JobState,
 } from "../../stores/jobs";
 import type { DatasetHealth, JobRow } from "../../types/protocol";
+import type { GenerationRow } from "../../features/generation/types";
 import { describeError } from "../../util/errors";
 
 const BLUE = "#0F6CBD";
@@ -70,7 +75,7 @@ function missingValuesSubtitle(
   if (!byProp) return t("Across all properties");
   const parts = Object.entries(byProp)
     .filter(([, n]) => (n ?? 0) > 0)
-    .map(([k, n]) => `${t(DATASET_PROPERTY_LABELS[k] ?? k)} ${(n ?? 0).toLocaleString()}`);
+    .map(([k, n]) => `${t(DATASET_PROPERTY_LABELS[k] ?? k)} ${(n ?? 0).toLocaleString("en-US", { useGrouping: false })}`);
   return parts.length > 0 ? parts.join(" · ") : t("Across all properties");
 }
 
@@ -78,6 +83,7 @@ export default function RightRail() {
   const page = useWorkspace((s) => s.page);
   const wide = useSyncExternalStore(subscribeResize, () => window.innerWidth >= 1280);
   if (!wide || page === "analysis") return null;
+  if (page === "generation") return <GenerationHistoryRail />;
   return page === "descriptors" || page === "results" ? <RecentJobsRail /> : <DataHealthRail />;
 }
 
@@ -314,6 +320,101 @@ function DataHealthRail() {
   );
 }
 
+function GenerationHistoryRail() {
+  const { message } = AntApp.useApp();
+  const { t, tr, locale } = useT();
+  const rows = useGenerationStore((s) => s.history);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const deleteRun = async (row: GenerationRow) => {
+    setDeletingId(row.id);
+    try {
+      await ipc.request("generation.delete", { id: row.id });
+      const state = useGenerationStore.getState();
+      state.setHistory(state.history.filter((item) => item.id !== row.id));
+      if (state.activeGenerationId === row.id) {
+        state.setActiveGeneration(null);
+        state.setLiveRow(null);
+        state.setPhase("config");
+      }
+      window.dispatchEvent(new Event("generation-history-changed"));
+      message.success(t("Expansion deleted"));
+    } catch (error) {
+      const err = error as { code?: string; message?: string };
+      message.error(describeError(err, "GENERATION", t("delete failed")));
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  return (
+    <RailShell
+      title={t("Expansion history")}
+      help={t("Generation runs for the active dataset. Open a run or delete its history.")}
+    >
+      {rows.length === 0 ? (
+        <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
+          {t("No expansion runs yet — submit one from configuration.")}
+        </Typography.Text>
+      ) : (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {rows.map((row, index) => {
+            const active = row.status === "QUEUED" || row.status === "RUNNING";
+            const color = row.status === "COMPLETED" ? "green" : row.status === "CANCELLED" ? "orange" : undefined;
+            const methodLabel = `${t(GENERATION_OPTIMIZER_LABELS[row.optimizer as keyof typeof GENERATION_OPTIMIZER_LABELS] ?? row.optimizer)} · ${t(GENERATION_OBJECTIVE_LABELS[row.objective as keyof typeof GENERATION_OBJECTIVE_LABELS] ?? row.objective)}`;
+            return (
+              <div
+                key={row.id}
+                style={{ padding: "9px 0", borderTop: index === 0 ? "none" : "1px solid #EAECF0" }}
+              >
+                <Typography.Text
+                  strong
+                  ellipsis
+                  title={methodLabel}
+                  style={{ display: "block", fontSize: 12 }}
+                >
+                  {methodLabel}
+                </Typography.Text>
+                <Typography.Text type="secondary" style={{ display: "block", fontSize: 11 }}>
+                  {new Date(row.created_at).toLocaleString(locale)}
+                </Typography.Text>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 4 }}>
+                  <Tag color={color} style={{ marginInlineEnd: 0, fontSize: 10 }}>
+                    {jobStatusLabel(tr, row.status)}
+                  </Tag>
+                  <Typography.Text type="secondary" style={{ fontSize: 10, whiteSpace: "nowrap" }}>
+                    {row.accepted_count} / {row.evaluations}
+                  </Typography.Text>
+                  <Space size={0} style={{ marginLeft: "auto" }}>
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<ArrowRight16Regular />}
+                      aria-label={t("Open {name} expansion", { name: t(GENERATION_OBJECTIVE_LABELS[row.objective as keyof typeof GENERATION_OBJECTIVE_LABELS] ?? row.objective) })}
+                      title={t("Open")}
+                      onClick={() => window.dispatchEvent(new CustomEvent("generation-open", { detail: row.id }))}
+                    />
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<Delete16Regular />}
+                      aria-label={t("Delete {name} expansion", { name: t(GENERATION_OBJECTIVE_LABELS[row.objective as keyof typeof GENERATION_OBJECTIVE_LABELS] ?? row.objective) })}
+                      title={t("Delete")}
+                      disabled={active || deletingId !== null}
+                      loading={deletingId === row.id}
+                      onClick={() => void deleteRun(row)}
+                    />
+                  </Space>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </RailShell>
+  );
+}
+
 
 function RecentJobsRail() {
   const setJobsDrawerOpen = useWorkspace((s) => s.setJobsDrawerOpen);
@@ -397,7 +498,7 @@ function JobRailRow({ job, first, datasetName }: { job: JobState; first: boolean
         ? i18n.t("#{n} in queue", { n: job.queue_position })
         : "—"
       : job.completed != null && job.total != null
-      ? `${job.completed.toLocaleString()} / ${job.total.toLocaleString()}`
+      ? `${job.completed.toLocaleString("en-US", { useGrouping: false })} / ${job.total.toLocaleString("en-US", { useGrouping: false })}`
       : job.error
         ? job.error.message
         : (job.message ?? "—");
@@ -509,7 +610,7 @@ function HealthRow({
           flex: "0 0 auto",
         }}
       >
-        {loading ? "—" : `${safeCount.toLocaleString()} (${pct.toFixed(2)}%)`}
+        {loading ? "—" : `${safeCount.toLocaleString("en-US", { useGrouping: false })} (${pct.toFixed(2)}%)`}
       </span>
       <span
         style={{

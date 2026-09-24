@@ -59,6 +59,59 @@ class AnalysisDataMixin:
             return np.full(count, int(run_row.get("frame_index") or 0), dtype=np.int64)
         return np.arange(count, dtype=np.int64)
 
+    def sample_identity(self, params: dict) -> dict:
+        """Resolve analysis indices in either direction without loading descriptor values."""
+        values, run = self.results.load_values(params.get("run_id"), mmap=True)
+        if run["status"] != "COMPLETED":
+            raise AppError(ANALYSIS_STALE, "sample indexing requires a current descriptor run")
+        mode = params.get("mode", "structure")
+        if mode not in ("structure", "atom"):
+            raise AppError(INVALID_PARAMS, "mode must be structure or atom")
+        meta = run["metadata"]
+        level = str(meta.get("level") or "").lower()
+        atom_rows = meta.get("row_semantics") in ("atom", "local_environment", "pair") or any(token in level for token in ("atom", "local", "pair"))
+        offsets = self._row_offsets(run)
+        if atom_rows and not self._valid_offsets(offsets, values.shape[0]):
+            raise AppError(RESULT_INCOMPATIBLE, "atom-level run has no verified row_offsets")
+        if mode == "atom" and not atom_rows:
+            raise AppError(RESULT_INCOMPATIBLE, "descriptor does not provide atom environments")
+        count = len(offsets) - 1 if atom_rows else values.shape[0]
+        frames = np.arange(count, dtype=np.int64) + (int(run.get("frame_index") or 0) if run.get("scope") == "frame" else 0)
+        if mode == "atom":
+            frames = self._run_frame_values(run, count)
+        sizes = np.diff(offsets) if mode == "atom" else np.ones(count, dtype=np.int64)
+        if params.get("view_id"):
+            view = self._usable_view(str(params["view_id"]), run["dataset_id"])
+            mask = np.isin(frames, json.loads(view["frame_indices_json"]))
+            frames, sizes = frames[mask], sizes[mask]
+        ends = np.cumsum(sizes)
+        total = int(ends[-1]) if ends.size else 0
+        result = {"dataset_id": run["dataset_id"], "total": total, "i": None, "frame": None, "row": None}
+
+        def index_value(key):
+            value = params.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise AppError(INVALID_PARAMS, f"{key} must be a non-negative integer")
+            return value
+
+        if "i" in params:
+            index = index_value("i")
+            if index >= total:
+                raise AppError(INVALID_PARAMS, "sample index is out of range")
+            position = int(np.searchsorted(ends, index, side="right"))
+            atom = index - (int(ends[position - 1]) if position else 0) if mode == "atom" else None
+        else:
+            frame = index_value("frame")
+            matches = np.flatnonzero(frames == frame)
+            if not matches.size or (mode == "atom" and params.get("row") is None):
+                return result
+            position = int(matches[0])
+            atom = index_value("row") if mode == "atom" else None
+            if atom is not None and atom >= sizes[position]:
+                return result
+            index = (int(ends[position - 1]) if position else 0) + (atom or 0)
+        return {**result, "i": index, "frame": int(frames[position]), "row": atom}
+
     def _frame_properties_by_frame(self, run_row: dict, frames: list[int]) -> dict[int, dict]:
         """Energy/force/volume for the named frames only, keyed by frame index.
 

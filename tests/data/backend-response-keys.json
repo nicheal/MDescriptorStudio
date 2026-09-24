@@ -95,6 +95,7 @@
    "descriptor_run_id",
    "error",
    "finished_at",
+   "generation_run_id",
    "id",
    "job_type",
    "message",

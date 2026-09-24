@@ -152,6 +152,35 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE descriptor_runs ADD COLUMN feature_count INTEGER;
     ALTER TABLE descriptor_runs ADD COLUMN row_semantics TEXT;
     """,
+    12: """
+    CREATE TABLE generation_runs (
+        id TEXT PRIMARY KEY,
+        dataset_id TEXT NOT NULL,
+        descriptor_run_id TEXT,
+        optimizer TEXT NOT NULL,
+        objective TEXT NOT NULL,
+        params_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        evaluations INTEGER DEFAULT 0,
+        accepted_count INTEGER DEFAULT 0,
+        result_path TEXT,
+        artifact_manifest_json TEXT,
+        preview_json TEXT,
+        warnings_json TEXT,
+        cache_key TEXT,
+        stale_reason TEXT,
+        updated_at TEXT
+    );
+    CREATE INDEX idx_generation_dataset ON generation_runs(dataset_id);
+    CREATE INDEX idx_generation_status ON generation_runs(status, created_at);
+    ALTER TABLE jobs ADD COLUMN generation_run_id TEXT;
+    """,
+    13: """
+    UPDATE descriptor_runs SET device = 'imported' WHERE device = 'external';
+    """,
 }
 
 

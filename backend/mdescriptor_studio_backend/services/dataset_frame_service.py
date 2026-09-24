@@ -189,6 +189,29 @@ class DatasetFrameService:
         row, f, symbols, _positions, bond_cutoff, cell, pbc, periodic, volume = self._frame_details(params)
         return self._summary_payload(row, f, symbols, cell, pbc, periodic, volume, bond_cutoff)
 
+    def frame_from(self, frame, *, name: str, params: dict | None = None) -> dict:
+        """Build the same viewer payload for a generated, non-dataset frame."""
+        params = params or {}
+        symbols = [symbol_of(z) for z in frame.numbers.tolist()]
+        positions = np.asarray(frame.positions)
+        bond_cutoff = _bond_cutoff(params.get("bond_cutoff"))
+        cell = np.asarray(frame.cell)
+        pbc = np.asarray(frame.pbc, dtype=bool).reshape(3)
+        det = abs(float(np.linalg.det(cell)))
+        periodic = bool(pbc.any() and det > 1e-8)
+        volume = det if det > 1e-8 else None
+        atom_offset, atom_end = _atom_window(params, len(symbols))
+        row = {"name": name}
+        return {
+            **self._summary_payload(row, frame, symbols, cell, pbc, periodic, volume, bond_cutoff),
+            **self._geometry_payload(row, frame, symbols, positions, cell, pbc, periodic, bond_cutoff),
+            "atom_rows": _atom_rows(symbols, positions, frame.forces, atom_offset, atom_end),
+            "atom_offset": atom_offset,
+            "atom_page_size": atom_end - atom_offset,
+            "atom_total": len(symbols),
+            "atom_rows_complete": atom_offset == 0 and atom_end == len(symbols),
+        }
+
     def frame_geometry(self, params: dict) -> dict:
         """Return bounded viewer geometry separately from frame metadata."""
         _row, f, symbols, positions, bond_cutoff, cell, pbc, periodic, _volume = self._frame_details(params)

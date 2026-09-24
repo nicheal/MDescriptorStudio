@@ -44,7 +44,6 @@ _GRAPH_QUERY_BLOCK = 4096
 # cancellation immediately, and these caps prevent a cancelled black-box run
 # from occupying an analysis worker for an unbounded period.
 _BLACK_BOX_SAMPLE_LIMITS = {
-    "tsne": 10_000,
     "hdbscan": 30_000,
     "dbscan": 30_000,
     "agglomerative": 20_000,

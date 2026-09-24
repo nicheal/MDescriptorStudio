@@ -482,7 +482,7 @@ function DatasetItem({
         </Dropdown>
       </div>
       <div style={{ fontSize: 11, color: "#616161" }}>
-        {formatLabel(d.format)} · {t("{n} structures", { n: d.number_of_frames.toLocaleString() })}
+        {formatLabel(d.format)} · {t("{n} structures", { n: d.number_of_frames.toLocaleString("en-US", { useGrouping: false }) })}
       </div>
       <div style={{ fontSize: 11, color: "#8A8A8A" }}>
         {d.elements.join(" · ")} · PBC {d.periodicity.flags.join("") || "—"}
@@ -500,7 +500,7 @@ function DatasetViewItem({ view, onRename, onSplit, onMaterialize, onDelete }: {
     <BranchFork16Regular aria-hidden />
     <div className="dataset-view-copy">
       <div className="dataset-view-name">{view.name}</div>
-      <div className="dataset-view-meta">{t("{n} structures", { n: view.number_of_frames.toLocaleString() })}{view.role ? ` · ${view.role}` : ""}{view.stale ? ` · ${t("stale")}` : ""}</div>
+      <div className="dataset-view-meta">{t("{n} structures", { n: view.number_of_frames.toLocaleString("en-US", { useGrouping: false }) })}{view.role ? ` · ${view.role}` : ""}{view.stale ? ` · ${t("stale")}` : ""}</div>
     </div>
     <Dropdown menu={{ items: [
       { key: "rename", label: t("Rename") },

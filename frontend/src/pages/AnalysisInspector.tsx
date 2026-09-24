@@ -41,8 +41,8 @@ export default function AnalysisInspector({
         <SectionHeading title={t("INSPECTOR")} meta={selectedPoint ? t("Frame {index}", { index: selectedPoint.frame }) : undefined} />
         {selectedPoint ? <>
           <Row k={t("Sample")} v={selectedPoint.sample_id ?? String(selectedPoint.i)} />
-          <Row k={t("Frame")} v={String(selectedPoint.frame)} />
-          {selectedPoint.row != null && <Row k={t("Row")} v={String(selectedPoint.row)} />}
+          <Row k={t("Frame index")} v={String(selectedPoint.frame)} />
+          {selectedPoint.row != null && <Row k={t("Atom index in frame")} v={String(selectedPoint.row)} />}
           <Button size="small" icon={<ArrowRight16Regular />} onClick={onOpenPoint}>{t("Open in Explore")}</Button>
         </> : <Typography.Text type="secondary">{t("Click a point, or use box/lasso selection, to inspect a structure.")}</Typography.Text>}
       </section>

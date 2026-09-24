@@ -1,3 +1,4 @@
+import { formatNumber as formatNumericValue } from "../util/format";
 import { useEffect, useMemo, useState } from "react";
 import type { Data, PlotMouseEvent } from "plotly.js";
 import { InputNumber, Select, Tabs, Tag, Typography } from "antd";
@@ -533,5 +534,5 @@ export function buildKde(samples: number[], edges: number[], totalCount: number)
 function formatNumber(value: unknown): string {
   const number = finiteNumber(value);
   if (number === null) return "—";
-  return Math.abs(number) >= 1000 ? number.toLocaleString(undefined, { maximumFractionDigits: 2 }) : number.toPrecision(5);
+  return formatNumericValue(number);
 }

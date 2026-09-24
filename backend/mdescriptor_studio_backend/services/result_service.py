@@ -212,6 +212,8 @@ class ResultService:
             )
         except (OSError, TypeError, ValueError, UnsafePathError) as exc:
             raise AppError(RESULT_INCOMPATIBLE, "descriptor result artifact is unavailable") from exc
+        if isinstance(meta, dict) and row.get("device") in ("imported", "external"):
+            meta["device"] = "imported"
         dataset = self.db.query_one("SELECT name FROM datasets WHERE id = ?", (row["dataset_id"],))
         return {**row, "dataset_name": dataset["name"] if dataset else None, "metadata": meta}
 

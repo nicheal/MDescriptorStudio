@@ -1,4 +1,7 @@
-import { InputNumber, Select, Space, Tag, Tooltip, Typography } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { Button, InputNumber, Select, Space, Tag, Tooltip, Typography } from "antd";
+import { ipc } from "../ipc/client";
+import { useWorkspace } from "../stores/workspace";
 import type {
   AnalysisParams,
   OverviewAnalysis,
@@ -19,6 +22,48 @@ import {
 import type { useAnalysisParameters } from "./useAnalysisParameters";
 
 type AnalysisParameterState = ReturnType<typeof useAnalysisParameters>;
+
+export function QueryIndexExploreButton({ runId, mode, viewId, index }: { runId: string | null; mode: PcaMode; viewId: string | null; index: number }) {
+  const { t } = useT();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  useEffect(() => {
+    const requests = generation;
+    ++requests.current;
+    setBusy(false);
+    setError(null);
+    return () => { ++requests.current; };
+  }, [runId, mode, viewId, index]);
+
+  const open = async () => {
+    if (!runId || busy) return;
+    const current = generation.current;
+    const datasetId = useWorkspace.getState().activeDatasetId;
+    setBusy(true);
+    setError(null);
+    try {
+      const sample = await ipc.request<{ dataset_id: string; frame: number; row: number | null }>("analysis.sample_identity", {
+        run_id: runId, mode, i: index, ...(viewId ? { view_id: viewId } : {}),
+      });
+      if (generation.current !== current || useWorkspace.getState().activeDatasetId !== datasetId || sample.dataset_id !== datasetId) return;
+      useWorkspace.setState({
+        activeFrameIndex: sample.frame,
+        selectedSample: { datasetId, runId, mode, frame: sample.frame, ...(sample.row == null ? {} : { atom: sample.row }) },
+        analysisSampleScope: { datasetId, runId, mode, viewId },
+        page: "explore",
+      });
+    } catch (reason) {
+      if (generation.current === current) setError(String(reason));
+    } finally {
+      if (generation.current === current) setBusy(false);
+    }
+  };
+  return <>
+    <Button loading={busy} disabled={!runId || !Number.isInteger(index) || index < 0} onClick={() => void open()}>{t("Open in Explore")}</Button>
+    {error && <Typography.Text type="danger">{error}</Typography.Text>}
+  </>;
+}
 
 type AnalysisModuleControlSetters = Pick<AnalysisParameterState,
   | "setSimilarityMode"
@@ -292,7 +337,11 @@ export default function AnalysisModuleControls({
       </>}
     </Space>}
     {tab === "similarity" && params.similarityMode !== "pairwise" && <Space wrap>
-      {params.similarityMode === "query" && <><ParamLabel label={t("Query index")} cached={cachedParam("queryIndex")} /><InputNumber min={0} value={params.queryIndex} onChange={(value) => setters.setQueryIndex(value ?? 0)} /></>}
+      {params.similarityMode === "query" && <>
+        <ParamLabel label={t("Query sample index i")} cached={cachedParam("queryIndex")} />
+        <InputNumber min={0} value={params.queryIndex} onChange={(value) => setters.setQueryIndex(value ?? 0)} />
+        <QueryIndexExploreButton runId={selectedRun} mode={params.mode} viewId={params.viewId} index={params.queryIndex} />
+      </>}
       <ParamLabel label="k" cached={cachedParam("k")} /><InputNumber min={1} value={params.k} onChange={(value) => setters.setK(value ?? 10)} />
     </Space>}
     {tab === "overview" && overviewAnalysis === "trajectory" && <Typography.Text type="secondary">{t("Frame range, trajectory sampling interval, event method, sensitivity, and coloring live in the trajectory result itself.")}</Typography.Text>}

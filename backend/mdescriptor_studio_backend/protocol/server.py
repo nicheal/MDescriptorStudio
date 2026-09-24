@@ -30,7 +30,7 @@ class Server:
     # job.get/job.list belong here too: watchJob polls job.get every 500ms, so
     # a jam otherwise also freezes progress reporting and makes running jobs
     # look hung. All three are fast DB reads/row updates.
-    CONTROL_METHODS = frozenset({"job.cancel", "job.get", "job.list"})
+    CONTROL_METHODS = frozenset({"job.cancel", "job.get", "job.list", "generation.get", "generation.list"})
 
     def __init__(self, methods: dict):
         self.methods = methods

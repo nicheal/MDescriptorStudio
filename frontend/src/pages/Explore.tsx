@@ -26,6 +26,7 @@ import {
   type StructureViewer,
 } from "../viz/StructureViewer";
 import { createExploreFrameLoader, resolveExternalFrame, type ExploreFrameLoader } from "./exploreFrameLoader";
+import ExploreSampleIndex from "./ExploreSampleIndex";
 import type { DatasetHealth, DatasetView, FramePayload, HealthFindings } from "../types/protocol";
 
 const DEFAULT_BOND_CUTOFF = 2.4;
@@ -84,6 +85,7 @@ export default function Explore() {
   const activeFrameIndex = useWorkspace((st) => st.activeFrameIndex);
   const setActiveFrame = useWorkspace((st) => st.setActiveFrame);
   const activeDescriptorRunId = useWorkspace((st) => st.activeDescriptorRunId);
+  const analysisSampleScope = useWorkspace((st) => st.analysisSampleScope);
   const datasetId = d?.id;
   const { t } = useT();
   const [frame, setFrame] = useState<FramePayload | null>(null);
@@ -714,6 +716,11 @@ export default function Explore() {
             {t("loading…")}
           </Typography.Text>
         </div>
+        {analysisSampleScope?.datasetId === d?.id && (!activeDescriptorRunId || activeDescriptorRunId === analysisSampleScope.runId) && frame && (
+          <div style={{ flexBasis: "100%" }}>
+            <ExploreSampleIndex scope={analysisSampleScope} frame={frame.index} atom={selectedAtom} />
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 12, flex: 1, minHeight: 0 }}>
@@ -794,7 +801,7 @@ export default function Explore() {
           )}
           <InspectorRows
             rows={[
-              [t("Frame"), String(idx)],
+              [t("Frame index"), String(idx)],
               [t("Views"), frameViews.length > 0 ? frameViews.join(" · ") : "—"],
               [t("Formula"), frame?.formula ?? "—"],
               [t("Atoms"), String(frame?.natoms ?? "—")],
@@ -903,7 +910,7 @@ export default function Explore() {
             onClick: () => selectAtom(row.i),
           })}
           columns={[
-            { title: "#", dataIndex: "i", key: "i", width: 60 },
+            { title: t("Atom index in frame"), dataIndex: "i", key: "i", width: 150 },
             { title: t("Element"), dataIndex: "el", key: "el", width: 80 },
             { title: "x (Å)", dataIndex: "x", key: "x", align: "right" },
             { title: "y (Å)", dataIndex: "y", key: "y", align: "right" },

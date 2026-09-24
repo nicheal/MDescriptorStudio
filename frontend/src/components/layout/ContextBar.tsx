@@ -74,7 +74,7 @@ export default function ContextBar() {
         <Space size={8} wrap style={{ flex: 1, minWidth: 0 }}>
           <Tag style={{ marginRight: 0 }}>{formatLabel(d.format)}</Tag>
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-            {t("{n} structures", { n: d.number_of_frames.toLocaleString() })}
+            {t("{n} structures", { n: d.number_of_frames.toLocaleString("en-US", { useGrouping: false }) })}
           </Typography.Text>
           <Space size={2}>
             {d.elements.map((el) => (

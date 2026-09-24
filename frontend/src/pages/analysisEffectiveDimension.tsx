@@ -1,3 +1,4 @@
+import { formatNumber as formatNumericValue } from "../util/format";
 /*
  * The effective-dimension (PCA spectrum) panel.  Split out of Analysis so the
  * page component keeps only run selection and module orchestration.
@@ -205,7 +206,7 @@ function sampledIndices(length: number, maxPoints: number): number[] {
 function formatNumber(value: unknown): string {
   const number = finiteNumber(value);
   if (number === null) return "—";
-  return Math.abs(number) >= 1000 ? number.toLocaleString(undefined, { maximumFractionDigits: 2 }) : number.toPrecision(5);
+  return formatNumericValue(number);
 }
 
 function integerCount(value: unknown): number | null {

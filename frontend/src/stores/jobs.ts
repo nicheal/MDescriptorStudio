@@ -53,6 +53,8 @@ const JOB_TYPE_PAIRS: Record<string, Pair> = {
   "analysis.sensitivity": { en: "Parameter sensitivity", zh: "参数敏感性" },
   "analysis.perturbation_sensitivity": { en: "Structural perturbation response", zh: "结构扰动响应" },
   "analysis.export": { en: "Analysis export", zh: "分析导出" },
+  "generation.materialize": { en: "Materialize generated structures", zh: "物化生成结构" },
+  "generation.add_to_dataset": { en: "Add structures to dataset", zh: "添加结构到数据集" },
 };
 
 // Statuses render raw (uppercase) in English mode, exactly as before the

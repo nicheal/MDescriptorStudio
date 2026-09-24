@@ -1,3 +1,4 @@
+import { formatNumber } from "../util/format";
 // Shared Plotly/table primitives for the Analysis result views. Kept separate
 // from the individual module views so a module can live in its own file
 // without importing the component that renders it (no import cycle).
@@ -181,7 +182,7 @@ export function num(value: unknown): number | null {
 
 export function fmt(value: unknown): string {
   const numeric = num(value);
-  if (numeric !== null) return Math.abs(numeric) >= 1_000 ? numeric.toLocaleString(undefined, { maximumFractionDigits: 2 }) : numeric.toPrecision(5);
+  if (numeric !== null) return formatNumber(numeric);
   if (typeof value === "string") return value;
   if (value == null) return "—";
   try { return JSON.stringify(value); } catch { return String(value); }
@@ -189,7 +190,7 @@ export function fmt(value: unknown): string {
 
 export function formatCount(value: unknown): string {
   const numeric = num(value);
-  return numeric === null ? "—" : Math.round(numeric).toLocaleString();
+  return numeric === null ? "—" : Math.round(numeric).toLocaleString("en-US", { useGrouping: false });
 }
 
 export function formatPercent(value: unknown): string {

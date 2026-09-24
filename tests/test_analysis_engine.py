@@ -344,20 +344,25 @@ def test_tsne_adapts_default_perplexity_for_small_inputs() -> None:
     assert result["preview"]["parameters"]["perplexity"] == 3.0
 
 
-def test_tsne_caps_iterations_it_cannot_report_progress_for() -> None:
-    """sklearn optimises without a callback, so iteration count is the only
-    bound on how long the job runs before it can be cancelled."""
+def test_tsne_caps_optimisation_iterations() -> None:
+    """Keep excessive iteration requests bounded inside the killable worker."""
     values = np.arange(12, dtype=np.float64).reshape(6, 2)
     result = tsne(StructureDescriptorMatrix(values, np.arange(6)), {"max_iter": 100_000})
     assert result["preview"]["parameters"]["max_iter"] == MAX_ITERATIONS
     assert any("max_iter reduced" in warning for warning in result["warnings"])
 
 
-def test_uncancellable_tsne_refuses_oversized_input() -> None:
-    values = np.zeros((10_001, 2), dtype=np.float64)
-    with pytest.raises(AppError, match="cannot be cancelled") as exc:
-        tsne(StructureDescriptorMatrix(values, np.arange(values.shape[0])), {})
-    assert exc.value.code == ANALYSIS_INPUT_INVALID
+def test_tsne_preserves_large_atom_input(monkeypatch) -> None:
+    values = np.random.default_rng(42).normal(size=(10_001, 2))
+    samples = AtomDescriptorMatrix(values, np.zeros(len(values), dtype=np.int64), row=np.arange(len(values)))
+
+    def fit_transform(self, x):
+        np.testing.assert_array_equal(x, values)
+        return x.copy()
+
+    monkeypatch.setattr("sklearn.manifold.TSNE.fit_transform", fit_transform)
+    result = tsne(samples, {})
+    np.testing.assert_array_equal(result["arrays"]["coords"], values)
 
 
 def test_single_feature_matrix_runs_do_not_crash_unstructured() -> None:

@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 # Pool sizes per job category. The descriptor pool is deliberately size 1:
 # descriptor compute is the heaviest work in the process and must not overlap
 # with another descriptor run while the engine's native extensions are loaded.
-_POOL_SIZES = {"engine": 1, "analysis": 2, "dataset": 2}
+_POOL_SIZES = {"engine": 1, "analysis": 2, "dataset": 2, "generation": 2}
 
 
 def _category(job_type: str) -> str:
@@ -30,6 +30,8 @@ def _category(job_type: str) -> str:
         return "engine"
     if job_type.startswith("analysis."):
         return "analysis"
+    if job_type.startswith("generation."):
+        return "generation"
     return "dataset"
 
 
@@ -55,6 +57,10 @@ class JobContext:
         self.control = control
         if self._cancelled.is_set():
             control.cancel()
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancelled.is_set()
 
     def cancel(self) -> None:
         self._cancelled.set()
@@ -128,6 +134,7 @@ class JobService:
         dataset_id: str | None = None,
         descriptor_run_id: str | None = None,
         analysis_run_id: str | None = None,
+        generation_run_id: str | None = None,
     ) -> str:
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         if not self._queue_slots.acquire(blocking=False):
@@ -140,9 +147,9 @@ class JobService:
             with self._lock:
                 self._contexts[job_id] = JobContext(self, job_id)
             self.db.execute(
-                "INSERT INTO jobs (id, job_type, dataset_id, descriptor_run_id, analysis_run_id, status, progress, created_at)"
-                " VALUES (?, ?, ?, ?, ?, 'QUEUED', 0, ?)",
-                (job_id, job_type, dataset_id, descriptor_run_id, analysis_run_id, _NOW()),
+                "INSERT INTO jobs (id, job_type, dataset_id, descriptor_run_id, analysis_run_id, generation_run_id, status, progress, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', 0, ?)",
+                (job_id, job_type, dataset_id, descriptor_run_id, analysis_run_id, generation_run_id, _NOW()),
             )
             inserted = True
             self._pools[_category(job_type)].submit(self._run, job_id, job_type, runner)
@@ -164,6 +171,11 @@ class JobService:
         )
         self.db.execute(
             "UPDATE analysis_runs SET status = 'CANCELLED', finished_at = ?"
+            " WHERE status IN ('QUEUED', 'RUNNING')",
+            (_NOW(),),
+        )
+        self.db.execute(
+            "UPDATE generation_runs SET status = 'CANCELLED', finished_at = ?"
             " WHERE status IN ('QUEUED', 'RUNNING')",
             (_NOW(),),
         )
@@ -243,7 +255,7 @@ class JobService:
         the only place runners update them, so without this they stay RUNNING
         forever (Jobs page FAILED, Results page RUNNING)."""
         row = self.db.query_one(
-            "SELECT descriptor_run_id, analysis_run_id FROM jobs WHERE id = ?", (job_id,)
+            "SELECT descriptor_run_id, analysis_run_id, generation_run_id FROM jobs WHERE id = ?", (job_id,)
         )
         if row is None:
             return
@@ -259,6 +271,12 @@ class JobService:
                 "UPDATE analysis_runs SET status = ?, finished_at = ?"
                 " WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
                 (status, _NOW(), row["analysis_run_id"]),
+            )
+        if row["generation_run_id"]:
+            self.db.execute(
+                "UPDATE generation_runs SET status = ?, finished_at = ?"
+                " WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
+                (status, _NOW(), row["generation_run_id"]),
             )
 
     def _update_progress(self, job_id, fraction, completed, total, message) -> None:
@@ -282,13 +300,32 @@ class JobService:
 
     # -- queries / cancel ----------------------------------------------------
     def cancel(self, job_id: str) -> dict:
-        with self._lock:
-            ctx = self._contexts.get(job_id)
         row = self.get_job(job_id)
         if row is None:
             raise AppError(JOB_NOT_FOUND, f"job {job_id} does not exist")
         if row["status"] in ("COMPLETED", "FAILED", "CANCELLED"):
             return {"ok": True, "already_finished": True}
+
+        if row["job_type"] == "generation.run":
+            run = self.db.query_one(
+                "SELECT status FROM generation_runs WHERE id = ?", (row.get("generation_run_id"),)
+            )
+            if run is not None and run["status"] not in ("QUEUED", "RUNNING"):
+                return {"ok": True, "already_finished": True}
+            with self._lock:
+                ctx = self._contexts.get(job_id)
+                current = self.get_job(job_id)
+                if current is None or current["status"] in ("COMPLETED", "FAILED", "CANCELLED"):
+                    return {"ok": True, "already_finished": True}
+                if ctx is None:
+                    raise AppError(INVALID_PARAMS, f"job {job_id} is queued but has no context yet")
+                # The generation runner settles this cancellation after it has
+                # published any structures accepted in earlier rounds.
+                ctx.cancel()
+            return {"ok": True, "already_finished": False}
+
+        with self._lock:
+            ctx = self._contexts.get(job_id)
         if ctx is None:
             raise AppError(INVALID_PARAMS, f"job {job_id} is queued but has no context yet")
         ctx.cancel()

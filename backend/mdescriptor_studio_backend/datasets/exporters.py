@@ -32,8 +32,13 @@ def _symbols(frame) -> list[str]:
     return [_Z_TO_SYMBOL.get(int(z), f"Z{int(z)}") for z in np.asarray(frame.numbers, dtype=np.int64)]
 
 
-def write_extxyz(path: Path, frames: Iterable) -> int:
-    """Write frames to an extended-xyz file; returns the frame count."""
+def write_extxyz(path: Path, frames: Iterable, *, extra_comments: dict | None = None) -> int:
+    """Write frames to an extended-xyz file; returns the frame count.
+
+    ``extra_comments`` maps a frame's 0-based position to an additional
+    comment string (generation-run provenance for accepted candidates).
+    Keys outside the written range are ignored.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     written = 0
@@ -47,6 +52,8 @@ def write_extxyz(path: Path, frames: Iterable) -> int:
             if frame.forces is not None:
                 props += ":forces:R:3"
             comment = f'Lattice="{lattice}" {props} pbc="{pbc}"'
+            if extra_comments and written in extra_comments:
+                comment += " " + str(extra_comments[written]).strip()
             if frame.energy is not None:
                 comment += f" energy={float(frame.energy):.10g}"
             if frame.virial is not None:

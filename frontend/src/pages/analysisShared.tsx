@@ -1,3 +1,4 @@
+import { formatNumber } from "../util/format";
 /*
  * Leaf components and value types shared by the Analysis page and its panels.
  * Split out of Analysis so the page component keeps run selection, the async
@@ -16,7 +17,7 @@ import type {
   PcaPayload,
   RunRow,
 } from "../types/protocol";
-import { previewTableColumns, previewTableRows, type AnalysisPoint } from "./analysisPreview";
+import { SAMPLE_COLUMN_LABELS, previewTableColumns, previewTableRows, type AnalysisPoint } from "./analysisPreview";
 import type { AnalysisArrays } from "./analysisVisualizations";
 import type { AnalysisMethodGuide } from "./analysisMethodGuides";
 import { FeatureVarianceChart } from "./featureVariance";
@@ -93,7 +94,7 @@ export function CrossDatasetPicker({
   const datasetOptions = datasets.map((item) => ({ value: item.id, label: item.name }));
   const scopeOptions = (views: DatasetView[]) => [
     { value: "__full__", label: t("Full dataset") },
-    ...views.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString()}` })),
+    ...views.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString("en-US", { useGrouping: false })}` })),
   ];
   const runOptions = (rows: RunRow[]) => rows.map((run) => ({
     value: run.id,
@@ -197,7 +198,7 @@ export function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPr
     : typeof preview?.total_points === "number"
       ? preview.total_points
       : rows.length;
-  if (tableRows.length) return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} meta={t("{n} rows", { n: totalRows.toLocaleString() })} /><Table size="small" pagination={{ pageSize: 12 }} rowKey={(row, index) => `${String(row.i ?? row.sample_id ?? row.run_id ?? index)}:${String(row.source_i ?? row.rank ?? index)}`} dataSource={tableRows} onRow={(row) => ({ onClick: () => onSelect?.(row) })} columns={previewTableColumns(tableRows[0]).map((key) => ({ title: key, dataIndex: key, key, render: (value: unknown) => typeof value === "number" ? value.toPrecision(6) : String(value ?? "—") }))} /></section>;
+  if (tableRows.length) return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} meta={t("{n} rows", { n: totalRows.toLocaleString("en-US", { useGrouping: false }) })} /><Table size="small" pagination={{ pageSize: 12 }} rowKey={(row, index) => `${String(row.i ?? row.sample_id ?? row.run_id ?? index)}:${String(row.source_i ?? row.rank ?? index)}`} dataSource={tableRows} onRow={(row) => ({ onClick: () => onSelect?.(row) })} columns={previewTableColumns(tableRows[0]).map((key) => ({ title: t(SAMPLE_COLUMN_LABELS[key] ?? key), dataIndex: key, key, render: (value: unknown) => typeof value === "number" ? formatNumber(value, 6) : String(value ?? "—") }))} /></section>;
   return <section className="analysis-card"><SectionHeading title={String(preview?.kind ?? "RESULT").toUpperCase()} /><Collapse ghost size="small" items={[{ key: "raw", label: t("Raw result output"), children: <pre className="analysis-json-preview">{JSON.stringify(preview, null, 2)}</pre> }]} /></section>;
 }
 
@@ -252,7 +253,7 @@ export function SamplingQuotaPreview({ quota, busy }: { quota: SamplingQuota | n
           dataSource={quota.groups}
           columns={[
             { title: t("Element set"), dataIndex: "group" },
-            { title: t("Structures"), dataIndex: "structures", align: "right" as const, render: (value: number) => value.toLocaleString() },
+            { title: t("Structures"), dataIndex: "structures", align: "right" as const, render: (value: number) => value.toLocaleString("en-US", { useGrouping: false }) },
             { title: t("Sampling quota"), dataIndex: "quota", align: "right" as const },
           ]}
         />

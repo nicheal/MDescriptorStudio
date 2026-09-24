@@ -8,13 +8,13 @@ import numpy as np
 
 from ...errors import ANALYSIS_INPUT_INVALID, AppError
 from ..models import DescriptorMatrix
-from ._common import _check_black_box_samples, _check_samples, _float_param, _int_param, _preprocess, _safe_import, _seed
+from ._common import _check_samples, _float_param, _int_param, _preprocess, _safe_import, _seed
 
 MAX_ITERATIONS = 5000
 
 def tsne(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
     _check_samples(samples.values, 4)
-    _check_black_box_samples(samples.values, "tsne")
+    # JobRunner runs t-SNE in a killable process, including large atom matrices.
     x, warnings, keep = _preprocess(samples.values, params, "raw")
     default_perplexity = min(30.0, max(2.0, float(x.shape[0] - 1)))
     perplexity = _float_param(params, "perplexity", default_perplexity, 2.0)
@@ -24,8 +24,7 @@ def tsne(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str
         # sklearn answers a one-column matrix with a bare ValueError, which the
         # job layer can only report as an internal failure.
         raise AppError(ANALYSIS_INPUT_INVALID, "t-SNE needs at least two features")
-    # sklearn reports no progress while it optimises, so iterations are the one
-    # bound on how long this job can run uncancelled.
+    # Bound optimisation work even though JobRunner can terminate the worker.
     max_iter = _int_param(params, "max_iter", 1000, 250)
     if max_iter > MAX_ITERATIONS:
         warnings.append(f"max_iter reduced from {max_iter} to {MAX_ITERATIONS}")

@@ -56,7 +56,7 @@ describe("Analysis preview mapping", () => {
       { array: "left_pair_distances", truncated: true, rows: 20_000, total: 179_700 },
       { array: "similarity_matrix", truncated: true },
     ]);
-    expect(withCounts).toBe(`left_pair_distances (${(20_000).toLocaleString()} / ${(179_700).toLocaleString()})`);
+    expect(withCounts).toBe("left_pair_distances (20000 / 179700)");
     // A restored name from the cache carries no counts and stays as it was.
     expect(narrowedArrays([{ array: "similarity_matrix", truncated: true }])).toEqual(["similarity_matrix"]);
     // Complete arrays are not labelled just because the caller passed a total.

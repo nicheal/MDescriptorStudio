@@ -216,7 +216,7 @@ export default function HealthFindingsDrawer() {
   const tabItems = [
     ...CHECK_KEYS.filter((k) => (findings?.[k]?.length ?? 0) > 0).map((k) => ({
       key: k,
-      label: `${title(k)} ${(findings?.[k]?.length ?? 0).toLocaleString()}`,
+      label: `${title(k)} ${(findings?.[k]?.length ?? 0).toLocaleString("en-US", { useGrouping: false })}`,
     })),
   ];
 
@@ -274,7 +274,7 @@ export default function HealthFindingsDrawer() {
             </Button>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
               {rowsTotal > rows.length
-                ? t("Showing first {n} of {total} frames", { n: rows.length, total: rowsTotal.toLocaleString() })
+                ? t("Showing first {n} of {total} frames", { n: rows.length, total: rowsTotal.toLocaleString("en-US", { useGrouping: false }) })
                 : t("{n} frames", { n: rows.length })}
             </Typography.Text>
           </div>

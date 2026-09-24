@@ -14,3 +14,11 @@ export function formatSize(bytes: number): string {
   }
   return `${v.toFixed(1)} ${units[i]}`;
 }
+
+/** Keep integer identifiers exact and numeric displays free of grouping separators. */
+export function formatNumber(value: number, precision = 5): string {
+  if (Number.isInteger(value)) return String(value);
+  return Math.abs(value) >= 1000
+    ? value.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 2 })
+    : value.toPrecision(precision);
+}

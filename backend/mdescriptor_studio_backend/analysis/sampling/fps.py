@@ -28,15 +28,11 @@ from typing import Callable
 
 import numpy as np
 
-from ..algorithms._common import _safe_import
+from ...generation._distance import min_sqdist_to_set as _min_sqdist_to_set
+from ...generation._distance import sqdist_to_point as _sqdist_to_point
 from .grouping import group_sizes, sqrt_quota, validate_group_labels
 
 INITIAL_MODES = ("center", "first", "random")
-
-# Candidate/reference block side for the warm-start initialisation: each
-# Gram block costs block² floats (~33 MB in float64), keeping the N×M
-# cross-distance pass memory-bounded without a SciPy dependency.
-_BLOCK = 2048
 
 _STOP_TARGET = "target"
 _STOP_MIN_DISTANCE = "min_distance"
@@ -197,40 +193,6 @@ def _resolve_initial(x: np.ndarray, initial: str | int, rng: np.random.Generator
     if initial == "first":
         return 0
     return int(rng.integers(x.shape[0]))
-
-
-def _sqdist_to_point(x: np.ndarray, point: np.ndarray) -> np.ndarray:
-    """Squared distance from every row of ``x`` to one point, in blocks.
-
-    Explicit differences, not |x|² - 2x·p + |p|²: the expanded identity spends
-    the float64 mantissa on the common magnitude and gives away exactly the
-    low-order bits that separate near-duplicate structures -- which is what
-    decides the next FPS pick.  Measured on 400 x 96 features offset by 1e6
-    with 1e-3 spread: median relative error 1.0, wrong argmax, and no
-    agreement at all with the true top-20 ranking.  `_common._cross_nearest`
-    refuses the same identity for the same reason, and
-    tests/test_umap_numpy.py pins that as an invariant.
-    """
-    out = np.empty(x.shape[0], dtype=np.float64)
-    for start in range(0, x.shape[0], _BLOCK):
-        stop = min(start + _BLOCK, x.shape[0])
-        delta = x[start:stop] - point
-        out[start:stop] = np.einsum("ij,ij->i", delta, delta)
-    return out
-
-
-def _min_sqdist_to_set(x: np.ndarray, existing: np.ndarray) -> np.ndarray:
-    cdist = _safe_import("scipy.spatial.distance", "scipy").cdist
-    d2 = np.full(x.shape[0], np.inf, dtype=np.float64)
-    for ref_start in range(0, existing.shape[0], _BLOCK):
-        ref = existing[ref_start : ref_start + _BLOCK]
-        for cand_start in range(0, x.shape[0], _BLOCK):
-            cand_slice = slice(cand_start, cand_start + _BLOCK)
-            # Same reason as above; scipy subtracts coordinates directly, so an
-            # identical row scores exactly zero.
-            block = cdist(x[cand_slice], ref, metric="sqeuclidean")
-            np.minimum(d2[cand_slice], block.min(axis=1), out=d2[cand_slice])
-    return d2
 
 
 def _run_loop(

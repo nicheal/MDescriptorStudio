@@ -1,5 +1,16 @@
 import type { AnalysisPreview, RunRow } from "../types/protocol";
 
+export const SAMPLE_COLUMN_LABELS: Record<string, string> = {
+  i: "Analysis sample index i",
+  frame: "Frame index",
+  row: "Atom index in frame",
+  source_i: "Source sample index",
+  source_frame: "Source frame index",
+  reference_i: "Reference sample index",
+  reference_frame: "Reference frame index",
+  reference_row: "Reference atom index in frame",
+};
+
 /**
  * The Descriptor Results page is a descriptor-run history, not a failure log.  Failed
  * calculations remain available through Jobs, while this page keeps the
@@ -74,7 +85,7 @@ export function narrowedArrays(
     .filter((reply) => reply.truncated)
     .map((reply) =>
       reply.rows != null && reply.total != null && reply.total > reply.rows
-        ? `${reply.array} (${reply.rows.toLocaleString()} / ${reply.total.toLocaleString()})`
+        ? `${reply.array} (${reply.rows.toLocaleString("en-US", { useGrouping: false })} / ${reply.total.toLocaleString("en-US", { useGrouping: false })})`
         : reply.array,
     )
     .sort();
@@ -126,7 +137,7 @@ export function previewRowFields(row: Record<string, unknown>): { label?: number
 }
 
 /**
- * The keys a table becomes columns from, capped at seven.
+ * The keys a table becomes columns from, capped at seven plus similarity.
  *
  * The two plotted coordinates go last on purpose: the chart already reads them,
  * and a cluster result's table would otherwise spend its seven columns on x and y
@@ -135,7 +146,7 @@ export function previewRowFields(row: Record<string, unknown>): { label?: number
 export function previewTableColumns(row: Record<string, unknown>): string[] {
   return Object.keys(row)
     .sort((a, b) => Number(a === "x" || a === "y") - Number(b === "x" || b === "y"))
-    .slice(0, 7);
+    .filter((key, index) => index < 7 || key === "similarity");
 }
 
 

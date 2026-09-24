@@ -27,7 +27,7 @@ from mdescriptor_studio_backend.analysis.sampling import (
     sqrt_quota,
 )
 from mdescriptor_studio_backend.analysis.sampling.engine import sampling
-from mdescriptor_studio_backend.analysis.sampling.fps import _sqdist_to_point
+from mdescriptor_studio_backend.generation._distance import sqdist_to_point as _sqdist_to_point
 from mdescriptor_studio_backend.errors import ANALYSIS_INPUT_INVALID, AppError
 
 

@@ -493,7 +493,7 @@ export default function Descriptors() {
                       {t("Current frame")} <Typography.Text type="secondary">({t("Frame {index}", { index: frameIndex })})</Typography.Text>
                     </Radio>
                     <Radio value="dataset">
-                      {t("Entire dataset")} <Typography.Text type="secondary">({t("{n} structures", { n: d.number_of_frames.toLocaleString() })})</Typography.Text>
+                      {t("Entire dataset")} <Typography.Text type="secondary">({t("{n} structures", { n: d.number_of_frames.toLocaleString("en-US", { useGrouping: false }) })})</Typography.Text>
                     </Radio>
                   </Space>
                 </Radio.Group>

@@ -24,8 +24,10 @@ from .services.dataset_frame_service import DatasetFrameService
 from .services.dataset_service import DatasetService
 from .services.dataset_view_service import DatasetViewService
 from .services.descriptor_service import DescriptorService
+from .services.generation_service import GenerationService
 from .services.job_service import JobService
 from .services.result_service import ResultService
+from .services.result_transfer_service import ResultTransferService
 from .storage.database import Database
 
 log = logging.getLogger(__name__)
@@ -68,7 +70,8 @@ def _version_payload(engine_info: dict) -> dict:
     }
 
 
-def build_methods(jobs, datasets, views, frame_service, descriptors, results, analysis, settings_kv, engine_info, root):
+def build_methods(jobs, datasets, views, frame_service, descriptors, results, analysis, settings_kv, engine_info, root, generation=None):
+    transfer = ResultTransferService(results, datasets)
     def system_info(_params):
         return {
             **_version_payload(engine_info),
@@ -108,6 +111,7 @@ def build_methods(jobs, datasets, views, frame_service, descriptors, results, an
         "analysis.get": analysis.get,
         "analysis.delete": analysis.delete,
         "analysis.preview": analysis.preview,
+        "analysis.sample_identity": analysis.sample_identity,
         "analysis.chunk": analysis.chunk,
         "analysis.fps_quota": analysis.fps_quota,
         "analysis.export": analysis.submit_export,
@@ -149,11 +153,31 @@ def build_methods(jobs, datasets, views, frame_service, descriptors, results, an
         "job.get": job_get,
         "job.cancel": lambda params: jobs.cancel(params.get("id")),
         "result.list": results.list,
+        "result.import": transfer.import_file,
+        "result.export": transfer.export_file,
         "result.get": results.get,
         "result.remove": results.remove,
         "result.get_pca": results.get_pca,
         "result.heatmap": results.heatmap,
         **analysis_methods,
+        **(
+            {
+                "generation.catalog": generation.catalog,
+                "generation.submit": generation.submit,
+                "generation.get": generation.get,
+                "generation.list": generation.list,
+                "generation.delete": generation.delete,
+                "generation.preview": generation.preview,
+                "generation.cancel": generation.cancel,
+                "generation.materialize": generation.materialize,
+                "generation.add_to_dataset": generation.add_to_dataset,
+                "generation.export": generation.export,
+                "generation.pca": generation.pca,
+                "generation.structure": generation.structure,
+            }
+            if generation is not None
+            else {}
+        ),
     }
 
 
@@ -182,8 +206,10 @@ def main() -> int:
         db, adapter, jobs, datasets, root, info.get("version", "unknown")
     )
     analysis = AnalysisService(db, jobs, results, datasets, root)
+    generation = GenerationService(db, jobs, results, datasets, root, frame_service)
     server.methods = build_methods(
-        jobs, datasets, views, frame_service, descriptors, results, analysis, db, info, root
+        jobs, datasets, views, frame_service, descriptors, results, analysis, db, info, root,
+        generation=generation,
     )
 
     # Arm both warmup gates before the handshake: the heavy warmups below run

@@ -37,6 +37,11 @@ describe("previewTableRows", () => {
 });
 
 describe("previewTableColumns", () => {
+  it("includes similarity after the seven atom-neighbor identity and distance columns", () => {
+    const row = { i: 2, frame: 0, sample_id: "frame:0:row:2", row: 2, element: 14, rank: 1, distance: 0.02, similarity: 0.98 };
+    expect(previewTableColumns(row)).toEqual(["i", "frame", "sample_id", "row", "element", "rank", "distance", "similarity"]);
+  });
+
   it("keeps the assignment columns by ordering the plotted coordinates last", () => {
     const point = { i: 0, frame: 3, sample_id: "frame:3", row: 1, element: 31, x: 1.5, y: -2, label: 2, cluster: 1 };
     expect(previewTableColumns(point)).toEqual(["i", "frame", "sample_id", "row", "element", "label", "cluster"]);

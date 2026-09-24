@@ -9,7 +9,6 @@ import queue
 import subprocess
 import sys
 import threading
-from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +19,8 @@ from ..analysis import (
     StructureDescriptorMatrix,
 )
 from ..analysis.algorithms.sensitivity import perturbation_sensitivity
+from ..generation.evaluator import structure_values as _descriptor_structure_values
+from ..generation.operators import displaced, strained
 from ..errors import (
     ANALYSIS_INPUT_INVALID,
     ANALYSIS_INSUFFICIENT_SAMPLES,
@@ -618,12 +619,14 @@ class AnalysisRunMixin:
         for amplitude_index, amplitude in enumerate(amplitudes):
             ctx.check_cancelled()
             perturbed_frames = [
-                self._perturb_frame(frame, amplitude, perturbation, jitter_vectors[index])
+                displaced(frame, amplitude * jitter_vectors[index])
+                if perturbation == "jitter"
+                else strained(frame, 1.0 + amplitude)
                 for index, frame in enumerate(source_frames)
             ]
             batch = self.datasets.adapter.to_structure_batch(perturbed_frames)
             computed = self.datasets.adapter.compute(descriptor, batch, control)
-            values = self._computed_structure_values(computed, len(perturbed_frames))
+            values = _descriptor_structure_values(computed, len(perturbed_frames))
             perturbation_results.append((
                 amplitude,
                 StructureDescriptorMatrix(
@@ -655,47 +658,6 @@ class AnalysisRunMixin:
                 f"sampled {sampled} of {frame_count} structures evenly across the run",
             ]
         return result
-
-    @staticmethod
-    def _perturb_frame(frame, amplitude: float, perturbation: str, jitter_vector: np.ndarray):
-        positions = np.asarray(frame.positions, dtype=np.float64)
-        if perturbation == "jitter":
-            return replace(frame, positions=positions + amplitude * jitter_vector)
-        # A homogeneous strain is a single affine map, so the same scale has to
-        # act on the cell *and* on the positions about the same origin -- that
-        # is what keeps every atom's fractional coordinate (and therefore its
-        # relation to the periodic box) unchanged.  Scaling the positions about
-        # their centroid instead moved the cluster inside a box that grew
-        # elsewhere: an unintended rigid translation whose size depended on
-        # where the box origin happened to sit.
-        scale = 1.0 + amplitude
-        cell = np.asarray(frame.cell, dtype=np.float64)
-        if cell.shape == (3, 3) and abs(float(np.linalg.det(cell))) > 1e-10:
-            cell = cell * scale
-        return replace(frame, positions=positions * scale, cell=cell)
-
-    def _computed_structure_values(self, computed, frame_count: int) -> np.ndarray:
-        values = np.asarray(computed.values, dtype=np.float64)
-        if values.ndim > 2:
-            values = values.reshape(values.shape[0], -1)
-        if values.ndim == 1:
-            values = values.reshape(-1, 1)
-        if values.ndim != 2 or not np.isfinite(values).all():
-            raise AppError(ANALYSIS_INPUT_INVALID, "perturbed descriptor result is not a finite 2D matrix")
-        offsets = np.asarray(getattr(computed, "row_offsets", None), dtype=np.int64) if getattr(computed, "row_offsets", None) is not None else None
-        if self._valid_offsets(offsets, values.shape[0]) and offsets.size == frame_count + 1:
-            pooled = np.empty((frame_count, values.shape[1]), dtype=np.float64)
-            for index in range(frame_count):
-                lo, hi = int(offsets[index]), int(offsets[index + 1])
-                pooled[index] = values[lo:hi].mean(axis=0) if hi > lo else 0.0
-            return pooled
-        if values.shape[0] == frame_count:
-            return values
-        raise AppError(
-            ANALYSIS_INPUT_INVALID,
-            "perturbed descriptor result cannot be aligned to structures",
-            {"rows": int(values.shape[0]), "structures": frame_count},
-        )
 
 
 __all__ = ["AnalysisRunMixin"]

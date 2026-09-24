@@ -111,8 +111,8 @@ export default function SaveViewModal({ open, onClose, datasetId, frames, totalF
             style={{ minWidth: 220 }}
             value={baseViewId ?? "__full__"}
             options={[
-              ...(totalFrames ? [{ value: "__full__", label: `${t("Full dataset")} · ${totalFrames.toLocaleString()}` }] : []),
-              ...views.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString()}` })),
+              ...(totalFrames ? [{ value: "__full__", label: `${t("Full dataset")} · ${totalFrames.toLocaleString("en-US", { useGrouping: false })}` }] : []),
+              ...views.map((view) => ({ value: view.id, label: `${view.name} · ${view.number_of_frames.toLocaleString("en-US", { useGrouping: false })}` })),
             ]}
             onChange={(value) => setBaseViewId(value === "__full__" ? null : value)}
           />
@@ -123,7 +123,7 @@ export default function SaveViewModal({ open, onClose, datasetId, frames, totalF
           ? t("The view stores these {n} frame indices without copying source data.", { n: frames.length })
           : resultFrames.length === 0
             ? t("The result is empty — the selection covers the whole base scope.")
-            : t("Subtracting the selected {m} frames from {base} leaves {n} frames to store.", { m: frames.length.toLocaleString(), base: baseView?.name ?? t("Full dataset"), n: resultFrames.length.toLocaleString() })}
+            : t("Subtracting the selected {m} frames from {base} leaves {n} frames to store.", { m: frames.length.toLocaleString("en-US", { useGrouping: false }), base: baseView?.name ?? t("Full dataset"), n: resultFrames.length.toLocaleString("en-US", { useGrouping: false }) })}
       </Typography.Paragraph>
     </Modal>
   );

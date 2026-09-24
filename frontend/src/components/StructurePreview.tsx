@@ -12,14 +12,15 @@ import type { FramePayload } from "../types/protocol";
 
 interface StructurePreviewProps {
   frame: FramePayload;
-  onOpen: () => void;
+  onOpen?: () => void;
+  height?: number;
   selectedAtom?: number;
   localCutoff?: number;
   /** Click-to-select on the viewer; receives the clicked real-atom index. */
   onSelectAtom?: (atom: number) => void;
 }
 
-export default function StructurePreview({ frame, onOpen, selectedAtom, localCutoff, onSelectAtom }: StructurePreviewProps) {
+export default function StructurePreview({ frame, onOpen, height = 196, selectedAtom, localCutoff, onSelectAtom }: StructurePreviewProps) {
   const { t } = useT();
   const viewerDiv = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<StructureViewer | null>(null);
@@ -101,7 +102,7 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
   }, [frame, localCutoff, selectedAtom, viewerReady]);
 
   return (
-    <div className="results-structure-preview-shell">
+    <div className="results-structure-preview-shell" style={{ height }}>
       <div
         ref={viewerDiv}
         className="results-structure-viewer"
@@ -110,9 +111,11 @@ export default function StructurePreview({ frame, onOpen, selectedAtom, localCut
       {!viewerReady && !viewerError && <div className="structure-viewer-busy">{t("Loading the 3D viewer…")}</div>}
       {viewerError && <div className="results-structure-viewer-error">viewer error: {viewerError}</div>}
       {selectedAtom != null && localCutoff != null && <div className="results-structure-local-badge">{t("Local shell ≤ {cutoff} Å", { cutoff: localCutoff.toFixed(2) })}</div>}
-      <button type="button" className="results-structure-open" onClick={onOpen}>
-        {t("Open frame {index} in Explore", { index: frame.index })}
-      </button>
+      {onOpen && (
+        <button type="button" className="results-structure-open" onClick={onOpen}>
+          {t("Open frame {index} in Explore", { index: frame.index })}
+        </button>
+      )}
     </div>
   );
 }

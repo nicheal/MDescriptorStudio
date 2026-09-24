@@ -54,6 +54,7 @@ def backend_methods() -> set[str]:
     return set(
         build_methods(
             _Any(), _Any(), _Any(), _Any(), _Any(), _Any(), _Any(), _Any(), {}, ROOT / "data",
+            generation=_Any(),
         )
     )
 
@@ -302,7 +303,7 @@ def test_the_mock_answers_every_method_the_frontend_calls():
 
 
 # What the mock answers without a job, so no submission rules apply to them.
-READ_ONLY_ANALYSIS_METHODS = {"analysis.list", "analysis.preview", "analysis.chunk", "analysis.get", "analysis.delete"}
+READ_ONLY_ANALYSIS_METHODS = {"analysis.list", "analysis.preview", "analysis.chunk", "analysis.get", "analysis.delete", "analysis.sample_identity"}
 
 
 def test_every_mock_analysis_submission_has_parameter_rules():

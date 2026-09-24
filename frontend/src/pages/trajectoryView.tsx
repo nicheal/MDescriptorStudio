@@ -170,7 +170,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
   // values keep significant digits instead of rounding to 0.00.
   const metric = (value: number): string => {
     const magnitude = Math.abs(value);
-    if (magnitude >= 1000) return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+    if (magnitude >= 1000) return value.toLocaleString("en-US", { useGrouping: false, maximumFractionDigits: 2 });
     if (magnitude >= 1) return value.toFixed(2);
     return value.toPrecision(3);
   };
@@ -340,7 +340,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
 
   return <>
     <Metrics values={[
-      { k: t("Frames"), text: visibleIndices.length.toLocaleString() },
+      { k: t("Frames"), text: visibleIndices.length.toLocaleString("en-US", { useGrouping: false }) },
       { k: t("Total path length"), text: metric(pathLength) },
       { k: t("Max step distance"), text: metric(maxStep) },
       { k: t("Detected transitions"), text: String(visibleEvents.length) },
@@ -364,7 +364,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
         onChange={(value) => setRange([value[0], value[1]])}
         tooltip={{ formatter: (value) => String(value) }}
       />
-      <Typography.Text type="secondary">{t("{a} – {b} · {n} frames", { a: low, b: high, n: visibleIndices.length.toLocaleString() })}</Typography.Text>
+      <Typography.Text type="secondary">{t("{a} – {b} · {n} frames", { a: low, b: high, n: visibleIndices.length.toLocaleString("en-US", { useGrouping: false }) })}</Typography.Text>
       <Button size="small" onClick={() => setRange(null)} disabled={low === firstFrame && high === lastFrame}>{t("Full range")}</Button>
     </div>
     <div className="property-view-toolbar">
@@ -453,7 +453,7 @@ export default function TrajectoryView({ preview, arrays, points, selectedIndice
       pagination={{ pageSize: 8, hideOnSinglePage: true, showSizeChanger: false }}
       onRow={(row) => ({ onClick: () => setSelectedFrame(row.frame), className: row.frame === selectedFrame ? "trajectory-event-row-selected" : undefined })}
       columns={[
-        { title: t("Frame"), dataIndex: "frame", key: "frame", width: 88, render: (value: number) => value.toLocaleString() },
+        { title: t("Frame"), dataIndex: "frame", key: "frame", width: 88, render: (value: number) => value.toLocaleString("en-US", { useGrouping: false }) },
         { title: t("Step distance"), dataIndex: "step", key: "step", align: "right", render: (value: number) => metric(value) },
         { title: t("Threshold ratio"), dataIndex: "ratio", key: "ratio", align: "right", render: (value: number | null) => value === null ? "—" : `${value.toFixed(2)}×` },
         { title: t("Percentile"), dataIndex: "percentile", key: "percentile", align: "right", render: (value: number) => `${(value * 100).toFixed(1)}%` },
