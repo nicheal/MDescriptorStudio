@@ -36,19 +36,28 @@ export interface SearchSpaceConfig {
   maxStrain: number; // fraction
   cellShear: boolean;
   maxShear: number; // fraction
+  vacancy: boolean;
+  interstitialAtom: boolean;
+  interstitialElement: string;
+  substitution: boolean;
+  substitutionElement: string;
+  antisiteSwap: boolean;
 }
 
 export interface ConstraintConfig {
   minDistanceMode: MinDistanceMode;
   minDistanceFactor: number; // covalent multiplier
   minDistanceAbsolute: number; // Å, absolute mode
+  minDistancePairs: string; // comma-separated element-pair cutoffs, e.g. C-C=1.5
   maxVolumeChange: number; // fraction
+  minVolumePerAtom: number | null; // Å³/atom, fully periodic structures only
+  maxVolumePerAtom: number | null; // Å³/atom, fully periodic structures only
   compositionLocked: boolean;
   atomCountLocked: boolean;
 }
 
 export type OptimizerConfig =
-  | { type: "random"; childrenPerSeed: number; batchAccept: number; nSeeds: number };
+  | { type: "random"; childrenPerSeed: number; batchAccept: number; nSeeds: number; reuseAcceptedSeeds: boolean };
 
 export interface BudgetConfig {
   maxEvaluations: number;

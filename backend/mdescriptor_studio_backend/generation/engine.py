@@ -35,6 +35,7 @@ _GEOMETRY_REJECTION_CODES = {
     "cell contains NaN or Inf": "non_finite_cell",
     "periodic cell is singular": "singular_periodic_cell",
     "periodic cell is too skewed to bound the contact search": "periodic_cell_too_skewed",
+    "structure contains no atoms": "empty_structure",
     "interatomic contact below the minimum distance": "minimum_distance",
     "composition differs from the parent structure": "composition_lock",
     "atom count differs from the parent structure": "atom_count_lock",
@@ -48,6 +49,8 @@ def _geometry_rejection_code(reason: str | None) -> str:
         return "displacement_limit"
     if reason.startswith("volume change "):
         return "volume_change_limit"
+    if reason.startswith("volume per atom "):
+        return "volume_per_atom_range"
     return _GEOMETRY_REJECTION_CODES.get(reason, "other")
 
 
@@ -182,6 +185,10 @@ class GenerationEngine:
         total_evaluations = 0
         generation = 0
         needs_atomic = bool(getattr(self.objective, "needs_atomic", False))
+        reuse_accepted_seeds = bool(getattr(self.optimizer, "reuse_accepted_seeds", False))
+        feedback_seed_pool: list[StructureCandidate] = []
+        feedback_descriptors: list[np.ndarray] = []
+        feedback_pool_limit = min(256, max(1, 4 * int(self.n_seeds)))
 
         while True:
             try:
@@ -205,7 +212,15 @@ class GenerationEngine:
                 break
 
             generation += 1
-            seeds = self.optimizer.choose_seeds(self.seed_pool, self.n_seeds, self.rng)
+            if reuse_accepted_seeds:
+                seeds = self.optimizer.choose_seeds(
+                    self.seed_pool,
+                    self.n_seeds,
+                    self.rng,
+                    feedback_pool=feedback_seed_pool,
+                )
+            else:
+                seeds = self.optimizer.choose_seeds(self.seed_pool, self.n_seeds, self.rng)
             children = self.optimizer.propose(seeds, self.rng)
 
             valid: list[StructureCandidate] = []
@@ -305,6 +320,18 @@ class GenerationEngine:
 
                 accepted_this_round = len(selected)
                 if selected:
+                    if reuse_accepted_seeds:
+                        feedback_seed_pool.extend(valid[index] for index in selected)
+                        feedback_descriptors.extend(
+                            np.asarray(scaled_values[index], dtype=np.float64) for index in selected
+                        )
+                        if len(feedback_seed_pool) > feedback_pool_limit:
+                            keep = farthest_point_sampling(
+                                np.stack(feedback_descriptors),
+                                n_samples=feedback_pool_limit,
+                            ).indices
+                            feedback_seed_pool = [feedback_seed_pool[int(index)] for index in keep]
+                            feedback_descriptors = [feedback_descriptors[int(index)] for index in keep]
                     entries = []
                     for order, index in enumerate(selected):
                         candidate = valid[index]

@@ -16,7 +16,16 @@ from .objectives import (
     LocalEnvironmentNoveltyObjective,
     NoveltyObjective,
 )
-from .operators import AnisotropicStrain, AtomicDisplacement, CellShear, IsotropicStrain
+from .operators import (
+    AnisotropicStrain,
+    AntisiteSwap,
+    AtomicDisplacement,
+    CellShear,
+    InterstitialAtom,
+    IsotropicStrain,
+    Substitution,
+    Vacancy,
+)
 from .optimizers import RandomSearchOptimizer
 
 
@@ -29,6 +38,10 @@ class GenerationRegistry:
                 IsotropicStrain,
                 AnisotropicStrain,
                 CellShear,
+                Vacancy,
+                InterstitialAtom,
+                Substitution,
+                AntisiteSwap,
             )
         }
         self._objectives = {
@@ -87,6 +100,7 @@ class GenerationRegistry:
                     "params": {
                         "children_per_seed": 8,
                         "batch_accept": 8,
+                        "reuse_accepted_seeds": False,
                     },
                 }
             ],
@@ -121,13 +135,20 @@ class GenerationRegistry:
                 {"name": IsotropicStrain.name, "params": {"max_strain": 0.05}},
                 {"name": AnisotropicStrain.name, "params": {"max_strain": 0.05}},
                 {"name": CellShear.name, "params": {"max_shear": 0.05}},
+                {"name": Vacancy.name, "params": {}},
+                {"name": InterstitialAtom.name, "params": {"element": None}},
+                {"name": Substitution.name, "params": {"element": None}},
+                {"name": AntisiteSwap.name, "params": {}},
             ],
             "constraints": {
                 "min_distance_mode": ["none", "absolute", "covalent"],
                 "min_distance_factor": 0.7,
+                "min_distance_pairs": {},
                 "max_volume_change": 0.2,
-                "composition_locked": True,
-                "atom_count_locked": True,
+                "min_volume_per_atom": None,
+                "max_volume_per_atom": None,
+                "composition_locked": False,
+                "atom_count_locked": False,
             },
             "budget": {
                 "max_evaluations": 10_000,

@@ -24,7 +24,14 @@ class Optimizer(Protocol):
         """Candidates proposed per seed-round (drives evaluations accounting)."""
         ...
 
-    def choose_seeds(self, seed_pool: list, n_seeds: int, rng: np.random.Generator) -> list:
+    def choose_seeds(
+        self,
+        seed_pool: list,
+        n_seeds: int,
+        rng: np.random.Generator,
+        *,
+        feedback_pool: list | None = None,
+    ) -> list:
         """Pick parent candidates for the next round."""
         ...
 

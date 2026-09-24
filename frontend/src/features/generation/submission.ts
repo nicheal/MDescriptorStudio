@@ -2,21 +2,80 @@
 // emits is the single serialization fact: the page renders controls, the
 // backend parses them back (generation.models.parse_request).
 import type { GenerationConfig } from "./types";
+import { ATOMIC_MASS } from "../../util/elements";
 
 export interface SubmissionCheck {
   ok: boolean;
   reason?: string;
 }
 
+function parsePairMinDistances(value: string): Record<string, number> | null {
+  const pairs: Record<string, number> = {};
+  if (!value.trim()) return pairs;
+  const validElements = new Set(Object.keys(ATOMIC_MASS));
+  const entryPattern = /^([A-Z][a-z]?)-([A-Z][a-z]?)\s*=\s*((?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)$/i;
+  for (const entry of value.split(/[;,]/)) {
+    const match = entry.trim().match(entryPattern);
+    if (!match) return null;
+    const normalize = (symbol: string) => symbol[0].toUpperCase() + symbol.slice(1).toLowerCase();
+    const first = normalize(match[1]);
+    const second = normalize(match[2]);
+    const distance = Number(match[3]);
+    if (!validElements.has(first) || !validElements.has(second) || !Number.isFinite(distance) || distance <= 0 || distance > 20) {
+      return null;
+    }
+    const pair = [first, second].sort().join("-");
+    if (Object.prototype.hasOwnProperty.call(pairs, pair)) return null;
+    pairs[pair] = distance;
+  }
+  return pairs;
+}
+
+function normalizeElement(value: string): string | null {
+  const element = value.trim();
+  if (!element) return "";
+  const symbol = element[0].toUpperCase() + element.slice(1).toLowerCase();
+  return Object.prototype.hasOwnProperty.call(ATOMIC_MASS, symbol) ? symbol : null;
+}
+
 export function validateConfig(config: GenerationConfig): SubmissionCheck {
   if (!config.source.datasetId) return { ok: false, reason: "Select a source dataset" };
   if (!config.source.descriptorRunId) return { ok: false, reason: "Select a descriptor run" };
   const space = config.searchSpace;
-  if (!space.atomicDisplacement && !space.isotropicStrain && !space.anisotropicStrain && !space.cellShear) {
+  if (
+    !space.atomicDisplacement && !space.isotropicStrain && !space.anisotropicStrain && !space.cellShear &&
+    !space.vacancy && !space.interstitialAtom && !space.substitution && !space.antisiteSwap
+  ) {
     return { ok: false, reason: "Enable at least one structure operator" };
+  }
+  if (config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds && !space.atomicDisplacement) {
+    return { ok: false, reason: "Accepted-seed feedback requires atomic displacement" };
+  }
+  if (space.interstitialAtom && normalizeElement(space.interstitialElement) == null) {
+    return { ok: false, reason: "Enter a valid interstitial element symbol" };
+  }
+  if (space.substitution && normalizeElement(space.substitutionElement) == null) {
+    return { ok: false, reason: "Enter a valid substitution element symbol" };
+  }
+  if ((space.vacancy || space.interstitialAtom) && (config.constraints.compositionLocked || config.constraints.atomCountLocked)) {
+    return { ok: false, reason: "Vacancy and interstitial operators require unlocked composition and atom count" };
+  }
+  if (space.substitution && config.constraints.compositionLocked) {
+    return { ok: false, reason: "Substitution requires unlocked composition" };
   }
   if (config.constraints.minDistanceMode === "absolute" && config.constraints.minDistanceAbsolute <= 0) {
     return { ok: false, reason: "Minimum distance must be positive" };
+  }
+  if (parsePairMinDistances(config.constraints.minDistancePairs) == null) {
+    return { ok: false, reason: "Use element pairs like C-C=1.5, C-H=1.0 with positive distances up to 20 Å" };
+  }
+  const minVolume = config.constraints.minVolumePerAtom;
+  const maxVolume = config.constraints.maxVolumePerAtom;
+  if ([minVolume, maxVolume].some((v) => v != null && (!Number.isFinite(v) || v <= 0))) {
+    return { ok: false, reason: "Volume per atom bounds must be positive" };
+  }
+  if (minVolume != null && maxVolume != null && minVolume > maxVolume) {
+    return { ok: false, reason: "Minimum volume per atom must not exceed maximum" };
   }
   if (config.budget.maxEvaluations < 1 || config.budget.maxAccepted < 1) {
     return { ok: false, reason: "Budgets must be positive" };
@@ -43,6 +102,16 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
   if (space.isotropicStrain) operators.isotropic_strain = { enabled: true, max_strain: space.maxStrain };
   if (space.anisotropicStrain) operators.anisotropic_strain = { enabled: true, max_strain: space.maxStrain };
   if (space.cellShear) operators.cell_shear = { enabled: true, max_shear: space.maxShear };
+  if (space.vacancy) operators.vacancy = { enabled: true };
+  if (space.interstitialAtom) {
+    const element = normalizeElement(space.interstitialElement);
+    operators.interstitial_atom = { enabled: true, ...(element ? { element } : {}) };
+  }
+  if (space.substitution) {
+    const element = normalizeElement(space.substitutionElement);
+    operators.substitution = { enabled: true, ...(element ? { element } : {}) };
+  }
+  if (space.antisiteSwap) operators.antisite_swap = { enabled: true };
 
   const constraints: Record<string, unknown> = {
     min_distance_mode: config.constraints.minDistanceMode,
@@ -56,6 +125,10 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
   if (config.constraints.minDistanceMode === "absolute") {
     constraints.min_distance = config.constraints.minDistanceAbsolute;
   }
+  const pairMinDistances = parsePairMinDistances(config.constraints.minDistancePairs) ?? {};
+  if (Object.keys(pairMinDistances).length) constraints.min_distance_pairs = pairMinDistances;
+  if (config.constraints.minVolumePerAtom != null) constraints.min_volume_per_atom = config.constraints.minVolumePerAtom;
+  if (config.constraints.maxVolumePerAtom != null) constraints.max_volume_per_atom = config.constraints.maxVolumePerAtom;
 
   const optimizer = config.optimizer;
   const optimizerParams: Record<string, unknown> = {};
@@ -63,6 +136,7 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
     optimizerParams.children_per_seed = optimizer.childrenPerSeed;
     optimizerParams.batch_accept = optimizer.batchAccept;
     optimizerParams.n_seeds = optimizer.nSeeds;
+    optimizerParams.reuse_accepted_seeds = optimizer.reuseAcceptedSeeds;
   }
 
   const budget: Record<string, unknown> = {

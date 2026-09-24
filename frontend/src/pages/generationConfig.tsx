@@ -1,6 +1,6 @@
 // The six-section expansion workflow form: SOURCE → SEARCH OBJECTIVE →
 // SEARCH SPACE → PHYSICAL CONSTRAINTS → OPTIMIZER → COMPUTE BUDGET.
-import { Button, Card, InputNumber, Select, Slider, Switch } from "antd";
+import { Button, Card, Input, InputNumber, Select, Slider, Switch } from "antd";
 import { Play16Regular } from "@fluentui/react-icons";
 import { useGenerationStore } from "../features/generation/generationStore";
 import { GENERATION_OBJECTIVE_LABELS } from "../features/generation/labels";
@@ -203,7 +203,16 @@ export default function GenerationConfigPanel({
           <span style={labelStyle}>{t("Atomic displacement")}</span>
           <Switch
             checked={config.searchSpace.atomicDisplacement}
-            onChange={(v) => update((c) => ({ ...c, searchSpace: { ...c.searchSpace, atomicDisplacement: v } }))}
+            onChange={(v) =>
+              update((c) => ({
+                ...c,
+                searchSpace: { ...c.searchSpace, atomicDisplacement: v },
+                optimizer:
+                  c.optimizer.type === "random" && !v
+                    ? { ...c.optimizer, reuseAcceptedSeeds: false }
+                    : c.optimizer,
+              }))
+            }
           />
           <span style={{ fontSize: 13, color: "#616161" }}>0–{config.searchSpace.maxDisplacement} Å</span>
           <Slider
@@ -242,6 +251,77 @@ export default function GenerationConfigPanel({
             checked={config.searchSpace.cellShear}
             onChange={(v) => update((c) => ({ ...c, searchSpace: { ...c.searchSpace, cellShear: v } }))}
           />
+        </div>
+        <div style={rowStyle}>
+          <span style={labelStyle}>{t("Vacancy")}</span>
+          <Switch
+            checked={config.searchSpace.vacancy}
+            onChange={(v) =>
+              update((c) => ({
+                ...c,
+                searchSpace: { ...c.searchSpace, vacancy: v },
+                constraints: v
+                  ? { ...c.constraints, compositionLocked: false, atomCountLocked: false }
+                  : c.constraints,
+              }))
+            }
+          />
+          <span style={labelStyle}>{t("Interstitial atom")}</span>
+          <Switch
+            checked={config.searchSpace.interstitialAtom}
+            onChange={(v) =>
+              update((c) => ({
+                ...c,
+                searchSpace: { ...c.searchSpace, interstitialAtom: v },
+                constraints: v
+                  ? { ...c.constraints, compositionLocked: false, atomCountLocked: false }
+                  : c.constraints,
+              }))
+            }
+          />
+          <Input
+            style={{ width: 150 }}
+            aria-label={t("Interstitial element")}
+            value={config.searchSpace.interstitialElement}
+            placeholder={t("Auto from parent")}
+            disabled={!config.searchSpace.interstitialAtom}
+            onChange={(event) =>
+              update((c) => ({ ...c, searchSpace: { ...c.searchSpace, interstitialElement: event.target.value } }))
+            }
+          />
+        </div>
+        <div style={rowStyle}>
+          <span style={labelStyle}>{t("Substitution")}</span>
+          <Switch
+            checked={config.searchSpace.substitution}
+            onChange={(v) =>
+              update((c) => ({
+                ...c,
+                searchSpace: { ...c.searchSpace, substitution: v },
+                constraints: v ? { ...c.constraints, compositionLocked: false } : c.constraints,
+              }))
+            }
+          />
+          <Input
+            style={{ width: 150 }}
+            aria-label={t("Substitution element")}
+            value={config.searchSpace.substitutionElement}
+            placeholder={t("Auto: existing species")}
+            disabled={!config.searchSpace.substitution}
+            onChange={(event) =>
+              update((c) => ({ ...c, searchSpace: { ...c.searchSpace, substitutionElement: event.target.value } }))
+            }
+          />
+          <span style={labelStyle}>{t("Antisite swap")}</span>
+          <Switch
+            checked={config.searchSpace.antisiteSwap}
+            onChange={(v) => update((c) => ({ ...c, searchSpace: { ...c.searchSpace, antisiteSwap: v } }))}
+          />
+        </div>
+        <div style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
+          {t("Vacancy and interstitial change both composition and atom count; substitution changes composition. Antisite swap preserves both.")}
+          {" "}
+          {t("Leave element blank to use species already present; automatic substitution needs multiple species.")}
         </div>
       </Card>
 
@@ -282,6 +362,16 @@ export default function GenerationConfigPanel({
           )}
         </div>
         <div style={rowStyle}>
+          <span style={labelStyle}>{t("Element-pair distance overrides")}</span>
+          <Input
+            style={{ width: 320 }}
+            value={config.constraints.minDistancePairs}
+            placeholder={t("e.g. C-C=1.5, C-H=1.0")}
+            onChange={(event) => update((c) => ({ ...c, constraints: { ...c.constraints, minDistancePairs: event.target.value } }))}
+          />
+          <span style={{ fontSize: 12, color: "#616161" }}>{t("Listed pairs use these Å cutoffs; other pairs use the selected mode.")}</span>
+        </div>
+        <div style={rowStyle}>
           <span style={labelStyle}>{t("Maximum volume change")}</span>
           <span style={{ fontSize: 13, color: "#616161" }}>±{(config.constraints.maxVolumeChange * 100).toFixed(0)} %</span>
           <Slider
@@ -292,10 +382,42 @@ export default function GenerationConfigPanel({
             value={config.constraints.maxVolumeChange}
             onChange={(v) => update((c) => ({ ...c, constraints: { ...c.constraints, maxVolumeChange: v } }))}
           />
-          <span style={labelStyle}>{t("Composition")}</span>
-          <span style={{ fontSize: 13, color: "#242424" }}>{t("Locked")}</span>
-          <span style={labelStyle}>{t("Atom count")}</span>
-          <span style={{ fontSize: 13, color: "#242424" }}>{t("Locked")}</span>
+          <span style={labelStyle}>{t("Volume per atom range")}</span>
+          <span style={{ fontSize: 12, color: "#616161" }}>{t("Fully periodic structures; blank means unbounded.")}</span>
+          <InputNumber
+            min={0.001}
+            max={10000}
+            step={0.1}
+            precision={3}
+            addonBefore={t("Minimum")}
+            addonAfter="Å³/atom"
+            value={config.constraints.minVolumePerAtom}
+            onChange={(minVolumePerAtom) => update((c) => ({ ...c, constraints: { ...c.constraints, minVolumePerAtom } }))}
+          />
+          <InputNumber
+            min={0.001}
+            max={10000}
+            step={0.1}
+            precision={3}
+            addonBefore={t("Maximum")}
+            addonAfter="Å³/atom"
+            value={config.constraints.maxVolumePerAtom}
+            onChange={(maxVolumePerAtom) => update((c) => ({ ...c, constraints: { ...c.constraints, maxVolumePerAtom } }))}
+          />
+          <span style={labelStyle}>{t("Lock composition")}</span>
+          <Switch
+            checked={config.constraints.compositionLocked}
+            disabled={config.searchSpace.vacancy || config.searchSpace.interstitialAtom || config.searchSpace.substitution}
+            onChange={(compositionLocked) =>
+              update((c) => ({ ...c, constraints: { ...c.constraints, compositionLocked } }))
+            }
+          />
+          <span style={labelStyle}>{t("Lock atom count")}</span>
+          <Switch
+            checked={config.constraints.atomCountLocked}
+            disabled={config.searchSpace.vacancy || config.searchSpace.interstitialAtom}
+            onChange={(atomCountLocked) => update((c) => ({ ...c, constraints: { ...c.constraints, atomCountLocked } }))}
+          />
         </div>
       </Card>
 
@@ -332,6 +454,23 @@ export default function GenerationConfigPanel({
               }))
             }
           />
+        </div>
+        <div style={rowStyle}>
+          <span style={labelStyle}>{t("Reuse accepted structures as seeds")}</span>
+          <Switch
+            checked={config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds}
+            disabled={!config.searchSpace.atomicDisplacement}
+            onChange={(reuseAcceptedSeeds) =>
+              update((c) => ({
+                ...c,
+                optimizer:
+                  c.optimizer.type === "random" ? { ...c.optimizer, reuseAcceptedSeeds } : c.optimizer,
+              }))
+            }
+          />
+          <span style={{ fontSize: 13, color: "#616161" }}>
+            {t("About half of the parents come from diverse accepted structures and are shaken at random displacement scales.")}
+          </span>
         </div>
       </Card>
 

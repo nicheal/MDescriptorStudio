@@ -337,10 +337,12 @@ def _frame_short_contact(
     max_images_per_axis: int = _MIN_DISTANCE_IMAGE_LIMIT,
     include_self_images: bool = True,
     pair_radii: np.ndarray | None = None,
+    pair_cutoff_matrix: np.ndarray | None = None,
 ) -> bool:
     """True when any atom pair — periodic images included — sits closer than
-    coefficient × the sum of its per-atom radii (NepTrainKit's
-    "find non-physical structures" bond-length filter).
+    coefficient × the sum of its per-atom radii, with optional exact
+    element-pair overrides (NepTrainKit's "find non-physical structures"
+    bond-length filter).
 
     Exact under the supplied per-axis stencil cap (the fractional-coefficient
     bound is Cauchy–Schwarz on the inverse-cell columns). Callers that already
@@ -353,6 +355,12 @@ def _frame_short_contact(
     if radii.shape != (len(numbers),):
         raise ValueError("pair_radii must have one radius per atom")
     t_max = coefficient * 2.0 * float(radii.max())
+    if pair_cutoff_matrix is not None:
+        present_numbers = np.unique(numbers)
+        t_max = max(
+            t_max,
+            float(pair_cutoff_matrix[np.ix_(present_numbers, present_numbers)].max()),
+        )
     # The comparison above is the whole cost for a healthy frame; preparation and
     # the tree are only paid by one that can still hold a violating pair.
     if not t_max > 0.0 or min_distance >= t_max:
@@ -399,6 +407,9 @@ def _frame_short_contact(
         diff = centers[query_atom] - pts[hit_atom]
         dist_sq = np.einsum("ij,ij->i", diff, diff)
         bound = coefficient * (radii[query_atom] + radii[hit_atom])
+        if pair_cutoff_matrix is not None:
+            overrides = pair_cutoff_matrix[numbers[query_atom], numbers[hit_atom]]
+            bound = np.where(overrides > 0.0, overrides, bound)
         # Periodic wrapping can round an exact cutoff a few ULPs inward.
         limit_sq = bound * bound * (1.0 - 16.0 * np.finfo(np.float64).eps)
         return bool((dist_sq < limit_sq).any())
@@ -444,8 +455,9 @@ def has_short_contact(
     max_images_per_axis: int = _MIN_DISTANCE_IMAGE_LIMIT,
     include_self_images: bool = True,
     pair_radii: np.ndarray | None = None,
+    pair_cutoff_matrix: np.ndarray | None = None,
 ) -> bool:
-    """Check pairs against ``coefficient * (radius_i + radius_j)`` spatially."""
+    """Check global radius-based cutoffs plus optional element-pair overrides."""
     return _frame_short_contact(
         positions,
         numbers,
@@ -456,6 +468,7 @@ def has_short_contact(
         max_images_per_axis=max_images_per_axis,
         include_self_images=include_self_images,
         pair_radii=pair_radii,
+        pair_cutoff_matrix=pair_cutoff_matrix,
     )
 
 

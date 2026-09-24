@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..datasets.base import DatasetFrame
+from ..datasets.deepmd_symbols import _SYMBOL_TO_Z
 from ..errors import AppError, INVALID_PARAMS
 
 
@@ -72,12 +73,13 @@ class StructureCandidate:
         *,
         candidate_id: str,
         positions: np.ndarray,
+        atomic_numbers: np.ndarray | None = None,
         cell: np.ndarray | None = None,
         operator: str,
         operator_params: dict | None = None,
         metadata: dict | None = None,
     ) -> "StructureCandidate":
-        """A derived candidate; composition/atom count always carry over."""
+        """A derived candidate; operators may change composition or atom count."""
         inherited = {
             "parent_composition": np.sort(self.atomic_numbers).tolist(),
             "parent_atom_count": int(self.atomic_numbers.size),
@@ -85,7 +87,10 @@ class StructureCandidate:
         inherited.update(metadata or {})
         return StructureCandidate(
             candidate_id=candidate_id,
-            atomic_numbers=self.atomic_numbers,
+            atomic_numbers=np.asarray(
+                self.atomic_numbers if atomic_numbers is None else atomic_numbers,
+                dtype=np.int64,
+            ),
             positions=np.asarray(positions, dtype=np.float64),
             cell=np.asarray(self.cell if cell is None else cell, dtype=np.float64),
             pbc=self.pbc,
@@ -243,6 +248,7 @@ def parse_operators(params) -> list:
                     continue
                 op_params = {k: v for k, v in cfg.items() if k != "enabled"}
                 GENERATION_REGISTRY.operator(name)  # validates the name early
+                op_params = _normalize_operator_params(name, op_params)
                 specs.append(OperatorSpec(name=name, params=op_params))
         elif isinstance(params, list):
             for entry in params:
@@ -252,7 +258,12 @@ def parse_operators(params) -> list:
                 if not isinstance(op_params, dict):
                     raise AppError(INVALID_PARAMS, "operator params must be an object")
                 GENERATION_REGISTRY.operator(entry["name"])
-                specs.append(OperatorSpec(name=entry["name"], params=dict(op_params)))
+                specs.append(
+                    OperatorSpec(
+                        name=entry["name"],
+                        params=_normalize_operator_params(entry["name"], dict(op_params)),
+                    )
+                )
         else:
             raise AppError(INVALID_PARAMS, "operators must be an object or a list")
     except KeyError as exc:
@@ -260,6 +271,53 @@ def parse_operators(params) -> list:
     if not specs:
         raise AppError(INVALID_PARAMS, "at least one operator must be enabled")
     return specs
+
+
+def _normalize_operator_params(name: str, params: dict) -> dict:
+    if name not in ("interstitial_atom", "substitution") or "element" not in params:
+        return params
+    element = params["element"]
+    if element is None:
+        params.pop("element")
+        return params
+    if not isinstance(element, str):
+        raise AppError(INVALID_PARAMS, f"{name} element must be a valid chemical symbol")
+    element = element.strip()
+    if not element:
+        params.pop("element")
+        return params
+    symbol = element[0].upper() + element[1:].lower()
+    if symbol not in _SYMBOL_TO_Z:
+        raise AppError(INVALID_PARAMS, f"{name} element must be a valid chemical symbol")
+    params["element"] = symbol
+    return params
+
+
+def normalize_pair_min_distances(value) -> dict[str, float]:
+    """Validate element-pair contact overrides and canonicalize pair order."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise AppError(INVALID_PARAMS, "min_distance_pairs must be an object")
+    result: dict[str, float] = {}
+    for pair, distance in value.items():
+        parts = [symbol.strip() for symbol in pair.split("-")] if isinstance(pair, str) else []
+        if len(parts) != 2 or any(symbol not in _SYMBOL_TO_Z for symbol in parts):
+            raise AppError(INVALID_PARAMS, f"invalid element pair in min_distance_pairs: {pair}")
+        if isinstance(distance, bool) or not isinstance(distance, (int, float)):
+            raise AppError(INVALID_PARAMS, f"distance for {pair} must be a positive finite number")
+        try:
+            distance = float(distance)
+        except (OverflowError, ValueError) as exc:
+            raise AppError(INVALID_PARAMS, f"distance for {pair} must be between 0 and 20 Å") from exc
+        if not np.isfinite(distance) or not 0 < distance <= 20:
+            raise AppError(INVALID_PARAMS, f"distance for {pair} must be between 0 and 20 Å")
+        first, second = sorted(parts, key=_SYMBOL_TO_Z.__getitem__)
+        canonical_pair = f"{first}-{second}"
+        if canonical_pair in result:
+            raise AppError(INVALID_PARAMS, f"duplicate element pair in min_distance_pairs: {pair}")
+        result[canonical_pair] = distance
+    return result
 
 
 def parse_request(params: dict) -> GenerationRequest:
@@ -289,6 +347,11 @@ def parse_request(params: dict) -> GenerationRequest:
     if not isinstance(constraints, dict):
         raise AppError(INVALID_PARAMS, "constraints must be an object")
     constraints = dict(constraints)
+    for key in ("composition_locked", "atom_count_locked"):
+        value = constraints.get(key, False)
+        if not isinstance(value, bool):
+            raise AppError(INVALID_PARAMS, f"{key} must be a boolean")
+        constraints[key] = value
     mode = constraints.get("min_distance_mode", "none")
     if mode not in ("none", "absolute", "covalent"):
         raise AppError(INVALID_PARAMS, "min_distance_mode must be none, absolute, or covalent")
@@ -296,15 +359,53 @@ def parse_request(params: dict) -> GenerationRequest:
         factor = constraints.get("min_distance_factor", 0.7)
         if isinstance(factor, bool) or not isinstance(factor, (int, float)) or not 0.1 <= float(factor) <= 2.0:
             raise AppError(INVALID_PARAMS, "min_distance_factor must be between 0.1 and 2.0")
+    pair_min_distances = normalize_pair_min_distances(constraints.get("min_distance_pairs"))
+    if pair_min_distances:
+        constraints["min_distance_pairs"] = pair_min_distances
+    else:
+        constraints.pop("min_distance_pairs", None)
+    for key in ("min_volume_per_atom", "max_volume_per_atom"):
+        value = constraints.get(key)
+        if value is None:
+            constraints.pop(key, None)
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise AppError(INVALID_PARAMS, f"{key} must be a positive finite number")
+        try:
+            value = float(value)
+        except (OverflowError, ValueError) as exc:
+            raise AppError(INVALID_PARAMS, f"{key} must be a positive finite number") from exc
+        if not np.isfinite(value) or value <= 0:
+            raise AppError(INVALID_PARAMS, f"{key} must be a positive finite number")
+        constraints[key] = value
+    minimum_volume = constraints.get("min_volume_per_atom")
+    maximum_volume = constraints.get("max_volume_per_atom")
+    if minimum_volume is not None and maximum_volume is not None and minimum_volume > maximum_volume:
+        raise AppError(INVALID_PARAMS, "min_volume_per_atom must not exceed max_volume_per_atom")
     optimizer_params = params.get("optimizer_params") or {}
     if not isinstance(optimizer_params, dict):
         raise AppError(INVALID_PARAMS, "optimizer_params must be an object")
+    reuse_accepted_seeds = optimizer_params.get("reuse_accepted_seeds", False)
+    if not isinstance(reuse_accepted_seeds, bool):
+        raise AppError(INVALID_PARAMS, "reuse_accepted_seeds must be a boolean")
+    operators = parse_operators(params.get("operators"))
+    operator_names = {spec.name for spec in operators}
+    count_changing = operator_names.intersection({"vacancy", "interstitial_atom"})
+    if count_changing and (constraints["atom_count_locked"] or constraints["composition_locked"]):
+        raise AppError(
+            INVALID_PARAMS,
+            "Vacancy and interstitial operators require unlocked composition and atom count",
+        )
+    if "substitution" in operator_names and constraints["composition_locked"]:
+        raise AppError(INVALID_PARAMS, "Substitution requires unlocked composition")
+    if reuse_accepted_seeds and not any(spec.name == "atomic_displacement" for spec in operators):
+        raise AppError(INVALID_PARAMS, "Accepted-seed feedback requires atomic displacement")
     return GenerationRequest(
         dataset_id=dataset_id,
         descriptor_run_id=descriptor_run_id,
         optimizer=optimizer,
         objective=dict(objective),
-        operators=parse_operators(params.get("operators")),
+        operators=operators,
         constraints=constraints,
         budget=parse_budget(params.get("budget")),
         seed=parse_seed(params.get("seed", 42)),
