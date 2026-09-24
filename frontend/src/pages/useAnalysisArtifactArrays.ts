@@ -16,8 +16,14 @@ type ArtifactArraysState = {
 export function useAnalysisArtifactArrays({ analysisId, preview, retry }: ArtifactArraysState) {
   const [arrays, setArrays] = useState<NumericArrays>({});
   const [narrowed, setNarrowed] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [settled, setSettled] = useState<ArtifactArraysState | null>(null);
   const [error, setError] = useState(false);
+  // Gate the very first render too: an effect-only loading flag mounts the
+  // WebGL charts, immediately purges them, then creates them again after I/O.
+  const needsArrays = artifactArraysForPreview(String(preview?.kind ?? ""), String(preview?.algorithm ?? "")).length > 0;
+  const busy = Boolean(analysisId && needsArrays && (
+    settled?.analysisId !== analysisId || settled?.preview !== preview || settled?.retry !== retry
+  ));
 
   useEffect(() => {
     const kind = String(preview?.kind ?? "");
@@ -26,7 +32,7 @@ export function useAnalysisArtifactArrays({ analysisId, preview, retry }: Artifa
     if (!analysisId || !arrayNames.length) {
       setArrays({});
       setNarrowed([]);
-      setBusy(false);
+      setSettled({ analysisId, preview, retry });
       return;
     }
 
@@ -36,12 +42,11 @@ export function useAnalysisArtifactArrays({ analysisId, preview, retry }: Artifa
     if (!missingArrays.length) {
       setArrays(cachedArrays);
       setNarrowed(cached?.narrowed ?? []);
-      setBusy(false);
+      setSettled({ analysisId, preview, retry });
       return;
     }
 
     let disposed = false;
-    setBusy(true);
     void Promise.all(missingArrays.map(async (name) => {
       try {
         const loadAll = (kind === "effective_dimension" && name === "explained_variance") || kind === "trajectory";
@@ -91,7 +96,7 @@ export function useAnalysisArtifactArrays({ analysisId, preview, retry }: Artifa
       setArrays(nextArrays);
       setNarrowed(nextNarrowed);
     }).finally(() => {
-      if (!disposed) setBusy(false);
+      if (!disposed) setSettled({ analysisId, preview, retry });
     });
 
     return () => { disposed = true; };

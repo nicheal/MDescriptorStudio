@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import type { Data } from "plotly.js";
 import { Select, Space, Switch, Table, Tag, Typography } from "antd";
 import { useT, type Pair } from "../i18n";
@@ -53,7 +53,7 @@ const SENSITIVITY_METRIC_LABELS: Record<string, Pair> = {
 
 const COLORS = ["#0F6CBD", "#F7630C", "#107C10", "#8764B8", "#D13438", "#00B7C3", "#C239B3"];
 
-export default function AnalysisResultVisualization(props: Props) {
+export default memo(function AnalysisResultVisualization(props: Props) {
   const { preview, loading, narrowed } = props;
   const { t, tr } = useT();
   if (!preview) return null;
@@ -85,7 +85,7 @@ export default function AnalysisResultVisualization(props: Props) {
       {loading ? <NoData message={t("Loading bounded analysis arrays…")} /> : <Visualization {...props} kind={kind} />}
     </section>
   );
-}
+});
 
 function Visualization({ kind, preview, arrays, points, selectedIndices, onSelect }: Props & { kind: string }) {
   if (!preview) return null;
@@ -262,7 +262,7 @@ function SamplingView({ preview, arrays, points, selectedIndices, onSelect }: Pi
             { type: "scatter", mode: "lines", x: meanCurve.map((_, index) => index + 1), y: meanCurve, name: t("Mean residual"), line: { color: "#F7630C", width: 2, dash: "dot" } },
           ]} layout={layout({ xaxis: { title: { text: t("Selected samples") } }, yaxis: { title: { text: t("Descriptor distance") } }, showlegend: true })} />
         : pickScores.length
-        ? <PlotFrame compact ariaLabel={t("Score at the moment of each pick")} data={[{ type: "bar", x: pickScores.map((_, index) => index + 1), y: pickScores, marker: { color: uncertaintyDriven ? "#D13438" : "#0F6CBD" } }]} layout={layout({ xaxis: { title: { text: t("Pick order") }, dtick: 1 }, yaxis: { title: { text: t("Score when picked") }, rangemode: "tozero" } })} />
+        ? <PlotFrame compact ariaLabel={t("Score at the moment of each pick")} data={[{ type: "bar", x: pickScores.map((_, index) => index + 1), y: pickScores, marker: { color: uncertaintyDriven ? "#D13438" : "#0F6CBD" } }]} layout={layout({ xaxis: { title: { text: t("Pick order") }, dtick: pickScores.length <= 20 ? 1 : undefined }, yaxis: { title: { text: t("Score when picked") }, rangemode: "tozero" } })} />
         : <PlotFrame compact ariaLabel={t("Selection score distribution")} data={[{ type: "histogram", x: points.map((point) => kind === "acquisition" ? uncertaintyDriven ? point.uncertainty ?? 0 : point.distance ?? 0 : point.x), marker: { color: uncertaintyDriven ? "#D13438" : "#8764B8" } }]} layout={layout({ xaxis: { title: { text: kind === "acquisition" ? uncertaintyDriven ? t("kNN extrapolation uncertainty") : t("Novelty distance") : t("PC1 distribution") } }, yaxis: { title: { text: t("Samples") } } })} />}
     </div>
     {pickScores.length > 0 && <Typography.Text type="secondary">{t("Bars show the objective each pick maximised; the stored scores rank every candidate by the loop's final state.")}</Typography.Text>}
