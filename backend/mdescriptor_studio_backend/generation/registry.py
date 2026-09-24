@@ -140,6 +140,6 @@ class GenerationRegistry:
 
 
 GENERATION_REGISTRY = GenerationRegistry()
-GENERATION_ALGORITHM_VERSION = "gen-1"
+GENERATION_ALGORITHM_VERSION = "gen-3"
 
 __all__ = ["GENERATION_REGISTRY", "GENERATION_ALGORITHM_VERSION", "GenerationRegistry"]

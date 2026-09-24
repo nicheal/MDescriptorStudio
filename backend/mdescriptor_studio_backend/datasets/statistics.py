@@ -332,23 +332,27 @@ def _frame_short_contact(
     pbc: np.ndarray,
     min_distance: float | None,
     prepared: tuple | None = None,
+    *,
+    coefficient: float = SHORT_CONTACT_COEFFICIENT,
+    max_images_per_axis: int = _MIN_DISTANCE_IMAGE_LIMIT,
+    include_self_images: bool = True,
+    pair_radii: np.ndarray | None = None,
 ) -> bool:
     """True when any atom pair — periodic images included — sits closer than
-    SHORT_CONTACT_COEFFICIENT × the sum of its covalent radii (NepTrainKit's
+    coefficient × the sum of its per-atom radii (NepTrainKit's
     "find non-physical structures" bond-length filter).
 
-    Exact under the same per-axis stencil cap as _frame_min_distance (the
-    fractional-coefficient bound here is Cauchy–Schwarz on the inverse-cell
-    columns, as in _frame_min_distance).
-    The scan only runs when the frame's minimum distance still leaves room
-    for a pair to undercut its own threshold — every threshold is at most
-    coefficient × 2 × the largest radius present — so healthy frames pay a
-    single comparison.
+    Exact under the supplied per-axis stencil cap (the fractional-coefficient
+    bound is Cauchy–Schwarz on the inverse-cell columns). Callers that already
+    know the frame's minimum distance can skip the scan when it is above the
+    largest possible pair threshold.
     """
     if min_distance is None:
         return False  # no atom pairs at all
-    radii = radii_for(numbers)
-    t_max = SHORT_CONTACT_COEFFICIENT * 2.0 * float(radii.max())
+    radii = radii_for(numbers) if pair_radii is None else np.asarray(pair_radii, dtype=np.float64)
+    if radii.shape != (len(numbers),):
+        raise ValueError("pair_radii must have one radius per atom")
+    t_max = coefficient * 2.0 * float(radii.max())
     # The comparison above is the whole cost for a healthy frame; preparation and
     # the tree are only paid by one that can still hold a violating pair.
     if not t_max > 0.0 or min_distance >= t_max:
@@ -368,7 +372,7 @@ def _frame_short_contact(
         inverse = np.linalg.inv(cell)
         limits = [
             min(
-                _MIN_DISTANCE_IMAGE_LIMIT,
+                max_images_per_axis,
                 int(t_max * np.linalg.norm(inverse[:, axis])) + 1,
             )
             if pbc[axis]
@@ -394,7 +398,7 @@ def _frame_short_contact(
         batch_i, batch_j, batch_pairs = [], [], 0
         diff = centers[query_atom] - pts[hit_atom]
         dist_sq = np.einsum("ij,ij->i", diff, diff)
-        bound = SHORT_CONTACT_COEFFICIENT * (radii[query_atom] + radii[hit_atom])
+        bound = coefficient * (radii[query_atom] + radii[hit_atom])
         return bool((dist_sq < bound * bound).any())
 
     def _scan(centers: np.ndarray, drop_self: bool) -> bool:
@@ -422,10 +426,35 @@ def _frame_short_contact(
 
     if _scan(pts, drop_self=True):  # zero shift: core-core pairs
         return True
-    for shift in shifts:  # image pairs; i == j is a real own-image contact
-        if _scan(pts + shift @ cell, drop_self=False):
+    for shift in shifts:  # image pairs; self-image contacts are optional for generation
+        if _scan(pts + shift @ cell, drop_self=not include_self_images):
             return True
     return False
+
+
+def has_short_contact(
+    positions: np.ndarray,
+    numbers: np.ndarray,
+    cell: np.ndarray,
+    pbc: np.ndarray,
+    *,
+    coefficient: float = SHORT_CONTACT_COEFFICIENT,
+    max_images_per_axis: int = _MIN_DISTANCE_IMAGE_LIMIT,
+    include_self_images: bool = True,
+    pair_radii: np.ndarray | None = None,
+) -> bool:
+    """Check pairs against ``coefficient * (radius_i + radius_j)`` spatially."""
+    return _frame_short_contact(
+        positions,
+        numbers,
+        cell,
+        pbc,
+        0.0,
+        coefficient=coefficient,
+        max_images_per_axis=max_images_per_axis,
+        include_self_images=include_self_images,
+        pair_radii=pair_radii,
+    )
 
 
 def _frame_hash(numbers: np.ndarray, positions: np.ndarray, cell: np.ndarray) -> str:

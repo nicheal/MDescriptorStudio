@@ -30,11 +30,12 @@ from .models import ArchiveEntry
 
 
 class _ArchiveBase:
-    def __init__(self, reference_values: np.ndarray, scaling: FeatureScaling) -> None:
+    def __init__(self, reference_values: np.ndarray, scaling: FeatureScaling, *, workers: int = 1) -> None:
         reference = np.asarray(reference_values, dtype=np.float64)
         if reference.ndim != 2 or reference.shape[0] == 0:
             raise ValueError("archive reference must be a non-empty 2D matrix")
         self.scaling = scaling
+        self.workers = max(1, int(workers))
         # Raw mode is the identity transform. Reuse the reference matrix rather
         # than materializing another full float64 copy (large atom archives
         # can exceed several hundred MiB).
@@ -70,10 +71,17 @@ class _ArchiveBase:
 
     # -- queries -----------------------------------------------------------
     def _nearest_sq(self, x_scaled: np.ndarray) -> np.ndarray:
-        d2 = min_sqdist_to_set(x_scaled, self._reference)
-        accepted = self.accepted_matrix
-        if accepted is not None:
-            np.minimum(d2, min_sqdist_to_set(x_scaled, accepted), out=d2)
+        d2 = min_sqdist_to_set(x_scaled, self._reference, workers=self.workers)
+        if self._accepted:
+            np.minimum(d2, self.nearest_accepted_sq(x_scaled), out=d2)
+        return d2
+
+    def nearest_accepted_sq(self, x_scaled: np.ndarray) -> np.ndarray:
+        """Squared distance to accepted rows, without joining archive blocks."""
+        x_scaled = np.asarray(x_scaled, dtype=np.float64)
+        d2 = np.full(x_scaled.shape[0], np.inf, dtype=np.float64)
+        for accepted in self._accepted:
+            np.minimum(d2, min_sqdist_to_set(x_scaled, accepted, workers=self.workers), out=d2)
         return d2
 
     def nearest(self, values: np.ndarray) -> np.ndarray:
@@ -91,9 +99,12 @@ class _ArchiveBase:
         Over ``query`` (raw rows) when given, else over the reference set
         itself — how well the archive covers its own domain.
         """
-        target = self._reference if query is None else apply_scaling(
-            self.scaling, np.atleast_2d(np.asarray(query, dtype=np.float64))
-        )
+        # The reference matrix is itself part of this archive, so its exact
+        # covering radius is always zero. Scanning it against itself would be
+        # an O(N²) no-op at the end of every generation round.
+        if query is None:
+            return 0.0
+        target = apply_scaling(self.scaling, np.atleast_2d(np.asarray(query, dtype=np.float64)))
         return float(np.sqrt(max(self._nearest_sq(target).max(), 0.0)))
 
     # -- mutation ----------------------------------------------------------
@@ -136,8 +147,7 @@ class LocalEnvironmentArchive(_ArchiveBase):
 
     @property
     def atom_row_count(self) -> int:
-        accepted = self.accepted_matrix
-        return 0 if accepted is None else int(accepted.shape[0])
+        return sum(int(block.shape[0]) for block in self._accepted)
 
     def novel_count(self, values: np.ndarray, threshold: float) -> np.ndarray:
         """Per-row boolean-count: how many raw rows sit farther than ``threshold``."""

@@ -1050,6 +1050,7 @@ const descriptorRow = (meta: (typeof MOCK_DESCRIPTORS)[number]) => ({
 const jobRow = <T extends Record<string, unknown>>(row: T) => ({
   ...row,
   analysis_run_id: null,
+  generation_run_id: row.generation_run_id ?? null,
   result: row.status === "COMPLETED" ? {} : null,
 });
 

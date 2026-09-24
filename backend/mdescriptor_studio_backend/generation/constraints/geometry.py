@@ -23,75 +23,56 @@ from dataclasses import dataclass
 import numpy as np
 
 from ...datasets.covalent_radii import radii_for
-from ...lattice import image_shift_limits
+from ...datasets.statistics import has_short_contact
+from ...lattice import MAX_IMAGES_PER_AXIS, image_shift_limits
 from ..models import ConstraintResult, StructureCandidate
 
-# Pairs are visited row-by-row; one row's N distances are a few hundred KB at
-# the dataset sizes this studio targets, never an N² matrix.
-_CONTACT_CAP = 2.0
 _IMAGE_CAP_TOTAL = 1024
-# A contact this close (Å) is reported as zero-distance for the reason string.
-_EPS = 1e-12
 
 
-def _contact_margin(
+def _contact_violation(
     candidate: StructureCandidate,
     *,
     covalent: bool,
     factor: float,
     absolute: float | None,
-) -> tuple[float, str | None]:
-    """Minimum over all pairs/images of (distance − threshold).
+) -> tuple[bool, str | None]:
+    """Check pair cutoffs with the shared periodic spatial-neighbor scan.
 
-    Non-negative means no contact violation. Returns (margin, reason); reason
-    is set when the periodic stencil cannot be bounded (degenerate cell).
+    The reason is set when the periodic image stencil cannot be bounded.
     """
     positions = np.asarray(candidate.positions, dtype=np.float64)
     n = positions.shape[0]
     if n < 2:
-        return float("inf"), None
+        return False, None
     numbers = np.asarray(candidate.atomic_numbers, dtype=np.int64)
     cell = np.asarray(candidate.cell, dtype=np.float64)
     pbc = np.asarray(candidate.pbc, dtype=bool)
     periodic_axes = tuple(int(a) for a in np.flatnonzero(pbc))
     periodic = bool(periodic_axes) and abs(float(np.linalg.det(cell))) > 1e-10
 
-    if covalent:
-        radii = radii_for(numbers)
-        cap = _CONTACT_CAP * factor
-    else:
-        radii = None
-        cap = float(absolute)
-
-    shifts = np.zeros((1, 3), dtype=np.float64)
-    if periodic:
-        limits = image_shift_limits(
-            cell,
-            cap,
-            axes=periodic_axes,
-            max_total_images=_IMAGE_CAP_TOTAL,
-        )
-        if limits is None:
-            return 0.0, "periodic cell is too skewed to bound the contact search"
-        axes = list(periodic_axes)
-        grid = np.meshgrid(*[np.arange(-limits[k], limits[k] + 1, dtype=np.float64) for k in range(len(axes))], indexing="ij")
-        combos = np.stack([g.reshape(-1) for g in grid], axis=1)
-        shifts = np.zeros((combos.shape[0], 3), dtype=np.float64)
-        for col, axis in enumerate(axes):
-            shifts[:, axis] = combos[:, col]
-        shifts = shifts @ cell  # fractional image offsets → Cartesian
-
-    margin = np.inf
-    for i in range(n - 1):
-        delta = positions[i + 1 :] - positions[i]  # (m, 3)
-        for shift in shifts:
-            d = np.sqrt(np.einsum("ij,ij->i", delta - shift, delta - shift) + 1e-300)
-            if covalent:
-                thresholds = factor * (radii[i] + radii[i + 1 :])
-            else:
-                thresholds = float(absolute)
-            margin = min(margin, float((d - thresholds).min()))
-    return margin, None
+    pair_radii = radii_for(numbers) if covalent else np.full(n, 0.5, dtype=np.float64)
+    coefficient = factor if covalent else float(absolute)
+    cap = coefficient * 2.0 * float(pair_radii.max())
+    if periodic and image_shift_limits(
+        cell,
+        cap,
+        axes=periodic_axes,
+        max_total_images=_IMAGE_CAP_TOTAL,
+    ) is None:
+        return False, "periodic cell is too skewed to bound the contact search"
+    if has_short_contact(
+        positions,
+        numbers,
+        cell,
+        pbc,
+        coefficient=coefficient,
+        max_images_per_axis=MAX_IMAGES_PER_AXIS,
+        include_self_images=False,
+        pair_radii=pair_radii,
+    ):
+        return True, None
+    return False, None
 
 
 @dataclass(frozen=True)
@@ -121,7 +102,7 @@ class GeometryConstraints:
                 if not np.isfinite(det) or abs(det) < 1e-10:
                     reasons.append("periodic cell is singular")
         if not reasons and self.min_distance_mode != "none":
-            margin, reason = _contact_margin(
+            contact, reason = _contact_violation(
                 candidate,
                 covalent=self.min_distance_mode == "covalent",
                 factor=self.min_distance_factor,
@@ -129,12 +110,8 @@ class GeometryConstraints:
             )
             if reason is not None:
                 reasons.append(reason)
-            elif margin < 0.0:
-                reasons.append(
-                    "interatomic contact below the minimum distance"
-                    if margin < -_EPS
-                    else "atoms overlap"
-                )
+            elif contact:
+                reasons.append("interatomic contact below the minimum distance")
         if not reasons and self.max_displacement is not None:
             moved = float(candidate.metadata.get("displacement_max", 0.0))
             if moved > self.max_displacement:

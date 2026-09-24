@@ -36,6 +36,7 @@ vi.mock("@fluentui/react-icons", () => {
     Options16Regular: Icon,
     Sparkle16Regular: Icon,
     DocumentTableRegular: Icon,
+    ArrowSwap16Regular: Icon,
   };
 });
 

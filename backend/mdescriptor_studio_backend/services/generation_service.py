@@ -317,7 +317,7 @@ class GenerationService:
         needs_atomic = bool(getattr(objective, "needs_atomic", False))
 
         # Reference descriptor matrix (raw rows + optional row offsets).
-        raw_values, run_meta = self.results.load_values(run_row["id"], mmap=False)
+        raw_values, run_meta = self.results.load_values(run_row["id"], mmap=True)
         values = np.asarray(raw_values, dtype=np.float64)
         if values.ndim > 2:
             values = values.reshape(values.shape[0], -1)
@@ -335,14 +335,23 @@ class GenerationService:
         )
         reference_structure = aligned.structure_values
         reference_atomic = aligned.atomic_values if needs_atomic else None
+        descriptor_metadata = run_meta.get("metadata") or {}
+        source_num_threads = descriptor_metadata.get("num_threads")
+        if type(source_num_threads) is not int or not 1 <= source_num_threads <= 64:
+            source_num_threads = None
+        device = str(run_row.get("device") or "cpu")
+        cpu_workers = min(os.cpu_count() or 1, 64)
+        distance_workers = cpu_workers
+        if device.lower() == "cpu" and source_num_threads is not None:
+            distance_workers = min(source_num_threads, cpu_workers)
 
         scaling_mode = signature["scaling"]
         structure_scaling, scaling_warnings = fit_scaling(reference_structure, scaling_mode)
-        structure_archive = DescriptorArchive(reference_structure, structure_scaling)
+        structure_archive = DescriptorArchive(reference_structure, structure_scaling, workers=distance_workers)
         local_archive = None
         if needs_atomic and reference_atomic is not None:
             local_scaling, local_warnings = fit_scaling(reference_atomic, scaling_mode)
-            local_archive = LocalEnvironmentArchive(reference_atomic, local_scaling)
+            local_archive = LocalEnvironmentArchive(reference_atomic, local_scaling, workers=distance_workers)
             warnings = scaling_warnings + local_warnings
         else:
             warnings = scaling_warnings
@@ -377,11 +386,19 @@ class GenerationService:
                 )
             )
 
+        num_threads = source_num_threads
+        if (
+            num_threads is None
+            and device.lower() == "cpu"
+            and (self.datasets.adapter.schema(run_row["descriptor_name"]).get("execution") or {}).get("num_threads")
+        ):
+            num_threads = cpu_workers
         evaluator = DescriptorEvaluator(
             self.datasets.adapter,
             run_row["descriptor_name"],
             signature["descriptor_parameters"],
-            device=str(run_row.get("device") or "cpu"),
+            device=device,
+            num_threads=num_threads,
         )
         control = self.datasets.adapter.make_control()
         ctx.attach_control(control)
@@ -406,6 +423,7 @@ class GenerationService:
             rng=rng,
             n_seeds=int(request.optimizer_params.get("n_seeds", 64)),
             duplicate_threshold=duplicate_threshold,
+            workers=distance_workers,
         )
 
         rounds: list = []
@@ -459,6 +477,11 @@ class GenerationService:
                         "constraints": request.constraints,
                         "budget": request.budget.__dict__,
                         "seed": request.seed,
+                        "execution": {
+                            "device": device,
+                            "num_threads": num_threads,
+                            "distance_workers": distance_workers,
+                        },
                     },
                     descriptor_signature=signature,
                     run=run,
@@ -674,7 +697,7 @@ class GenerationService:
             raise AppError(RESULT_INCOMPATIBLE, "descriptor run is no longer available")
         if run_row["dataset_id"] != row["dataset_id"]:
             raise AppError(RESULT_INCOMPATIBLE, "descriptor run belongs to a different dataset")
-        raw_values, run_meta = self.results.load_values(run_row["id"], mmap=False)
+        raw_values, run_meta = self.results.load_values(run_row["id"], mmap=True)
         values = np.asarray(raw_values, dtype=np.float64)
         if values.ndim > 2:
             values = values.reshape(values.shape[0], -1)

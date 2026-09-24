@@ -18,6 +18,8 @@ ranking. ``tests/test_fps_sampling.py`` pins this as an invariant.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 
 from ..analysis.algorithms._common import _safe_import
@@ -26,6 +28,7 @@ from ..analysis.algorithms._common import _safe_import
 # float64), keeping the N×M cross-distance pass memory-bounded without
 # pinning a SciPy dependency on callers.
 _BLOCK = 2048
+_MAX_PARALLEL_SCRATCH_BYTES = 256 * 1024 * 1024
 
 
 def sqdist_to_point(x: np.ndarray, point: np.ndarray) -> np.ndarray:
@@ -38,7 +41,13 @@ def sqdist_to_point(x: np.ndarray, point: np.ndarray) -> np.ndarray:
     return out
 
 
-def min_sqdist_to_set(x: np.ndarray, existing: np.ndarray, *, block_size: int = _BLOCK) -> np.ndarray:
+def min_sqdist_to_set(
+    x: np.ndarray,
+    existing: np.ndarray,
+    *,
+    block_size: int = _BLOCK,
+    workers: int = 1,
+) -> np.ndarray:
     """Row-wise minimum squared distance from each row of ``x`` to the set ``existing``.
 
     Runs in blocks of ``block_size`` rows/columns; a full N×M distance
@@ -46,13 +55,40 @@ def min_sqdist_to_set(x: np.ndarray, existing: np.ndarray, *, block_size: int = 
     so an identical row scores exactly zero.
     """
     cdist = _safe_import("scipy.spatial.distance", "scipy").cdist
+
+    if x.shape[0] == 0:
+        return np.empty(0, dtype=np.float64)
+
+    requested_workers = max(1, int(workers))
+    # Split small query batches across workers without letting concurrent
+    # cdist blocks exceed the shared scratch-memory budget.
+    query_block_size = min(
+        block_size,
+        max(1, (x.shape[0] + requested_workers - 1) // requested_workers),
+        max(1, _MAX_PARALLEL_SCRATCH_BYTES // (requested_workers * block_size * 8)),
+    )
+
+    def _query_chunk(cand_start: int) -> tuple[int, np.ndarray]:
+        cand = x[cand_start : cand_start + query_block_size]
+        nearest = np.full(cand.shape[0], np.inf, dtype=np.float64)
+        for ref_start in range(0, existing.shape[0], block_size):
+            ref = existing[ref_start : ref_start + block_size]
+            block = cdist(cand, ref, metric="sqeuclidean")
+            np.minimum(nearest, block.min(axis=1), out=nearest)
+        return cand_start, nearest
+
+    starts = range(0, x.shape[0], query_block_size)
+    chunk_count = (x.shape[0] + query_block_size - 1) // query_block_size
+    worker_count = min(requested_workers, chunk_count)
     d2 = np.full(x.shape[0], np.inf, dtype=np.float64)
-    for ref_start in range(0, existing.shape[0], block_size):
-        ref = existing[ref_start : ref_start + block_size]
-        for cand_start in range(0, x.shape[0], block_size):
-            cand_slice = slice(cand_start, cand_start + block_size)
-            block = cdist(x[cand_slice], ref, metric="sqeuclidean")
-            np.minimum(d2[cand_slice], block.min(axis=1), out=d2[cand_slice])
+    if worker_count == 1:
+        results = map(_query_chunk, starts)
+        for start, nearest in results:
+            d2[start : start + nearest.size] = nearest
+    else:
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            for start, nearest in pool.map(_query_chunk, starts):
+                d2[start : start + nearest.size] = nearest
     return d2
 
 

@@ -104,9 +104,21 @@ class DescriptorEvaluator:
     performance contract, not a convenience.
     """
 
-    def __init__(self, adapter, descriptor_name: str, descriptor_parameters: dict, device: str = "cpu") -> None:
+    def __init__(
+        self,
+        adapter,
+        descriptor_name: str,
+        descriptor_parameters: dict,
+        device: str = "cpu",
+        num_threads: int | None = None,
+    ) -> None:
         self._adapter = adapter
-        self._descriptor = adapter.build(descriptor_name, descriptor_parameters, device=device)
+        self._descriptor = adapter.build(
+            descriptor_name,
+            descriptor_parameters,
+            device=device,
+            num_threads=num_threads,
+        )
 
     def evaluate(self, candidates, *, return_atomic: bool = False, control=None) -> DescriptorEvaluation:
         if not candidates:

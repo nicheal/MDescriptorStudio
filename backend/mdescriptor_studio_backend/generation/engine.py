@@ -13,6 +13,7 @@ re-fitting the scaling inside the loop.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -131,6 +132,7 @@ class GenerationEngine:
         rng: np.random.Generator,
         n_seeds: int = 64,
         duplicate_threshold: float | None = None,
+        workers: int = 1,
     ) -> None:
         if not seed_pool:
             raise ValueError("seed pool must not be empty")
@@ -145,6 +147,7 @@ class GenerationEngine:
         self.rng = rng
         self.n_seeds = int(n_seeds)
         self.duplicate_threshold = duplicate_threshold
+        self.workers = max(1, int(workers))
 
     def _check_geometry(self, candidate: StructureCandidate) -> ConstraintResult:
         return self.constraints.validate(candidate)
@@ -185,12 +188,24 @@ class GenerationEngine:
 
             valid: list[StructureCandidate] = []
             rejected_geometry = 0
-            for child in children:
-                verdict = self._check_geometry(child)
-                if verdict.valid:
-                    valid.append(child)
-                else:
-                    rejected_geometry += 1
+            if self.workers > 1 and len(children) > 1:
+                with ThreadPoolExecutor(max_workers=min(self.workers, len(children))) as pool:
+                    verdicts = pool.map(self._check_geometry, children)
+                    for child, verdict in zip(children, verdicts):
+                        if verdict.valid:
+                            valid.append(child)
+                        else:
+                            rejected_geometry += 1
+            else:
+                for child in children:
+                    verdict = self._check_geometry(child)
+                    if verdict.valid:
+                        valid.append(child)
+                    else:
+                        rejected_geometry += 1
+            # The evaluation budget counts descriptor calls, not proposals.
+            # A full final batch could otherwise exceed the requested cap.
+            del valid[max(0, self.budget.max_evaluations - total_evaluations) :]
 
             # Duplicate filtering needs descriptors, so it runs after scoring
             # (below), against the frozen archive.
@@ -226,9 +241,13 @@ class GenerationEngine:
                 fitness = np.asarray(scores.fitness, dtype=np.float64)
                 # Post-hoc duplicate rejection against the frozen archive.
                 if self.duplicate_threshold is not None:
-                    keep = ~self.structure_archive.contains_near(
-                        evaluation.structure_values, self.duplicate_threshold
-                    )
+                    # Novelty, composite, and coverage objectives already
+                    # measured these exact distances against this unchanged
+                    # archive. Reuse them instead of scanning it a second time.
+                    nearest = scores.novelty
+                    if nearest is None:
+                        nearest = self.structure_archive.nearest(evaluation.structure_values)
+                    keep = nearest >= self.duplicate_threshold
                     rejected_duplicate = int((~keep).sum())
                     fitness = np.where(keep, fitness, -np.inf)
 

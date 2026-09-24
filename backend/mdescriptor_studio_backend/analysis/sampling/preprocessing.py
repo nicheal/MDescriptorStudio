@@ -54,11 +54,12 @@ def fit_scaling(x: np.ndarray, mode: str = "robust") -> tuple[FeatureScaling, li
         center = x.mean(axis=0)
         scale = x.std(axis=0)
     else:
-        center = np.median(x, axis=0)
-        iqr_spread = (np.quantile(x, 0.75, axis=0) - np.quantile(x, 0.25, axis=0)) / _IQR_TO_SIGMA
-        std = x.std(axis=0)
+        quartiles = np.quantile(x, (0.25, 0.5, 0.75), axis=0)
+        center = quartiles[1]
+        iqr_spread = (quartiles[2] - quartiles[0]) / _IQR_TO_SIGMA
         # A degenerate IQR (more than half the samples share one value) carries
         # no reliable spread signal — the standard deviation is the fallback.
+        std = x.std(axis=0)
         scale = np.where(_meaningful_scale(center, iqr_spread), iqr_spread, std)
     warnings: list[str] = []
     constant = ~_meaningful_scale(center, scale)

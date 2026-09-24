@@ -1109,6 +1109,7 @@ export const zhDict: Record<string, string> = {
   "Expansion history": "扩展历史",
   "Generation runs for the active dataset. Open a run or delete its history.": "当前活动数据集的扩展任务，可打开运行或删除历史。",
   "No expansion runs yet — submit one from configuration.": "暂无扩展任务，请先在配置中提交任务。",
+  "Open": "打开",
   "Open {name} expansion": "打开扩展任务：{name}",
   "Delete {name} expansion": "删除扩展任务：{name}",
   "Expansion deleted": "扩展历史已删除",

@@ -25,5 +25,5 @@ test("generation page walks config → running → results against the mock back
 
   // The run lands in the expansion history once back on the configuration view.
   await page.getByRole("button", { name: /Back to configuration/i }).click();
-  await expect(heads.filter({ hasText: "Expansion history" })).toBeVisible();
+  await expect(page.getByText("Expansion history", { exact: true })).toBeVisible();
 });

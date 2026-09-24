@@ -48,8 +48,8 @@ test("cross-dataset analysis selects compatible runs and a saved dataset view", 
   await expect(page.getByText("Compatible feature space", { exact: true })).toBeVisible();
 
   await rows.nth(0).locator(".ant-select").nth(1).click();
-  await page.getByText("Training split · 9,984", { exact: true }).last().click();
-  await expect(rows.nth(0)).toContainText("Training split · 9,984");
+  await page.getByText("Training split · 9984", { exact: true }).last().click();
+  await expect(rows.nth(0)).toContainText("Training split · 9984");
   await page.getByRole("button", { name: /Run Data Coverage/i }).click();
   await expect(page.getByText("DATASET COVERAGE", { exact: true })).toBeVisible({ timeout: 30_000 });
   // The result states which scale its distances were measured on, because the
@@ -356,7 +356,7 @@ test("atom-level local selection stays highlighted when opened in Explore", asyn
   await page.getByRole("button", { name: /Run Local Environment/i }).click();
   await expect(page.getByText("LOCAL ENVIRONMENT DIVERSITY", { exact: true })).toBeVisible({ timeout: 30_000 });
   await page.locator(".analysis-main .ant-table-tbody").nth(1).locator("tr").first().click();
-  await expect(page.locator(".analysis-inspector").getByText("Row", { exact: true })).toBeVisible();
+  await expect(page.locator(".analysis-inspector").getByText("Atom index in frame", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open in Explore" }).click();
   await expect(page.locator(".explore-atom-row-selected")).toHaveCount(1, { timeout: 30_000 });
 });

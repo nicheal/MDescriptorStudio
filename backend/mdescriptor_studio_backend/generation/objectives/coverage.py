@@ -21,7 +21,7 @@ from __future__ import annotations
 import numpy as np
 
 from ...analysis.sampling import apply_scaling
-from .._distance import min_sqdist_to_set, sqdist_to_point
+from .._distance import sqdist_to_point
 from .base import ObjectiveBatchResult
 
 
@@ -41,11 +41,7 @@ class CoverageGainObjective:
         scaled = apply_scaling(structure_archive.scaling, values)
         reference = structure_archive.reference
 
-        accepted = structure_archive.accepted_matrix
-        if accepted is not None:
-            base_d2 = min_sqdist_to_set(reference, accepted)
-        else:
-            base_d2 = np.full(reference.shape[0], np.inf, dtype=np.float64)
+        base_d2 = structure_archive.nearest_accepted_sq(reference)
         if np.isfinite(base_d2).all():
             radius_now = float(np.sqrt(np.clip(base_d2, 0.0, None).max()))
         else:

@@ -19,6 +19,8 @@ Aggregation choices:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 
 from ..archive import LocalEnvironmentArchive
@@ -38,7 +40,7 @@ def _aggregate(distances: np.ndarray, aggregation: str, top_fraction: float, qua
         return float(np.quantile(distances, quantile))
     # top_fraction_mean
     k = max(1, int(np.ceil(top_fraction * distances.size)))
-    return float(np.sort(distances)[-k:].mean())
+    return float(np.partition(distances, distances.size - k)[-k:].mean())
 
 
 class LocalEnvironmentNoveltyObjective:
@@ -73,13 +75,29 @@ class LocalEnvironmentNoveltyObjective:
         local = np.empty(n_candidates, dtype=np.float64)
         novel_counts = np.empty(n_candidates, dtype=np.float64) if self.novelty_threshold is not None else None
         counts = np.empty(n_candidates, dtype=np.float64)
-        for i in range(n_candidates):
+
+        def _score_candidate(i: int) -> tuple[float, int, float | None]:
             lo, hi = int(offsets[i]), int(offsets[i + 1])
             rows = per_atom[lo:hi]
-            local[i] = _aggregate(rows, self.aggregation, self.top_fraction, self.quantile)
-            counts[i] = float(rows.size)
-            if novel_counts is not None:
-                novel_counts[i] = float((rows > self.novelty_threshold).sum())
+            count = float((rows > self.novelty_threshold).sum()) if self.novelty_threshold is not None else None
+            return _aggregate(rows, self.aggregation, self.top_fraction, self.quantile), rows.size, count
+
+        workers = min(max(1, int(getattr(local_archive, "workers", 1))), n_candidates)
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                candidate_scores = pool.map(_score_candidate, range(n_candidates))
+                for i, (score, count, novel_count) in enumerate(candidate_scores):
+                    local[i] = score
+                    counts[i] = float(count)
+                    if novel_counts is not None:
+                        novel_counts[i] = float(novel_count)
+        else:
+            for i in range(n_candidates):
+                score, count, novel_count = _score_candidate(i)
+                local[i] = score
+                counts[i] = float(count)
+                if novel_counts is not None:
+                    novel_counts[i] = float(novel_count)
         fitness = local - np.asarray(penalties, dtype=np.float64)
         components = {
             "local_diversity": local,
