@@ -92,8 +92,8 @@ class GeometryConstraints:
     max_volume_change: float | None = None  # fraction, from operator metadata
     min_volume_per_atom: float | None = None  # Å³/atom, fully periodic structures only
     max_volume_per_atom: float | None = None  # Å³/atom, fully periodic structures only
-    composition_locked: bool = False
-    atom_count_locked: bool = False
+    composition_locked: bool = True
+    atom_count_locked: bool = True
 
     def validate(self, candidate: StructureCandidate) -> ConstraintResult:
         reasons: list[str] = []
