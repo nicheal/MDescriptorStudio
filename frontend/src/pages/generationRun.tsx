@@ -3,6 +3,7 @@
 import { Alert, Button, Card, Spin, Statistic } from "antd";
 import ScientificPlot from "../viz/ScientificPlot";
 import type { GenerationPreview, GenerationRow } from "../features/generation/types";
+import { GENERATION_GEOMETRY_REJECTION_LABELS } from "../features/generation/labels";
 import { useT } from "../i18n";
 
 function metric(label: string, value: string | number) {
@@ -21,6 +22,12 @@ export default function GenerationRunPanel({ row, onCancel, cancelPending = fals
     }),
     { proposed: 0, rejectedGeometry: 0, rejectedDuplicate: 0 },
   );
+  const geometryReasonTotals = rounds.reduce<Record<string, number>>((acc, round) => {
+    for (const [reason, count] of Object.entries(round.rejected_geometry_by_reason ?? {})) {
+      acc[reason] = (acc[reason] ?? 0) + count;
+    }
+    return acc;
+  }, {});
   const rejectedLowNovelty = Math.max(0, totals.proposed - totals.rejectedGeometry - totals.rejectedDuplicate - (preview?.accepted ?? 0));
   const latest = rounds[rounds.length - 1];
   const evaluations = preview?.evaluations ?? row.evaluations;
@@ -89,6 +96,13 @@ export default function GenerationRunPanel({ row, onCancel, cancelPending = fals
             {t("Rejected — low novelty")}: <b>{rejectedLowNovelty}</b>
           </span>
         </div>
+        {Object.keys(geometryReasonTotals).length > 0 && (
+          <div style={{ marginTop: 8, color: "#616161", fontSize: 12 }}>
+            {t("Geometry rejection reasons")}: {Object.entries(geometryReasonTotals).map(([reason, count]) =>
+              `${t(GENERATION_GEOMETRY_REJECTION_LABELS[reason] ?? reason)} ${count}`,
+            ).join(" · ")}
+          </div>
+        )}
       </Card>
 
       <Card size="small" title={t("Novel environments per round")}>

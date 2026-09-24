@@ -8,7 +8,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { PlotMouseEvent } from "plotly.js";
 import { ipc } from "../ipc/client";
 import ScientificPlot from "../viz/ScientificPlot";
-import { GENERATION_OBJECTIVE_LABELS, GENERATION_OPTIMIZER_LABELS, GENERATION_STOP_REASON_LABELS } from "../features/generation/labels";
+import { GENERATION_GEOMETRY_REJECTION_LABELS, GENERATION_OBJECTIVE_LABELS, GENERATION_OPTIMIZER_LABELS, GENERATION_STOP_REASON_LABELS } from "../features/generation/labels";
 import type { GenerationPca, GenerationPreview, GenerationRow } from "../features/generation/types";
 import type { DatasetView, FramePayload } from "../types/protocol";
 import StructurePreview from "../components/StructurePreview";
@@ -27,6 +27,12 @@ function SummaryCard({ row }: { row: GenerationRow }) {
   const preview: GenerationPreview | null = row.preview ?? null;
   const rounds = preview?.rounds ?? [];
   const latest = rounds[rounds.length - 1];
+  const geometryReasonTotals = rounds.reduce<Record<string, number>>((acc, round) => {
+    for (const [reason, count] of Object.entries(round.rejected_geometry_by_reason ?? {})) {
+      acc[reason] = (acc[reason] ?? 0) + count;
+    }
+    return acc;
+  }, {});
   return (
     <Card size="small" title={t("Run summary")}>
       <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
@@ -38,6 +44,13 @@ function SummaryCard({ row }: { row: GenerationRow }) {
         {metric(t("Rounds"), rounds.length)}
         {metric(t("Coverage radius"), latest ? latest.coverage_radius.toFixed(3) : "—")}
       </div>
+      {Object.keys(geometryReasonTotals).length > 0 && (
+        <div style={{ marginTop: 12, color: "#616161", fontSize: 12 }}>
+          {t("Geometry rejection reasons")}: {Object.entries(geometryReasonTotals).map(([reason, count]) =>
+            `${t(GENERATION_GEOMETRY_REJECTION_LABELS[reason] ?? reason)} ${count}`,
+          ).join(" · ")}
+        </div>
+      )}
       <div style={{ marginTop: 12 }}>
         <Tag color={row.status === "COMPLETED" ? "green" : row.status === "CANCELLED" ? "orange" : "red"}>
           {t(GENERATION_OPTIMIZER_LABELS[row.optimizer as keyof typeof GENERATION_OPTIMIZER_LABELS] ?? row.optimizer)} · {t(GENERATION_OBJECTIVE_LABELS[row.objective as keyof typeof GENERATION_OBJECTIVE_LABELS] ?? row.objective)}

@@ -30,6 +30,26 @@ from .models import (
     StructureCandidate,
 )
 
+_GEOMETRY_REJECTION_CODES = {
+    "positions contain NaN or Inf": "non_finite_positions",
+    "cell contains NaN or Inf": "non_finite_cell",
+    "periodic cell is singular": "singular_periodic_cell",
+    "periodic cell is too skewed to bound the contact search": "periodic_cell_too_skewed",
+    "interatomic contact below the minimum distance": "minimum_distance",
+    "composition differs from the parent structure": "composition_lock",
+    "atom count differs from the parent structure": "atom_count_lock",
+}
+
+
+def _geometry_rejection_code(reason: str | None) -> str:
+    if reason is None:
+        return "unknown"
+    if reason.startswith("displacement "):
+        return "displacement_limit"
+    if reason.startswith("volume change "):
+        return "volume_change_limit"
+    return _GEOMETRY_REJECTION_CODES.get(reason, "other")
+
 
 @dataclass
 class RoundRecord:
@@ -44,6 +64,7 @@ class RoundRecord:
     mean_novelty: float | None
     coverage_radius: float
     novel_environments: int
+    rejected_geometry_by_reason: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return {
@@ -51,6 +72,7 @@ class RoundRecord:
             "evaluations": self.evaluations,
             "proposed": self.proposed,
             "rejected_geometry": self.rejected_geometry,
+            "rejected_geometry_by_reason": dict(self.rejected_geometry_by_reason),
             "rejected_duplicate": self.rejected_duplicate,
             "accepted": self.accepted,
             "best_fitness": self.best_fitness,
@@ -187,22 +209,28 @@ class GenerationEngine:
             children = self.optimizer.propose(seeds, self.rng)
 
             valid: list[StructureCandidate] = []
-            rejected_geometry = 0
+            rejected_geometry_by_reason: dict[str, int] = {}
+
+            def collect_verdict(child: StructureCandidate, verdict: ConstraintResult) -> None:
+                if verdict.valid:
+                    valid.append(child)
+                    return
+                # A candidate may violate multiple checks; count its first
+                # reported reason so the buckets sum to rejected_geometry.
+                reason = verdict.reasons[0] if verdict.reasons else None
+                code = _geometry_rejection_code(reason)
+                rejected_geometry_by_reason[code] = rejected_geometry_by_reason.get(code, 0) + 1
+
             if self.workers > 1 and len(children) > 1:
                 with ThreadPoolExecutor(max_workers=min(self.workers, len(children))) as pool:
                     verdicts = pool.map(self._check_geometry, children)
                     for child, verdict in zip(children, verdicts):
-                        if verdict.valid:
-                            valid.append(child)
-                        else:
-                            rejected_geometry += 1
+                        collect_verdict(child, verdict)
             else:
                 for child in children:
                     verdict = self._check_geometry(child)
-                    if verdict.valid:
-                        valid.append(child)
-                    else:
-                        rejected_geometry += 1
+                    collect_verdict(child, verdict)
+            rejected_geometry = sum(rejected_geometry_by_reason.values())
             # The evaluation budget counts descriptor calls, not proposals.
             # A full final batch could otherwise exceed the requested cap.
             del valid[max(0, self.budget.max_evaluations - total_evaluations) :]
@@ -349,6 +377,7 @@ class GenerationEngine:
                 evaluations=evaluations_this_round,
                 proposed=len(children),
                 rejected_geometry=rejected_geometry,
+                rejected_geometry_by_reason=rejected_geometry_by_reason,
                 rejected_duplicate=rejected_duplicate,
                 accepted=accepted_this_round,
                 best_fitness=best_round_fitness,

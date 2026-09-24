@@ -80,6 +80,7 @@ export interface GenerationRound {
   evaluations: number;
   proposed: number;
   rejected_geometry: number;
+  rejected_geometry_by_reason?: Record<string, number>;
   rejected_duplicate: number;
   accepted: number;
   best_fitness: number;
