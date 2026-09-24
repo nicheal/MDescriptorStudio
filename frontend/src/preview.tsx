@@ -1583,6 +1583,16 @@ const METHODS: Record<string, Handler> = {
     const rows = Array.from(MOCK_GENERATION_ROWS.values());
     return p?.dataset_id ? rows.filter((row) => row.dataset_id === p.dataset_id) : rows;
   },
+  "generation.delete": (p) => {
+    const id = String(p?.id ?? "");
+    const row = MOCK_GENERATION_ROWS.get(id);
+    if (!row) throw new MockError("INVALID_PARAMS", `generation run ${id} does not exist`);
+    if (row.status === "QUEUED" || row.status === "RUNNING") {
+      throw new MockError("RESULT_INCOMPATIBLE", `generation ${id} is ${row.status}`);
+    }
+    MOCK_GENERATION_ROWS.delete(id);
+    return { ok: true, generation_id: id };
+  },
   "generation.preview": (p) => {
     const row = MOCK_GENERATION_ROWS.get(String(p?.id ?? ""));
     if (!row) throw new MockError("INVALID_PARAMS", `generation run ${String(p?.id ?? "")} does not exist`);

@@ -399,7 +399,9 @@ def _frame_short_contact(
         diff = centers[query_atom] - pts[hit_atom]
         dist_sq = np.einsum("ij,ij->i", diff, diff)
         bound = coefficient * (radii[query_atom] + radii[hit_atom])
-        return bool((dist_sq < bound * bound).any())
+        # Periodic wrapping can round an exact cutoff a few ULPs inward.
+        limit_sq = bound * bound * (1.0 - 16.0 * np.finfo(np.float64).eps)
+        return bool((dist_sq < limit_sq).any())
 
     def _scan(centers: np.ndarray, drop_self: bool) -> bool:
         nonlocal batch_pairs
