@@ -22,7 +22,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # First because it inspects the source tree only: a version mismatch is
       # known in seconds instead of after the toolchain install.
@@ -37,7 +37,7 @@ jobs:
             exit 1
           }
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -80,7 +80,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # tauri.conf.json maps bundle.resources -> src-tauri/resources/backend,
       # which scripts/prepare_sidecar.ps1 generates and .gitignore excludes.
@@ -105,9 +105,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm

@@ -202,10 +202,11 @@ export default function Generation() {
         "generation.submit",
         buildSubmitPayload(config),
       );
-      store.setActiveGeneration(result.generation_id);
-      store.setLiveRow(null);
+      const state = useGenerationStore.getState();
+      state.setActiveGeneration(result.generation_id);
+      state.setLiveRow(null);
       setCancelPending(false);
-      store.setPhase("running");
+      state.setPhase("running");
       startPolling(result.generation_id);
     } catch (error) {
       console.error(error);
