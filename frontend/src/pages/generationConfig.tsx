@@ -3,8 +3,9 @@
 import { Button, Card, Input, InputNumber, Select, Slider, Switch } from "antd";
 import { Play16Regular } from "@fluentui/react-icons";
 import { useGenerationStore } from "../features/generation/generationStore";
-import { GENERATION_OBJECTIVE_LABELS } from "../features/generation/labels";
-import type { GenerationCatalog, GenerationObjectiveType } from "../features/generation/types";
+import { defaultOptimizerConfig } from "../features/generation/generationStore";
+import { GENERATION_OBJECTIVE_LABELS, GENERATION_OPTIMIZER_LABELS } from "../features/generation/labels";
+import type { GenerationCatalog, GenerationObjectiveType, GenerationOptimizer } from "../features/generation/types";
 import type { DatasetView, RunRow } from "../types/protocol";
 import { useT } from "../i18n";
 
@@ -57,6 +58,12 @@ export default function GenerationConfigPanel({
   ]).map((o) => {
     const type = o.name as GenerationObjectiveType;
     return { value: type, label: t(GENERATION_OBJECTIVE_LABELS[type] ?? o.name) };
+  });
+  // The optimizer vocabulary is the backend's runtime vocabulary: only what
+  // generation.catalog actually offers is selectable (G3.5-2, review §25).
+  const optimizerOptions = (catalog?.optimizers ?? [{ name: "random" }]).map((o) => {
+    const type = o.name as GenerationOptimizer;
+    return { value: type, label: t(GENERATION_OPTIMIZER_LABELS[type] ?? o.name) };
   });
   const fullDatasetScope = "__full_dataset__";
 
@@ -214,7 +221,7 @@ export default function GenerationConfigPanel({
               }))
             }
           />
-          <span style={{ fontSize: 13, color: "#616161" }}>0–{config.searchSpace.maxDisplacement} Å</span>
+          <span style={{ fontSize: 13, color: "#616161" }}>σ ≤ {config.searchSpace.maxDisplacement} Å</span>
           <Slider
             style={{ width: 180 }}
             min={0.01}
@@ -223,7 +230,22 @@ export default function GenerationConfigPanel({
             value={config.searchSpace.maxDisplacement}
             onChange={(v) => update((c) => ({ ...c, searchSpace: { ...c.searchSpace, maxDisplacement: v } }))}
           />
+          <span style={labelStyle}>{t("Hard displacement cutoff")}</span>
+          <InputNumber
+            style={{ width: 150 }}
+            min={0.01}
+            max={5}
+            step={0.05}
+            value={config.searchSpace.hardCutoff ?? undefined}
+            placeholder={t("unbounded")}
+            onChange={(v) => update((c) => ({ ...c, searchSpace: { ...c.searchSpace, hardCutoff: v ?? null } }))}
+          />
         </div>
+        {config.searchSpace.atomicDisplacement && (
+          <div style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
+            {t("σ caps the Gaussian spread per structure; individual displacements can still exceed σ. Set a hard cutoff to bound every atom's displacement norm.")}
+          </div>
+        )}
         <div style={rowStyle}>
           <span style={labelStyle}>{t("Isotropic strain")}</span>
           <Switch
@@ -427,8 +449,8 @@ export default function GenerationConfigPanel({
           <Select
             style={{ minWidth: 280 }}
             value={config.optimizer.type}
-            options={[{ value: "random", label: t("Descriptor-guided random") }]}
-            onChange={() => undefined}
+            options={optimizerOptions}
+            onChange={(type) => update((c) => ({ ...c, optimizer: defaultOptimizerConfig(type) }))}
           />
           <span style={labelStyle}>{t("Candidate batch")}</span>
           <InputNumber

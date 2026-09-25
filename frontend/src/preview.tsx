@@ -1559,6 +1559,7 @@ const METHODS: Record<string, Handler> = {
       mean_novelty: 0.5 + 0.1 * (i + 1),
       coverage_radius: Math.max(0.2, 2.4 - 0.3 * (i + 1)),
       novel_environments: 12 * (i + 1),
+      unique_novel_environments: Math.max(1, Math.round(12 * (i + 1) * 0.75)),
     }));
     MOCK_GENERATION_ROWS.set(id, {
       id,

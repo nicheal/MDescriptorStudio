@@ -197,8 +197,24 @@ def _optional_float(params: dict, key: str) -> float | None:
     return float(value)
 
 
+def _optional_count(params: dict, key: str, default: int, *, lo: int, hi: int) -> int:
+    """An integer knob: absent → default; fractional floats and bools rejected."""
+    value = params.get(key, default)
+    if value is None:
+        value = default
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise AppError(INVALID_PARAMS, f"{key} must be an integer")
+    if float(value) != int(value):
+        raise AppError(INVALID_PARAMS, f"{key} must be an integer")
+    value = int(value)
+    if value < lo or value > hi:
+        raise AppError(INVALID_PARAMS, f"{key} must be between {lo} and {hi}")
+    return value
+
+
 def parse_budget(params: dict) -> Budget:
     params = params or {}
+    min_novel = _optional_float(params, "min_novel_per_100_evals")
     budget = Budget(
         max_evaluations=_int(params, "max_evaluations", 10_000, lo=1, hi=10_000_000),
         max_accepted=_int(params, "max_accepted", 500, lo=1, hi=1_000_000),
@@ -210,7 +226,9 @@ def parse_budget(params: dict) -> Budget:
             else None
         ),
         discovery_window=_int(params, "discovery_window", 10, lo=1, hi=10_000),
-        min_novel_per_100_evals=_optional_float(params, "min_novel_per_100_evals") or 1.0,
+        # 0.0 is a legal value ("never stop on the discovery rate") and must
+        # not be collapsed into the 1.0 default — only absence means default.
+        min_novel_per_100_evals=1.0 if min_novel is None else min_novel,
     )
     if budget.target_novelty is not None and budget.target_novelty <= 0:
         raise AppError(INVALID_PARAMS, "target_novelty must be positive")
@@ -348,7 +366,10 @@ def parse_request(params: dict) -> GenerationRequest:
         raise AppError(INVALID_PARAMS, "constraints must be an object")
     constraints = dict(constraints)
     for key in ("composition_locked", "atom_count_locked"):
-        value = constraints.get(key, False)
+        # Locked-by-default is the single scientific default (shared with the
+        # GeometryConstraints dataclass, build_constraints and the catalog):
+        # perturbation operators must not silently change composition.
+        value = constraints.get(key, True)
         if not isinstance(value, bool):
             raise AppError(INVALID_PARAMS, f"{key} must be a boolean")
         constraints[key] = value
@@ -388,8 +409,49 @@ def parse_request(params: dict) -> GenerationRequest:
     reuse_accepted_seeds = optimizer_params.get("reuse_accepted_seeds", False)
     if not isinstance(reuse_accepted_seeds, bool):
         raise AppError(INVALID_PARAMS, "reuse_accepted_seeds must be a boolean")
+    if optimizer == "random":
+        # Full request-level validation (G3.5 A10): an illegal payload must
+        # fail at Run-click time, not after the job was queued — the
+        # optimizer constructor would only reject these mid-worker.
+        unknown = set(optimizer_params) - {"children_per_seed", "batch_accept", "n_seeds", "reuse_accepted_seeds"}
+        if unknown:
+            raise AppError(
+                INVALID_PARAMS,
+                f"unknown optimizer params for '{optimizer}': {', '.join(sorted(unknown))}",
+            )
+        n_seeds = _optional_count(optimizer_params, "n_seeds", 64, lo=1, hi=1024)
+        children_per_seed = _optional_count(optimizer_params, "children_per_seed", 8, lo=1, hi=1024)
+        # The accepted budget cannot exceed what one round actually proposes.
+        batch_accept = _optional_count(
+            optimizer_params, "batch_accept", 8, lo=1, hi=n_seeds * children_per_seed
+        )
+        optimizer_params["n_seeds"] = n_seeds
+        optimizer_params["children_per_seed"] = children_per_seed
+        optimizer_params["batch_accept"] = batch_accept
     operators = parse_operators(params.get("operators"))
     operator_names = {spec.name for spec in operators}
+    for spec in operators:
+        if spec.name == "atomic_displacement":
+            # σ and the hard cutoff are separate parameters (G3.5 A11):
+            # σ bounds the Gaussian distribution, the cutoff bounds each
+            # displacement. Both validated here so bad values cannot queue.
+            max_sigma = spec.params.get("max_sigma", 0.15)
+            if (
+                isinstance(max_sigma, bool)
+                or not isinstance(max_sigma, (int, float))
+                or not np.isfinite(float(max_sigma))
+                or not 0.0 < float(max_sigma) <= 5.0
+            ):
+                raise AppError(INVALID_PARAMS, "atomic_displacement max_sigma must be in (0, 5] Å")
+            hard_cutoff = spec.params.get("hard_cutoff")
+            if hard_cutoff is not None:
+                if (
+                    isinstance(hard_cutoff, bool)
+                    or not isinstance(hard_cutoff, (int, float))
+                    or not np.isfinite(float(hard_cutoff))
+                    or not 0.0 < float(hard_cutoff) <= 20.0
+                ):
+                    raise AppError(INVALID_PARAMS, "atomic_displacement hard_cutoff must be in (0, 20] Å")
     count_changing = operator_names.intersection({"vacancy", "interstitial_atom"})
     if count_changing and (constraints["atom_count_locked"] or constraints["composition_locked"]):
         raise AppError(

@@ -39,6 +39,7 @@ export default function GenerationRunPanel({ row, onCancel, cancelPending = fals
   const generations = rounds.length;
   const x = rounds.map((r) => r.generation);
   const novelTrace = rounds.map((r) => r.novel_environments);
+  const uniqueTrace = rounds.map((r) => r.unique_novel_environments);
   const radiusTrace = rounds.map((r) => r.coverage_radius);
 
   return (
@@ -83,7 +84,7 @@ export default function GenerationRunPanel({ row, onCancel, cancelPending = fals
           {metric(t("Accepted"), `${preview?.accepted ?? row.accepted_count}`)}
           {metric(t("Best novelty"), latest?.best_novelty != null ? latest.best_novelty.toFixed(3) : "—")}
           {metric(t("Mean novelty"), latest?.mean_novelty != null ? latest.mean_novelty.toFixed(3) : "—")}
-          {metric(t("Coverage radius"), latest ? latest.coverage_radius.toFixed(3) : "—")}
+          {metric(t("Coverage radius"), latest?.coverage_radius != null ? latest.coverage_radius.toFixed(3) : "—")}
         </div>
         <div style={{ display: "flex", gap: 24, marginTop: 12, color: "#616161", fontSize: 13 }}>
           <span>
@@ -117,6 +118,21 @@ export default function GenerationRunPanel({ row, onCancel, cancelPending = fals
               line: { color: "#0F6CBD" },
               name: t("Novel environments"),
             },
+            // Raw counts charge duplicate new regions twice when two
+            // accepted structures find the same region in one round; the
+            // deduplicated count is the benchmark-comparable one.
+            ...(uniqueTrace.some((v) => v != null)
+              ? [
+                  {
+                    x,
+                    y: uniqueTrace,
+                    type: "scatter" as const,
+                    mode: "lines+markers" as const,
+                    line: { color: "#8FBCE6" },
+                    name: t("Unique novel environments"),
+                  },
+                ]
+              : []),
           ]}
           layout={{
             margin: { t: 8, r: 16, b: 40, l: 48 },

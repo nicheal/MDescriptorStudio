@@ -1,14 +1,15 @@
 // Generation page contracts. Discriminated unions keep every illegal state
 // unrepresentable: an OptimizerConfig is exactly one optimizer's parameters,
-// never a bag of partially-filled ga*/pso* optionals.
+// never a bag of partially-filled optionals. The vocabulary below is the
+// *runtime* vocabulary — roadmap items (GA/PSO/target-region) join when the
+// backend catalog actually offers them, never earlier.
 
-export type GenerationOptimizer = "random" | "genetic" | "pso" | "external";
+export type GenerationOptimizer = "random";
 
 export type GenerationObjectiveType =
   | "novelty"
   | "local_environment_novelty"
   | "coverage"
-  | "target_region"
   | "composite";
 
 export type LocalAggregation = "mean" | "top_fraction_mean" | "quantile" | "max";
@@ -30,7 +31,10 @@ export interface ObjectiveConfig {
 
 export interface SearchSpaceConfig {
   atomicDisplacement: boolean;
-  maxDisplacement: number; // Å
+  /** Largest per-structure Gaussian σ in Å — bounds the distribution, not any single displacement. */
+  maxDisplacement: number; // Å (σ cap)
+  /** Hard per-atom displacement bound in Å; null = unbounded Gaussian tail. */
+  hardCutoff: number | null;
   isotropicStrain: boolean;
   anisotropicStrain: boolean;
   maxStrain: number; // fraction
@@ -95,8 +99,11 @@ export interface GenerationRound {
   best_fitness: number;
   best_novelty: number | null;
   mean_novelty: number | null;
-  coverage_radius: number;
+  /** Covering radius of the accepted set over the reference domain; null until the first accept. */
+  coverage_radius: number | null;
   novel_environments: number;
+  /** Selection-order-deduplicated novel environments; null when the objective emits no counts. */
+  unique_novel_environments: number | null;
 }
 
 export interface GenerationPreview {

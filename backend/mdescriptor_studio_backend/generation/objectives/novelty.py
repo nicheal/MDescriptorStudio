@@ -17,6 +17,7 @@ from .base import ObjectiveBatchResult
 class NoveltyObjective:
     name = "novelty"
     needs_atomic = False
+    produces_novel_environment_count = False
 
     def evaluate_batch(self, structure_values, atomic_values, row_offsets, structure_archive, local_archive, penalties):
         values = np.asarray(structure_values, dtype=np.float64)

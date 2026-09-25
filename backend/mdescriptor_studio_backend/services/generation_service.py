@@ -174,6 +174,28 @@ class GenerationService:
             raise AppError(RESULT_INCOMPATIBLE, f"descriptor run {request.descriptor_run_id} is {run_row['status']}")
         if run_row.get("device") in ("imported", "external"):
             raise AppError(RESULT_INCOMPATIBLE, "imported descriptor results cannot be used as generation targets")
+        # The reference archive, novelty space and coverage domain all come
+        # from this descriptor run — it must describe the same dataset the
+        # seed pool is drawn from, or every score loses scientific meaning.
+        if run_row.get("dataset_id") != request.dataset_id:
+            raise AppError(RESULT_INCOMPATIBLE, "descriptor run belongs to a different dataset")
+        # Local-environment objectives genuinely need atom-level rows: the
+        # objective raises at runtime without them, so a structure-level run
+        # must be rejected here (at Run-click time), not after queueing.
+        objective_cls = GENERATION_REGISTRY.objective(request.objective["type"])
+        if bool(getattr(objective_cls, "needs_atomic", False)) and run_row.get("row_semantics") != "atom":
+            raise AppError(
+                RESULT_INCOMPATIBLE,
+                "local-environment objectives require an atom-level descriptor run;"
+                " the selected run provides structure-level rows only",
+            )
+        # Freshness: the frozen reference archive must describe the dataset
+        # as it is now, not as it was when the run completed — otherwise every
+        # novelty/coverage score silently measures the wrong domain.
+        _, run_metadata = self.results.feature_space_signature(request.descriptor_run_id)
+        run_fingerprint = run_metadata.get("dataset_fingerprint")
+        if run_fingerprint and dataset["fingerprint"] != run_fingerprint:
+            raise AppError(ANALYSIS_STALE, "descriptor run was computed on an older version of this dataset")
         seed_frame_indices, seed_scope_hash = self._seed_view(request, dataset)
         scaling = str(request.objective.get("scaling") or "robust")
         signature = self._descriptor_signature(run_row, scaling)
@@ -313,6 +335,10 @@ class GenerationService:
         run_row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (request.descriptor_run_id,))
         if run_row is None or run_row["status"] != "COMPLETED":
             raise AppError(RESULT_INCOMPATIBLE, "descriptor run is no longer available")
+        # Revalidate the submit-time invariant on the worker side: the run may
+        # have been re-pointed or replaced between queueing and execution.
+        if run_row["dataset_id"] != request.dataset_id:
+            raise AppError(RESULT_INCOMPATIBLE, "descriptor run belongs to a different dataset")
         objective = GENERATION_REGISTRY.build_objective(request.objective)
         needs_atomic = bool(getattr(objective, "needs_atomic", False))
 
@@ -349,14 +375,20 @@ class GenerationService:
         structure_scaling, scaling_warnings = fit_scaling(reference_structure, scaling_mode)
         structure_archive = DescriptorArchive(reference_structure, structure_scaling, workers=distance_workers)
         local_archive = None
-        if needs_atomic and reference_atomic is not None:
+        if needs_atomic:
+            # The objective raises on structure rows only — a degraded run
+            # would crash mid-job, so refuse here instead of warning.
+            if reference_atomic is None:
+                raise AppError(
+                    RESULT_INCOMPATIBLE,
+                    "descriptor run has no atom-level rows;"
+                    " local-environment objectives require an atom-level descriptor run",
+                )
             local_scaling, local_warnings = fit_scaling(reference_atomic, scaling_mode)
             local_archive = LocalEnvironmentArchive(reference_atomic, local_scaling, workers=distance_workers)
             warnings = scaling_warnings + local_warnings
         else:
             warnings = scaling_warnings
-            if needs_atomic:
-                warnings.append("descriptor run has no atom-level rows; local objective sees structure rows only")
 
         # Seed pool: a bounded, seed-deterministic sample of dataset frames.
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (request.dataset_id,))

@@ -34,6 +34,15 @@ class CompositeObjective:
         self._structure = NoveltyObjective()
         self._local = LocalEnvironmentNoveltyObjective(**local_params)
 
+    @property
+    def produces_novel_environment_count(self) -> bool:
+        # The composite emits exactly what its local part emits.
+        return self._local.produces_novel_environment_count
+
+    @property
+    def novel_environment_threshold(self) -> float | None:
+        return self._local.novel_environment_threshold
+
     def evaluate_batch(self, structure_values, atomic_values, row_offsets, structure_archive, local_archive, penalties):
         structure = self._structure.evaluate_batch(
             structure_values, atomic_values, row_offsets, structure_archive, local_archive, penalties

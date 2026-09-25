@@ -27,6 +27,11 @@ class ObjectiveBatchResult:
 class GenerationObjective(Protocol):
     name: str
     needs_atomic: bool  # whether the objective reads per-atom descriptor rows
+    # Whether evaluate_batch actually fills ``novel_environment_count``. The
+    # engine runs the local-environment discovery-rate stop only when this is
+    # true — structure-level objectives (novelty, coverage) must never be
+    # terminated by a metric they do not produce.
+    produces_novel_environment_count: bool
 
     def evaluate_batch(
         self,

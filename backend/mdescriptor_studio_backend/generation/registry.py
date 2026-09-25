@@ -131,7 +131,7 @@ class GenerationRegistry:
                 },
             ],
             "operators": [
-                {"name": AtomicDisplacement.name, "params": {"max_sigma": 0.15}},
+                {"name": AtomicDisplacement.name, "params": {"max_sigma": 0.15, "hard_cutoff": None}},
                 {"name": IsotropicStrain.name, "params": {"max_strain": 0.05}},
                 {"name": AnisotropicStrain.name, "params": {"max_strain": 0.05}},
                 {"name": CellShear.name, "params": {"max_shear": 0.05}},
@@ -147,8 +147,10 @@ class GenerationRegistry:
                 "max_volume_change": 0.2,
                 "min_volume_per_atom": None,
                 "max_volume_per_atom": None,
-                "composition_locked": False,
-                "atom_count_locked": False,
+                # The single locked-by-default scientific default, shared with
+                # GeometryConstraints and parse_request.
+                "composition_locked": True,
+                "atom_count_locked": True,
             },
             "budget": {
                 "max_evaluations": 10_000,
@@ -161,6 +163,10 @@ class GenerationRegistry:
 
 
 GENERATION_REGISTRY = GenerationRegistry()
-GENERATION_ALGORITHM_VERSION = "gen-3"
+# G3.5 correctness gate: coverage-gain direction, the accepted-only coverage
+# radius, and the objective-capability-gated discovery stop changed the
+# meaning of persisted metrics (convergence coverage_radius, coverage
+# fitness), so runs from gen-3 and gen-4 are not comparable.
+GENERATION_ALGORITHM_VERSION = "gen-4"
 
 __all__ = ["GENERATION_REGISTRY", "GENERATION_ALGORITHM_VERSION", "GenerationRegistry"]

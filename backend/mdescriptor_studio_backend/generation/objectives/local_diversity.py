@@ -65,6 +65,18 @@ class LocalEnvironmentNoveltyObjective:
         self.quantile = float(quantile)
         self.novelty_threshold = novelty_threshold
 
+    @property
+    def produces_novel_environment_count(self) -> bool:
+        """Counts exist only when a novelty threshold is configured; without
+        one the engine must not run the discovery-rate stop."""
+        return self.novelty_threshold is not None
+
+    @property
+    def novel_environment_threshold(self) -> float | None:
+        """The distance threshold defining "novel environment" — the engine
+        needs it for the per-round unique-count dedup."""
+        return self.novelty_threshold
+
     def evaluate_batch(self, structure_values, atomic_values, row_offsets, structure_archive, local_archive: LocalEnvironmentArchive, penalties):
         if atomic_values is None or row_offsets is None:
             raise ValueError("local_environment_novelty requires atom-level descriptor rows")

@@ -215,6 +215,40 @@ class TestStopCriteria:
         # A zero threshold never triggers; the run ends on its real budget.
         assert result.stopped_by in {"max_accepted", "max_evaluations", "max_generations", "no_improvement"}
 
+    def test_discovery_rate_stop_ignores_structure_level_objectives(self):
+        # Same saturated setup as the composite test above, but the novelty
+        # objective never produces novel_environment_count. The stop must not
+        # fire on a metric the objective does not emit — before the capability
+        # gate this run was killed by fake "saturation" after `window` rounds.
+        pool = _seed_pool(2)
+        structure_archive, local_archive = _archives(pool)
+        operator = GENERATION_REGISTRY.build_operator(
+            OperatorSpec("atomic_displacement", {"max_sigma": 1e-9})
+        )
+        optimizer = RandomSearchOptimizer([operator], children_per_seed=2, batch_accept=1)
+        engine = GenerationEngine(
+            seed_pool=pool,
+            evaluator=_StubEvaluator(),
+            structure_archive=structure_archive,
+            local_archive=local_archive,
+            objective=NoveltyObjective(),
+            optimizer=optimizer,
+            constraints=build_constraints({"min_distance_mode": "none"}),
+            budget=Budget(
+                max_evaluations=10**6,
+                max_accepted=10**6,
+                max_generations=5,
+                no_improvement_rounds=None,
+                discovery_window=2,
+                min_novel_per_100_evals=1.0,
+            ),
+            rng=np.random.default_rng(5),
+            n_seeds=2,
+        )
+        result = engine.run()
+        assert result.stopped_by == "max_generations"
+        assert len(result.rounds) == 5
+
 
 class TestEngineBehaviour:
     def test_one_batch_evaluate_per_round(self):
@@ -281,4 +315,131 @@ class TestEngineBehaviour:
             "novel_environments",
         ):
             assert key in record
+        # The last round accepted, so its accepted-only coverage radius is a
+        # real number (the pre-fix archive metric was structurally always 0).
+        assert record["coverage_radius"] is not None
         assert record["coverage_radius"] >= 0.0
+
+    def test_accepted_coverage_radius_is_none_then_finite_and_non_increasing(self):
+        result = _engine(42, budget=Budget(max_evaluations=200, max_accepted=6, max_generations=20)).run()
+        radii = [r.coverage_radius for r in result.rounds]
+        first_accept = next(i for i, r in enumerate(result.rounds) if r.accepted)
+        # Nothing accepted yet → there is no generated coverage to report.
+        assert all(radius is None for radius in radii[:first_accept])
+        measured = radii[first_accept:]
+        assert all(radius is not None and radius >= 0.0 for radius in measured)
+        # Accepts only add covering points, so the radius never grows.
+        assert all(a >= b - 1e-9 for a, b in zip(measured, measured[1:]))
+
+
+class TestOptimizerObservations:
+    """G3.5 lifecycle: the engine reports every proposal's outcome back."""
+
+    class _RecordingOptimizer:
+        def __init__(self, inner):
+            self.inner = inner
+            self.batches = []
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+        def observe(self, observations):
+            self.batches.append(observations)
+            self.inner.observe(observations)
+
+    def _run(self, constraints):
+        pool = _seed_pool(2)
+        structure_archive, local_archive = _archives(pool)
+        operator = GENERATION_REGISTRY.build_operator(
+            OperatorSpec("atomic_displacement", {"max_sigma": 0.1})
+        )
+        strain = GENERATION_REGISTRY.build_operator(OperatorSpec("isotropic_strain", {"max_strain": 0.02}))
+        optimizer = self._RecordingOptimizer(
+            RandomSearchOptimizer([operator, strain], children_per_seed=2, batch_accept=1)
+        )
+        engine = GenerationEngine(
+            seed_pool=pool,
+            evaluator=_StubEvaluator(),
+            structure_archive=structure_archive,
+            local_archive=local_archive,
+            objective=NoveltyObjective(),
+            optimizer=optimizer,
+            constraints=constraints,
+            budget=Budget(max_evaluations=100, max_accepted=3, max_generations=6),
+            rng=np.random.default_rng(3),
+            n_seeds=2,
+        )
+        return engine.run(), optimizer
+
+    def test_every_proposal_is_observed_with_its_outcome(self):
+        result, optimizer = self._run(build_constraints({"min_distance_mode": "none", "max_displacement": 0.01}))
+        # One observation per proposed candidate, per round.
+        assert sum(len(batch) for batch in optimizer.batches) == sum(r.proposed for r in result.rounds)
+        assert [batch.generation for batch in optimizer.batches] == [r.generation for r in result.rounds]
+        accepted_seen = 0
+        for batch, record in zip(optimizer.batches, result.rounds):
+            rejected = [obs for obs in batch.observations if not obs.valid]
+            valid = [obs for obs in batch.observations if obs.valid]
+            assert len(rejected) == record.rejected_geometry
+            assert all(obs.geometry_rejection not in (None, "unknown") for obs in rejected)
+            assert all(obs.fitness is None for obs in rejected)
+            # Evaluated candidates carry scores and a descriptor; accepted
+            # ones carry their batch-selection rank.
+            assert all(obs.structure_descriptor is not None for obs in valid)
+            for obs in valid:
+                if obs.accepted:
+                    accepted_seen += 1
+                    assert obs.selection_rank is not None
+                    assert obs.fitness is not None
+                else:
+                    assert obs.selection_rank is None
+        assert accepted_seen == result.accepted_count > 0
+
+
+class TestUniqueEnvironmentMetric:
+    def test_round_records_carry_raw_and_unique_counts(self):
+        pool = _seed_pool(2)
+        structure_archive, local_archive = _archives(pool)
+        operator = GENERATION_REGISTRY.build_operator(
+            OperatorSpec("atomic_displacement", {"max_sigma": 1e-9})
+        )
+        optimizer = RandomSearchOptimizer([operator], children_per_seed=2, batch_accept=1)
+        engine = GenerationEngine(
+            seed_pool=pool,
+            evaluator=_StubEvaluator(),
+            structure_archive=structure_archive,
+            local_archive=local_archive,
+            objective=CompositeObjective(structure_weight=0.5, local_weight=0.5, novelty_threshold=0.25),
+            optimizer=optimizer,
+            constraints=build_constraints({"min_distance_mode": "none"}),
+            budget=Budget(max_evaluations=10**6, max_accepted=4, max_generations=4),
+            rng=np.random.default_rng(5),
+            n_seeds=2,
+        )
+        result = engine.run()
+        for record in result.rounds:
+            assert record.unique_novel_environments is not None
+            # The deduplicated count can never exceed the raw count.
+            assert record.unique_novel_environments <= record.novel_environments
+        assert "unique_novel_environments" in result.rounds[-1].to_json()
+
+    def test_structure_level_objectives_leave_the_unique_count_empty(self):
+        result = _engine(42, budget=Budget(max_evaluations=100, max_accepted=2, max_generations=3)).run()
+        assert all(record.unique_novel_environments is None for record in result.rounds)
+
+    def test_greedy_union_dedup_counts_shared_regions_once(self):
+        engine = _engine(42)
+        reference = np.array([[0.0], [1.0], [2.0], [3.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+        # Candidate 0: {0.1, 8.0, 9.0} — 8.0 and 9.0 are novel against the
+        # frozen archive. Candidate 1: {8.1, 9.1, 0.2} — 8.1/9.1 are novel
+        # against the frozen archive too, but they are the same two regions
+        # candidate 0 already claimed (within the 0.25 threshold).
+        atomic = np.array([[0.1], [8.0], [9.0], [8.1], [9.1], [0.2]])
+        offsets = np.array([0, 3, 6])
+        unique = engine._count_unique_novel_environments([0, 1], atomic, offsets, 0.25)
+        assert unique == 2
+        # Raw per-candidate counts would have charged the shared regions twice.
+        raw = 2 + 2
+        assert unique < raw

@@ -54,6 +54,9 @@ export function validateConfig(config: GenerationConfig): SubmissionCheck {
   if (space.interstitialAtom && normalizeElement(space.interstitialElement) == null) {
     return { ok: false, reason: "Enter a valid interstitial element symbol" };
   }
+  if (space.hardCutoff != null && (!Number.isFinite(space.hardCutoff) || space.hardCutoff <= 0)) {
+    return { ok: false, reason: "Hard displacement cutoff must be positive" };
+  }
   if (space.substitution && normalizeElement(space.substitutionElement) == null) {
     return { ok: false, reason: "Enter a valid substitution element symbol" };
   }
@@ -98,7 +101,15 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
   }
 
   const operators: Record<string, unknown> = {};
-  if (space.atomicDisplacement) operators.atomic_displacement = { enabled: true, max_sigma: space.maxDisplacement };
+  if (space.atomicDisplacement) {
+    // max_sigma bounds the Gaussian spread; hard_cutoff (optional) bounds
+    // every atom's displacement norm. Separate semantics — see the operator.
+    operators.atomic_displacement = {
+      enabled: true,
+      max_sigma: space.maxDisplacement,
+      ...(space.hardCutoff != null ? { hard_cutoff: space.hardCutoff } : {}),
+    };
+  }
   if (space.isotropicStrain) operators.isotropic_strain = { enabled: true, max_strain: space.maxStrain };
   if (space.anisotropicStrain) operators.anisotropic_strain = { enabled: true, max_strain: space.maxStrain };
   if (space.cellShear) operators.cell_shear = { enabled: true, max_shear: space.maxShear };

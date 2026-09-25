@@ -24,6 +24,7 @@ from mdescriptor_studio_backend.generation.archive import DescriptorArchive, Loc
 from mdescriptor_studio_backend.generation.engine import select_diverse_batch
 from mdescriptor_studio_backend.generation.models import ArchiveEntry
 from mdescriptor_studio_backend.generation.objectives import (
+    CompositeObjective,
     CoverageGainObjective,
     LocalEnvironmentNoveltyObjective,
     NoveltyObjective,
@@ -102,17 +103,46 @@ class TestCoverageGain:
         # Novelty stays available as a diagnostic component.
         assert scores.novelty[1] > scores.novelty[0]
 
-    def test_empty_archive_ranks_by_established_radius(self):
+    def test_empty_archive_prefers_the_max_min_centre(self):
         corners = np.array([[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]])
         archive = _structure_archive(corners)
         values = np.array([[0.5, 0.5], [3.0, 3.0]])
         scores = _score(CoverageGainObjective(), values, archive)
         gain = scores.components["coverage_gain"]
-        # No covering radius exists yet: the candidate establishing the larger
-        # radius ranks higher (fitness must be finite for selection).
+        # Empty archive: there is no radius to shrink, so the first pick
+        # must seed the max-min centre — the candidate that leaves the
+        # *smallest* covering radius behind. (0.5,0.5) leaves √0.5 ≈ 0.707;
+        # (3,3) leaves √18 ≈ 4.24 and must rank BELOW the centre.
         assert np.isfinite(scores.fitness).all()
-        assert gain[1] > gain[0]
-        assert gain[1] == pytest.approx(np.sqrt(18.0), rel=1e-9)  # (3,3) covers worst corner at 18
+        assert gain[0] > gain[1]
+        assert gain[0] == pytest.approx(-np.sqrt(0.5), rel=1e-9)
+        assert gain[1] == pytest.approx(-np.sqrt(18.0), rel=1e-9)
+        # Fitness mirrors the component (minus zero penalties here).
+        np.testing.assert_allclose(scores.fitness, gain, atol=1e-12)
+
+
+class TestObjectiveCapabilities:
+    def test_only_environment_counting_objectives_claim_the_capability(self):
+        # The engine runs the discovery-rate stop only for objectives that
+        # actually produce novel_environment_count — structure-level
+        # objectives (novelty, coverage) must never trigger it.
+        assert not NoveltyObjective().produces_novel_environment_count
+        assert not CoverageGainObjective().produces_novel_environment_count
+        assert LocalEnvironmentNoveltyObjective(novelty_threshold=0.25).produces_novel_environment_count
+        # Without a threshold the local objective emits no counts at all.
+        assert not LocalEnvironmentNoveltyObjective().produces_novel_environment_count
+        assert CompositeObjective(structure_weight=0.5, local_weight=0.5, novelty_threshold=0.25).produces_novel_environment_count
+        assert not CompositeObjective(structure_weight=0.5, local_weight=0.5).produces_novel_environment_count
+
+    def test_novel_environment_threshold_follows_the_counting_capability(self):
+        # The engine's per-round unique-count dedup needs the threshold from
+        # the objective; structure-level objectives have none.
+        assert getattr(NoveltyObjective(), "novel_environment_threshold", None) is None
+        assert getattr(CoverageGainObjective(), "novel_environment_threshold", None) is None
+        assert LocalEnvironmentNoveltyObjective(novelty_threshold=0.3).novel_environment_threshold == pytest.approx(0.3)
+        composite = CompositeObjective(structure_weight=0.5, local_weight=0.5, novelty_threshold=0.4)
+        assert composite.novel_environment_threshold == pytest.approx(0.4)
+        assert CompositeObjective(structure_weight=0.5, local_weight=0.5).novel_environment_threshold is None
 
 
 class TestLocalEnvironmentNovelty:

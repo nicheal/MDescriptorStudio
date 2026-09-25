@@ -42,7 +42,7 @@ function SummaryCard({ row }: { row: GenerationRow }) {
         {metric(t("Descriptor evaluations"), preview?.evaluations ?? row.evaluations)}
         {metric(t("Accepted structures"), preview?.accepted ?? row.accepted_count)}
         {metric(t("Rounds"), rounds.length)}
-        {metric(t("Coverage radius"), latest ? latest.coverage_radius.toFixed(3) : "—")}
+        {metric(t("Coverage radius"), latest?.coverage_radius != null ? latest.coverage_radius.toFixed(3) : "—")}
       </div>
       {Object.keys(geometryReasonTotals).length > 0 && (
         <div style={{ marginTop: 12, color: "#616161", fontSize: 12 }}>

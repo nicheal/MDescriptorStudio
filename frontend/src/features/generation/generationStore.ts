@@ -3,7 +3,16 @@
 // AnalysisParams with ga*/pso* optionals would recreate the illegal-state
 // surface the discriminated union exists to prevent.
 import { create } from "zustand";
-import type { GenerationConfig, GenerationPhase, GenerationRow } from "./types";
+import type { GenerationConfig, GenerationOptimizer, GenerationPhase, GenerationRow, OptimizerConfig } from "./types";
+
+/** Exhaustive per-optimizer defaults — switching method in the UI resets to
+ * the backend catalog defaults for that optimizer. */
+export function defaultOptimizerConfig(type: GenerationOptimizer): OptimizerConfig {
+  switch (type) {
+    case "random":
+      return { type: "random", childrenPerSeed: 8, batchAccept: 8, nSeeds: 64, reuseAcceptedSeeds: false };
+  }
+}
 
 export const defaultGenerationConfig = (): GenerationConfig => ({
   source: { datasetId: null, descriptorRunId: null, seedViewId: null },
@@ -20,6 +29,7 @@ export const defaultGenerationConfig = (): GenerationConfig => ({
   searchSpace: {
     atomicDisplacement: true,
     maxDisplacement: 0.15,
+    hardCutoff: null,
     isotropicStrain: true,
     anisotropicStrain: true,
     maxStrain: 0.05,
@@ -40,10 +50,13 @@ export const defaultGenerationConfig = (): GenerationConfig => ({
     maxVolumeChange: 0.2,
     minVolumePerAtom: null,
     maxVolumePerAtom: null,
-    compositionLocked: false,
-    atomCountLocked: false,
+    // Locked-by-default is the single scientific default shared with the
+    // backend (GeometryConstraints / parse_request / catalog). Count-changing
+    // operators unlock these switches explicitly.
+    compositionLocked: true,
+    atomCountLocked: true,
   },
-  optimizer: { type: "random", childrenPerSeed: 8, batchAccept: 8, nSeeds: 64, reuseAcceptedSeeds: false },
+  optimizer: { ...defaultOptimizerConfig("random") },
   budget: {
     maxEvaluations: 10_000,
     maxAccepted: 500,

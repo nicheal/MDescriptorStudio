@@ -54,6 +54,36 @@ class TestOperators:
         assert 0.0 < child.metadata["displacement_max"] <= 0.1 * 4.0  # ~4 sigma tail
         assert not np.allclose(child.positions, parent.positions)
 
+    def test_displacement_max_is_the_true_per_atom_norm(self):
+        rng = np.random.default_rng(0)
+        parent = _candidate()
+        child = AtomicDisplacement(0.1).apply(parent, rng, {"max_sigma": 0.1})
+        delta = child.positions - parent.positions
+        expected = float(np.linalg.norm(delta, axis=1).max())
+        # The metadata must understate nothing: max |Δx| component ≤ ||Δr||.
+        assert child.metadata["displacement_max"] == pytest.approx(expected, rel=1e-12)
+        assert child.metadata["displacement_max"] >= float(np.abs(delta).max()) - 1e-12
+
+    def test_hard_cutoff_bounds_every_displacement_norm(self):
+        rng = np.random.default_rng(0)
+        parent = _candidate()
+        child = AtomicDisplacement(0.4).apply(parent, rng, {"max_sigma": 0.4, "hard_cutoff": 0.05})
+        delta = child.positions - parent.positions
+        norms = np.linalg.norm(delta, axis=1)
+        assert norms.max() <= 0.05 + 1e-12
+        # Directions are preserved: rescaled atoms keep their unit vector.
+        assert "hard_cutoff" in child.operator_params
+        assert child.operator_params["hard_cutoff"] == 0.05
+
+    def test_no_cutoff_keeps_the_gaussian_tail(self):
+        rng = np.random.default_rng(0)
+        parent = _candidate()
+        uncapped = AtomicDisplacement(0.4).apply(parent, rng, {"max_sigma": 0.4})
+        capped = AtomicDisplacement(0.4).apply(parent, rng, {"max_sigma": 0.4, "hard_cutoff": 0.01})
+        # Without a cutoff the sampled geometry is untouched by the operator.
+        assert np.linalg.norm(uncapped.positions - parent.positions, axis=1).max() > 0.01
+        assert np.linalg.norm(capped.positions - parent.positions, axis=1).max() <= 0.01 + 1e-12
+
     @pytest.mark.parametrize(
         "operator",
         [
@@ -213,6 +243,31 @@ class TestArchive:
         assert radius == pytest.approx(0.0)  # reference covers itself
         assert archive.contains_near(np.array([[0.1, 0.1]]), 0.5)[0]
 
+    def test_accepted_coverage_radius_measures_generated_coverage(self):
+        from mdescriptor_studio_backend.generation.models import ArchiveEntry
+
+        reference = np.array([[0.0, 0.0], [10.0, 10.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        archive = DescriptorArchive(reference, scaling)
+        # Nothing accepted yet: there is no generated coverage to measure.
+        assert archive.accepted_coverage_radius() is None
+
+        archive.add(np.array([[9.0, 9.0]]), [ArchiveEntry("c0", 0, 0.0, 0.0, 1)])
+        first = archive.accepted_coverage_radius()
+        # The reference point (0,0) is the farthest from the single accept.
+        assert first == pytest.approx(9.0 * np.sqrt(2.0))
+        # The metric must not silently fall back to the reference rows, which
+        # cover the domain exactly and would always report 0.0.
+        assert first > 0.0
+
+        archive.add(np.array([[0.5, 0.5]]), [ArchiveEntry("c1", 1, 0.0, 0.0, 1)])
+        second = archive.accepted_coverage_radius()
+        assert second == pytest.approx(np.sqrt(2.0))
+        assert second < first  # non-increasing as accepts accumulate
+
+        # Arbitrary query domains work too.
+        assert archive.accepted_coverage_radius(query=np.array([[9.0, 9.0]])) == pytest.approx(0.0)
+
     def test_local_environment_novel_counts(self):
         reference = np.array([[0.0], [1.0], [2.0], [3.0]])
         scaling, _ = fit_scaling(reference, "raw")
@@ -223,3 +278,113 @@ class TestArchive:
     def test_empty_reference_rejected(self):
         with pytest.raises(ValueError):
             DescriptorArchive(np.zeros((0, 3)), fit_scaling(np.ones((2, 3)), "raw")[0])
+
+
+# ---------------------------------------------------------------- budget parsing
+class TestBudgetParsing:
+    def test_zero_discovery_threshold_is_preserved(self):
+        from mdescriptor_studio_backend.generation.models import parse_budget
+        from mdescriptor_studio_backend.errors import AppError
+
+        budget = parse_budget({"min_novel_per_100_evals": 0.0, "discovery_window": 5})
+        # 0.0 is a legal value ("never stop on the discovery rate") — the old
+        # `or 1.0` parser silently turned it into the default.
+        assert budget.min_novel_per_100_evals == 0.0
+
+    def test_discovery_threshold_defaults_when_absent(self):
+        from mdescriptor_studio_backend.generation.models import parse_budget
+
+        assert parse_budget({}).min_novel_per_100_evals == 1.0
+        assert parse_budget({"min_novel_per_100_evals": None}).min_novel_per_100_evals == 1.0
+        assert parse_budget({"min_novel_per_100_evals": 2.5}).min_novel_per_100_evals == 2.5
+
+    def test_negative_discovery_threshold_rejected(self):
+        from mdescriptor_studio_backend.generation.models import parse_budget
+        from mdescriptor_studio_backend.errors import AppError
+
+        with pytest.raises(AppError):
+            parse_budget({"min_novel_per_100_evals": -0.1})
+
+
+# ---------------------------------------------------------------- request parsing
+def _request(**overrides) -> dict:
+    payload = {
+        "dataset_id": "ds",
+        "descriptor_run_id": "run",
+        "optimizer": "random",
+        "optimizer_params": {"children_per_seed": 4, "batch_accept": 2, "n_seeds": 8},
+        "objective": {"type": "novelty"},
+        "operators": {"atomic_displacement": {"enabled": True, "max_sigma": 0.1}},
+        "constraints": {"min_distance_mode": "none"},
+        "budget": {"max_evaluations": 100},
+        "seed": 42,
+    }
+    payload.update(overrides)
+    return payload
+
+
+class TestRequestParsing:
+    def test_locks_default_to_true_across_every_layer(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.generation.registry import GENERATION_REGISTRY
+
+        request = parse_request(_request())
+        # The single locked-by-default scientific default: dataclass,
+        # builder, parser and catalog must agree (review §15).
+        assert request.constraints["composition_locked"] is True
+        assert request.constraints["atom_count_locked"] is True
+        built = build_constraints({})
+        assert built.composition_locked and built.atom_count_locked
+        catalog = GENERATION_REGISTRY.catalog()["constraints"]
+        assert catalog["composition_locked"] is True and catalog["atom_count_locked"] is True
+
+    def test_count_changing_operator_with_implicit_lock_is_rejected(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        # Omitting the lock flags now means "locked", so a vacancy payload
+        # must unlock explicitly instead of silently changing composition.
+        with pytest.raises(AppError, match="unlocked"):
+            parse_request(_request(operators={"vacancy": {"enabled": True}}))
+
+    def test_optimizer_params_are_normalized_integers(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+
+        request = parse_request(_request())
+        assert request.optimizer_params["n_seeds"] == 8
+        assert request.optimizer_params["children_per_seed"] == 4
+        assert request.optimizer_params["batch_accept"] == 2
+
+    def test_fractional_and_out_of_range_optimizer_params_rejected(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        with pytest.raises(AppError, match="integer"):
+            parse_request(_request(optimizer_params={"children_per_seed": 2.5}))
+        with pytest.raises(AppError, match="between"):
+            parse_request(_request(optimizer_params={"n_seeds": 0}))
+        # batch_accept cannot exceed one round's proposal count.
+        with pytest.raises(AppError, match="between"):
+            parse_request(_request(optimizer_params={"n_seeds": 2, "children_per_seed": 2, "batch_accept": 5}))
+
+    def test_unknown_optimizer_param_rejected(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        with pytest.raises(AppError, match="unknown optimizer params"):
+            parse_request(_request(optimizer_params={"mutation_rate": 0.2}))
+
+    def test_displacement_sigma_and_cutoff_validated_at_submit(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        ok = parse_request(
+            _request(operators={"atomic_displacement": {"enabled": True, "max_sigma": 0.2, "hard_cutoff": 0.5}})
+        )
+        assert ok.operators[0].params["hard_cutoff"] == 0.5
+        with pytest.raises(AppError, match="hard_cutoff"):
+            parse_request(
+                _request(operators={"atomic_displacement": {"enabled": True, "max_sigma": 0.2, "hard_cutoff": -1}})
+            )
+        with pytest.raises(AppError, match="max_sigma"):
+            parse_request(_request(operators={"atomic_displacement": {"enabled": True, "max_sigma": 9.0}}))

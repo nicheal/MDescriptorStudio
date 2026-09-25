@@ -212,6 +212,10 @@ def build_constraints(params: dict) -> GeometryConstraints:
         max_volume_change=_cap("max_volume_change"),
         min_volume_per_atom=min_volume_per_atom,
         max_volume_per_atom=max_volume_per_atom,
-        composition_locked=bool(params.get("composition_locked", False)),
-        atom_count_locked=bool(params.get("atom_count_locked", False)),
+        # Locked-by-default is the single scientific default shared with the
+        # dataclass, parse_request and the UI catalog: perturbation operators
+        # must not silently change composition or atom count. Count-changing
+        # operators require the client to unlock explicitly.
+        composition_locked=bool(params.get("composition_locked", True)),
+        atom_count_locked=bool(params.get("atom_count_locked", True)),
     )

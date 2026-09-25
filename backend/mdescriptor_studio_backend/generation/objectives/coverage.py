@@ -9,6 +9,10 @@ and archive A:
     R_cov(A)  = max_{x in R} min_{a in A} ||x - a||
     gain(X)   = R_cov(A) - R_cov(A ∪ {X})   ≥ 0
 
+With an empty archive there is no radius to shrink; the first pick is ranked
+by ``-R_cov({X})`` so the archive is seeded with the max-min centre of the
+reference domain (the candidate whose addition leaves the smallest radius).
+
 Unlike novelty, the signal is sparse: only candidates near the current
 farthest reference points score. That is exactly the behaviour wanted when
 completing coverage of an existing domain (e.g. labelling 10k structures out
@@ -28,6 +32,9 @@ from .base import ObjectiveBatchResult
 class CoverageGainObjective:
     name = "coverage"
     needs_atomic = False
+    # Coverage never reads per-atom rows and never emits environment counts,
+    # so the engine must not run the local-environment discovery-rate stop.
+    produces_novel_environment_count = False
 
     def __init__(self, **_ignored) -> None:
         # The covering radius is fully determined by the archive; there are no
@@ -54,9 +61,13 @@ class CoverageGainObjective:
             if np.isfinite(radius_now):
                 gain[index] = max(radius_now - radius_new, 0.0)
             else:
-                # Empty archive: the first accept defines the radius; rank by
-                # how much a candidate already covers (larger radius = better).
-                gain[index] = radius_new
+                # Empty archive: there is no radius to shrink yet, and the
+                # greedy coverage step must seed the archive with the
+                # candidate that leaves the *smallest* covering radius
+                # behind — argmin R({X}), the max-min centre of the domain.
+                # Ranking by radius_new itself would pick the farthest
+                # outlier first and actively worsen coverage.
+                gain[index] = -radius_new
         novelty = structure_archive.nearest(values)
         fitness = gain - np.asarray(penalties, dtype=np.float64)
         return ObjectiveBatchResult(

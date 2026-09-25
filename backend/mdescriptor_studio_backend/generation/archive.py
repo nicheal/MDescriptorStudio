@@ -107,6 +107,24 @@ class _ArchiveBase:
         target = apply_scaling(self.scaling, np.atleast_2d(np.asarray(query, dtype=np.float64)))
         return float(np.sqrt(max(self._nearest_sq(target).max(), 0.0)))
 
+    def accepted_coverage_radius(self, query: np.ndarray | None = None) -> float | None:
+        """Covering radius of the *accepted* set alone over ``query``.
+
+        R_acc = max_{x in query} min_{a in accepted} d(x, a), with ``query``
+        defaulting to the reference domain. Unlike :meth:`coverage_radius`
+        this deliberately ignores the reference rows, so it measures how well
+        the generated structures cover the domain — the metric that makes
+        "Random vs GA: Coverage Radius ↓" meaningful. Returns None until the
+        first accept, and is non-increasing as accepts accumulate.
+        """
+        if not self._accepted:
+            return None
+        if query is None:
+            target = self._reference
+        else:
+            target = apply_scaling(self.scaling, np.atleast_2d(np.asarray(query, dtype=np.float64)))
+        return float(np.sqrt(max(self.nearest_accepted_sq(target).max(), 0.0)))
+
     # -- mutation ----------------------------------------------------------
     def add(self, values: np.ndarray, entries: list[ArchiveEntry]) -> None:
         """Accept raw rows; called once per round with the selected batch."""

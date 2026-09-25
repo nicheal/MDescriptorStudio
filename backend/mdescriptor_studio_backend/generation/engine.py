@@ -2,13 +2,18 @@
 
 One round, in order (the order is a performance contract):
 
-    choose seeds → propose children → geometry filter (cheap)
+    optimizer.propose → geometry filter (cheap)
     → duplicate filter (frozen archive) → ONE batch descriptor evaluation
     → objective scoring (frozen archive) → greedy max-min batch selection
-    → archive update exactly once → stop check
+    → archive update exactly once → optimizer.observe → stop check
 
 Never: per-candidate descriptor computes, per-candidate archive updates, or
 re-fitting the scaling inside the loop.
+
+The optimizer lifecycle (G3.5): initialize → propose → observe → state. The
+engine reports every proposed candidate's outcome back through ``observe``
+(fitness, novelty, acceptance, geometry rejection) so feedback-driven
+optimizers (GA/PSO) can steer the next round; Random ignores the feedback.
 """
 
 from __future__ import annotations
@@ -21,6 +26,8 @@ import numpy as np
 from ..analysis.sampling import apply_scaling
 from ..analysis.sampling.fps import farthest_point_sampling
 from ..errors import AppError, JOB_CANCELLED
+from ._distance import min_sqdist_to_set
+from .optimization import CandidateObservation, ObservationBatch, OptimizationContext
 from .evaluator import DescriptorEvaluator
 from .models import (
     ArchiveEntry,
@@ -54,6 +61,13 @@ def _geometry_rejection_code(reason: str | None) -> str:
     return _GEOMETRY_REJECTION_CODES.get(reason, "other")
 
 
+def _finite_or_none(values: np.ndarray | None, index: int) -> float | None:
+    if values is None:
+        return None
+    value = float(values[index])
+    return value if np.isfinite(value) else None
+
+
 @dataclass
 class RoundRecord:
     generation: int
@@ -65,8 +79,18 @@ class RoundRecord:
     best_fitness: float
     best_novelty: float | None
     mean_novelty: float | None
-    coverage_radius: float
+    # Covering radius of the *accepted* set over the reference domain
+    # (None until the first accept). The reference rows themselves always
+    # cover the domain exactly, so the old archive-level number was a
+    # structural 0.0 — not a coverage metric.
+    coverage_radius: float | None
     novel_environments: int
+    # Novel environments accepted this round, deduplicated greedily against
+    # the frozen archive *plus* everything already counted this round (in
+    # selection order). Two accepted structures that found the same new
+    # region count it once — the benchmark-honest number (G3.5 A12). None
+    # when the objective does not produce environment counts.
+    unique_novel_environments: int | None = None
     rejected_geometry_by_reason: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> dict:
@@ -83,6 +107,7 @@ class RoundRecord:
             "mean_novelty": self.mean_novelty,
             "coverage_radius": self.coverage_radius,
             "novel_environments": self.novel_environments,
+            "unique_novel_environments": self.unique_novel_environments,
         }
 
 
@@ -177,6 +202,37 @@ class GenerationEngine:
     def _check_geometry(self, candidate: StructureCandidate) -> ConstraintResult:
         return self.constraints.validate(candidate)
 
+    def _count_unique_novel_environments(
+        self,
+        selected: list[int],
+        atomic_values: np.ndarray,
+        row_offsets: np.ndarray,
+        threshold: float,
+    ) -> int:
+        """Greedy union dedup of one round's novel environments (G3.5 A12).
+
+        Candidates are counted in selection order against the frozen archive
+        *plus* the environments already counted this round, so two accepted
+        structures that found the same new region contribute it once. The raw
+        per-candidate counts stay frozen-archive based (order-independent,
+        what the objective scores on); this number is the benchmark-honest
+        one — "Random vs GA" must compare unique environments, not raw.
+        """
+        counted: list[np.ndarray] = []
+        unique = 0
+        for index in selected:
+            lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
+            rows = np.asarray(atomic_values[lo:hi], dtype=np.float64)
+            if rows.shape[0] == 0:
+                continue
+            novel = self.local_archive.nearest_per_row(rows) > threshold
+            if counted:
+                d2 = min_sqdist_to_set(rows, np.vstack(counted), workers=1)
+                novel &= np.sqrt(np.clip(d2, 0.0, None)) > threshold
+            unique += int(novel.sum())
+            counted.append(rows)
+        return unique
+
     def run(self, check_cancelled=None, progress=None, on_round=None, on_evaluated=None) -> GenerationRunResult:
         check_cancelled = check_cancelled or (lambda: None)
         result = GenerationRunResult()
@@ -185,10 +241,19 @@ class GenerationEngine:
         total_evaluations = 0
         generation = 0
         needs_atomic = bool(getattr(self.objective, "needs_atomic", False))
-        reuse_accepted_seeds = bool(getattr(self.optimizer, "reuse_accepted_seeds", False))
-        feedback_seed_pool: list[StructureCandidate] = []
-        feedback_descriptors: list[np.ndarray] = []
-        feedback_pool_limit = min(256, max(1, 4 * int(self.n_seeds)))
+        # The discovery-rate stop measures novel *environments* per 100
+        # descriptor evaluations. Objectives that never produce that metric
+        # (structure novelty, coverage) must not be terminated by it — a
+        # zero default would otherwise fake saturation from round `window`
+        # on and stop productive runs prematurely.
+        counts_environments = bool(getattr(self.objective, "produces_novel_environment_count", False))
+        self.optimizer.initialize(
+            OptimizationContext(
+                seed_pool=tuple(self.seed_pool),
+                n_seeds=int(self.n_seeds),
+                budget=self.budget,
+            )
+        )
 
         while True:
             try:
@@ -212,39 +277,30 @@ class GenerationEngine:
                 break
 
             generation += 1
-            if reuse_accepted_seeds:
-                seeds = self.optimizer.choose_seeds(
-                    self.seed_pool,
-                    self.n_seeds,
-                    self.rng,
-                    feedback_pool=feedback_seed_pool,
-                )
+            proposal = self.optimizer.propose(
+                budget=max(1, int(self.budget.max_evaluations - total_evaluations)),
+                rng=self.rng,
+            )
+            children = list(proposal.candidates)
+
+            verdicts: list[ConstraintResult] = []
+            if self.workers > 1 and len(children) > 1:
+                with ThreadPoolExecutor(max_workers=min(self.workers, len(children))) as pool:
+                    verdicts = list(pool.map(self._check_geometry, children))
             else:
-                seeds = self.optimizer.choose_seeds(self.seed_pool, self.n_seeds, self.rng)
-            children = self.optimizer.propose(seeds, self.rng)
+                verdicts = [self._check_geometry(child) for child in children]
 
             valid: list[StructureCandidate] = []
             rejected_geometry_by_reason: dict[str, int] = {}
-
-            def collect_verdict(child: StructureCandidate, verdict: ConstraintResult) -> None:
+            for child, verdict in zip(children, verdicts):
                 if verdict.valid:
                     valid.append(child)
-                    return
+                    continue
                 # A candidate may violate multiple checks; count its first
                 # reported reason so the buckets sum to rejected_geometry.
                 reason = verdict.reasons[0] if verdict.reasons else None
                 code = _geometry_rejection_code(reason)
                 rejected_geometry_by_reason[code] = rejected_geometry_by_reason.get(code, 0) + 1
-
-            if self.workers > 1 and len(children) > 1:
-                with ThreadPoolExecutor(max_workers=min(self.workers, len(children))) as pool:
-                    verdicts = pool.map(self._check_geometry, children)
-                    for child, verdict in zip(children, verdicts):
-                        collect_verdict(child, verdict)
-            else:
-                for child in children:
-                    verdict = self._check_geometry(child)
-                    collect_verdict(child, verdict)
             rejected_geometry = sum(rejected_geometry_by_reason.values())
             # The evaluation budget counts descriptor calls, not proposals.
             # A full final batch could otherwise exceed the requested cap.
@@ -260,6 +316,7 @@ class GenerationEngine:
             best_round_novelty = None
             mean_round_novelty = None
             novel_environments = 0
+            unique_novel_environments: int | None = None
 
             if valid:
                 try:
@@ -295,6 +352,7 @@ class GenerationEngine:
                     fitness = np.where(keep, fitness, -np.inf)
 
                 scaled_values = apply_scaling(self.structure_archive.scaling, evaluation.structure_values)
+                coverage_gain = scores.components.get("coverage_gain")
                 remaining = self.budget.max_accepted - len(result.accepted)
                 selected = select_diverse_batch(
                     fitness,
@@ -302,6 +360,7 @@ class GenerationEngine:
                     budget=min(self.optimizer.batch_accept, remaining),
                 )
                 selected_set = set(selected)
+                selection_rank = {index: rank for rank, index in enumerate(selected)}
                 # Every evaluated candidate (accepted or not) feeds the
                 # descriptor-space map the results view animates.
                 for index in range(len(valid)):
@@ -320,18 +379,6 @@ class GenerationEngine:
 
                 accepted_this_round = len(selected)
                 if selected:
-                    if reuse_accepted_seeds:
-                        feedback_seed_pool.extend(valid[index] for index in selected)
-                        feedback_descriptors.extend(
-                            np.asarray(scaled_values[index], dtype=np.float64) for index in selected
-                        )
-                        if len(feedback_seed_pool) > feedback_pool_limit:
-                            keep = farthest_point_sampling(
-                                np.stack(feedback_descriptors),
-                                n_samples=feedback_pool_limit,
-                            ).indices
-                            feedback_seed_pool = [feedback_seed_pool[int(index)] for index in keep]
-                            feedback_descriptors = [feedback_descriptors[int(index)] for index in keep]
                     entries = []
                     for order, index in enumerate(selected):
                         candidate = valid[index]
@@ -398,6 +445,58 @@ class GenerationEngine:
                     if finite_novelty.size:
                         best_round_novelty = float(finite_novelty.max())
                         mean_round_novelty = float(finite_novelty.mean())
+                if scores.novel_environment_count is not None and self.local_archive is not None and evaluation.atomic_values is not None:
+                    threshold = getattr(self.objective, "novel_environment_threshold", None)
+                    if threshold is not None:
+                        unique_novel_environments = self._count_unique_novel_environments(
+                            selected, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
+                        )
+
+            # Report every proposed candidate's outcome back to the optimizer
+            # (G3.5 lifecycle): proposal order, geometry rejections included.
+            round_observations: list[CandidateObservation] = []
+            valid_cursor = 0
+            for child, verdict in zip(children, verdicts):
+                if not verdict.valid:
+                    round_observations.append(
+                        CandidateObservation(
+                            candidate_id=child.candidate_id,
+                            generation=generation,
+                            candidate=child,
+                            valid=False,
+                            geometry_rejection=_geometry_rejection_code(
+                                verdict.reasons[0] if verdict.reasons else None
+                            ),
+                        )
+                    )
+                    continue
+                index = valid_cursor
+                valid_cursor += 1
+                if index >= len(valid):
+                    # Dropped by the evaluation-budget truncation before the
+                    # descriptor call: the pipeline never scored it.
+                    continue
+                round_observations.append(
+                    CandidateObservation(
+                        candidate_id=child.candidate_id,
+                        generation=generation,
+                        candidate=child,
+                        valid=True,
+                        accepted=index in selected_set,
+                        selection_rank=selection_rank.get(index),
+                        fitness=_finite_or_none(fitness, index),
+                        novelty=_finite_or_none(scores.novelty, index),
+                        local_diversity=_finite_or_none(scores.local_diversity, index),
+                        coverage_gain=_finite_or_none(coverage_gain, index),
+                        novel_environment_count=(
+                            int(scores.novel_environment_count[index])
+                            if scores.novel_environment_count is not None
+                            else None
+                        ),
+                        structure_descriptor=np.asarray(scaled_values[index], dtype=np.float64),
+                    )
+                )
+            self.optimizer.observe(ObservationBatch(generation=generation, observations=round_observations))
 
             record = RoundRecord(
                 generation=generation,
@@ -410,8 +509,9 @@ class GenerationEngine:
                 best_fitness=best_round_fitness,
                 best_novelty=best_round_novelty,
                 mean_novelty=mean_round_novelty,
-                coverage_radius=self.structure_archive.coverage_radius(),
+                coverage_radius=self.structure_archive.accepted_coverage_radius(),
                 novel_environments=novel_environments,
+                unique_novel_environments=unique_novel_environments,
             )
             result.rounds.append(record)
             if on_round is not None:
@@ -421,9 +521,10 @@ class GenerationEngine:
             # trailing window of rounds produced fewer novel environments per
             # 100 descriptor evaluations than the threshold, expanding
             # further is not paying off — the archive has converged onto the
-            # reachable frontier of the operator family.
+            # reachable frontier of the operator family. Only objectives that
+            # actually produce novel_environment_count may trigger it.
             window = int(getattr(self.budget, "discovery_window", 0) or 0)
-            if window and generation >= window:
+            if window and counts_environments and generation >= window:
                 gained = sum(r.novel_environments for r in result.rounds[-window:])
                 spent = sum(r.evaluations for r in result.rounds[-window:])
                 min_rate = float(getattr(self.budget, "min_novel_per_100_evals", 0.0) or 0.0)
