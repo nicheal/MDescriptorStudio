@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Importing the module tree pulls in plotly's scattergl, whose svg-path-sdf
+// dependency touches a 2D canvas while modules are still loading — before any
+// test body could spy on it. jsdom has no canvas, so stub it at hoist time;
+// the SDF atlas path is browser-only and irrelevant to these tests.
+vi.hoisted(() => {
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+});
 
 import { buildKde } from "./featureVariance";
 

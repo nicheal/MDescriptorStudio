@@ -22,6 +22,10 @@ function fake3Dmol() {
 
 describe("structure viewer lifecycle", () => {
   beforeEach(() => {
+    // jsdom has no canvas: dispose's WebGL context release is browser-only
+    // and reaches the jsdom "not implemented" notice without this stub
+    // (same pattern as analysisRendering.test.ts).
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
     createViewerMock.mockReset();
     fake3Dmol();
   });
