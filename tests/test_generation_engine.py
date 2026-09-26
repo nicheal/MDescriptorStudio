@@ -443,3 +443,34 @@ class TestUniqueEnvironmentMetric:
         # Raw per-candidate counts would have charged the shared regions twice.
         raw = 2 + 2
         assert unique < raw
+
+    def test_unique_count_runs_against_the_pre_round_archive(self):
+        # Regression (G4-2): the count used to run *after* the accepted rows
+        # entered the local archive, so every accepted candidate sat at
+        # distance zero from its own block and the metric was structurally 0.
+        # A candidate far from the frozen reference must own its novel rows.
+        pool = _seed_pool(2)
+        structure_archive, local_archive = _archives(pool)
+        operator = GENERATION_REGISTRY.build_operator(
+            OperatorSpec("atomic_displacement", {"max_sigma": 4.9})
+        )
+        optimizer = RandomSearchOptimizer([operator], children_per_seed=2, batch_accept=1)
+        engine = GenerationEngine(
+            seed_pool=pool,
+            evaluator=_StubEvaluator(),
+            structure_archive=structure_archive,
+            local_archive=local_archive,
+            objective=CompositeObjective(structure_weight=0.0, local_weight=1.0, novelty_threshold=0.25),
+            optimizer=optimizer,
+            constraints=build_constraints({"min_distance_mode": "none"}),
+            budget=Budget(max_evaluations=10**6, max_accepted=4, max_generations=2),
+            rng=np.random.default_rng(5),
+            n_seeds=2,
+        )
+        result = engine.run()
+        accepted_rounds = [record for record in result.rounds if record.accepted]
+        assert accepted_rounds, "expected at least one accepting round"
+        for record in accepted_rounds:
+            # A single-candidate selection cannot dedup anything away, and
+            # its rows are far from the frozen reference (σ=10 displacement).
+            assert record.unique_novel_environments == record.novel_environments > 0

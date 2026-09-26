@@ -1073,6 +1073,26 @@ class MockError extends Error {
   }
 }
 
+const previewFailures = new Map<string, { remaining: number; message: string }>();
+const previewDelays = new Map<string, number>();
+const previewMethodCounts = new Map<string, number>();
+let mockGenerationSubmitStatus: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" = "COMPLETED";
+let omitMockGenerationDiscovery = false;
+
+function consumePreviewFailure(method: string) {
+  const failure = previewFailures.get(method);
+  if (!failure || failure.remaining <= 0) return null;
+  failure.remaining -= 1;
+  if (failure.remaining === 0) previewFailures.delete(method);
+  return failure.message;
+}
+
+function consumePreviewDelay(method: string) {
+  const delay = previewDelays.get(method) ?? 0;
+  previewDelays.delete(method);
+  return delay;
+}
+
 const requireDataset = (id: unknown) => {
   const row = DS.find((item) => item.id === id);
   if (!row) throw new MockError("DATASET_NOT_FOUND", `dataset ${String(id)} does not exist`);
@@ -1515,7 +1535,11 @@ const METHODS: Record<string, Handler> = {
   // Generation (dataset expansion): canned vocabulary + one scripted run so
   // the e2e suite can walk config → running → results without the engine.
   "generation.catalog": () => ({
-    optimizers: [{ name: "random", params: { children_per_seed: 8, batch_accept: 8 } }],
+    optimizers: [
+      { name: "random", params: { children_per_seed: 8, batch_accept: 8 } },
+      { name: "genetic", params: { children_per_seed: 8, batch_accept: 8, parent_fraction: 0.7, immigrant_fraction: 0.15 } },
+      { name: "pso", params: { children_per_seed: 8, batch_accept: 8, pso_weight_pbest: 1.0, pso_weight_gbest: 1.5, pso_weight_mut: 0.5, immigrant_fraction: 0.15 } },
+    ],
     objectives: [
       { name: "novelty", params: {} },
       {
@@ -1547,6 +1571,7 @@ const METHODS: Record<string, Handler> = {
   "generation.submit": (p) => {
     const id = "gen-mock-run1";
     const jobId = "job-gen-submit";
+    const status = mockGenerationSubmitStatus;
     const rounds = Array.from({ length: 6 }, (_, i) => ({
       generation: i + 1,
       evaluations: (i + 1) * 32,
@@ -1568,8 +1593,20 @@ const METHODS: Record<string, Handler> = {
       descriptor_name: "ACSF",
       optimizer: "random",
       objective: String((p?.objective as { type?: string } | undefined)?.type ?? "novelty"),
-      params_json: JSON.stringify({ budget: { max_evaluations: 10000 } }),
-      status: "COMPLETED",
+      params_json: JSON.stringify({
+        optimizer: String(p?.optimizer ?? "random"),
+        optimizer_params: p?.optimizer_params ?? {},
+        objective: p?.objective ?? { type: "novelty" },
+        operators: Object.entries((p?.operators as Record<string, Record<string, unknown>> | undefined) ?? {}).map(([name, params]) => ({ name, params })),
+        constraints: p?.constraints ?? {},
+        budget: p?.budget ?? { max_evaluations: 10000 },
+        seed: p?.seed ?? 42,
+        seed_mode: p?.seed === "random" ? "random" : "fixed",
+        seed_view_id: p?.seed_view_id ?? null,
+        anchor_frames: p?.anchor_frames ?? [],
+        region_radius: p?.region_radius ?? 15,
+      }),
+      status,
       created_at: new Date().toISOString(),
       started_at: new Date().toISOString(),
       finished_at: new Date().toISOString(),
@@ -1578,10 +1615,11 @@ const METHODS: Record<string, Handler> = {
       result_path: "mock",
       cache_key: null,
       artifact_complete: true,
-      preview: { status: "COMPLETED", stopped_by: "max_accepted", accepted: 24, evaluations: 192, rounds },
+      error_message: status === "FAILED" ? "Mock expansion failed during initialization" : null,
+      preview: { status, stopped_by: status === "COMPLETED" ? "max_accepted" : status === "CANCELLED" ? "cancelled" : null, accepted: 24, evaluations: 192, rounds },
     });
-    window.setTimeout(() => {
-      mockEmit("job.finished", { job_id: jobId, status: "COMPLETED", result: { generation_id: id, accepted: 24, evaluations: 192 }, error: null });
+    if (status === "COMPLETED" || status === "FAILED") window.setTimeout(() => {
+      mockEmit("job.finished", { job_id: jobId, status, result: { generation_id: id, accepted: 24, evaluations: 192 }, error: status === "FAILED" ? { code: "GENERATION_FAILED", message: "Mock expansion failed during initialization" } : null });
     }, 800);
     return handOut({ generation_id: id, job_id: jobId, cached: false });
   },
@@ -1609,7 +1647,19 @@ const METHODS: Record<string, Handler> = {
     if (!row) throw new MockError("INVALID_PARAMS", `generation run ${String(p?.id ?? "")} does not exist`);
     return row.preview;
   },
-  "generation.cancel": () => ({ ok: true, already_finished: true }),
+  "generation.cancel": (p) => {
+    const row = MOCK_GENERATION_ROWS.get(String(p?.id ?? ""));
+    if (!row) throw new MockError("INVALID_PARAMS", "unknown generation run");
+    if (row.status !== "QUEUED" && row.status !== "RUNNING") return { ok: true, already_finished: true };
+    row.status = "CANCELLED";
+    row.finished_at = new Date().toISOString();
+    const preview = row.preview as Record<string, unknown> | undefined;
+    if (preview) {
+      preview.status = "CANCELLED";
+      preview.stopped_by = "cancelled";
+    }
+    return { ok: true, already_finished: false };
+  },
   "generation.pca": (p) => {
     if (!MOCK_GENERATION_ROWS.has(String(p?.id ?? ""))) throw new MockError("INVALID_PARAMS", "unknown generation run");
     const ring = (n: number, radius: number, jitter: number) =>
@@ -1621,7 +1671,7 @@ const METHODS: Record<string, Handler> = {
         ];
       });
     const evaluated = 192;
-    return {
+    const result = {
       x_label: "PC1 (41.2%)",
       y_label: "PC2 (18.7%)",
       original: ring(600, 1.0, 0.12),
@@ -1638,6 +1688,8 @@ const METHODS: Record<string, Handler> = {
         novel_environments: 231,
       },
     };
+    if (omitMockGenerationDiscovery) delete (result as { discovery?: unknown }).discovery;
+    return result;
   },
   "generation.structure": (p) => {
     if (!MOCK_GENERATION_ROWS.has(String(p?.id ?? ""))) throw new MockError("INVALID_PARAMS", "unknown generation run");
@@ -1924,6 +1976,11 @@ function mockEmit(event: string, data: Record<string, unknown>) {
  * failure at the spec rather than at the mock.
  */
 function replyFor(id: number, method: string, params: Record<string, unknown>): Record<string, unknown> {
+  previewMethodCounts.set(method, (previewMethodCounts.get(method) ?? 0) + 1);
+  const injectedMessage = consumePreviewFailure(method);
+  if (injectedMessage != null) {
+    return { protocol_version: 1, id, error: { code: "PREVIEW_INJECTED", message: injectedMessage, error_id: "preview" } };
+  }
   const handler = METHODS[method];
   if (!handler) {
     return { protocol_version: 1, id, error: { code: "NO_HANDLER", message: "Preview mock method is unavailable.", error_id: "preview" } };
@@ -2106,9 +2163,9 @@ function showPreviewError(text: string) {
         method: args?.method as string,
         params: (args?.params as Record<string, unknown>) ?? {},
       };
-      const previewDelay = frame.method === "analysis.preview"
+      const previewDelay = consumePreviewDelay(frame.method ?? "") || (frame.method === "analysis.preview"
         ? Math.max(25, Number((window as unknown as { __PREVIEW_ANALYSIS_PREVIEW_DELAY__?: number }).__PREVIEW_ANALYSIS_PREVIEW_DELAY__ ?? 25))
-        : 25;
+        : 25);
       window.setTimeout(() => {
         const payload = JSON.stringify(replyFor(id, frame.method ?? "", frame.params ?? {}));
         // route strictly by event name, like the Tauri event system
@@ -2134,11 +2191,21 @@ function showPreviewError(text: string) {
   __mdsMock: {
     call: (method: string, params?: Record<string, unknown>) => unknown;
     respond: (method: string, params?: Record<string, unknown>) => Record<string, unknown>;
+    failNext: (method: string, message: string, count?: number) => void;
+    delayNext: (method: string, milliseconds: number) => void;
+    setGenerationSubmitStatus: (status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED") => void;
+    omitGenerationDiscovery: (omit: boolean) => void;
+    count: (method: string) => number;
   };
 }).__mdsMock = {
   call: (method, params = {}) => METHODS[method]?.(params),
   // The frame the renderer would get, error envelope included.
   respond: (method, params = {}) => replyFor(0, method, params),
+  failNext: (method, message, count = 1) => previewFailures.set(method, { remaining: Math.max(1, count), message }),
+  delayNext: (method, milliseconds) => previewDelays.set(method, Math.max(0, milliseconds)),
+  setGenerationSubmitStatus: (status) => { mockGenerationSubmitStatus = status; },
+  omitGenerationDiscovery: (omit) => { omitMockGenerationDiscovery = omit; },
+  count: (method) => previewMethodCounts.get(method) ?? 0,
 };
 
 async function bootstrap() {

@@ -53,3 +53,31 @@ interval of `[t, t]` would read like a spread. `results.json` records
 `omp_num_threads` for the run - the harness sets it *before* importing numpy,
 because BLAS chooses its threads when the library loads and a later value is
 ignored.
+
+## Scientific comparison: genetic_vs_random.py
+
+`genetic_vs_random.py` (G4-2) is a different animal from `run_benchmarks.py`:
+it measures search *efficacy*, not cost. For each repeat seed it runs the
+generation engine twice-plus over the local `carbon` dataset with the NEP
+descriptor run, everything held identical except the optimizer
+(`random`, `random-reuse` = Random with accepted-seed reuse, `genetic`).
+Core metrics: unique novel environments per 100 descriptor evaluations
+(lower duplicate waste and wider discovery win) and the final accepted-only
+coverage radius. It replicates the generation worker's assembly against the
+app data read-only — no DB rows, no job queue — and checkpoints
+`results/<utc>/genetic_vs_random.json` after every run.
+
+This is not a CI gate either: it needs the local dataset/descriptor-run ids
+pinned in the script and takes hours at the full 20 × 10 000-evaluation
+sweep. `--pilot` runs one 400-evaluation repeat of each optimizer as a
+smoke test. Wall-time columns here are informational only — the headline
+metrics are budget-normalized discovery numbers, not speed.
+
+`--optimizers target_region` adds the G5-2 targeted-resampling optimizer and
+a second metric family: `anchor_proximity` (median / p90 / within_radius of
+each accepted structure's distance to the anchor descriptors, in robust-scaled
+units). `--anchor-frames` picks the anchor dataset frames — they must satisfy
+the run's own geometry constraints (the worker refuses pathological anchors).
+Discovery and proximity are deliberately different yardsticks: target_region
+trades global discovery for accepted structures concentrated around the
+anchors, so compare each optimizer on the metric it is aiming at.

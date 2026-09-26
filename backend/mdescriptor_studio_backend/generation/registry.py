@@ -26,7 +26,7 @@ from .operators import (
     Substitution,
     Vacancy,
 )
-from .optimizers import RandomSearchOptimizer
+from .optimizers import GeneticOptimizer, PSOOptimizer, RandomSearchOptimizer
 
 
 class GenerationRegistry:
@@ -53,7 +53,11 @@ class GenerationRegistry:
                 CoverageGainObjective,
             )
         }
-        self._optimizers = {RandomSearchOptimizer.name: RandomSearchOptimizer}
+        self._optimizers = {
+            RandomSearchOptimizer.name: RandomSearchOptimizer,
+            GeneticOptimizer.name: GeneticOptimizer,
+            PSOOptimizer.name: PSOOptimizer,
+        }
 
     # -- lookup ------------------------------------------------------------
     def operator(self, name: str):
@@ -102,7 +106,27 @@ class GenerationRegistry:
                         "batch_accept": 8,
                         "reuse_accepted_seeds": False,
                     },
-                }
+                },
+                {
+                    "name": GeneticOptimizer.name,
+                    "params": {
+                        "children_per_seed": 8,
+                        "batch_accept": 8,
+                        "parent_fraction": 0.7,
+                        "immigrant_fraction": 0.15,
+                    },
+                },
+                {
+                    "name": PSOOptimizer.name,
+                    "params": {
+                        "children_per_seed": 8,
+                        "batch_accept": 8,
+                        "pso_weight_pbest": 1.0,
+                        "pso_weight_gbest": 1.5,
+                        "pso_weight_mut": 0.5,
+                        "immigrant_fraction": 0.15,
+                    },
+                },
             ],
             "objectives": [
                 {"name": NoveltyObjective.name, "params": {}},

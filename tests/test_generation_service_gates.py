@@ -8,12 +8,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from mdescriptor_studio_backend.errors import ANALYSIS_STALE, AppError, INVALID_PARAMS, RESULT_INCOMPATIBLE
 from mdescriptor_studio_backend.services.generation_service import GenerationService
+from mdescriptor_studio_backend.generation.models import parse_request
 
 
 class _FakeDb:
@@ -159,3 +161,20 @@ class TestUnchangedValidation:
         with pytest.raises(AppError) as excinfo:
             service.submit(_payload("ds_A", objective="telepathy"))
         assert excinfo.value.code == INVALID_PARAMS
+
+
+class TestTargetRegionPersistence:
+    def test_anchor_region_changes_cache_key_and_is_saved_for_review(self, tmp_path: Path):
+        service = _service(tmp_path)
+        first = parse_request({**_payload("ds_A"), "anchor_frames": [0], "region_radius": 15.0})
+        second = parse_request({**_payload("ds_A"), "anchor_frames": [0], "region_radius": 16.0})
+        dataset = service.db._dataset_rows["ds_A"]
+        assert service._cache_key(first, dataset, {"signature": "same"}, None) != service._cache_key(
+            second, dataset, {"signature": "same"}, None
+        )
+
+        service.submit({**_payload("ds_A"), "anchor_frames": [0, 2], "region_radius": 18.0})
+        insert = next((sql, values) for sql, values in service.db.executed if "INSERT INTO generation_runs" in sql)
+        saved_params = json.loads(insert[1][5])
+        assert saved_params["anchor_frames"] == [0, 2]
+        assert saved_params["region_radius"] == 18.0

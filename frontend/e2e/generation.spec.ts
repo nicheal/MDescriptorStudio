@@ -6,9 +6,9 @@ test("generation page walks config → running → results against the mock back
   await page.getByRole("button", { name: "Generation", exact: true }).click();
   await expect(page.getByText("DATASET EXPANSION", { exact: true })).toBeVisible();
 
-  // Six-section workflow form is present (section cards number their titles).
+  // Three grouped stages expose the complete workflow.
   const heads = page.locator(".ant-card-head-title");
-  for (const section of ["SOURCE", "SEARCH OBJECTIVE", "SEARCH SPACE", "PHYSICAL CONSTRAINTS", "OPTIMIZER", "COMPUTE BUDGET"]) {
+  for (const section of ["Source and exploration target", "Structure changes and geometry constraints", "Search strategy and stopping conditions"]) {
     await expect(heads.filter({ hasText: section })).toBeVisible();
   }
 
@@ -22,6 +22,11 @@ test("generation page walks config → running → results against the mock back
   await expect(heads.filter({ hasText: "LOCAL ENVIRONMENT DISCOVERY" })).toBeVisible();
   await expect(heads.filter({ hasText: "Descriptor space" })).toBeVisible();
   await expect(heads.filter({ hasText: "Accepted structures" })).toBeVisible();
+  await page.getByRole("button", { name: "Run parameters" }).click();
+  await expect(page.getByText(/Maximum displacement.*0\.15 Å/)).toBeVisible();
+  await expect(page.getByText(/200 generations/)).toBeVisible();
+  await page.getByRole("button", { name: "Convergence history" }).click();
+  await expect(heads.filter({ hasText: "Novel environments per round" })).toBeVisible();
 
   // The run lands in the expansion history once back on the configuration view.
   await page.getByRole("button", { name: /Back to configuration/i }).click();

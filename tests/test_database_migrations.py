@@ -111,6 +111,7 @@ def test_migration_12_adds_generation_runs(tmp_path: Path) -> None:
             "warnings_json",
             "cache_key",
             "stale_reason",
+            "error_message",
         } <= columns
         job_columns = {r["name"] for r in db.query("PRAGMA table_info(jobs)")}
         assert "generation_run_id" in job_columns

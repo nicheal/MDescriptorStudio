@@ -176,6 +176,8 @@ class GenerationRequest:
     seed: int | None
     seed_view_id: str | None = None
     optimizer_params: dict = field(default_factory=dict)
+    anchor_frames: list = field(default_factory=list)
+    region_radius: float = 15.0
 
 
 def _int(params: dict, key: str, default: int, *, lo: int, hi: int) -> int:
@@ -428,6 +430,117 @@ def parse_request(params: dict) -> GenerationRequest:
         optimizer_params["n_seeds"] = n_seeds
         optimizer_params["children_per_seed"] = children_per_seed
         optimizer_params["batch_accept"] = batch_accept
+    elif optimizer == "genetic":
+        # Same submit-time completeness as random (G3.5 A10), extended with
+        # the GA knobs: parent_fraction (USPEX bestFrac) and the immigrant
+        # share of each round's parent slots.
+        allowed = {"children_per_seed", "batch_accept", "n_seeds", "parent_fraction", "immigrant_fraction"}
+        unknown = set(optimizer_params) - allowed
+        if unknown:
+            raise AppError(
+                INVALID_PARAMS,
+                f"unknown optimizer params for '{optimizer}': {', '.join(sorted(unknown))}",
+            )
+        n_seeds = _optional_count(optimizer_params, "n_seeds", 64, lo=1, hi=1024)
+        children_per_seed = _optional_count(optimizer_params, "children_per_seed", 8, lo=1, hi=1024)
+        batch_accept = _optional_count(
+            optimizer_params, "batch_accept", 8, lo=1, hi=n_seeds * children_per_seed
+        )
+        parent_fraction = optimizer_params.get("parent_fraction", 0.7)
+        if isinstance(parent_fraction, bool) or not isinstance(parent_fraction, (int, float)):
+            raise AppError(INVALID_PARAMS, "parent_fraction must be a number in [0.1, 1.0]")
+        if not 0.1 <= float(parent_fraction) <= 1.0:
+            raise AppError(INVALID_PARAMS, "parent_fraction must be in [0.1, 1.0]")
+        immigrant_fraction = optimizer_params.get("immigrant_fraction", 0.15)
+        if isinstance(immigrant_fraction, bool) or not isinstance(immigrant_fraction, (int, float)):
+            raise AppError(INVALID_PARAMS, "immigrant_fraction must be a number in [0.0, 0.9]")
+        if not 0.0 <= float(immigrant_fraction) <= 0.9:
+            raise AppError(INVALID_PARAMS, "immigrant_fraction must be in [0.0, 0.9]")
+        optimizer_params["n_seeds"] = n_seeds
+        optimizer_params["children_per_seed"] = children_per_seed
+        optimizer_params["batch_accept"] = batch_accept
+        optimizer_params["parent_fraction"] = float(parent_fraction)
+        optimizer_params["immigrant_fraction"] = float(immigrant_fraction)
+    elif optimizer == "pso":
+        # G5-1: per-slot memory weights (USPEX PSO_BestStruc / PSO_BestEver /
+        # soft-mutation mass, the latter remapped to plain mutation) plus the
+        # immigrant share. At least one pull mass must be positive, else the
+        # run degenerates to immigrants-only.
+        allowed = {
+            "children_per_seed",
+            "batch_accept",
+            "n_seeds",
+            "pso_weight_pbest",
+            "pso_weight_gbest",
+            "pso_weight_mut",
+            "immigrant_fraction",
+        }
+        unknown = set(optimizer_params) - allowed
+        if unknown:
+            raise AppError(
+                INVALID_PARAMS,
+                f"unknown optimizer params for '{optimizer}': {', '.join(sorted(unknown))}",
+            )
+        n_seeds = _optional_count(optimizer_params, "n_seeds", 64, lo=1, hi=1024)
+        children_per_seed = _optional_count(optimizer_params, "children_per_seed", 8, lo=1, hi=1024)
+        batch_accept = _optional_count(
+            optimizer_params, "batch_accept", 8, lo=1, hi=n_seeds * children_per_seed
+        )
+        weights = {}
+        for key in ("pso_weight_pbest", "pso_weight_gbest", "pso_weight_mut"):
+            value = optimizer_params.get(key, {"pso_weight_pbest": 1.0, "pso_weight_gbest": 1.5, "pso_weight_mut": 0.5}[key])
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(float(value)):
+                raise AppError(INVALID_PARAMS, f"{key} must be a non-negative finite number")
+            if float(value) < 0.0:
+                raise AppError(INVALID_PARAMS, f"{key} must be a non-negative finite number")
+            weights[key] = float(value)
+        if sum(weights.values()) <= 0.0:
+            raise AppError(INVALID_PARAMS, "at least one pso weight must be positive")
+        immigrant_fraction = optimizer_params.get("immigrant_fraction", 0.15)
+        if isinstance(immigrant_fraction, bool) or not isinstance(immigrant_fraction, (int, float)):
+            raise AppError(INVALID_PARAMS, "immigrant_fraction must be a number in [0.0, 0.9]")
+        if not 0.0 <= float(immigrant_fraction) <= 0.9:
+            raise AppError(INVALID_PARAMS, "immigrant_fraction must be in [0.0, 0.9]")
+        optimizer_params["n_seeds"] = n_seeds
+        optimizer_params["children_per_seed"] = children_per_seed
+        optimizer_params["batch_accept"] = batch_accept
+        optimizer_params.update(weights)
+        optimizer_params["immigrant_fraction"] = float(immigrant_fraction)
+    # Search target (G5-2): anchor dataset frames define descriptor-space
+    # region centers; any optimizer may consume them (currently the random
+    # optimizer's targeted mode). Top-level request input, not an optimizer
+    # parameter — the region is part of the problem definition.
+    anchor_frames = params.get("anchor_frames")
+    if anchor_frames in (None, [], ""):
+        anchor_frames = []
+    else:
+        if (
+            not isinstance(anchor_frames, list)
+            or not 1 <= len(anchor_frames) <= 16
+            or any(isinstance(i, bool) or not isinstance(i, int) for i in anchor_frames)
+        ):
+            raise AppError(
+                INVALID_PARAMS,
+                "anchor_frames must be a list of 1-16 integer dataset frame indices",
+            )
+        if len(set(anchor_frames)) != len(anchor_frames):
+            raise AppError(INVALID_PARAMS, "anchor_frames must not repeat a frame index")
+        if optimizer not in ("random", "genetic", "pso"):
+            raise AppError(
+                INVALID_PARAMS,
+                "a target region currently supports the random, genetic, and pso optimizers",
+            )
+        if reuse_accepted_seeds:
+            raise AppError(
+                INVALID_PARAMS,
+                "reuse_accepted_seeds is not used when a target region is set",
+            )
+    region_radius = params.get("region_radius", 15.0)
+    if isinstance(region_radius, bool) or not isinstance(region_radius, (int, float)):
+        raise AppError(INVALID_PARAMS, "region_radius must be a number in [0.01, 100]")
+    if not 0.01 <= float(region_radius) <= 100.0:
+        raise AppError(INVALID_PARAMS, "region_radius must be in [0.01, 100]")
+    region_radius = float(region_radius)
     operators = parse_operators(params.get("operators"))
     operator_names = {spec.name for spec in operators}
     for spec in operators:
@@ -473,4 +586,6 @@ def parse_request(params: dict) -> GenerationRequest:
         seed=parse_seed(params.get("seed", 42)),
         seed_view_id=seed_view_id,
         optimizer_params=dict(optimizer_params),
+        anchor_frames=[int(i) for i in anchor_frames],
+        region_radius=region_radius,
     )

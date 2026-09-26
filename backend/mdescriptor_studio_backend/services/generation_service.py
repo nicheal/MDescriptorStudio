@@ -35,7 +35,7 @@ from ..generation.engine import GenerationEngine
 from ..generation.evaluator import DescriptorEvaluator, evaluate_batch
 from ..generation.models import StructureCandidate, parse_request
 from ..generation.registry import GENERATION_ALGORITHM_VERSION, GENERATION_REGISTRY
-from ..analysis.sampling import fit_scaling
+from ..analysis.sampling import apply_scaling, fit_scaling
 from ..security import UnsafePathError, ensure_no_reparse_points, validate_local_path
 from ..datasets import create_adapter, detect_format
 from .artifact_service import AnalysisArtifactMixin
@@ -60,6 +60,7 @@ _LIST_COLUMNS = (
     "accepted_count",
     "result_path",
     "warnings_json",
+    "error_message",
     "cache_key",
     "stale_reason",
     "updated_at",
@@ -132,6 +133,8 @@ class GenerationService:
             "budget": request.budget.__dict__,
             "seed": request.seed,
             "seed_scope_hash": seed_scope_hash,
+            "anchor_frames": request.anchor_frames,
+            "region_radius": request.region_radius,
         }
         blob = json.dumps(_json_safe(payload), sort_keys=True, ensure_ascii=False)
         return "gen:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -223,6 +226,8 @@ class GenerationService:
                         "seed_mode": "fixed" if request.seed is not None else "random",
                         "seed_view_id": request.seed_view_id,
                         "seed_view_selection_hash": seed_scope_hash,
+                        "anchor_frames": request.anchor_frames,
+                        "region_radius": request.region_radius,
                     }
                 ),
                 ensure_ascii=False,
@@ -406,6 +411,22 @@ class GenerationService:
         positions = np.linspace(0, len(candidates) - 1, take, dtype=np.int64)
         indices = candidates[positions]
         rng.shuffle(indices)
+        # Target-region anchors must be parentable structures: force them into
+        # the seed pool (deduplicated, anchors first) or the distance-weighted
+        # parent selection would have nothing near the region to mutate.
+        anchor_frames: list[int] = []
+        if request.anchor_frames:
+            if reference_structure.shape[0] != frame_total:
+                raise AppError(
+                    RESULT_INCOMPATIBLE,
+                    "a target region requires a descriptor run covering every dataset frame",
+                )
+            anchor_frames = [int(i) for i in request.anchor_frames]
+            if not all(0 <= i < frame_total for i in anchor_frames):
+                raise AppError(INVALID_PARAMS, "anchor_frames contains a dataset frame index out of range")
+            anchor_array = np.asarray(sorted(set(anchor_frames)), dtype=np.int64)
+            keep = ~np.isin(indices, anchor_array)
+            indices = np.concatenate([anchor_array, indices[keep]])[:_SEED_POOL_CAP]
         seed_pool = []
         for position, frame_index in enumerate(indices.tolist()):
             ctx.check_cancelled()
@@ -417,6 +438,32 @@ class GenerationService:
                     parent_frame=int(frame_index),
                 )
             )
+
+        # Descriptor-aware optimizers get the scaled structure descriptors of
+        # their seed pool and target-region anchors for free: every dataset
+        # frame's descriptor is a row of the frozen reference, so no extra
+        # descriptor calls happen here. Row i of reference_structure is frame
+        # i's descriptor, which only holds for runs covering the whole dataset.
+        seed_descriptors: tuple = ()
+        anchor_descriptors: tuple = ()
+        anchor_candidates: list = []
+        if request.anchor_frames:
+            anchor_descriptors = tuple(
+                apply_scaling(structure_scaling, reference_structure[index][np.newaxis, :])[0]
+                for index in anchor_frames
+            )
+            seed_descriptors = tuple(
+                (
+                    apply_scaling(structure_scaling, reference_structure[candidate.parent_frame][np.newaxis, :])[0]
+                    if candidate.parent_frame is not None and 0 <= int(candidate.parent_frame) < frame_total
+                    else None
+                )
+                for candidate in seed_pool
+            )
+            anchor_candidates = [
+                StructureCandidate.from_frame(source.get_frame(index), candidate_id=f"anchor_{position}", parent_frame=index)
+                for position, index in enumerate(anchor_frames)
+            ]
 
         num_threads = source_num_threads
         if (
@@ -438,6 +485,17 @@ class GenerationService:
         operators = [GENERATION_REGISTRY.build_operator(spec) for spec in request.operators]
         optimizer = GENERATION_REGISTRY.build_optimizer(request.optimizer, operators, request.optimizer_params)
         constraints = build_constraints(request.constraints)
+        # A pathological anchor (e.g. a frame with sub-threshold contacts)
+        # would fail every mutation of itself and silently waste the round's
+        # proposal capacity — refuse the run instead of guessing.
+        for candidate in anchor_candidates:
+            verdict = constraints.validate(candidate)
+            if not verdict.valid:
+                raise AppError(
+                    INVALID_PARAMS,
+                    f"anchor frame {candidate.parent_frame} violates the run's geometry constraints: "
+                    + "; ".join(verdict.reasons),
+                )
         duplicate_threshold = request.constraints.get("duplicate_threshold")
         if duplicate_threshold is not None:
             duplicate_threshold = float(duplicate_threshold)
@@ -456,6 +514,9 @@ class GenerationService:
             n_seeds=int(request.optimizer_params.get("n_seeds", 64)),
             duplicate_threshold=duplicate_threshold,
             workers=distance_workers,
+            seed_descriptors=seed_descriptors,
+            anchor_descriptors=anchor_descriptors,
+            region_radius=request.region_radius if request.anchor_frames else None,
         )
 
         rounds: list = []

@@ -274,9 +274,9 @@ class JobService:
             )
         if row["generation_run_id"]:
             self.db.execute(
-                "UPDATE generation_runs SET status = ?, finished_at = ?"
+                "UPDATE generation_runs SET status = ?, finished_at = ?, error_message = ?"
                 " WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
-                (status, _NOW(), row["generation_run_id"]),
+                (status, _NOW(), message, row["generation_run_id"]),
             )
 
     def _update_progress(self, job_id, fraction, completed, total, message) -> None:

@@ -15,6 +15,12 @@ from __future__ import annotations
 
 import numpy as np
 
+# Validated in the G5-2 sweep (docs/reviews/2026-09-25-g5-2-target-region.md):
+# with a search target set, this share of every round's parent slots stays on
+# uniformly drawn seeds so the run keeps global breadth while the rest of the
+# proposals concentrate around the anchor region.
+_TARGET_IMMIGRANT_SHARE = 0.15
+
 from ...analysis.sampling.fps import farthest_point_sampling
 from ..optimization import ObservationBatch, OptimizationContext, ProposalBatch
 
@@ -52,6 +58,13 @@ class RandomSearchOptimizer:
         # observe() with the same FPS pruning the engine used pre-refactor.
         self._feedback_seed_pool: list = []
         self._feedback_descriptors: list[np.ndarray] = []
+        # Search-target mode (context.anchor_descriptors non-empty): accepted
+        # parents retained by NEAREST-to-anchor distance (proximity is the
+        # point here, unlike the diversity-pruned reuse pool above), plus the
+        # proposal bookkeeping that keeps foreign candidates out.
+        self._targeted_accepted: list = []
+        self._targeted_descriptors: list[np.ndarray] = []
+        self._targeted_pending: dict[int, object] = {}
 
     @property
     def batch_size(self) -> int:
@@ -68,6 +81,9 @@ class RandomSearchOptimizer:
         self._context = context
         self._feedback_seed_pool = []
         self._feedback_descriptors = []
+        self._targeted_accepted = []
+        self._targeted_descriptors = []
+        self._targeted_pending = {}
 
     def _require_context(self) -> OptimizationContext:
         if self._context is None:
@@ -76,6 +92,8 @@ class RandomSearchOptimizer:
 
     def propose(self, *, budget: int, rng: np.random.Generator) -> ProposalBatch:
         context = self._require_context()
+        if self._targeting_active():
+            return self._propose_targeted(budget, rng)
         feedback_pool = self._feedback_seed_pool if self.reuse_accepted_seeds else None
         seeds = self.choose_seeds(context.seed_pool, context.n_seeds, rng, feedback_pool=feedback_pool)
         children: list = []
@@ -103,6 +121,86 @@ class RandomSearchOptimizer:
             self._feedback_seed_ids.clear()
         return ProposalBatch(candidates=children)
 
+    def _targeting_active(self) -> bool:
+        return bool(self._context is not None and self._context.anchor_descriptors)
+
+    def _anchor_distance(self, descriptor: np.ndarray | None) -> float:
+        """L2 distance to the nearest anchor center (inf without a descriptor)."""
+        if descriptor is None:
+            return float("inf")
+        descriptor = np.asarray(descriptor, dtype=np.float64)
+        return min(
+            float(np.linalg.norm(descriptor - np.asarray(anchor, dtype=np.float64)))
+            for anchor in self._context.anchor_descriptors
+        )
+
+    def _propose_targeted(self, budget: int, rng: np.random.Generator) -> ProposalBatch:
+        """Search-target proposals: parents drawn by exp(-(d/r)^2) over the
+        min-anchor distance (r = region radius, robust-scaled units), with a
+        fixed immigrant share on uniform seeds. The mechanics are the ones
+        validated in the G5-2 sweep; the engine's selection and acceptance
+        are untouched. Accepted structures join the parent pool nearest-first,
+        so the region fills outward one mutation shell at a time.
+        """
+        context = self._require_context()
+        self._targeted_pending.clear()
+        children: list = []
+        n_slots = int(context.n_seeds)
+        cap = int(budget) if budget is not None and int(budget) > 0 else None
+        if cap is not None:
+            cap = min(cap, n_slots * self.children_per_seed)
+        seed_pool = list(context.seed_pool)
+        seed_descs = list(context.seed_descriptors) or [None] * len(seed_pool)
+        pool = list(zip(seed_pool, seed_descs)) + list(zip(self._targeted_accepted, self._targeted_descriptors))
+        radius = context.region_radius if context.region_radius is not None else 15.0
+        distances = np.asarray([self._anchor_distance(descriptor) for _, descriptor in pool], dtype=np.float64)
+        weights = np.maximum(np.exp(-np.square(distances / radius)), 1e-12)
+        immigrant_slots = int(round(_TARGET_IMMIGRANT_SHARE * n_slots))
+        target_slots = n_slots - immigrant_slots
+
+        def _draw_parent():
+            draw = float(rng.uniform(0.0, float(weights.sum())))
+            cumulative = 0.0
+            for index, weight in enumerate(weights):
+                cumulative += float(weight)
+                if cumulative > draw:
+                    return pool[index][0]
+            return pool[-1][0]
+
+        def _apply_uniform(parent):
+            available = []
+            for candidate_operator in self.operators:
+                params = getattr(candidate_operator, "operator_params", {})
+                can_apply = getattr(candidate_operator, "can_apply", None)
+                if can_apply is None or can_apply(parent, params):
+                    available.append(candidate_operator)
+            if not available:
+                return None
+            operator = available[int(rng.integers(len(available)))]
+            return operator.apply(parent, rng, params)
+
+        for _ in range(target_slots):
+            for _ in range(self.children_per_seed):
+                if cap is not None and len(children) >= cap:
+                    return ProposalBatch(candidates=children)
+                parent = _draw_parent()
+                child = _apply_uniform(parent)
+                if child is None:
+                    continue
+                self._targeted_pending[id(child)] = child
+                children.append(child)
+        for _ in range(immigrant_slots):
+            for _ in range(self.children_per_seed):
+                if cap is not None and len(children) >= cap:
+                    return ProposalBatch(candidates=children)
+                seed = seed_pool[int(rng.integers(len(seed_pool)))]
+                child = _apply_uniform(seed)
+                if child is None:
+                    continue
+                self._targeted_pending[id(child)] = child
+                children.append(child)
+        return ProposalBatch(candidates=children)
+
     def observe(self, observations: ObservationBatch) -> None:
         """Fold accepted candidates into the descriptor-diverse parent pool.
 
@@ -110,6 +208,9 @@ class RandomSearchOptimizer:
         proposal order — the pool order feeds the FPS pruning below and must
         stay reproducible.
         """
+        if self._targeting_active():
+            self._observe_targeted(observations)
+            return
         if not self.reuse_accepted_seeds or self._context is None:
             return
         accepted = [
@@ -127,15 +228,53 @@ class RandomSearchOptimizer:
             self._feedback_seed_pool = [self._feedback_seed_pool[int(index)] for index in keep]
             self._feedback_descriptors = [self._feedback_descriptors[int(index)] for index in keep]
 
+    def _observe_targeted(self, observations: ObservationBatch) -> None:
+        """Accepted own proposals join the targeted parent pool in selection
+        order; on overflow the NEAREST-to-anchor parents are retained."""
+        if self._context is None:
+            return
+        accepted = [
+            obs
+            for obs in observations.observations
+            if obs.accepted and obs.candidate is not None and obs.structure_descriptor is not None
+        ]
+        accepted.sort(key=lambda obs: obs.selection_rank if obs.selection_rank is not None else len(observations))
+        for obs in accepted:
+            if self._targeted_pending.pop(id(obs.candidate), None) is None:
+                continue
+            self._targeted_accepted.append(obs.candidate)
+            self._targeted_descriptors.append(np.asarray(obs.structure_descriptor, dtype=np.float64))
+        limit = min(256, max(1, 4 * int(self._context.n_seeds)))
+        if len(self._targeted_accepted) > limit:
+            ranked = sorted(
+                zip(self._targeted_accepted, self._targeted_descriptors),
+                key=lambda entry: (self._anchor_distance(entry[1]), entry[0].candidate_id),
+            )
+            self._targeted_accepted = [entry[0] for entry in ranked[:limit]]
+            self._targeted_descriptors = [entry[1] for entry in ranked[:limit]]
+
     def state_dict(self) -> dict:
         """Serializable state; the parent pool keeps only lineage ids."""
-        return {
+        state = {
             "name": self.name,
             "children_per_seed": self.children_per_seed,
             "batch_accept": self.batch_accept,
             "reuse_accepted_seeds": self.reuse_accepted_seeds,
             "feedback_pool": [candidate.candidate_id for candidate in self._feedback_seed_pool],
         }
+        if self._targeting_active():
+            pool = list(zip(self._context.seed_pool, self._context.seed_descriptors)) + list(
+                zip(self._targeted_accepted, self._targeted_descriptors)
+            )
+            distances = [self._anchor_distance(descriptor) for _, descriptor in pool]
+            finite = [d for d in distances if np.isfinite(d)]
+            state["targeting"] = {
+                "anchors": len(self._context.anchor_descriptors),
+                "region_radius": self._context.region_radius,
+                "parent_pool": len(pool),
+                "nearest_parent_distance": min(finite) if finite else None,
+            }
+        return state
 
     def choose_seeds(
         self,

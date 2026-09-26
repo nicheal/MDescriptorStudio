@@ -2,31 +2,138 @@
 // orange = accepted, with a generation slider), local-environment discovery,
 // and the actions that turn accepted structures into a new dataset.
 import { useEffect, useMemo, useState } from "react";
-import { App as AntApp, Button, Card, Col, Empty, Modal, Row, Select, Slider, Space, Spin, Statistic, Tag, Typography } from "antd";
+import { Alert, App as AntApp, Button, Card, Col, Collapse, Empty, Modal, Row, Select, Slider, Space, Spin, Statistic, Tag, Typography } from "antd";
 import { Database24Regular } from "@fluentui/react-icons";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { PlotMouseEvent } from "plotly.js";
 import { ipc } from "../ipc/client";
 import ScientificPlot from "../viz/ScientificPlot";
 import { GENERATION_GEOMETRY_REJECTION_LABELS, GENERATION_OBJECTIVE_LABELS, GENERATION_OPTIMIZER_LABELS, GENERATION_STOP_REASON_LABELS } from "../features/generation/labels";
-import type { GenerationPca, GenerationPreview, GenerationRow } from "../features/generation/types";
+import type { GenerationPca, GenerationPreview, GenerationRow, PendingGenerationRegistration } from "../features/generation/types";
 import type { DatasetView, FramePayload } from "../types/protocol";
 import StructurePreview from "../components/StructurePreview";
 import { refetchDatasets, useWorkspace } from "../stores/workspace";
 import { jobStatusLabel, trackJob, watchJob } from "../stores/jobs";
+import { discoveryStats } from "../features/generation/summary";
+import { useGenerationStore } from "../features/generation/generationStore";
+import GenerationConvergenceCharts from "../features/generation/GenerationConvergenceCharts";
 import { useT } from "../i18n";
+import { describeError } from "../util/errors";
 
 function metric(label: string, value: string | number) {
   return <Statistic title={label} value={value} valueStyle={{ fontSize: 22 }} />;
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function numberText(value: unknown, digits = 3): string | null {
+  return typeof value === "number" && Number.isFinite(value) ? String(Number(value.toFixed(digits))) : null;
+}
+
+function errorDetail(error: unknown, fallback: string) {
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    return "code" in error
+      ? describeError(error as { code?: string; message: string; error_id?: string }, "GENERATION", fallback)
+      : error.message;
+  }
+  return error instanceof Error ? error.message : fallback;
+}
+
 type GenerationPoint = { kind: "original" | "evaluated"; index: number };
 
-function SummaryCard({ row }: { row: GenerationRow }) {
+function SummaryCard({ row, onBackToConfig }: { row: GenerationRow; onBackToConfig: () => void }) {
   const { t, tr } = useT();
+  const datasets = useWorkspace((state) => state.datasets);
   const preview: GenerationPreview | null = row.preview ?? null;
   const rounds = preview?.rounds ?? [];
   const latest = rounds[rounds.length - 1];
+  let params: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(row.params_json || "{}");
+    if (parsed && typeof parsed === "object") params = parsed as Record<string, unknown>;
+  } catch {
+    // Keep the result summary usable when a legacy or damaged row has invalid JSON.
+  }
+  const budget = record(params.budget);
+  const optimizerParams = record(params.optimizer_params);
+  const objective = record(params.objective);
+  const constraints = record(params.constraints);
+  const operatorLabels: Record<string, string> = {
+    atomic_displacement: "Atomic displacement",
+    isotropic_strain: "Isotropic strain",
+    anisotropic_strain: "Anisotropic strain",
+    cell_shear: "Cell shear",
+    vacancy: "Vacancy",
+    interstitial_atom: "Interstitial atom",
+    substitution: "Substitution",
+    antisite_swap: "Antisite swap",
+  };
+  const operators = Array.isArray(params.operators) ? params.operators.map((value) => {
+    const operator = record(value);
+    return { name: String(operator.name ?? ""), params: record(operator.params) };
+  }) : [];
+  const operatorSummary = operators.map(({ name, params: values }) => {
+    const label = t(operatorLabels[name] ?? name);
+    if (name === "atomic_displacement") {
+      const sigma = numberText(values.max_sigma);
+      const cutoff = numberText(values.hard_cutoff);
+      return `${label}${sigma ? ` · ${t("Maximum displacement")} σ ≤ ${sigma} Å` : ""}${cutoff ? ` · ${t("Hard displacement cutoff")} ${cutoff} Å` : ""}`;
+    }
+    if (name === "isotropic_strain" || name === "anisotropic_strain") {
+      const strain = numberText(values.max_strain == null ? null : Number(values.max_strain) * 100, 1);
+      return `${label}${strain ? ` · ±${strain} %` : ""}`;
+    }
+    if (name === "cell_shear") {
+      const shear = numberText(values.max_shear == null ? null : Number(values.max_shear) * 100, 1);
+      return `${label}${shear ? ` · ${t("Maximum shear")} ${shear} %` : ""}`;
+    }
+    const element = values.element;
+    return element ? `${label} · ${String(element)}` : label;
+  });
+  const anchors = Array.isArray(params.anchor_frames) ? params.anchor_frames as number[] : [];
+  const strategyValues = [
+    `${t("Seed structures per run")}: ${String(optimizerParams.n_seeds ?? "—")}`,
+    `${t("Candidate batch")}: ${String(optimizerParams.children_per_seed ?? "—")}`,
+    `${t("Accepted / round")}: ${String(optimizerParams.batch_accept ?? "—")}`,
+    ...(typeof optimizerParams.parent_fraction === "number" ? [`${t("Parent fraction")}: ${numberText(optimizerParams.parent_fraction, 2)}`] : []),
+    ...(typeof optimizerParams.immigrant_fraction === "number" ? [`${t("Immigrant fraction")}: ${numberText(optimizerParams.immigrant_fraction, 2)}`] : []),
+    ...(typeof optimizerParams.pso_weight_pbest === "number" ? [`${t("Pull: personal best")}: ${numberText(optimizerParams.pso_weight_pbest, 2)}`] : []),
+    ...(typeof optimizerParams.pso_weight_gbest === "number" ? [`${t("Pull: global best")}: ${numberText(optimizerParams.pso_weight_gbest, 2)}`] : []),
+    ...(typeof optimizerParams.pso_weight_mut === "number" ? [`${t("Pull: own position")}: ${numberText(optimizerParams.pso_weight_mut, 2)}`] : []),
+    ...(optimizerParams.reuse_accepted_seeds === true ? [t("Reuse accepted structures as seeds")] : []),
+  ].join(" · ");
+  const objectiveValues = [
+    t(GENERATION_OBJECTIVE_LABELS[objective.type as keyof typeof GENERATION_OBJECTIVE_LABELS] ?? String(objective.type ?? row.objective)),
+    ...(typeof objective.scaling === "string" ? [`${t("Feature scaling")}: ${t(objective.scaling === "standardized" ? "Standardized" : objective.scaling === "raw" ? "Raw" : "Robust")}`] : []),
+    ...(typeof objective.aggregation === "string" ? [`${t("Aggregation")}: ${t(objective.aggregation === "top_fraction_mean" ? "Top fraction mean" : objective.aggregation === "mean" ? "Mean" : objective.aggregation === "quantile" ? "Quantile" : "Maximum (diagnostic)")}`] : []),
+    ...(typeof objective.top_fraction === "number" ? [`${t("Top fraction")}: ${numberText(objective.top_fraction, 2)}`] : []),
+    ...(typeof objective.quantile === "number" ? [`${t("Quantile")}: ${numberText(objective.quantile, 2)}`] : []),
+    ...(typeof objective.novelty_threshold === "number" ? [`${t("Novel threshold")}: ${numberText(objective.novelty_threshold)}`] : []),
+    ...(typeof objective.local_weight === "number" ? [`${t("Local environment weight")}: ${numberText(objective.local_weight, 2)} · ${t("Structure weight")}: ${numberText(objective.structure_weight, 2)}`] : []),
+  ].join(" · ");
+  const minDistanceMode = String(constraints.min_distance_mode ?? "");
+  const pairDistances = record(constraints.min_distance_pairs);
+  const constraintValues = [
+    `${t("Minimum distance")}: ${t(minDistanceMode === "covalent" ? "Covalent radius × factor" : minDistanceMode === "absolute" ? "Absolute (Å)" : "None")}`,
+    ...(typeof constraints.min_distance_factor === "number" ? [`${t("Covalent radius factor")}: ${numberText(constraints.min_distance_factor, 2)}×`] : []),
+    ...(typeof constraints.min_distance === "number" ? [`${t("Minimum distance")}: ${numberText(constraints.min_distance)} Å`] : []),
+    ...(Object.keys(pairDistances).length ? [`${t("Element-pair distance overrides")}: ${Object.entries(pairDistances).map(([pair, distance]) => `${pair}=${String(distance)} Å`).join(", ")}`] : []),
+    ...(typeof constraints.max_volume_change === "number" ? [`${t("Maximum volume change")}: ±${numberText(Number(constraints.max_volume_change) * 100, 1)} %`] : []),
+    ...(typeof constraints.min_volume_per_atom === "number" ? [`${t("Minimum volume per atom")}: ${numberText(constraints.min_volume_per_atom)} Å³/atom`] : []),
+    ...(typeof constraints.max_volume_per_atom === "number" ? [`${t("Maximum volume per atom")}: ${numberText(constraints.max_volume_per_atom)} Å³/atom`] : []),
+    `${t("Lock composition")}: ${constraints.composition_locked === false ? t("No") : t("Yes")}`,
+    `${t("Lock atom count")}: ${constraints.atom_count_locked === false ? t("No") : t("Yes")}`,
+  ].join(" · ");
+  const budgetValues = [
+    `${String(budget.max_evaluations ?? "—")} ${t("evaluations")}`,
+    `${String(budget.max_accepted ?? "—")} ${t("accepted")}`,
+    `${String(budget.max_generations ?? "—")} ${t("generations")}`,
+    `${t("No-improvement rounds")}: ${String(budget.no_improvement_rounds ?? t("Disabled"))}`,
+    ...(typeof budget.target_novelty === "number" ? [`${t("Target novelty")}: ≥ ${numberText(budget.target_novelty)}`] : []),
+  ].join(" · ");
+  const datasetName = datasets.find((dataset) => dataset.id === row.dataset_id)?.name ?? row.dataset_id;
   const geometryReasonTotals = rounds.reduce<Record<string, number>>((acc, round) => {
     for (const [reason, count] of Object.entries(round.rejected_geometry_by_reason ?? {})) {
       acc[reason] = (acc[reason] ?? 0) + count;
@@ -38,12 +145,18 @@ function SummaryCard({ row }: { row: GenerationRow }) {
       <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
         {metric(t("Status"), jobStatusLabel(tr, row.status))}
         {metric(t("Stopped by"), preview?.stopped_by ? t(GENERATION_STOP_REASON_LABELS[preview.stopped_by] ?? preview.stopped_by) : "—")}
+        {metric(t("Source dataset"), datasetName)}
         {metric(t("Target descriptor"), row.descriptor_name ?? "—")}
         {metric(t("Descriptor evaluations"), preview?.evaluations ?? row.evaluations)}
         {metric(t("Accepted structures"), preview?.accepted ?? row.accepted_count)}
         {metric(t("Rounds"), rounds.length)}
         {metric(t("Coverage radius"), latest?.coverage_radius != null ? latest.coverage_radius.toFixed(3) : "—")}
       </div>
+      {row.status === "FAILED" && (
+        <Alert type="error" showIcon style={{ marginTop: 12 }} message={t("Expansion failed")}
+          description={row.error_message ?? t("The backend did not retain a failure message for this older run.")}
+          action={<Button size="small" onClick={onBackToConfig}>{t("Back to configuration")}</Button>} />
+      )}
       {Object.keys(geometryReasonTotals).length > 0 && (
         <div style={{ marginTop: 12, color: "#616161", fontSize: 12 }}>
           {t("Geometry rejection reasons")}: {Object.entries(geometryReasonTotals).map(([reason, count]) =>
@@ -57,6 +170,21 @@ function SummaryCard({ row }: { row: GenerationRow }) {
         </Tag>
         <span style={{ fontSize: 12, color: "#9AA0A6" }}>{row.id}</span>
       </div>
+      <Collapse ghost style={{ marginTop: 8 }} items={[
+        { key: "params", label: t("Run parameters"), children: (
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, max-content) minmax(0, 1fr)", gap: "6px 14px", fontSize: 12, color: "#616161" }}>
+            <b>{t("Seed")}</b><span>{params.seed_mode === "random" ? t("Random") : String(params.seed ?? "—")}</span>
+            <b>{t("Seed scope")}</b><span>{typeof params.seed_view_id === "string" ? `${t("Selected view")} · ${params.seed_view_id}` : t("Full dataset")}</span>
+            {anchors.length > 0 && <><b>{t("Target region")}</b><span>{t("Anchor frames")}: {anchors.join(", ")} · {t("Region radius")}: {String(params.region_radius ?? "—")} {t("robust-scaled descriptor units")}</span></>}
+            <b>{t("Method")}</b><span>{t(GENERATION_OPTIMIZER_LABELS[row.optimizer as keyof typeof GENERATION_OPTIMIZER_LABELS] ?? row.optimizer)} · {strategyValues}</span>
+            <b>{t("Enabled operators")}</b><span>{operatorSummary.join(" · ") || "—"}</span>
+            <b>{t("Objective configuration")}</b><span>{objectiveValues}</span>
+            <b>{t("Geometry constraints")}</b><span>{constraintValues}</span>
+            <b>{t("Budget")}</b><span>{budgetValues}</span>
+          </div>
+        )},
+        { key: "convergence", label: t("Convergence history"), children: <GenerationConvergenceCharts rounds={rounds} /> },
+      ]} />
     </Card>
   );
 }
@@ -197,6 +325,7 @@ function DescriptorSpaceMap({
         }}
         config={{ displayModeBar: false, responsive: true }}
       />
+      <div style={{ fontSize: 12, color: "#9AA0A6", marginTop: 4 }}>{t("PCA map is a two-dimensional projection; distances and overlap can change under projection.")}</div>
       <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
         <span style={{ fontSize: 13, color: "#616161", whiteSpace: "nowrap" }}>
           {t("Generation {generation}", { generation: maxGeneration })}
@@ -215,35 +344,36 @@ function DescriptorSpaceMap({
   );
 }
 
-function LocalEnvironmentCard({ row, pca }: { row: GenerationRow; pca: GenerationPca | null }) {
+function LocalEnvironmentCard({ pca, error }: { pca: GenerationPca | null; error: boolean }) {
   const { t } = useT();
-  const preview: GenerationPreview | null = row.preview ?? null;
-  const fallbackAccepted = preview?.accepted ?? row.accepted_count;
   const discovery = pca?.discovery ?? null;
-  const generated = discovery?.generated_environments ?? fallbackAccepted;
-  const novel = discovery?.novel_environments ?? 0;
-  const fraction = generated > 0 ? (novel / generated) * 100 : 0;
+  const stats = discoveryStats(discovery);
   return (
-    <Card size="small" title={t("LOCAL ENVIRONMENT DISCOVERY")}>
+      <Card size="small" title={t("LOCAL ENVIRONMENT DISCOVERY")}>
+        {!stats && <Typography.Text type="secondary">{t(error || pca ? "Discovery statistics are unavailable for this run" : "Loading discovery statistics")}</Typography.Text>}
+        {stats && <>
       <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
-        {metric(t("Original environments"), discovery?.original_environments ?? "—")}
-        {metric(t("Generated environments"), generated)}
-        {metric(t("Novel environments"), novel)}
-        {metric(t("Novel fraction"), `${fraction.toFixed(1)} %`)}
+        {metric(t("Original environments"), discovery!.original_environments)}
+        {metric(t("Generated environments"), stats.generated)}
+        {metric(t("Novel environments"), stats.novel)}
+        {metric(t("Novel fraction"), `${stats.fraction.toFixed(1)} %`)}
       </div>
+        </>}
       <div style={{ marginTop: 8, fontSize: 12, color: "#9AA0A6" }}>
-        {t("Novel environments are local descriptor rows farther than the novelty threshold from every archived environment.")}
+        {t("Novel environments are local descriptor rows farther than the novelty threshold from every archived environment. This is descriptor-space novelty and geometry screening; it does not establish physical stability or label quality.")}
       </div>
-    </Card>
+      </Card>
   );
 }
 
-export default function GenerationResultsPanel({ row, onMaterialized }: { row: GenerationRow; onMaterialized: () => void }) {
+export default function GenerationResultsPanel({ row, onMaterialized, onBackToConfig }: { row: GenerationRow; onMaterialized: () => void; onBackToConfig: () => void }) {
   const { t } = useT();
   const { message } = AntApp.useApp();
   const datasets = useWorkspace((s) => s.datasets);
   const [busy, setBusy] = useState(false);
-  const [materializedPath, setMaterializedPath] = useState<string | null>(null);
+  const pendingRegistration = useGenerationStore((state) => state.pendingRegistrations[row.id] ?? null);
+  const setPendingRegistration = useGenerationStore((state) => state.setPendingRegistration);
+  const [registrationError, setRegistrationError] = useState<string | null>(null);
   const [pca, setPca] = useState<GenerationPca | null>(null);
   const [pcaError, setPcaError] = useState(false);
   const [selectedPoint, setSelectedPoint] = useState<GenerationPoint | null>(null);
@@ -327,50 +457,27 @@ export default function GenerationResultsPanel({ row, onMaterialized }: { row: G
       message.success(t("Export written to {path}", { path: payload.path }));
     } catch (error) {
       console.error(error);
-      message.error(t("Export failed: {message}", { message: error instanceof Error ? error.message : String(error) }));
+      message.error(t("Export failed: {message}", { message: errorDetail(error, t("Export failed")) }));
     } finally {
       setBusy(false);
     }
   };
 
-  const materialize = async () => {
+  const registerSavedDataset = async (file: PendingGenerationRegistration) => {
     setBusy(true);
+    setRegistrationError(null);
     try {
-      const suggested = row.id + "_accepted.extxyz";
-      const target = await saveDialog({
-        title: t("Destination path for the expanded dataset (.extxyz)"),
-        defaultPath: suggested,
-        filters: [{ name: "extxyz", extensions: ["xyz", "extxyz"] }],
-      });
-      if (!target) return;
-
-      interface MaterializeResult {
-        path: string;
-        name: string;
-        lineage: Record<string, unknown>;
-      }
-      const submitted = await ipc.request<{ job_id: string }>("generation.materialize", {
-        id: row.id,
-        path: target,
-        name: row.id + "_expanded",
-      });
-      trackJob(submitted.job_id, "generation.materialize", row.dataset_id);
-      const written = await watchJob(submitted.job_id);
-      const payload = written.result as unknown as MaterializeResult | null;
-      if (written.status !== "COMPLETED" || !payload?.path) {
-        throw new Error(written.error?.message ?? written.status);
-      }
-      setMaterializedPath(payload.path);
       const reg = await ipc.request<{ job_id: string }>("dataset.register", {
-        path: payload.path,
-        name: payload.name,
-        lineage: payload.lineage,
+        path: file.path,
+        name: file.name,
+        lineage: file.lineage,
       });
       trackJob(reg.job_id, "dataset.register");
       const registered = await watchJob(reg.job_id);
       if (registered.status !== "COMPLETED") {
         throw new Error(registered.error?.message ?? registered.status);
       }
+      setPendingRegistration(row.id, null);
       let refreshed = true;
       try {
         await refetchDatasets();
@@ -383,10 +490,45 @@ export default function GenerationResultsPanel({ row, onMaterialized }: { row: G
       else message.warning(t("Expanded dataset was registered, but the workspace list could not be refreshed"));
     } catch (error) {
       console.error(error);
-      message.error(t("Materialize failed: {message}", { message: error instanceof Error ? error.message : String(error) }));
+      const detail = errorDetail(error, t("Dataset written but registration did not complete"));
+      setRegistrationError(detail);
+      message.error(t("Dataset written but registration failed: {message}", { message: detail }));
     } finally {
       setBusy(false);
     }
+  };
+
+  const materialize = async () => {
+    setBusy(true);
+    let saved: PendingGenerationRegistration | null = null;
+    try {
+      const target = await saveDialog({
+        title: t("Destination path for the expanded dataset (.extxyz)"),
+        defaultPath: row.id + "_accepted.extxyz",
+        filters: [{ name: "extxyz", extensions: ["xyz", "extxyz"] }],
+      });
+      if (!target) return;
+      const submitted = await ipc.request<{ job_id: string }>("generation.materialize", {
+        id: row.id,
+        path: target,
+        name: row.id + "_expanded",
+      });
+      trackJob(submitted.job_id, "generation.materialize", row.dataset_id);
+      const written = await watchJob(submitted.job_id);
+      const payload = written.result as unknown as { path?: string; name?: string; lineage?: Record<string, unknown> } | null;
+      if (written.status !== "COMPLETED" || !payload?.path || !payload.name || !payload.lineage) {
+        throw new Error(written.error?.message ?? written.status);
+      }
+      saved = { path: payload.path, name: payload.name, lineage: payload.lineage };
+      setPendingRegistration(row.id, saved);
+      setRegistrationError(null);
+    } catch (error) {
+      console.error(error);
+      message.error(t("Materialize failed: {message}", { message: errorDetail(error, t("Materialize failed")) }));
+    } finally {
+      setBusy(false);
+    }
+    if (saved) void registerSavedDataset(saved);
   };
 
   const addToExisting = async () => {
@@ -476,7 +618,26 @@ export default function GenerationResultsPanel({ row, onMaterialized }: { row: G
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <SummaryCard row={row} />
+      <SummaryCard row={row} onBackToConfig={onBackToConfig} />
+      {(row.status === "COMPLETED" || row.status === "CANCELLED") && row.artifact_complete === true && row.accepted_count > 0 && (
+        <Card size="small" title={t("Accepted structures")}
+          extra={<Space wrap>
+            <Button type="primary" icon={<Database24Regular />} loading={busy} disabled={pendingRegistration != null} onClick={() => void materialize()}>{t("Save as new dataset")}</Button>
+            <Button loading={busy} disabled={pendingRegistration != null} onClick={() => setAddOpen(true)}>{t("Add to existing dataset")}</Button>
+            <Button loading={busy} onClick={() => void exportAccepted()}>{t("Export accepted structures")}</Button>
+          </Space>}>
+          <div style={{ fontSize: 13, color: "#616161" }}>
+            {t("The new dataset contains only the accepted generated structures; the original source dataset is not copied into it.", { count: row.accepted_count })}
+          </div>
+          <div style={{ fontSize: 12, color: "#9AA0A6", marginTop: 4 }}>
+            {t("{count} accepted structures; each frame carries candidate provenance such as generation, parent, operator, and fitness.", { count: row.accepted_count })}
+          </div>
+          {pendingRegistration && <Alert type={registrationError ? "error" : "info"} showIcon style={{ marginTop: 10 }}
+            message={registrationError ? t("Dataset written but registration did not complete") : t("Dataset written — registration is ready")}
+            description={<span>{pendingRegistration.path}{registrationError ? ` · ${registrationError}` : ""}</span>}
+            action={<Button size="small" loading={busy} onClick={() => void registerSavedDataset(pendingRegistration)}>{t("Retry registration")}</Button>} />}
+        </Card>
+      )}
       <Row gutter={[12, 12]} align="stretch">
         <Col xs={24} xl={16}>
           <DescriptorSpaceMap row={row} pca={pca} error={pcaError} onSelectPoint={setSelectedPoint} />
@@ -487,7 +648,17 @@ export default function GenerationResultsPanel({ row, onMaterialized }: { row: G
               <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
                 {selectedPoint.kind === "original"
                   ? t("Original frame {index}", { index: selectedPoint.index })
-                  : t("Generated candidate {index}", { index: selectedPoint.index })}
+                  : (() => {
+                    const generation = pca?.evaluated_generation[selectedPoint.index];
+                    const novelty = pca?.evaluated_novelty[selectedPoint.index];
+                    const accepted = pca?.evaluated_accepted[selectedPoint.index];
+                    return t("Candidate {index} · generation {generation} · accepted {accepted} · novelty {novelty}", {
+                      index: selectedPoint.index,
+                      generation: generation ?? "—",
+                      accepted: accepted == null ? "—" : accepted ? t("Yes") : t("No"),
+                      novelty: novelty == null ? "—" : novelty.toFixed(3),
+                    });
+                  })()}
               </Typography.Text>
             )}
             {structureFrame ? (
@@ -505,35 +676,7 @@ export default function GenerationResultsPanel({ row, onMaterialized }: { row: G
           </Card>
         </Col>
       </Row>
-      <LocalEnvironmentCard row={row} pca={pca} />
-      <Card
-        size="small"
-        title={t("Accepted structures")}
-        extra={
-          (row.status === "COMPLETED" || row.status === "CANCELLED") && row.artifact_complete === true && row.accepted_count > 0 && (
-            <Space wrap>
-              <Button icon={<Database24Regular />} loading={busy} onClick={() => void materialize()}>
-                {t("Materialize as new dataset")}
-              </Button>
-              <Button loading={busy} onClick={() => setAddOpen(true)}>
-                {t("Add to existing dataset")}
-              </Button>
-              <Button loading={busy} onClick={() => void exportAccepted()}>
-                {t("Export accepted structures")}
-              </Button>
-            </Space>
-          )
-        }
-      >
-        {materializedPath && (
-          <div style={{ fontSize: 13, color: "#616161", marginBottom: 8 }}>{materializedPath}</div>
-        )}
-        <div style={{ fontSize: 13, color: "#616161" }}>
-          {t("{count} structures accepted; every accepted.extxyz frame carries candidate provenance (generation, parent, operator, fitness).", {
-            count: row.accepted_count,
-          })}
-        </div>
-      </Card>
+      <LocalEnvironmentCard pca={pca} error={pcaError} />
       <Modal
         title={t("Add generated structures to an existing dataset")}
         open={addOpen}
@@ -559,7 +702,9 @@ export default function GenerationResultsPanel({ row, onMaterialized }: { row: G
           style={{ width: "100%" }}
         />
         <Typography.Text type="secondary" style={{ display: "block", marginTop: 12 }}>
-          {t("Only extxyz datasets are supported. Generated frames will be appended to the selected source file; statistics will be rescanned, dependent results marked stale, and a view of just the new structures created.")}
+          {t("Target dataset")}: {writableDatasets.find((dataset) => dataset.id === targetDatasetId)?.name ?? t("None")} · {t("Accepted structures to append")}: {row.accepted_count} · {t("Expected total structures")}: {(writableDatasets.find((dataset) => dataset.id === targetDatasetId)?.number_of_frames ?? 0) + row.accepted_count}
+          <br />
+          {t("Only extxyz datasets are supported. The accepted structures will be appended to the selected file; statistics will be rescanned, dependent results marked stale, and a view of just the new structures created.")}
         </Typography.Text>
       </Modal>
     </div>

@@ -9,6 +9,8 @@ export const GENERATION_OBJECTIVE_LABELS: Record<GenerationObjectiveType, string
 
 export const GENERATION_OPTIMIZER_LABELS: Record<GenerationOptimizer, string> = {
   random: "Descriptor-guided random",
+  genetic: "Genetic algorithm (mutation-only)",
+  pso: "Particle swarm (memory)",
 };
 
 export const GENERATION_STOP_REASON_LABELS: Record<string, string> = {

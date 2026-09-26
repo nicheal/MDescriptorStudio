@@ -1,10 +1,10 @@
 // Generation page contracts. Discriminated unions keep every illegal state
 // unrepresentable: an OptimizerConfig is exactly one optimizer's parameters,
 // never a bag of partially-filled optionals. The vocabulary below is the
-// *runtime* vocabulary — roadmap items (GA/PSO/target-region) join when the
-// backend catalog actually offers them, never earlier.
+// *runtime* vocabulary — an optimizer joins when the backend catalog
+// actually offers it, never earlier.
 
-export type GenerationOptimizer = "random";
+export type GenerationOptimizer = "random" | "genetic" | "pso";
 
 export type GenerationObjectiveType =
   | "novelty"
@@ -61,7 +61,20 @@ export interface ConstraintConfig {
 }
 
 export type OptimizerConfig =
-  | { type: "random"; childrenPerSeed: number; batchAccept: number; nSeeds: number; reuseAcceptedSeeds: boolean };
+  | { type: "random"; childrenPerSeed: number; batchAccept: number; nSeeds: number; reuseAcceptedSeeds: boolean }
+  /** Mutation-only GA (USPEX-style): parent_fraction = USPEX bestFrac, immigrant_fraction = USPEX howManyRand share. */
+  | { type: "genetic"; childrenPerSeed: number; batchAccept: number; nSeeds: number; parentFraction: number; immigrantFraction: number }
+  /** PSO with per-slot memory: pull masses scale with descriptor distance to pbest/gbest (USPEX-PSO without crossover). */
+  | {
+      type: "pso";
+      childrenPerSeed: number;
+      batchAccept: number;
+      nSeeds: number;
+      psoWeightPbest: number;
+      psoWeightGbest: number;
+      psoWeightMut: number;
+      immigrantFraction: number;
+    }
 
 export interface BudgetConfig {
   maxEvaluations: number;
@@ -77,12 +90,20 @@ export interface SourceConfig {
   seedViewId: string | null;
 }
 
+/** Search target: anchor dataset frames define descriptor-space region centers
+ * (robust-scaled units for the radius). Empty anchorFrames = no target. */
+export interface SearchTargetConfig {
+  anchorFrames: number[];
+  regionRadius: number;
+}
+
 export interface GenerationConfig {
   source: SourceConfig;
   objective: ObjectiveConfig;
   searchSpace: SearchSpaceConfig;
   constraints: ConstraintConfig;
   optimizer: OptimizerConfig;
+  searchTarget: SearchTargetConfig;
   budget: BudgetConfig;
   seedMode: SeedMode;
   seed: number;
@@ -132,6 +153,13 @@ export interface GenerationRow {
   cache_key: string | null;
   preview?: GenerationPreview | null;
   artifact_complete?: boolean;
+  error_message?: string | null;
+}
+
+export interface PendingGenerationRegistration {
+  path: string;
+  name: string;
+  lineage: Record<string, unknown>;
 }
 
 export interface GenerationCatalog {

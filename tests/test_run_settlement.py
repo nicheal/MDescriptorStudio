@@ -1,5 +1,5 @@
 """Run-row settlement: a job that fails or is cancelled must settle its linked
-run rows (descriptor_runs / analysis_runs), and a backend restart must sweep
+run rows (descriptor_runs / analysis_runs / generation_runs), and a backend restart must sweep
 run rows left non-terminal by the previous session.
 
 User-reported symptom: Jobs page shows FAILED while Results page keeps the run
@@ -139,6 +139,28 @@ def test_failed_analysis_settles_analysis_run(tmp_path: Path) -> None:
         analysis.pca({"run_id": "run_1"})
     assert exc.value.code == RESULT_INCOMPATIBLE
     jobs.shutdown()
+
+
+def test_failed_job_persists_generation_error_message(tmp_path: Path) -> None:
+    db = Database(tmp_path / "db.sqlite3")
+    db.execute(
+        "INSERT INTO generation_runs (id, dataset_id, optimizer, objective, params_json, status, created_at)"
+        " VALUES ('gen_1', 'ds_1', 'random', 'novelty', '{}', 'RUNNING', '2026-01-01T00:00:00+00:00')"
+    )
+    db.execute(
+        "INSERT INTO jobs (id, job_type, generation_run_id, status, created_at)"
+        " VALUES ('job_gen_1', 'generation.submit', 'gen_1', 'RUNNING', '2026-01-01T00:00:00+00:00')"
+    )
+
+    # Settlement only needs the database; avoid starting worker threads in this
+    # persistence-contract test.
+    jobs = JobService.__new__(JobService)
+    jobs.db = db
+    jobs._settle_linked_runs('job_gen_1', 'FAILED', {'message': 'invalid search-space parameter'})
+
+    run = db.query_one("SELECT status, error_message FROM generation_runs WHERE id = 'gen_1'")
+    assert run == {"status": "FAILED", "error_message": "invalid search-space parameter"}
+    db.close()
 
 
 def test_restart_settles_zombie_runs(tmp_path: Path) -> None:

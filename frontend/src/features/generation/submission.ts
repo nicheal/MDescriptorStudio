@@ -9,6 +9,34 @@ export interface SubmissionCheck {
   reason?: string;
 }
 
+export interface ConfigIssue {
+  field: string;
+  reason: string;
+}
+
+export type AnchorFrameParse =
+  | { ok: true; frames: number[] }
+  | { ok: false; reason: string };
+
+/** Parse without coercion so partial input such as `12abc` is never submitted as frame 12. */
+export function parseAnchorFrames(value: string, frameCount?: number): AnchorFrameParse {
+  const input = value.trim();
+  if (!input) return { ok: true, frames: [] };
+  if (!/^\d+(?:\s*(?:,|\s)\s*\d+)*$/.test(input)) {
+    return { ok: false, reason: "Anchor frames must be whole numbers separated by commas or spaces" };
+  }
+  const frames = input.split(/[\s,]+/).map(Number);
+  if (frames.some((frame) => !Number.isSafeInteger(frame) || frame < 0)) {
+    return { ok: false, reason: "Anchor frames must be non-negative whole numbers" };
+  }
+  if (frames.length > 16) return { ok: false, reason: "Use at most 16 anchor frames" };
+  if (new Set(frames).size !== frames.length) return { ok: false, reason: "Anchor frame indices must not repeat" };
+  if (frameCount != null && frames.some((frame) => frame >= frameCount)) {
+    return { ok: false, reason: "Anchor frame index is outside the source dataset range" };
+  }
+  return { ok: true, frames };
+}
+
 function parsePairMinDistances(value: string): Record<string, number> | null {
   const pairs: Record<string, number> = {};
   if (!value.trim()) return pairs;
@@ -38,52 +66,80 @@ function normalizeElement(value: string): string | null {
   return Object.prototype.hasOwnProperty.call(ATOMIC_MASS, symbol) ? symbol : null;
 }
 
-export function validateConfig(config: GenerationConfig): SubmissionCheck {
-  if (!config.source.datasetId) return { ok: false, reason: "Select a source dataset" };
-  if (!config.source.descriptorRunId) return { ok: false, reason: "Select a descriptor run" };
+export function validateConfigFields(config: GenerationConfig): ConfigIssue[] {
+  const issues: ConfigIssue[] = [];
+  const add = (field: string, reason: string) => issues.push({ field, reason });
+  if (!config.source.datasetId) add("source.datasetId", "Select a source dataset");
+  if (!config.source.descriptorRunId) add("source.descriptorRunId", "Select a descriptor run");
   const space = config.searchSpace;
   if (
     !space.atomicDisplacement && !space.isotropicStrain && !space.anisotropicStrain && !space.cellShear &&
     !space.vacancy && !space.interstitialAtom && !space.substitution && !space.antisiteSwap
   ) {
-    return { ok: false, reason: "Enable at least one structure operator" };
+    add("searchSpace.operators", "Enable at least one structure operator");
   }
   if (config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds && !space.atomicDisplacement) {
-    return { ok: false, reason: "Accepted-seed feedback requires atomic displacement" };
+    add("optimizer.reuseAcceptedSeeds", "Accepted-seed feedback requires atomic displacement");
+  }
+  const anchorFrames = config.searchTarget.anchorFrames;
+  if (anchorFrames.length > 16 || anchorFrames.some((frame) => !Number.isSafeInteger(frame) || frame < 0)) {
+    add("searchTarget.anchorFrames", "Anchor frames must be 0–16 non-negative whole dataset indices");
+  } else if (new Set(anchorFrames).size !== anchorFrames.length) {
+    add("searchTarget.anchorFrames", "Anchor frame indices must not repeat");
+  }
+  if (anchorFrames.length > 0 && config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds) {
+    add("optimizer.reuseAcceptedSeeds", "Accepted-seed feedback is unavailable with a target region");
   }
   if (space.interstitialAtom && normalizeElement(space.interstitialElement) == null) {
-    return { ok: false, reason: "Enter a valid interstitial element symbol" };
+    add("searchSpace.interstitialElement", "Enter a valid interstitial element symbol");
   }
   if (space.hardCutoff != null && (!Number.isFinite(space.hardCutoff) || space.hardCutoff <= 0)) {
-    return { ok: false, reason: "Hard displacement cutoff must be positive" };
+    add("searchSpace.hardCutoff", "Hard displacement cutoff must be positive");
   }
   if (space.substitution && normalizeElement(space.substitutionElement) == null) {
-    return { ok: false, reason: "Enter a valid substitution element symbol" };
+    add("searchSpace.substitutionElement", "Enter a valid substitution element symbol");
   }
   if ((space.vacancy || space.interstitialAtom) && (config.constraints.compositionLocked || config.constraints.atomCountLocked)) {
-    return { ok: false, reason: "Vacancy and interstitial operators require unlocked composition and atom count" };
+    add("constraints.compositionLocked", "Vacancy and interstitial operators require unlocked composition and atom count");
   }
   if (space.substitution && config.constraints.compositionLocked) {
-    return { ok: false, reason: "Substitution requires unlocked composition" };
+    add("constraints.compositionLocked", "Substitution requires unlocked composition");
   }
   if (config.constraints.minDistanceMode === "absolute" && config.constraints.minDistanceAbsolute <= 0) {
-    return { ok: false, reason: "Minimum distance must be positive" };
+    add("constraints.minDistanceAbsolute", "Minimum distance must be positive");
   }
   if (parsePairMinDistances(config.constraints.minDistancePairs) == null) {
-    return { ok: false, reason: "Use element pairs like C-C=1.5, C-H=1.0 with positive distances up to 20 Å" };
+    add("constraints.minDistancePairs", "Use element pairs like C-C=1.5, C-H=1.0 with positive distances up to 20 Å");
   }
   const minVolume = config.constraints.minVolumePerAtom;
   const maxVolume = config.constraints.maxVolumePerAtom;
   if ([minVolume, maxVolume].some((v) => v != null && (!Number.isFinite(v) || v <= 0))) {
-    return { ok: false, reason: "Volume per atom bounds must be positive" };
+    add("constraints.volume", "Volume per atom bounds must be positive");
   }
   if (minVolume != null && maxVolume != null && minVolume > maxVolume) {
-    return { ok: false, reason: "Minimum volume per atom must not exceed maximum" };
+    add("constraints.volume", "Minimum volume per atom must not exceed maximum");
   }
-  if (config.budget.maxEvaluations < 1 || config.budget.maxAccepted < 1) {
-    return { ok: false, reason: "Budgets must be positive" };
+  if (!Number.isInteger(config.budget.maxEvaluations) || config.budget.maxEvaluations < 1 || config.budget.maxEvaluations > 10_000_000) {
+    add("budget.maxEvaluations", "Max descriptor evaluations must be a whole number in range 1–10,000,000");
   }
-  return { ok: true };
+  if (!Number.isInteger(config.budget.maxAccepted) || config.budget.maxAccepted < 1 || config.budget.maxAccepted > 1_000_000) {
+    add("budget.maxAccepted", "Max accepted structures must be a whole number in range 1–1,000,000");
+  }
+  if (!Number.isInteger(config.budget.maxGenerations) || config.budget.maxGenerations < 1 || config.budget.maxGenerations > 100_000) {
+    add("budget.maxGenerations", "Max generations must be a whole number in range 1–100,000");
+  }
+  if (config.budget.noImprovementRounds != null && (!Number.isInteger(config.budget.noImprovementRounds) || config.budget.noImprovementRounds < 1 || config.budget.noImprovementRounds > 10_000)) {
+    add("budget.noImprovementRounds", "No-improvement rounds must be a whole number in range 1–10,000");
+  }
+  if (config.budget.targetNovelty != null && (!Number.isFinite(config.budget.targetNovelty) || config.budget.targetNovelty <= 0)) {
+    add("budget.targetNovelty", "Target novelty must be positive or empty");
+  }
+  return issues;
+}
+
+export function validateConfig(config: GenerationConfig): SubmissionCheck {
+  const issue = validateConfigFields(config)[0];
+  return issue ? { ok: false, reason: issue.reason } : { ok: true };
 }
 
 export function buildSubmitPayload(config: GenerationConfig): Record<string, unknown> {
@@ -149,6 +205,22 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
     optimizerParams.n_seeds = optimizer.nSeeds;
     optimizerParams.reuse_accepted_seeds = optimizer.reuseAcceptedSeeds;
   }
+  if (optimizer.type === "genetic") {
+    optimizerParams.children_per_seed = optimizer.childrenPerSeed;
+    optimizerParams.batch_accept = optimizer.batchAccept;
+    optimizerParams.n_seeds = optimizer.nSeeds;
+    optimizerParams.parent_fraction = optimizer.parentFraction;
+    optimizerParams.immigrant_fraction = optimizer.immigrantFraction;
+  }
+  if (optimizer.type === "pso") {
+    optimizerParams.children_per_seed = optimizer.childrenPerSeed;
+    optimizerParams.batch_accept = optimizer.batchAccept;
+    optimizerParams.n_seeds = optimizer.nSeeds;
+    optimizerParams.pso_weight_pbest = optimizer.psoWeightPbest;
+    optimizerParams.pso_weight_gbest = optimizer.psoWeightGbest;
+    optimizerParams.pso_weight_mut = optimizer.psoWeightMut;
+    optimizerParams.immigrant_fraction = optimizer.immigrantFraction;
+  }
 
   const budget: Record<string, unknown> = {
     max_evaluations: config.budget.maxEvaluations,
@@ -158,7 +230,7 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
   if (config.budget.targetNovelty != null) budget.target_novelty = config.budget.targetNovelty;
   if (config.budget.noImprovementRounds != null) budget.no_improvement_rounds = config.budget.noImprovementRounds;
 
-  return {
+  const payload: Record<string, unknown> = {
     dataset_id: config.source.datasetId,
     descriptor_run_id: config.source.descriptorRunId,
     seed_view_id: config.source.seedViewId,
@@ -170,4 +242,9 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
     budget,
     seed: config.seedMode === "fixed" ? config.seed : "random",
   };
+  if (config.searchTarget.anchorFrames.length > 0) {
+    payload.anchor_frames = config.searchTarget.anchorFrames;
+    payload.region_radius = config.searchTarget.regionRadius;
+  }
+  return payload;
 }

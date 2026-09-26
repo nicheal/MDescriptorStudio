@@ -181,6 +181,9 @@ MIGRATIONS: dict[int, str] = {
     13: """
     UPDATE descriptor_runs SET device = 'imported' WHERE device = 'external';
     """,
+    14: """
+    ALTER TABLE generation_runs ADD COLUMN error_message TEXT;
+    """,
 }
 
 

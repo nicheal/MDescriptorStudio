@@ -183,6 +183,9 @@ class GenerationEngine:
         n_seeds: int = 64,
         duplicate_threshold: float | None = None,
         workers: int = 1,
+        seed_descriptors: tuple = (),
+        anchor_descriptors: tuple = (),
+        region_radius: float | None = None,
     ) -> None:
         if not seed_pool:
             raise ValueError("seed pool must not be empty")
@@ -198,6 +201,12 @@ class GenerationEngine:
         self.n_seeds = int(n_seeds)
         self.duplicate_threshold = duplicate_threshold
         self.workers = max(1, int(workers))
+        # Scaled structure descriptors for the seed pool / user anchors —
+        # forwarded into the context for descriptor-aware optimizers
+        # (the random optimizer's search-target mode); the engine itself never uses them.
+        self.seed_descriptors = tuple(seed_descriptors)
+        self.anchor_descriptors = tuple(anchor_descriptors)
+        self.region_radius = None if region_radius is None else float(region_radius)
 
     def _check_geometry(self, candidate: StructureCandidate) -> ConstraintResult:
         return self.constraints.validate(candidate)
@@ -252,6 +261,9 @@ class GenerationEngine:
                 seed_pool=tuple(self.seed_pool),
                 n_seeds=int(self.n_seeds),
                 budget=self.budget,
+                seed_descriptors=self.seed_descriptors,
+                anchor_descriptors=self.anchor_descriptors,
+                region_radius=self.region_radius,
             )
         )
 
@@ -361,6 +373,17 @@ class GenerationEngine:
                 )
                 selected_set = set(selected)
                 selection_rank = {index: rank for rank, index in enumerate(selected)}
+                # Unique novel environments must be counted against the
+                # *pre-round* archive (A12: "frozen archive + already counted
+                # this round"). Every accepted candidate's rows are zero
+                # distance to its own just-added block, so counting after the
+                # archive update would make this metric structurally zero.
+                if scores.novel_environment_count is not None and self.local_archive is not None and evaluation.atomic_values is not None:
+                    threshold = getattr(self.objective, "novel_environment_threshold", None)
+                    if threshold is not None:
+                        unique_novel_environments = self._count_unique_novel_environments(
+                            selected, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
+                        )
                 # Every evaluated candidate (accepted or not) feeds the
                 # descriptor-space map the results view animates.
                 for index in range(len(valid)):
@@ -445,12 +468,6 @@ class GenerationEngine:
                     if finite_novelty.size:
                         best_round_novelty = float(finite_novelty.max())
                         mean_round_novelty = float(finite_novelty.mean())
-                if scores.novel_environment_count is not None and self.local_archive is not None and evaluation.atomic_values is not None:
-                    threshold = getattr(self.objective, "novel_environment_threshold", None)
-                    if threshold is not None:
-                        unique_novel_environments = self._count_unique_novel_environments(
-                            selected, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
-                        )
 
             # Report every proposed candidate's outcome back to the optimizer
             # (G3.5 lifecycle): proposal order, geometry rejections included.

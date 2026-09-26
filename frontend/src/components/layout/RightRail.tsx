@@ -11,7 +11,7 @@
 // Fits the viewport by design — no scrollbar at default window sizes; below
 // 1280px window width it hides so pages keep their working area.
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
-import { App as AntApp, Button, Progress, Space, Tag, Tooltip, Typography } from "antd";
+import { Alert, App as AntApp, Button, Popconfirm, Progress, Space, Spin, Tag, Tooltip, Typography } from "antd";
 import {
   ArrowRight16Regular,
   ArrowSync16Regular,
@@ -324,6 +324,8 @@ function GenerationHistoryRail() {
   const { message } = AntApp.useApp();
   const { t, tr, locale } = useT();
   const rows = useGenerationStore((s) => s.history);
+  const historyStatus = useGenerationStore((s) => s.historyStatus);
+  const historyError = useGenerationStore((s) => s.historyError);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const deleteRun = async (row: GenerationRow) => {
@@ -352,9 +354,21 @@ function GenerationHistoryRail() {
       title={t("Expansion history")}
       help={t("Generation runs for the active dataset. Open a run or delete its history.")}
     >
+      {historyStatus === "failed" && <Alert
+        type="error"
+        showIcon
+        style={{ marginBottom: 8 }}
+        message={t("Could not load expansion history")}
+        description={historyError ?? t("Could not refresh expansion history")}
+        action={<Button size="small" onClick={() => window.dispatchEvent(new Event("generation-history-changed"))}>{t("Retry")}</Button>}
+      />}
       {rows.length === 0 ? (
         <Typography.Text type="secondary" style={{ fontSize: 12, padding: "10px 0 14px" }}>
-          {t("No expansion runs yet — submit one from configuration.")}
+          {historyStatus === "failed"
+            ? t("History could not be verified; retry to check for runs.")
+            : historyStatus === "ready"
+              ? t("No expansion runs yet — submit one from configuration.")
+              : <span><Spin size="small" /> {t("Loading expansion history")}</span>}
         </Typography.Text>
       ) : (
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -394,16 +408,24 @@ function GenerationHistoryRail() {
                       title={t("Open")}
                       onClick={() => window.dispatchEvent(new CustomEvent("generation-open", { detail: row.id }))}
                     />
-                    <Button
-                      size="small"
-                      type="text"
-                      icon={<Delete16Regular />}
-                      aria-label={t("Delete {name} expansion", { name: t(GENERATION_OBJECTIVE_LABELS[row.objective as keyof typeof GENERATION_OBJECTIVE_LABELS] ?? row.objective) })}
-                      title={t("Delete")}
-                      disabled={active || deletingId !== null}
-                      loading={deletingId === row.id}
-                      onClick={() => void deleteRun(row)}
-                    />
+                    <Popconfirm
+                      title={t("Delete expansion and generated files?")}
+                      description={t("This removes the run history, linked job record, and generated files. It cannot be undone.")}
+                      okText={t("Delete")}
+                      cancelText={t("Cancel")}
+                      okButtonProps={{ danger: true, loading: deletingId === row.id }}
+                      onConfirm={() => void deleteRun(row)}
+                    >
+                      <Button
+                        size="small"
+                        type="text"
+                        icon={<Delete16Regular />}
+                        aria-label={t("Delete {name} expansion", { name: t(GENERATION_OBJECTIVE_LABELS[row.objective as keyof typeof GENERATION_OBJECTIVE_LABELS] ?? row.objective) })}
+                        title={t("Delete")}
+                        disabled={active || deletingId !== null}
+                        loading={deletingId === row.id}
+                      />
+                    </Popconfirm>
                   </Space>
                 </div>
               </div>
