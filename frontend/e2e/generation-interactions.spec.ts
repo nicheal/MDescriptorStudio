@@ -4,6 +4,7 @@ type PreviewMock = {
   failNext: (method: string, message: string, count?: number) => void;
   delayNext: (method: string, milliseconds: number) => void;
   setGenerationSubmitStatus: (status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED") => void;
+  setGenerationRunStatus: (status: "RUNNING" | "COMPLETED", accepted?: number) => void;
   omitGenerationDiscovery: (omit: boolean) => void;
   count: (method: string) => number;
 };
@@ -101,6 +102,26 @@ test("field errors persist across edits, anchor text is preserved, and keyboard 
   await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("searchSpace-operators");
 });
 
+test("distance-pair validation opens its collapsed section and focuses the input", async ({ page }) => {
+  await enterGeneration(page);
+  const collapse = page.getByRole("button", { name: /Advanced element-pair distance overrides/ });
+  await expect(collapse).toHaveAttribute("aria-expanded", "false");
+  await collapse.click();
+  const pairs = page.getByLabel("Element-pair distance overrides");
+  await pairs.fill("C-C=bad");
+  await collapse.click();
+  await expect(collapse).toHaveAttribute("aria-expanded", "false");
+  await page.getByRole("button", { name: /Run Expansion/i }).click();
+  const error = page.locator("#generation-error-summary").getByRole("button", {
+    name: "Use element pairs like C-C=1.5, C-H=1.0 with positive distances up to 20 Å",
+    exact: true,
+  });
+  await expect(error).toBeVisible();
+  await error.click();
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+  await expect.poll(() => page.evaluate(() => document.activeElement?.id)).toBe("constraints-minDistancePairs");
+});
+
 test("a poll error can be retried and cancellation still exposes accepted-result actions", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/preview.html");
@@ -121,7 +142,7 @@ test("a poll error can be retried and cancellation still exposes accepted-result
   const backgroundError = page.locator(".ant-alert").filter({ hasText: "mock background status refresh failed" });
   await expect(backgroundError).toBeVisible({ timeout: 5000 });
   await page.getByRole("button", { name: "Return to current run", exact: true }).click();
-  await expect(page.locator(".ant-alert").filter({ hasText: "mock background status refresh failed" })).toBeVisible();
+  await expect(backgroundError).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("button", { name: "Save as new dataset", exact: true })).toBeVisible({ timeout: 10000 });
@@ -176,6 +197,31 @@ test("opening a run cannot steal navigation after returning to configuration", a
   await page.waitForTimeout(1100);
   await expect(page.getByRole("button", { name: /Run Expansion/i })).toBeVisible();
   await expect(page.getByRole("button", { name: "Return to current run", exact: true })).toBeVisible();
+});
+
+test("active run monitoring resumes after leaving and remounting Generation", async ({ page }) => {
+  await enterGeneration(page);
+  await setGenerationStatus(page, "RUNNING");
+  await page.getByRole("button", { name: /Run Expansion/i }).click();
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible({ timeout: 10000 });
+  await page.getByRole("button", { name: "Back to configuration", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Return to current run", exact: true })).toBeVisible();
+
+  const beforeUnmount = await page.evaluate(() => (window as unknown as { __mdsMock: PreviewMock }).__mdsMock.count("generation.get"));
+  await page.getByRole("button", { name: "Descriptors", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Generation", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Generation", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Return to current run", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Run Expansion/i })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __mdsMock: PreviewMock }).__mdsMock.count("generation.get"))).toBeGreaterThan(beforeUnmount);
+
+  await page.getByRole("button", { name: "Return to current run", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
+  await page.evaluate(() => (window as unknown as { __mdsMock: PreviewMock }).__mdsMock.setGenerationRunStatus("COMPLETED", 29));
+  await expect(page.getByText("Run summary", { exact: true })).toBeVisible({ timeout: 5000 });
+  await expect(page.locator(".ant-statistic").filter({ hasText: "Accepted structures" })).toContainText("29");
+  await expect(page.locator(".ant-statistic").filter({ hasText: "Rounds" })).toContainText("7");
+  await expect(page.locator(".ant-statistic").filter({ hasText: "Status" })).toContainText("COMPLETED");
 });
 
 test("dataset changes isolate history and clear dataset-bound seed scope", async ({ page }) => {

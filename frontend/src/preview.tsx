@@ -2194,6 +2194,7 @@ function showPreviewError(text: string) {
     failNext: (method: string, message: string, count?: number) => void;
     delayNext: (method: string, milliseconds: number) => void;
     setGenerationSubmitStatus: (status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED") => void;
+    setGenerationRunStatus: (status: "RUNNING" | "COMPLETED", accepted?: number) => void;
     omitGenerationDiscovery: (omit: boolean) => void;
     count: (method: string) => number;
   };
@@ -2204,6 +2205,34 @@ function showPreviewError(text: string) {
   failNext: (method, message, count = 1) => previewFailures.set(method, { remaining: Math.max(1, count), message }),
   delayNext: (method, milliseconds) => previewDelays.set(method, Math.max(0, milliseconds)),
   setGenerationSubmitStatus: (status) => { mockGenerationSubmitStatus = status; },
+  setGenerationRunStatus: (status, accepted = 29) => {
+    const row = MOCK_GENERATION_ROWS.get("gen-mock-run1");
+    if (!row) return;
+    row.status = status;
+    row.finished_at = status === "COMPLETED" ? new Date().toISOString() : null;
+    row.accepted_count = accepted;
+    row.evaluations = 224;
+    const preview = row.preview as Record<string, unknown>;
+    preview.status = status;
+    preview.accepted = accepted;
+    preview.evaluations = 224;
+    const rounds = Array.isArray(preview.rounds) ? preview.rounds as Record<string, unknown>[] : [];
+    const last = rounds[rounds.length - 1] ?? {};
+    preview.rounds = [...rounds, {
+      ...last,
+      generation: rounds.length + 1,
+      evaluations: 224,
+      proposed: 32,
+      accepted: 5,
+      rejected_geometry: 28,
+      rejected_duplicate: 3,
+      best_novelty: 2.7,
+      mean_novelty: 1.1,
+      coverage_radius: 0.6,
+      novel_environments: 84,
+      unique_novel_environments: 63,
+    }];
+  },
   omitGenerationDiscovery: (omit) => { omitMockGenerationDiscovery = omit; },
   count: (method) => previewMethodCounts.get(method) ?? 0,
 };

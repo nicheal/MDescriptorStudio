@@ -190,6 +190,7 @@ export default function GenerationConfigPanel({
       : field.replaceAll(".", "-");
   const focusIssue = (issue: { field: string; reason: string }) => {
     if (issue.field === "optimizer.reuseAcceptedSeeds") setAdvancedOpen(true);
+    if (issue.field === "constraints.minDistancePairs") setGeometryAdvancedOpen(true);
     window.setTimeout(() => {
       const target = document.getElementById(fieldTargetId(issue.field));
       const focusable = target?.matches("input,button,[tabindex]")

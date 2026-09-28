@@ -57,7 +57,6 @@ export default function Generation() {
   const catalogRequestRef = useRef(0);
   const openRequestRef = useRef(0);
   const phaseIntentRef = useRef(0);
-  const restoreAttemptedRef = useRef(false);
   const historyRequestRef = useRef(0);
   const historyDatasetRef = useRef<string | null>(null);
 
@@ -312,7 +311,7 @@ export default function Generation() {
   }, [activeDatasetId, catalogState, runs, viewsState, startPolling, message, t]);
 
   const openRun = useCallback(
-    (id: string) => {
+    (id: string, options: { preserveConfiguration?: boolean } = {}) => {
       stopPolling();
       const request = ++openRequestRef.current;
       const phaseIntent = ++phaseIntentRef.current;
@@ -321,9 +320,12 @@ export default function Generation() {
       setRunLoadError(null);
       setConnectionError(null);
       setLastUpdatedAt(null);
-      useGenerationStore.getState().setActiveGeneration(id);
-      useGenerationStore.getState().setLiveRow(null);
-      useGenerationStore.getState().setPhase("running");
+      const current = useGenerationStore.getState();
+      current.setActiveGeneration(id);
+      if (!options.preserveConfiguration) {
+        current.setLiveRow(null);
+        current.setPhase("running");
+      }
       ipc
         .request<GenerationRow>("generation.get", { id })
         .then((row) => {
@@ -332,7 +334,7 @@ export default function Generation() {
           state.setLiveRow(row);
           setRunLoading(false);
           setLastUpdatedAt(Date.now());
-          if (phaseIntentRef.current === phaseIntent && state.phase !== "config") {
+          if (!options.preserveConfiguration && phaseIntentRef.current === phaseIntent && state.phase !== "config") {
             state.setPhase(row.status === "RUNNING" || row.status === "QUEUED" ? "running" : "results");
           }
           if (row.status === "RUNNING" || row.status === "QUEUED") startPolling(id);
@@ -368,12 +370,12 @@ export default function Generation() {
   }, [refreshHistory]);
 
   useEffect(() => {
-    if (restoreAttemptedRef.current) return;
-    restoreAttemptedRef.current = true;
     const state = useGenerationStore.getState();
-    if (state.activeGenerationId && state.phase !== "config") openRun(state.activeGenerationId);
-    // Restore once per page mount. Locale and workspace changes must not steal
-    // navigation or restart polling for the active run.
+    if (state.activeGenerationId) {
+      openRun(state.activeGenerationId, { preserveConfiguration: state.phase === "config" });
+    }
+    // Restore activity on each page mount. When configuration was intentionally
+    // left open, refresh and monitor in the background without taking navigation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -443,10 +445,7 @@ export default function Generation() {
               description={row
                 ? `${t("Run {id} · source dataset {dataset}", { id: row.id, dataset: sourceDatasetName ?? row.dataset_id })}${runProblem ? ` · ${runProblem}` : ""}`
                 : `${runProblem ?? t("Run {id} is being loaded or monitored", { id: store.activeGenerationId })}`}
-              action={<Button size="small" onClick={() => {
-                if (row) store.setPhase(row.status === "QUEUED" || row.status === "RUNNING" ? "running" : "results");
-                else openRun(store.activeGenerationId!);
-              }}>{t("Return to current run")}</Button>}
+              action={<Button size="small" onClick={() => openRun(store.activeGenerationId!)}>{t("Return to current run")}</Button>}
             />
           )}
           <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
