@@ -264,11 +264,13 @@ def run_once(
     )
     # Runtime targeting assertion (P0-03): the anchors that reached the
     # engine are exactly the search anchors — a targeting label cannot run
-    # untargeted, and a baseline cannot run targeted.
+    # untargeted, and a baseline cannot run targeted. The state-level check
+    # is random-registry-only: GA/PSO carry targeting inside their draw
+    # logic and do not report a targeting block in state_dict.
     assert bool(engine.anchor_descriptors) == targeting, "search anchors disagree with the run's targeting flag"
     started = time.perf_counter()
     result = engine.run()
-    if targeting:
+    if targeting and registry_name == "random":
         assert optimizer_obj.state_dict().get("targeting"), "targeting run shows no targeting state"
     elapsed = time.perf_counter() - started
 
