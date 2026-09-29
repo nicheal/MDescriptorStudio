@@ -18,6 +18,17 @@ export type AnchorFrameParse =
   | { ok: true; frames: number[] }
   | { ok: false; reason: string };
 
+/** Element symbols for the local-anchor species filter (audit R3.4); null on
+ *  invalid input, [] when unset (= all atoms of the anchor frames). */
+export function parseAnchorSpecies(value: string): string[] | null {
+  const input = value.trim();
+  if (!input) return [];
+  const parts = input.split(/[\s,]+/).filter(Boolean);
+  if (!parts.length) return [];
+  if (parts.some((part) => !/^[A-Z][a-z]?$/.test(part) || !(part in ATOMIC_MASS))) return null;
+  return parts;
+}
+
 /** Parse without coercion so partial input such as `12abc` is never submitted as frame 12. */
 export function parseAnchorFrames(value: string, frameCount?: number): AnchorFrameParse {
   const input = value.trim();
@@ -89,6 +100,17 @@ export function validateConfigFields(config: GenerationConfig): ConfigIssue[] {
   }
   if (anchorFrames.length > 0 && config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds) {
     add("optimizer.reuseAcceptedSeeds", "Accepted-seed feedback is unavailable with a target region");
+  }
+  if (config.searchTarget.targetMode === "local_environment") {
+    if (anchorFrames.length === 0) {
+      add("searchTarget.anchorFrames", "Local-environment targeting requires anchor frames");
+    } else if (config.optimizer.type !== "random") {
+      add("searchTarget.targetMode", "Local-environment targeting is currently supported with the random optimizer");
+    }
+    const species = parseAnchorSpecies(config.searchTarget.anchorSpecies);
+    if (species == null) {
+      add("searchTarget.anchorSpecies", "Anchor species must be element symbols separated by commas");
+    }
   }
   if (space.interstitialAtom && normalizeElement(space.interstitialElement) == null) {
     add("searchSpace.interstitialElement", "Enter a valid interstitial element symbol");
@@ -245,6 +267,21 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
   if (config.searchTarget.anchorFrames.length > 0) {
     payload.anchor_frames = config.searchTarget.anchorFrames;
     payload.region_radius = config.searchTarget.regionRadius;
+    // Local-environment anchors (audit R3.4): the atomic-space kernel on top
+    // of the structure anchors. Omitted for the default structure mode so
+    // older payloads stay byte-identical.
+    if (config.searchTarget.targetMode === "local_environment") {
+      payload.target_mode = "local_environment";
+      const species = parseAnchorSpecies(config.searchTarget.anchorSpecies);
+      if (species && species.length) {
+        payload.anchor_species = species;
+      }
+    }
+  }
+  // The field only exists post-audit; omitting the default keeps older
+  // backend payloads byte-identical.
+  if (config.selectionStrategy && config.selectionStrategy !== "structure_fps_v1") {
+    payload.selection_strategy = config.selectionStrategy;
   }
   return payload;
 }

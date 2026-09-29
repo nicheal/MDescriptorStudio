@@ -444,6 +444,112 @@ class TestUniqueEnvironmentMetric:
         raw = 2 + 2
         assert unique < raw
 
+    def test_within_candidate_duplicates_count_once(self):
+        # Audit P0-02 counterexample 1: two identical rows of the SAME
+        # candidate, both far from the frozen archive — the strict union
+        # counts one novel environment, not two.
+        engine = _engine(42)
+        reference = np.array([[0.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+        atomic = np.array([[3.0], [3.0]])
+        offsets = np.array([0, 2])
+        assert engine._count_unique_novel_environments([0], atomic, offsets, 1.0) == 1
+
+    def test_non_novel_rows_never_block_a_later_novel_row(self):
+        # Audit P0-02 counterexample 2: a row that is NOT novel against the
+        # frozen archive (0.9 ≤ 1) must not join the round's counted set.
+        # The old implementation appended every row, so this archive-near
+        # row repelled the next structure's genuinely novel row at 1.8
+        # (distance 0.9) and reported 0 instead of 1.
+        engine = _engine(42)
+        reference = np.array([[0.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+        atomic = np.array([[0.9], [1.8]])
+        offsets = np.array([0, 1, 2])
+        assert engine._count_unique_novel_environments([0, 1], atomic, offsets, 1.0) == 1
+
+    def test_threshold_contract_is_strictly_greater(self):
+        # "Novel" means strictly farther than the threshold, both against
+        # the frozen archive and against already-counted rows: a row at
+        # exactly the threshold distance counts neither way.
+        engine = _engine(42)
+        reference = np.array([[0.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+        # 1.0 sits exactly at the threshold from the archive reference 0.0
+        # → not novel. 2.0 is novel; 3.0 is exactly at the threshold from
+        # the counted 2.0 → not a second environment.
+        atomic = np.array([[1.0], [2.0], [3.0]])
+        offsets = np.array([0, 3])
+        assert engine._count_unique_novel_environments([0], atomic, offsets, 1.0) == 1
+
+    def test_empty_blocks_are_skipped(self):
+        engine = _engine(42)
+        reference = np.array([[0.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+        atomic = np.array([[3.0]])
+        offsets = np.array([0, 0, 1, 1])
+        assert engine._count_unique_novel_environments([0, 1, 2], atomic, offsets, 1.0) == 1
+
+    def test_discovery_stop_reads_the_unique_metric(self):
+        # P1-01: the saturation stop must consume the deduplicated metric.
+        # Raw sums let the same region, found by several selected candidates
+        # in one round, hold the rate above the floor and postpone — here
+        # indefinitely — a stop the unique count already fired.
+        pool = _seed_pool(2)
+        structure_archive, local_archive = _archives(pool)
+
+        class _SharedRegionEvaluator:
+            """Every candidate of a round reports one identical atom row far
+            from the archive; each round moves to a fresh region so the rows
+            stay archive-novel and the within-round duplicates persist."""
+
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def evaluate(self, candidates, *, return_atomic=False, control=None):
+                n = len(candidates)
+                value = 100.0 + 10.0 * self.calls
+                self.calls += 1
+                return DescriptorEvaluation(
+                    structure_values=np.full((n, 3), value),
+                    atomic_values=np.full((n, 3), value),
+                    row_offsets=np.arange(n + 1, dtype=np.int64),
+                )
+
+        operators = [GENERATION_REGISTRY.build_operator(OperatorSpec("atomic_displacement", {"max_sigma": 1e-9}))]
+        engine = GenerationEngine(
+            seed_pool=pool,
+            evaluator=_SharedRegionEvaluator(),
+            structure_archive=structure_archive,
+            local_archive=local_archive,
+            objective=CompositeObjective(structure_weight=0.0, local_weight=1.0, novelty_threshold=0.25),
+            optimizer=RandomSearchOptimizer(operators, children_per_seed=2, batch_accept=2),
+            constraints=build_constraints({"min_distance_mode": "none"}),
+            budget=Budget(
+                max_evaluations=10**6,
+                max_accepted=10**6,
+                max_generations=20,
+                discovery_window=1,
+                min_novel_per_100_evals=60.0,
+            ),
+            rng=np.random.default_rng(5),
+            n_seeds=1,
+        )
+        result = engine.run()
+        # Round 1: both evaluated candidates (n_seeds=1 × 2 children = 2
+        # evaluations) report the same novel region — raw = 2, unique = 1.
+        # The raw rate (100/100) sits above the 60/100 floor, the unique
+        # rate (50/100) below it, so only the unique-based rate stops the
+        # run in round 1; the raw-based stop never fires.
+        first = result.rounds[0]
+        assert first.novel_environments == 2
+        assert first.unique_novel_environments == 1
+        assert result.stopped_by == "discovery_saturated"
+
     def test_unique_count_runs_against_the_pre_round_archive(self):
         # Regression (G4-2): the count used to run *after* the accepted rows
         # entered the local archive, so every accepted candidate sat at

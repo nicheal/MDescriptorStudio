@@ -69,6 +69,9 @@ class PSOOptimizer:
         pso_weight_pbest: float = 1.0,
         pso_weight_gbest: float = 1.5,
         pso_weight_mut: float = 0.5,
+        # Internal experiment knob (audit P2-01): deliberately NOT a public
+        # request param — parse_request rejects it, so only in-repo harnesses
+        # can set it. Public exposure requires a benchmark-backed decision.
         pso_weight_anchor: float = 1.5,
         immigrant_fraction: float = 0.15,
     ) -> None:

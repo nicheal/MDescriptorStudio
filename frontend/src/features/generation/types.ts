@@ -92,10 +92,21 @@ export interface SourceConfig {
 
 /** Search target: anchor dataset frames define descriptor-space region centers
  * (robust-scaled units for the radius). Empty anchorFrames = no target. */
+export type GenerationTargetMode = "structure" | "local_environment";
+
 export interface SearchTargetConfig {
   anchorFrames: number[];
   regionRadius: number;
+  /** Anchor semantics (audit R3.4): structure = mean-pooled anchors only;
+   *  local_environment adds the anchors' atomic descriptor rows (atomic
+   *  space) as a second kernel. */
+  targetMode: GenerationTargetMode;
+  /** Comma-separated element symbols filtering the local anchor atoms
+   *  ("" = all atoms of the anchor frames). */
+  anchorSpecies: string;
 }
+
+export type GenerationSelectionStrategy = "structure_fps_v1" | "local_incremental_maximin_v1";
 
 export interface GenerationConfig {
   source: SourceConfig;
@@ -107,6 +118,7 @@ export interface GenerationConfig {
   budget: BudgetConfig;
   seedMode: SeedMode;
   seed: number;
+  selectionStrategy: GenerationSelectionStrategy;
 }
 
 export interface GenerationRound {
@@ -178,6 +190,8 @@ export interface GenerationPcaDiscovery {
   original_environments: number;
   generated_environments: number;
   novel_environments: number;
+  /** Strictly deduplicated counterpart of novel_environments (older runs omit it). */
+  unique_novel_environments?: number;
 }
 
 export interface GenerationPca {

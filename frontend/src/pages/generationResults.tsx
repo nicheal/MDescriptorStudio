@@ -355,12 +355,15 @@ function LocalEnvironmentCard({ pca, error }: { pca: GenerationPca | null; error
       <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
         {metric(t("Original environments"), discovery!.original_environments)}
         {metric(t("Generated environments"), stats.generated)}
-        {metric(t("Novel environments"), stats.novel)}
+        {metric(t("Novel environments (raw)"), stats.novel)}
+        {stats.uniqueNovel != null && metric(t("Unique novel environments"), stats.uniqueNovel)}
         {metric(t("Novel fraction"), `${stats.fraction.toFixed(1)} %`)}
       </div>
         </>}
       <div style={{ marginTop: 8, fontSize: 12, color: "#9AA0A6" }}>
         {t("Novel environments are local descriptor rows farther than the novelty threshold from every archived environment. This is descriptor-space novelty and geometry screening; it does not establish physical stability or label quality.")}
+        {" "}
+        {t("The raw number sums per-candidate counts against the frozen archive; the unique number additionally removes environments already counted earlier in the same round — the convention the benchmark and the discovery-rate stop use.")}
       </div>
       </Card>
   );

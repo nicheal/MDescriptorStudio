@@ -77,7 +77,7 @@ export const defaultGenerationConfig = (): GenerationConfig => ({
     atomCountLocked: true,
   },
   optimizer: { ...defaultOptimizerConfig("random") },
-  searchTarget: { anchorFrames: [], regionRadius: 15.0 },
+  searchTarget: { anchorFrames: [], regionRadius: 15.0, targetMode: "structure", anchorSpecies: "" },
   budget: {
     maxEvaluations: 10_000,
     maxAccepted: 500,
@@ -87,6 +87,7 @@ export const defaultGenerationConfig = (): GenerationConfig => ({
   },
   seedMode: "fixed",
   seed: 42,
+  selectionStrategy: "structure_fps_v1",
 });
 
 interface GenerationState {

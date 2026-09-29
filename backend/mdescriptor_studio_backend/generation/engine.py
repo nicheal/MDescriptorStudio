@@ -68,6 +68,71 @@ def _finite_or_none(values: np.ndarray | None, index: int) -> float | None:
     return value if np.isfinite(value) else None
 
 
+def _candidate_novel_rows(
+    rows: np.ndarray,
+    archive_novel: np.ndarray,
+    counted: np.ndarray | None,
+    threshold: float,
+) -> np.ndarray:
+    """The rows one candidate contributes to the strict novel set right now.
+
+    Shared by the round metric and the local selection strategy so both use
+    one definition: archive-near rows are dropped, rows within ``threshold``
+    of an already-counted row are dropped, and within-candidate duplicates
+    are deduped greedily in fixed row order.
+    """
+    fresh = rows[archive_novel]
+    if fresh.shape[0] and counted is not None:
+        d2 = min_sqdist_to_set(fresh, counted, workers=1)
+        fresh = fresh[np.sqrt(np.clip(d2, 0.0, None)) > threshold]
+    kept: list[np.ndarray] = []
+    kept_matrix: np.ndarray | None = None
+    for row in fresh:
+        if kept_matrix is not None:
+            d2 = min_sqdist_to_set(row[None, :], kept_matrix, workers=1)[0]
+            if not np.sqrt(max(float(d2), 0.0)) > threshold:
+                continue
+        kept.append(row)
+        kept_matrix = row[None, :] if kept_matrix is None else np.vstack([kept_matrix, row[None, :]])
+    if not kept:
+        return np.empty((0, rows.shape[1]), dtype=np.float64)
+    return np.vstack(kept) if len(kept) > 1 else kept[0][None, :]
+
+
+def count_strict_unique_environments(
+    selected: list[int],
+    atomic_values: np.ndarray,
+    row_offsets: np.ndarray,
+    threshold: float,
+    local_archive,
+) -> int:
+    """Strict greedy union dedup of novel environments over ``selected``.
+
+    Rows are visited in fixed candidate order, then fixed atomic row order.
+    A row is counted only when its distance to the frozen archive AND to
+    every already-counted novel row is strictly greater than ``threshold``;
+    only counted rows join the novel set. Two accepted structures that found
+    the same new region therefore contribute it once, within-candidate
+    duplicates count once, and archive-near rows can never repel a later
+    novel row. Environments accepted in earlier rounds reach this comparison
+    only through the formal local_archive update. This one function is the
+    single definition behind the round metric, the discovery-rate stop and
+    the local selection strategy (P0-02/P1-01/P1-03).
+    """
+    counted: np.ndarray | None = None
+    unique = 0
+    for index in selected:
+        lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
+        rows = np.asarray(atomic_values[lo:hi], dtype=np.float64)
+        if rows.shape[0] == 0:
+            continue
+        block = _candidate_novel_rows(rows, local_archive.nearest_per_row(rows) > threshold, counted, threshold)
+        if block.shape[0]:
+            unique += int(block.shape[0])
+            counted = block if counted is None else np.vstack([counted, block])
+    return unique
+
+
 @dataclass
 class RoundRecord:
     generation: int
@@ -167,6 +232,98 @@ def select_diverse_batch(
     return [int(ranked[i]) for i in picked.indices]
 
 
+SELECTION_STRATEGIES = ("structure_fps_v1", "local_incremental_maximin_v1")
+
+
+def select_local_incremental_batch(
+    fitness: np.ndarray,
+    candidate_values: np.ndarray,
+    atomic_values: np.ndarray,
+    row_offsets: np.ndarray,
+    budget: int,
+    *,
+    local_archive,
+    threshold: float,
+    top_pool_factor: int = 4,
+    max_candidates: int = 128,
+) -> list[int]:
+    """``local_incremental_maximin_v1``: batch selection in environment space.
+
+    A fixed fitness-elite sub-pool (same shape as the structure-FPS baseline)
+    is accepted iteratively: each step picks the candidate with the largest
+    marginal count of strictly new environments versus the frozen archive
+    plus the environments already claimed by this batch (exactly the
+    ``count_strict_unique_environments`` semantics, so the strategy optimizes
+    the metric the benchmark reports). Ties break on the maximin structure
+    distance to the already-selected candidates — before the first selection
+    the ranked order decides — and zero-gain candidates still fill the batch
+    so accepted counts stay comparable with the baseline at equal budget.
+
+    Compute is bounded by design (audit R3.3): the elite pool caps the
+    per-step candidate sweep at ``max_candidates`` (on top of the
+    ``budget * top_pool_factor`` bound), all distance passes run through the
+    blocked ``min_sqdist_to_set`` kernel (no materialized N×M matrix), and
+    the batch memory holds only the counted novel rows. Atomic rows are
+    scaled once with the archive's own scaling so every comparison lives in
+    the space the threshold is defined in.
+    """
+    fitness = np.asarray(fitness, dtype=np.float64)
+    finite = np.flatnonzero(np.isfinite(fitness))
+    if finite.size == 0 or budget <= 0:
+        return []
+    pool_size = min(
+        max(int(budget) * int(top_pool_factor), int(budget)),
+        int(finite.size),
+        max(1, int(max_candidates)),
+    )
+    ranked = finite[np.argsort(-fitness[finite], kind="stable")[:pool_size]]
+    candidate_values = np.asarray(candidate_values, dtype=np.float64)
+    atomic_values = np.asarray(atomic_values, dtype=np.float64)
+    threshold = float(threshold)
+
+    # One scaling pass: batch-internal distances must live in the same space
+    # the frozen archive's threshold is defined in (nearest_per_row scales
+    # internally, so the frozen-archive mask below stays consistent).
+    scaled_rows = apply_scaling(local_archive.scaling, atomic_values)
+    archive_novel = local_archive.nearest_per_row(atomic_values) > threshold
+
+    memory: np.ndarray | None = None
+    selected: list[int] = []
+    selected_structures: list[np.ndarray] = []
+    remaining = [int(index) for index in ranked]
+
+    def _marginal_gain(index: int) -> tuple[int, np.ndarray]:
+        lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
+        rows = scaled_rows[lo:hi]
+        if rows.shape[0] == 0:
+            return 0, np.empty((0, rows.shape[1] if rows.ndim == 2 else 0), dtype=np.float64)
+        block = _candidate_novel_rows(rows, archive_novel[lo:hi], memory, threshold)
+        return int(block.shape[0]), block
+
+    while len(selected) < int(budget) and remaining:
+        best_index: int | None = None
+        best_gain = -1
+        best_struct_dist = -np.inf
+        best_block: np.ndarray | None = None
+        for index in remaining:
+            gain, block = _marginal_gain(index)
+            structure = candidate_values[index]
+            if selected_structures:
+                d2 = min_sqdist_to_set(structure[None, :], np.asarray(selected_structures), workers=1)[0]
+                struct_dist = float(np.sqrt(max(float(d2), 0.0)))
+            else:
+                struct_dist = 0.0  # first pick: ranked order decides ties
+            if gain > best_gain or (gain == best_gain and struct_dist > best_struct_dist):
+                best_index, best_gain, best_struct_dist, best_block = index, gain, struct_dist, block
+        assert best_index is not None
+        selected.append(best_index)
+        remaining.remove(best_index)
+        selected_structures.append(candidate_values[best_index])
+        if best_block is not None and best_block.shape[0]:
+            memory = best_block if memory is None else np.vstack([memory, best_block])
+    return selected
+
+
 class GenerationEngine:
     def __init__(
         self,
@@ -186,9 +343,23 @@ class GenerationEngine:
         seed_descriptors: tuple = (),
         anchor_descriptors: tuple = (),
         region_radius: float | None = None,
+        selection_strategy: str = "structure_fps_v1",
+        local_anchor_descriptors: tuple = (),
+        seed_local_distances: tuple = (),
     ) -> None:
         if not seed_pool:
             raise ValueError("seed pool must not be empty")
+        if selection_strategy not in SELECTION_STRATEGIES:
+            raise ValueError(f"selection_strategy must be one of {', '.join(SELECTION_STRATEGIES)}")
+        if selection_strategy == "local_incremental_maximin_v1" and (
+            local_archive is None or getattr(objective, "novel_environment_threshold", None) is None
+        ):
+            # Fail fast: the strategy scores candidates in environment space,
+            # so it is meaningless without atom rows and a novelty threshold.
+            raise ValueError(
+                "local_incremental_maximin_v1 requires a local-environment archive and a novelty threshold"
+            )
+        self.selection_strategy = selection_strategy
         self.seed_pool = list(seed_pool)
         self.evaluator = evaluator
         self.structure_archive = structure_archive
@@ -207,6 +378,11 @@ class GenerationEngine:
         self.seed_descriptors = tuple(seed_descriptors)
         self.anchor_descriptors = tuple(anchor_descriptors)
         self.region_radius = None if region_radius is None else float(region_radius)
+        # Local-environment targeting (audit R3.4): the anchor frames' scaled
+        # atom rows plus per-seed distances to them. Only populated for
+        # target_mode="local_environment" on atom-level runs.
+        self.local_anchor_descriptors = tuple(local_anchor_descriptors)
+        self.seed_local_distances = tuple(seed_local_distances)
 
     def _check_geometry(self, candidate: StructureCandidate) -> ConstraintResult:
         return self.constraints.validate(candidate)
@@ -218,29 +394,7 @@ class GenerationEngine:
         row_offsets: np.ndarray,
         threshold: float,
     ) -> int:
-        """Greedy union dedup of one round's novel environments (G3.5 A12).
-
-        Candidates are counted in selection order against the frozen archive
-        *plus* the environments already counted this round, so two accepted
-        structures that found the same new region contribute it once. The raw
-        per-candidate counts stay frozen-archive based (order-independent,
-        what the objective scores on); this number is the benchmark-honest
-        one — "Random vs GA" must compare unique environments, not raw.
-        """
-        counted: list[np.ndarray] = []
-        unique = 0
-        for index in selected:
-            lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
-            rows = np.asarray(atomic_values[lo:hi], dtype=np.float64)
-            if rows.shape[0] == 0:
-                continue
-            novel = self.local_archive.nearest_per_row(rows) > threshold
-            if counted:
-                d2 = min_sqdist_to_set(rows, np.vstack(counted), workers=1)
-                novel &= np.sqrt(np.clip(d2, 0.0, None)) > threshold
-            unique += int(novel.sum())
-            counted.append(rows)
-        return unique
+        return count_strict_unique_environments(selected, atomic_values, row_offsets, threshold, self.local_archive)
 
     def run(self, check_cancelled=None, progress=None, on_round=None, on_evaluated=None) -> GenerationRunResult:
         check_cancelled = check_cancelled or (lambda: None)
@@ -264,6 +418,8 @@ class GenerationEngine:
                 seed_descriptors=self.seed_descriptors,
                 anchor_descriptors=self.anchor_descriptors,
                 region_radius=self.region_radius,
+                local_anchor_descriptors=self.local_anchor_descriptors,
+                seed_local_distances=self.seed_local_distances,
             )
         )
 
@@ -366,11 +522,25 @@ class GenerationEngine:
                 scaled_values = apply_scaling(self.structure_archive.scaling, evaluation.structure_values)
                 coverage_gain = scores.components.get("coverage_gain")
                 remaining = self.budget.max_accepted - len(result.accepted)
-                selected = select_diverse_batch(
-                    fitness,
-                    scaled_values,
-                    budget=min(self.optimizer.batch_accept, remaining),
-                )
+                batch_budget = min(self.optimizer.batch_accept, remaining)
+                if (
+                    self.selection_strategy == "local_incremental_maximin_v1"
+                    and evaluation.atomic_values is not None
+                    and evaluation.row_offsets is not None
+                ):
+                    selected = select_local_incremental_batch(
+                        fitness,
+                        scaled_values,
+                        evaluation.atomic_values,
+                        evaluation.row_offsets,
+                        budget=batch_budget,
+                        local_archive=self.local_archive,
+                        threshold=float(getattr(self.objective, "novel_environment_threshold")),
+                    )
+                else:
+                    # structure_fps_v1: the G3 baseline — novelty ranking then
+                    # farthest-point sampling over mean-pooled structure rows.
+                    selected = select_diverse_batch(fitness, scaled_values, budget=batch_budget)
                 selected_set = set(selected)
                 selection_rank = {index: rank for rank, index in enumerate(selected)}
                 # Unique novel environments must be counted against the
@@ -471,6 +641,15 @@ class GenerationEngine:
 
             # Report every proposed candidate's outcome back to the optimizer
             # (G3.5 lifecycle): proposal order, geometry rejections included.
+            # Local-environment targeting additionally carries each scored
+            # candidate's scaled atom rows so the targeted branch can weigh
+            # proposals in atomic space (audit R3.4).
+            local_targeting = (
+                bool(self.local_anchor_descriptors)
+                and self.local_archive is not None
+                and evaluation.atomic_values is not None
+                and evaluation.row_offsets is not None
+            )
             round_observations: list[CandidateObservation] = []
             valid_cursor = 0
             for child, verdict in zip(children, verdicts):
@@ -511,6 +690,16 @@ class GenerationEngine:
                             else None
                         ),
                         structure_descriptor=np.asarray(scaled_values[index], dtype=np.float64),
+                        local_descriptor=(
+                            apply_scaling(
+                                self.local_archive.scaling,
+                                evaluation.atomic_values[
+                                    int(evaluation.row_offsets[index]) : int(evaluation.row_offsets[index + 1])
+                                ],
+                            )
+                            if local_targeting
+                            else None
+                        ),
                     )
                 )
             self.optimizer.observe(ObservationBatch(generation=generation, observations=round_observations))
@@ -540,9 +729,17 @@ class GenerationEngine:
             # further is not paying off — the archive has converged onto the
             # reachable frontier of the operator family. Only objectives that
             # actually produce novel_environment_count may trigger it.
+            # The rate reads the same strictly deduplicated metric the
+            # benchmark and the results view report (raw counts stay on the
+            # record as a diagnostic): raw sums let repeated environments
+            # hold the rate above the floor and postpone a saturation stop
+            # that already fired.
             window = int(getattr(self.budget, "discovery_window", 0) or 0)
             if window and counts_environments and generation >= window:
-                gained = sum(r.novel_environments for r in result.rounds[-window:])
+                gained = sum(
+                    r.unique_novel_environments if r.unique_novel_environments is not None else r.novel_environments
+                    for r in result.rounds[-window:]
+                )
                 spent = sum(r.evaluations for r in result.rounds[-window:])
                 min_rate = float(getattr(self.budget, "min_novel_per_100_evals", 0.0) or 0.0)
                 if spent > 0 and gained < min_rate * spent / 100.0:

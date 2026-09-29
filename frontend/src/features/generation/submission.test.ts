@@ -2,7 +2,7 @@
 // backend's parse_request. These tests pin the per-optimizer param mapping:
 // a field missing (or misspelled) here silently reverts the run to defaults.
 import { describe, expect, it } from "vitest";
-import { buildSubmitPayload, parseAnchorFrames, validateConfig } from "./submission";
+import { buildSubmitPayload, parseAnchorFrames, parseAnchorSpecies, validateConfig, validateConfigFields } from "./submission";
 import { defaultGenerationConfig, defaultOptimizerConfig } from "./generationStore";
 import type { GenerationConfig } from "./types";
 
@@ -68,6 +68,77 @@ describe("buildSubmitPayload stopping defaults", () => {
       max_generations: 200,
       no_improvement_rounds: 10,
     });
+  });
+});
+
+describe("buildSubmitPayload selection strategy", () => {
+  it("omits the field for the fps baseline so older payloads stay byte-identical", () => {
+    const payload = buildSubmitPayload(config(defaultOptimizerConfig("random")));
+    expect("selection_strategy" in payload).toBe(false);
+  });
+
+  it("maps the local strategy into the payload", () => {
+    const payload = buildSubmitPayload({
+      ...config(defaultOptimizerConfig("random")),
+      selectionStrategy: "local_incremental_maximin_v1",
+    });
+    expect(payload.selection_strategy).toBe("local_incremental_maximin_v1");
+  });
+});
+
+describe("buildSubmitPayload local-environment anchors", () => {
+  const withAnchors = (searchTarget: Partial<GenerationConfig["searchTarget"]> = {}) => ({
+    ...config(defaultOptimizerConfig("random")),
+    searchTarget: {
+      ...defaultGenerationConfig().searchTarget,
+      anchorFrames: [12, 345],
+      ...searchTarget,
+    },
+  });
+
+  it("omits the atomic-space fields for the default structure mode", () => {
+    const payload = buildSubmitPayload(withAnchors());
+    expect("target_mode" in payload).toBe(false);
+    expect("anchor_species" in payload).toBe(false);
+  });
+
+  it("maps the local target mode and species filter", () => {
+    const payload = buildSubmitPayload(
+      withAnchors({ targetMode: "local_environment", anchorSpecies: "C, O" }),
+    );
+    expect(payload.target_mode).toBe("local_environment");
+    expect(payload.anchor_species).toEqual(["C", "O"]);
+  });
+
+  it("omits empty species (all atoms of the anchor frames)", () => {
+    const payload = buildSubmitPayload(withAnchors({ targetMode: "local_environment", anchorSpecies: "" }));
+    expect("anchor_species" in payload).toBe(false);
+  });
+
+  it("rejects invalid species symbols", () => {
+    expect(parseAnchorSpecies("carbon")).toBeNull();
+    expect(parseAnchorSpecies("c")).toBeNull();
+    expect(parseAnchorSpecies("C, O")).toEqual(["C", "O"]);
+    expect(parseAnchorSpecies("")).toEqual([]);
+  });
+
+  it("flags a local target without anchors and with a non-random optimizer", () => {
+    const issues = validateConfigFields({
+      ...config(defaultOptimizerConfig("random")),
+      searchTarget: { ...defaultGenerationConfig().searchTarget, targetMode: "local_environment", anchorSpecies: "C" },
+    });
+    expect(issues.some((i) => i.field === "searchTarget.anchorFrames")).toBe(true);
+    const genetic = validateConfigFields({
+      ...config(defaultOptimizerConfig("genetic")),
+      searchTarget: {
+        ...defaultGenerationConfig().searchTarget,
+        anchorFrames: [1],
+        targetMode: "local_environment",
+        anchorSpecies: "C",
+      },
+    });
+    expect(genetic.some((i) => i.field === "searchTarget.targetMode")).toBe(true);
+    expect(genetic.some((i) => i.field === "searchTarget.anchorSpecies")).toBe(false);
   });
 });
 

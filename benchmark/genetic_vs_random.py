@@ -11,6 +11,16 @@ data — same archive construction, same seed-pool sampling, same evaluator —
 minus DB rows, the job queue and the artifact writer, so runs are fully
 deterministic and nothing the app owns is written.
 
+Anchor roles (audit P0-03): ``metric_anchors`` (the ``--anchor-frames``
+dataset frames) feed ONLY the proximity statistics; the engine receives
+``search_anchors``, empty for every untargeted label so the untargeted
+baselines can never drift into their targeted branch. Targeting labels
+(``target_region``, ``genetic-target``, ``pso-target``) get search anchors
+plus the worker's forced anchor insertion into the seed pool. Every group
+shares one identical full seed pool (audit P0-04: same parent resources),
+and the proximity ``within_radius`` fraction is computed at the same
+experiment radius for all groups.
+
 Usage:
     .venv/Scripts/python.exe benchmark/genetic_vs_random.py --pilot
     .venv/Scripts/python.exe benchmark/genetic_vs_random.py                # full: 20 repeats
@@ -18,7 +28,8 @@ Usage:
 
 Optimizers compared (``--optimizers``): ``random`` (seed-pool sampling only),
 ``random-reuse`` (Random with reuse_accepted_seeds — the stronger baseline),
-``genetic`` (G4-1). Results land in
+``genetic`` (G4-1), ``pso`` (G5-1), and the targeted ``target_region`` /
+``genetic-target`` / ``pso-target`` labels. Results land in
 ``benchmark/results/<utc>/genetic_vs_random.json`` (gitignored directory).
 """
 
@@ -39,7 +50,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "backend"))
 
-from mdescriptor_studio_backend.analysis.sampling import fit_scaling  # noqa: E402
+from mdescriptor_studio_backend.analysis.sampling import apply_scaling, fit_scaling  # noqa: E402
 from mdescriptor_studio_backend.datasets import create_adapter  # noqa: E402
 from mdescriptor_studio_backend.generation.archive import (  # noqa: E402
     DescriptorArchive,
@@ -62,6 +73,25 @@ WORKERS = max(1, os.cpu_count() or 1)
 DATASET_ID = "ds_d56748fb4391"  # carbon, 6738 extxyz frames
 RUN_ID = "run_57a8b8c40286"  # NEP, atom-level rows, 35 features, device=cpu
 SEED_POOL_CAP = 512  # services/generation_service.py::_SEED_POOL_CAP
+
+# Labels whose search policy consumes the anchors; every other label runs
+# strictly untargeted (search_anchors = ()) regardless of --anchor-frames.
+TARGETING_LABELS = {"target_region", "genetic-target", "pso-target"}
+
+
+def search_anchor_role(label: str, metric_anchors: tuple) -> tuple[tuple, bool]:
+    """P0-03: the only path metric anchors may take into an engine run.
+
+    Targeting labels search with them; every other label runs strictly
+    untargeted — the engine never sees the anchors, so a baseline's
+    proposals cannot drift into the optimizer's targeted branch through
+    measurement inputs."""
+    targeting = label in TARGETING_LABELS
+    return (metric_anchors if targeting else ()), targeting
+# Experiment-wide region radius for the proximity statistics (robust-scaled
+# descriptor units; one mutation moves this descriptor ~13-18 units). All
+# groups report within_radius at THIS radius — never a per-group default.
+REGION_RADIUS = 15.0
 
 OPERATORS = {
     "atomic_displacement": {"enabled": True, "max_sigma": 0.15},
@@ -111,13 +141,21 @@ def _reference_matrices(run_row: dict, needs_atomic: bool):
     return structure, (values if needs_atomic else None)
 
 
-def _seed_pool(adapter, frame_total: int, seed: int) -> list[StructureCandidate]:
-    """Worker seed-pool sampling, bit-for-bit (rng(seed), linspace, shuffle)."""
+def _seed_pool(adapter, frame_total: int, seed: int, force_anchors: list[int] | None = None) -> list[StructureCandidate]:
+    """Worker seed-pool sampling, bit-for-bit (rng(seed), linspace, shuffle),
+    plus the worker's forced-anchor insertion when given: the anchor frames
+    (deduplicated, sorted) go first, then the sampled indices minus the
+    anchors, truncated to the pool cap — services/generation_service.py
+    does exactly this for every run that declares anchor frames."""
     rng = np.random.default_rng(seed)
     candidates = np.asarray(range(frame_total), dtype=np.int64)
     take = min(len(candidates), SEED_POOL_CAP)
     indices = candidates[np.linspace(0, len(candidates) - 1, take, dtype=np.int64)]
     rng.shuffle(indices)
+    if force_anchors:
+        anchor_array = np.asarray(sorted(set(force_anchors)), dtype=np.int64)
+        keep = ~np.isin(indices, anchor_array)
+        indices = np.concatenate([anchor_array, indices[keep]])[:SEED_POOL_CAP]
     pool = []
     for position, frame_index in enumerate(indices.tolist()):
         frame = adapter.get_frame(int(frame_index))
@@ -131,8 +169,21 @@ def _seed_pool(adapter, frame_total: int, seed: int) -> list[StructureCandidate]
     return pool
 
 
-def run_once(*, optimizer: str, seed: int, budget: int, run_row: dict, dataset_row: dict, anchor_frames: list[int]) -> dict:
+def run_once(
+    *,
+    optimizer: str,
+    seed: int,
+    budget: int,
+    run_row: dict,
+    dataset_row: dict,
+    anchor_frames: list[int],
+    selection_strategy: str = "structure_fps_v1",
+) -> dict:
     label = optimizer  # reported name ("random-reuse" stays distinct)
+    # P0-03: metric vs search anchors. The metric anchors below feed ONLY
+    # the proximity statistics; the engine receives search_anchors, empty
+    # for every untargeted label, so a baseline's proposals can never enter
+    # the optimizer's targeted branch through measurement inputs.
     needs_atomic = True  # local_environment_novelty requires atom rows
     reference_structure, reference_atomic = _reference_matrices(run_row, needs_atomic)
 
@@ -152,6 +203,12 @@ def run_once(*, optimizer: str, seed: int, budget: int, run_row: dict, dataset_r
         device="cpu",
         num_threads=WORKERS,
     )
+    if reference_structure.shape[0] != len(frame_adapter):
+        raise SystemExit("reference rows do not align 1:1 with dataset frames")
+    metric_anchors = tuple(
+        apply_scaling(structure_scaling, reference_structure[index][np.newaxis, :])[0] for index in anchor_frames
+    )
+    search_anchors, targeting = search_anchor_role(label, metric_anchors)
 
     objective = GENERATION_REGISTRY.build_objective(dict(OBJECTIVE))
     operators = [
@@ -163,38 +220,15 @@ def run_once(*, optimizer: str, seed: int, budget: int, run_row: dict, dataset_r
     if optimizer == "random-reuse":
         registry_name = "random"
         params["reuse_accepted_seeds"] = True
-    region_radius = None
-    if optimizer in ("target_region", "genetic-target", "pso-target"):
-        # G5-2: targeting is a search target consumed by random/genetic/pso.
-        # Labels keep the report continuous; radius calibrated on this
-        # descriptor (one mutation moves it ~13-18 robust units).
-        if optimizer == "target_region":
-            registry_name = "random"
-        else:
-            registry_name = optimizer.removesuffix("-target")
-        region_radius = 15.0
-    optimizer_obj = GENERATION_REGISTRY.build_optimizer(registry_name, operators, params)
-    # Every dataset frame's descriptor is a row of the frozen reference; the
-    # worker path (generation_service) does exactly this for real runs,
-    # including forcing the anchor frames into the seed pool. Anchors are
-    # handed to EVERY optimizer so the proximity baseline (random) is
-    # measurable; only target_region uses them for proposals.
-    from mdescriptor_studio_backend.analysis.sampling import apply_scaling
-
-    if reference_structure.shape[0] != len(frame_adapter):
-        raise SystemExit("reference rows do not align 1:1 with dataset frames")
-    anchor_descriptors = tuple(
-        apply_scaling(structure_scaling, reference_structure[index][np.newaxis, :])[0] for index in anchor_frames
-    )
-    seed_pool = _seed_pool(frame_adapter, len(frame_adapter), seed)
     if optimizer == "target_region":
-        anchor_set = set(anchor_frames)
-        rest = [c for c in seed_pool if c.parent_frame not in anchor_set]
-        seed_pool = (
-            [StructureCandidate.from_frame(frame_adapter.get_frame(int(i)), candidate_id=f"seed_{p}", parent_frame=int(i))
-             for p, i in enumerate(sorted(anchor_set))]
-            + rest
-        )
+        registry_name = "random"
+    elif optimizer in TARGETING_LABELS:
+        registry_name = optimizer.removesuffix("-target")
+    region_radius = REGION_RADIUS if targeting else None
+    optimizer_obj = GENERATION_REGISTRY.build_optimizer(registry_name, operators, params)
+    # Identical full seed pool for every group (same parent resources);
+    # targeting groups additionally match the worker's forced anchors.
+    seed_pool = _seed_pool(frame_adapter, len(frame_adapter), seed, force_anchors=anchor_frames)
     seed_descriptors = tuple(
         (
             apply_scaling(structure_scaling, reference_structure[candidate.parent_frame][np.newaxis, :])[0]
@@ -224,11 +258,18 @@ def run_once(*, optimizer: str, seed: int, budget: int, run_row: dict, dataset_r
         n_seeds=params["n_seeds"],
         workers=WORKERS,
         seed_descriptors=seed_descriptors,
-        anchor_descriptors=anchor_descriptors,
+        anchor_descriptors=search_anchors,
         region_radius=region_radius,
+        selection_strategy=selection_strategy,
     )
+    # Runtime targeting assertion (P0-03): the anchors that reached the
+    # engine are exactly the search anchors — a targeting label cannot run
+    # untargeted, and a baseline cannot run targeted.
+    assert bool(engine.anchor_descriptors) == targeting, "search anchors disagree with the run's targeting flag"
     started = time.perf_counter()
     result = engine.run()
+    if targeting:
+        assert optimizer_obj.state_dict().get("targeting"), "targeting run shows no targeting state"
     elapsed = time.perf_counter() - started
 
     rounds = [record.to_json() for record in result.rounds]
@@ -236,9 +277,7 @@ def run_once(*, optimizer: str, seed: int, budget: int, run_row: dict, dataset_r
     total_evals = sum(r["evaluations"] for r in rounds)
     coverage = next((r["coverage_radius"] for r in reversed(rounds) if r["coverage_radius"] is not None), None)
     proximity = None
-    if anchor_descriptors:
-        from mdescriptor_studio_backend.analysis.sampling import apply_scaling
-
+    if metric_anchors:
         # result.evaluated carries RAW structure rows; the anchors are scaled.
         accepted_desc = [
             apply_scaling(structure_scaling, np.asarray(record.structure_descriptor, dtype=np.float64)[np.newaxis, :])[0]
@@ -246,18 +285,19 @@ def run_once(*, optimizer: str, seed: int, budget: int, run_row: dict, dataset_r
             if record.accepted
         ]
         distances = [
-            min(float(np.linalg.norm(desc - anchor)) for anchor in anchor_descriptors)
+            min(float(np.linalg.norm(desc - anchor)) for anchor in metric_anchors)
             for desc in accepted_desc
         ]
         if distances:
-            radius = float(params.get("region_radius", 1.0))
             proximity = {
                 "median": round(float(np.median(distances)), 4),
                 "p90": round(float(np.quantile(distances, 0.9)), 4),
-                "within_radius": round(sum(1 for d in distances if d <= radius) / len(distances), 4),
+                "within_radius": round(sum(1 for d in distances if d <= REGION_RADIUS) / len(distances), 4),
             }
     return {
         "optimizer": label,
+        "targeting_enabled": targeting,
+        "selection_strategy": selection_strategy,
         "anchor_frames": list(anchor_frames),
         "anchor_proximity": proximity,
         "seed": seed,
@@ -270,6 +310,65 @@ def run_once(*, optimizer: str, seed: int, budget: int, run_row: dict, dataset_r
         "wall_seconds": round(elapsed, 1),
         "rounds": rounds,
     }
+
+
+def _load_preregistration(path: Path) -> dict:
+    """Load and validate a frozen pre-registration config (audit R4).
+
+    The frozen scenario keys must match the harness constants exactly — a
+    divergence means the config and the code disagree about the experiment,
+    which is precisely what pre-registration exists to surface. Exit instead
+    of silently benchmarking a different scenario.
+    """
+    config = json.loads(path.read_text(encoding="utf-8"))
+    if config.get("kind") != "generation-benchmark-preregistration":
+        raise SystemExit(f"{path} is not a generation benchmark pre-registration")
+    for key, frozen in (
+        ("operators", OPERATORS),
+        ("objective", OBJECTIVE),
+        ("constraints", CONSTRAINTS),
+        ("optimizer_params", OPTIMIZER_PARAMS),
+    ):
+        if config.get(key) != frozen:
+            raise SystemExit(f"pre-registration '{key}' diverges from the harness constants — reconcile first")
+    if float(config.get("region_radius", -1)) != REGION_RADIUS:
+        raise SystemExit("pre-registration 'region_radius' diverges from the harness REGION_RADIUS")
+    for key in ("repeats", "budget_evaluations", "groups", "anchor_frames", "seed_base", "selection_strategy"):
+        if key not in config:
+            raise SystemExit(f"pre-registration is missing '{key}'")
+    return config
+
+
+def _environment_facts() -> dict:
+    """Reproducibility metadata for the results directory (audit P1-06)."""
+    import importlib.metadata
+    import platform
+
+    packages = {}
+    for name in ("numpy", "scipy", "mdescriptor"):
+        try:
+            packages[name] = importlib.metadata.version(name)
+        except Exception:
+            packages[name] = None
+    return {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "cpu_count": os.cpu_count(),
+        "packages": packages,
+    }
+
+
+def _write_sha256sums(out_dir: Path, names: list[str]) -> None:
+    import hashlib
+
+    lines = []
+    for name in names:
+        path = out_dir / name
+        if not path.is_file():
+            continue
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        lines.append(f"{digest}  {name}")
+    (out_dir / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _summarise(runs: list[dict]) -> dict:
@@ -310,26 +409,48 @@ def main() -> int:
     parser.add_argument("--budget", type=int, default=10_000)
     parser.add_argument("--pilot", action="store_true", help="1 repeat, small budget, quick smoke")
     parser.add_argument("--optimizers", default="random,random-reuse,genetic")
-    parser.add_argument("--anchor-frames", default="1322,5075", help="target_region anchor dataset frames (must satisfy the run constraints)")
+    parser.add_argument("--anchor-frames", default="1322,5075", help="dataset frames for the proximity metric (all groups) and, for the targeting labels, the search anchors (must satisfy the run constraints)")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="pre-registered config (e.g. benchmark/config.json): fixes repeats/budget/groups/strategy "
+        "and writes run_results.jsonl + SHA256SUMS for reproducibility (audit P1-06/R4)",
+    )
     args = parser.parse_args()
 
-    repeats = 1 if args.pilot else args.repeats
-    budget = 400 if args.pilot else args.budget
-    optimizers = [name.strip() for name in args.optimizers.split(",")]
+    config = None
+    if args.config:
+        config = _load_preregistration(Path(args.config))
+        repeats = int(config["repeats"])
+        budget = int(config["budget_evaluations"])
+        optimizers = [str(name) for name in config["groups"]]
+        anchor_frames = [int(i) for i in config["anchor_frames"]]
+        selection_strategy = str(config["selection_strategy"])
+    else:
+        repeats = 1 if args.pilot else args.repeats
+        budget = 400 if args.pilot else args.budget
+        optimizers = [name.strip() for name in args.optimizers.split(",")]
+        anchor_frames = []
+        selection_strategy = "structure_fps_v1"
 
     out_dir = REPO / "benchmark" / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir.mkdir(parents=True, exist_ok=True)
+    if config is not None:
+        (out_dir / "config.used.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+        (out_dir / "environment.json").write_text(json.dumps(_environment_facts(), indent=2), encoding="utf-8")
 
     run_row, dataset_row = _load_run_config()
     runs: list[dict] = []
+    results_jsonl = out_dir / "run_results.jsonl"
     for repeat in range(repeats):
-        seed = 1000 + repeat
+        seed = int(config["seed_base"]) + repeat if config is not None else 1000 + repeat
         for optimizer in optimizers:
             print(f"[repeat {repeat + 1}/{repeats}] {optimizer} seed={seed} budget={budget}", flush=True)
-            anchor_frames = [int(i) for i in str(args.anchor_frames).split(",") if i.strip()]
+            if not anchor_frames:
+                anchor_frames = [int(i) for i in str(args.anchor_frames).split(",") if i.strip()]
             run = run_once(
                 optimizer=optimizer, seed=seed, budget=budget, run_row=run_row, dataset_row=dataset_row,
-                anchor_frames=anchor_frames,
+                anchor_frames=anchor_frames, selection_strategy=selection_strategy,
             )
             runs.append(run)
             print(
@@ -343,9 +464,23 @@ def main() -> int:
                 json.dumps({"args": vars(args) | {"dataset": DATASET_ID, "run": RUN_ID}, "runs": runs, "summary": _summarise(runs)}, indent=2),
                 encoding="utf-8",
             )
+            if config is not None:
+                with open(results_jsonl, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(run, ensure_ascii=False) + "\n")
 
-    print(json.dumps(_summarise(runs), indent=2))
+    summary = _summarise(runs)
+    print(json.dumps(summary, indent=2))
     print(f"results: {out_dir / 'genetic_vs_random.json'}")
+    if config is not None:
+        (out_dir / "summary.json").write_text(
+            json.dumps({"args": vars(args) | {"dataset": DATASET_ID, "run": RUN_ID}, "summary": summary}, indent=2),
+            encoding="utf-8",
+        )
+        _write_sha256sums(
+            out_dir,
+            ["config.used.json", "environment.json", "run_results.jsonl", "genetic_vs_random.json", "summary.json"],
+        )
+        print(f"pre-registered run complete; per-seed rows in {results_jsonl}, checksums in {out_dir / 'SHA256SUMS'}")
     return 0
 
 

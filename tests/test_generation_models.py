@@ -139,6 +139,83 @@ class TestGeometryConstraints:
         rules = build_constraints({"min_distance_mode": "none"})
         assert rules.validate(close).valid
 
+    def test_single_atom_periodic_self_image_is_checked(self):
+        # P1-05: a single atom in a too-small periodic cell touches its own
+        # images — the n<2 early return used to skip this entirely.
+        rules = build_constraints({"min_distance_mode": "absolute", "min_distance": 2.0})
+        frame = DatasetFrame(
+            numbers=np.array([14], dtype=np.int64),
+            positions=np.array([[0.0, 0.0, 0.0]]),
+            cell=np.eye(3) * 1.4,
+            pbc=np.ones(3, dtype=bool),
+        )
+        candidate = StructureCandidate.from_frame(frame, candidate_id="c", parent_frame=0)
+        verdict = rules.validate(candidate)
+        assert not verdict.valid
+        assert any("minimum distance" in r for r in verdict.reasons)
+
+    def test_single_atom_periodic_with_adequate_lattice_passes(self):
+        rules = build_constraints({"min_distance_mode": "absolute", "min_distance": 2.0})
+        frame = DatasetFrame(
+            numbers=np.array([14], dtype=np.int64),
+            positions=np.array([[0.0, 0.0, 0.0]]),
+            cell=np.eye(3) * 3.0,
+            pbc=np.ones(3, dtype=bool),
+        )
+        candidate = StructureCandidate.from_frame(frame, candidate_id="c", parent_frame=0)
+        assert rules.validate(candidate).valid
+
+    def test_single_atom_non_periodic_is_never_rejected(self):
+        # No periodicity → no images → nothing to touch.
+        rules = build_constraints({"min_distance_mode": "absolute", "min_distance": 2.0})
+        frame = DatasetFrame(
+            numbers=np.array([14], dtype=np.int64),
+            positions=np.array([[0.0, 0.0, 0.0]]),
+            cell=np.eye(3) * 1.4,
+            pbc=np.zeros(3, dtype=bool),
+        )
+        candidate = StructureCandidate.from_frame(frame, candidate_id="c", parent_frame=0)
+        assert rules.validate(candidate).valid
+
+    def test_general_structure_self_image_contact_is_checked(self):
+        # Two atoms far apart in-cell, but the a-axis lattice vector is
+        # shorter than the cutoff: each atom violates against its own image.
+        # The old include_self_images=False accepted both cells.
+        rules = build_constraints({"min_distance_mode": "absolute", "min_distance": 2.5})
+        numbers = np.array([14, 14], dtype=np.int64)
+
+        def _candidate(cell_a: float) -> StructureCandidate:
+            frame = DatasetFrame(
+                numbers=numbers,
+                positions=np.array([[0.0, 0.0, 0.0], [0.0, 10.0, 0.0]]),
+                cell=np.diag([cell_a, 20.0, 20.0]),
+                pbc=np.ones(3, dtype=bool),
+            )
+            return StructureCandidate.from_frame(frame, candidate_id="c", parent_frame=0)
+
+        assert not rules.validate(_candidate(2.0)).valid
+        assert rules.validate(_candidate(3.0)).valid
+
+    def test_partial_periodicity_limits_self_image_axes(self):
+        # A short lattice vector only matters on axes that are actually
+        # periodic (audit P1-05: partial-periodicity support).
+        rules = build_constraints({"min_distance_mode": "absolute", "min_distance": 2.5})
+        cell = np.diag([2.0, 20.0, 20.0])
+        periodic_a = DatasetFrame(
+            numbers=np.array([14], dtype=np.int64),
+            positions=np.array([[0.0, 0.0, 0.0]]),
+            cell=cell,
+            pbc=np.array([True, False, False]),
+        )
+        periodic_b = DatasetFrame(
+            numbers=np.array([14], dtype=np.int64),
+            positions=np.array([[0.0, 0.0, 0.0]]),
+            cell=cell,
+            pbc=np.array([False, True, False]),
+        )
+        assert not rules.validate(StructureCandidate.from_frame(periodic_a, candidate_id="c", parent_frame=0)).valid
+        assert rules.validate(StructureCandidate.from_frame(periodic_b, candidate_id="c", parent_frame=0)).valid
+
     def test_nan_positions_rejected(self):
         frame = _frame()
         bad = _candidate(frame)
@@ -304,6 +381,37 @@ class TestBudgetParsing:
 
         with pytest.raises(AppError):
             parse_budget({"min_novel_per_100_evals": -0.1})
+
+    def test_fractional_budget_integers_are_rejected_not_truncated(self):
+        # P2-01: _int must share _optional_count's strict semantics —
+        # max_generations=3.9 is a client bug, not a silent 3.
+        from mdescriptor_studio_backend.generation.models import parse_budget
+        from mdescriptor_studio_backend.errors import AppError
+
+        for key in ("max_evaluations", "max_accepted", "max_generations", "discovery_window", "no_improvement_rounds"):
+            with pytest.raises(AppError, match=f"{key} must be an integer"):
+                parse_budget({key: 3.9})
+        # Whole-number floats are legitimate integers (JSON 3.0).
+        assert parse_budget({"max_generations": 3.0}).max_generations == 3
+        with pytest.raises(AppError, match="must be an integer"):
+            parse_budget({"max_generations": True})
+
+    def test_internal_experiment_knobs_stay_out_of_the_public_request(self):
+        # P2-01: pso_weight_anchor / gene_mutation_rate (and the reverted
+        # G4-1.5 levers) are internal ctor knobs — parse_request must reject
+        # injecting them so the public contract and the benchmark harness
+        # stay separate.
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        with pytest.raises(AppError, match="unknown optimizer params.*pso_weight_anchor"):
+            parse_request(_request(optimizer="pso", optimizer_params={"n_seeds": 2, "children_per_seed": 2, "batch_accept": 2, "pso_weight_anchor": 2.0}))
+        with pytest.raises(AppError, match="unknown optimizer params.*gene_mutation_rate"):
+            parse_request(_request(optimizer="genetic", optimizer_params={"n_seeds": 2, "children_per_seed": 2, "batch_accept": 2, "gene_mutation_rate": 0.5}))
+        with pytest.raises(AppError, match="unknown optimizer params"):
+            parse_request(_request(optimizer="genetic", optimizer_params={"n_seeds": 2, "children_per_seed": 2, "batch_accept": 2, "autofrac": True}))
+        with pytest.raises(AppError, match="unknown optimizer params"):
+            parse_request(_request(optimizer="genetic", optimizer_params={"n_seeds": 2, "children_per_seed": 2, "batch_accept": 2, "pressure_warmup_pool": 4}))
 
 
 # ---------------------------------------------------------------- request parsing

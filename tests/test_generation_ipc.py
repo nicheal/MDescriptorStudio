@@ -114,10 +114,13 @@ def test_generation_lifecycle_catalog_submit_get_materialize(tmp_path: Path) -> 
             "original_environments",
             "generated_environments",
             "novel_environments",
+            # P1-01: the strictly deduplicated counterpart of the raw count.
+            "unique_novel_environments",
         }
         assert pca["discovery"]["original_structures"] == 12
         assert pca["discovery"]["generated_environments"] > 0
         assert pca["discovery"]["novel_environments"] > 0
+        assert 0 <= pca["discovery"]["unique_novel_environments"] <= pca["discovery"]["novel_environments"]
 
         # Materialize accepted structures into a new, lineage-traceable dataset.
         dest = tmp_path / "gaas_expanded.extxyz"

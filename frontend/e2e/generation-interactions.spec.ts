@@ -296,3 +296,24 @@ test("generation form fits wide and narrow preview sizes without obscuring focus
   const narrow = await page.evaluate(() => ({ width: document.documentElement.scrollWidth, viewport: window.innerWidth }));
   expect(narrow.width).toBeLessThanOrEqual(narrow.viewport);
 });
+test("local-environment anchor semantics reveal the species filter and the structure mode hides it", async ({ page }) => {
+  await enterGeneration(page);
+  const anchors = page.getByLabel("Anchor dataset frames");
+  const semantics = page.getByRole("combobox", { name: "Anchor semantics" });
+  await expect(semantics).toBeDisabled(); // inert until anchors are set
+
+  await anchors.fill("12, 345");
+  await page.getByText("SEARCH OBJECTIVE", { exact: true }).click(); // blur commits the anchors
+  await expect(semantics).toBeEnabled();
+
+  await page.locator(".ant-select:has(#searchTarget-targetMode)").click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").getByText("Local-environment target (atomic space)", { exact: true }).click();
+  const species = page.getByLabel("Anchor species");
+  await expect(species).toBeVisible();
+  await species.fill("C, O");
+  await expect(page.locator("#generation-anchor-help")).toContainText("atomic descriptor rows");
+
+  await page.locator(".ant-select:has(#searchTarget-targetMode)").click();
+  await page.locator(".ant-select-dropdown:not(.ant-select-dropdown-hidden)").getByText("Structure-level target", { exact: true }).click();
+  await expect(species).not.toBeVisible();
+});

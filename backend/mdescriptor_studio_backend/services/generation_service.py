@@ -35,6 +35,7 @@ from ..generation.engine import GenerationEngine
 from ..generation.evaluator import DescriptorEvaluator, evaluate_batch
 from ..generation.models import StructureCandidate, parse_request
 from ..generation.registry import GENERATION_ALGORITHM_VERSION, GENERATION_REGISTRY
+from ..generation._distance import min_sqdist_to_set
 from ..analysis.sampling import apply_scaling, fit_scaling
 from ..security import UnsafePathError, ensure_no_reparse_points, validate_local_path
 from ..datasets import create_adapter, detect_format
@@ -77,6 +78,72 @@ def _now() -> str:
 
 def _json_safe(value):
     return AnalysisArtifactMixin._json_safe(value)
+
+
+def _local_anchor_rows(
+    source,
+    scaled_atom_rows: np.ndarray,
+    offsets,
+    frame_total: int,
+    anchor_frames: list[int],
+    species: set[int],
+) -> np.ndarray:
+    """Scaled atom rows of the anchor frames, optionally species-filtered.
+
+    Local-environment anchors must be defined in atomic descriptor space —
+    never by a structure mean (audit R3.4). The rows are free: every frame's
+    atom rows are a block of the frozen reference. Row i of a frame's block
+    is atom i of that frame (row_semantics=atom contract), so the species
+    filter reads the frame's own atomic numbers. Raises when the filter
+    matches nothing — an empty local anchor set would silently disable
+    targeting.
+    """
+    if offsets is None or getattr(offsets, "ndim", 0) != 1 or offsets.size < 2:
+        raise AppError(RESULT_INCOMPATIBLE, "local-environment anchors require atom-level reference rows")
+    blocks = []
+    for frame_index in anchor_frames:
+        if not 0 <= int(frame_index) < frame_total:
+            continue
+        frame = source.get_frame(int(frame_index))
+        lo, hi = int(offsets[int(frame_index)]), int(offsets[int(frame_index) + 1])
+        rows = scaled_atom_rows[lo:hi]
+        numbers = np.asarray(frame.numbers, dtype=np.int64)
+        if numbers.size != hi - lo:
+            raise AppError(RESULT_INCOMPATIBLE, "reference atom rows do not align with the anchor frame's atoms")
+        mask = np.isin(numbers, np.asarray(sorted(species), dtype=np.int64)) if species else np.ones(hi - lo, dtype=bool)
+        if rows[mask].shape[0]:
+            blocks.append(rows[mask])
+    if not blocks:
+        raise AppError(INVALID_PARAMS, "anchor_species filter matched no atoms in the anchor frames")
+    return np.vstack(blocks)
+
+
+def _seed_local_distances(
+    seed_pool: list,
+    scaled_atom_rows: np.ndarray,
+    offsets,
+    local_anchors: np.ndarray,
+    frame_total: int,
+) -> tuple:
+    """Per-seed minimum scaled atom-row distance to the local anchors.
+
+    Aligned with ``seed_pool``; None where the seed has no reference rows —
+    those entries stay on their structure merit in the targeted branch.
+    """
+    distances = []
+    for candidate in seed_pool:
+        frame_index = candidate.parent_frame
+        if frame_index is None or not 0 <= int(frame_index) < frame_total:
+            distances.append(None)
+            continue
+        lo, hi = int(offsets[int(frame_index)]), int(offsets[int(frame_index) + 1])
+        rows = scaled_atom_rows[lo:hi]
+        if rows.shape[0] == 0:
+            distances.append(None)
+            continue
+        d2 = min_sqdist_to_set(rows, local_anchors, workers=1)
+        distances.append(float(np.sqrt(np.clip(d2, 0.0, None)).min()))
+    return tuple(distances)
 
 
 class GenerationService:
@@ -136,6 +203,14 @@ class GenerationService:
             "anchor_frames": request.anchor_frames,
             "region_radius": request.region_radius,
         }
+        # Only non-default selection strategies join the cache key: the field
+        # was introduced after the cache format, and folding the default in
+        # would invalidate every existing cached run for no reason.
+        if request.selection_strategy != "structure_fps_v1":
+            payload["selection_strategy"] = request.selection_strategy
+        if request.target_mode != "structure" or request.anchor_species:
+            payload["target_mode"] = request.target_mode
+            payload["anchor_species"] = request.anchor_species
         blob = json.dumps(_json_safe(payload), sort_keys=True, ensure_ascii=False)
         return "gen:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -165,6 +240,20 @@ class GenerationService:
         return indices, view["selection_hash"]
 
     # -- submit -----------------------------------------------------------------
+    def _assert_reference_freshness(self, dataset: dict, descriptor_run_id: str) -> None:
+        """The submit→execute freshness check, shared by both paths.
+
+        The dataset can be re-imported while a run sits in the queue: the
+        worker rebuilds the reference archive from the descriptor run's
+        frozen rows while the seed pool reads the dataset files, so a
+        silent fingerprint drift would score the wrong domain. Runs whose
+        metadata predates fingerprinting stay exempt (submit-time policy).
+        """
+        _, run_metadata = self.results.feature_space_signature(descriptor_run_id)
+        run_fingerprint = run_metadata.get("dataset_fingerprint")
+        if run_fingerprint and dataset["fingerprint"] != run_fingerprint:
+            raise AppError(ANALYSIS_STALE, "descriptor run was computed on an older version of this dataset")
+
     def submit(self, params: dict) -> dict:
         request = parse_request(params)
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (request.dataset_id,))
@@ -192,13 +281,32 @@ class GenerationService:
                 "local-environment objectives require an atom-level descriptor run;"
                 " the selected run provides structure-level rows only",
             )
+        # The local selection strategy scores candidates in environment space:
+        # reject a configuration that cannot support it at Run-click time,
+        # not after queueing (same philosophy as the atom-level gate above).
+        if request.selection_strategy == "local_incremental_maximin_v1" and (
+            run_row.get("row_semantics") != "atom"
+            or isinstance(request.objective.get("novelty_threshold"), bool)
+            or not isinstance(request.objective.get("novelty_threshold"), (int, float))
+        ):
+            raise AppError(
+                INVALID_PARAMS,
+                "the local selection strategy requires a novelty threshold and an atom-level descriptor run",
+            )
+        # Local-environment anchors live in the run's atomic descriptor space:
+        # they need atom-level reference rows and the local archive's scaling
+        # (built only for atomic-capable objectives).
+        if request.target_mode == "local_environment" and (
+            run_row.get("row_semantics") != "atom" or not bool(getattr(objective_cls, "needs_atomic", False))
+        ):
+            raise AppError(
+                INVALID_PARAMS,
+                "local-environment anchors require an atom-level descriptor run and a local-environment objective",
+            )
         # Freshness: the frozen reference archive must describe the dataset
         # as it is now, not as it was when the run completed — otherwise every
         # novelty/coverage score silently measures the wrong domain.
-        _, run_metadata = self.results.feature_space_signature(request.descriptor_run_id)
-        run_fingerprint = run_metadata.get("dataset_fingerprint")
-        if run_fingerprint and dataset["fingerprint"] != run_fingerprint:
-            raise AppError(ANALYSIS_STALE, "descriptor run was computed on an older version of this dataset")
+        self._assert_reference_freshness(dataset, request.descriptor_run_id)
         seed_frame_indices, seed_scope_hash = self._seed_view(request, dataset)
         scaling = str(request.objective.get("scaling") or "robust")
         signature = self._descriptor_signature(run_row, scaling)
@@ -228,6 +336,9 @@ class GenerationService:
                         "seed_view_selection_hash": seed_scope_hash,
                         "anchor_frames": request.anchor_frames,
                         "region_radius": request.region_radius,
+                        "selection_strategy": request.selection_strategy,
+                        "target_mode": request.target_mode,
+                        "anchor_species": request.anchor_species,
                     }
                 ),
                 ensure_ascii=False,
@@ -399,6 +510,11 @@ class GenerationService:
         dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (request.dataset_id,))
         if dataset is None:
             raise AppError(INVALID_PARAMS, "dataset does not exist")
+        # P1-02: the dataset row may have been refreshed (re-import) while
+        # this run sat in the queue — re-run the submit-time fingerprint
+        # comparison before any frame is read, or the seed pool would
+        # silently pair new frames with the old frozen reference archive.
+        self._assert_reference_freshness(dataset, request.descriptor_run_id)
         source = self.datasets.adapter_for(dataset)
         frame_total = len(source)
         if frame_total < 1:
@@ -447,6 +563,8 @@ class GenerationService:
         seed_descriptors: tuple = ()
         anchor_descriptors: tuple = ()
         anchor_candidates: list = []
+        local_anchor_descriptors: tuple = ()
+        seed_local_distances: tuple = ()
         if request.anchor_frames:
             anchor_descriptors = tuple(
                 apply_scaling(structure_scaling, reference_structure[index][np.newaxis, :])[0]
@@ -464,6 +582,28 @@ class GenerationService:
                 StructureCandidate.from_frame(source.get_frame(index), candidate_id=f"anchor_{position}", parent_frame=index)
                 for position, index in enumerate(anchor_frames)
             ]
+            if request.target_mode == "local_environment":
+                # Atomic-space anchors (audit R3.4): the anchor frames' scaled
+                # atom rows — species-filtered when requested — plus per-seed
+                # distances to them, so the targeted branch can weigh parents
+                # in atomic space instead of by structure mean alone.
+                from ..datasets.deepmd_symbols import _SYMBOL_TO_Z
+
+                if local_archive is None or reference_atomic is None or offsets is None:
+                    raise AppError(RESULT_INCOMPATIBLE, "local-environment anchors require atom-level reference rows")
+                scaled_atom_rows = apply_scaling(local_archive.scaling, reference_atomic)
+                species = {_SYMBOL_TO_Z[symbol] for symbol in request.anchor_species}
+                local_anchor_descriptors = _local_anchor_rows(
+                    source,
+                    scaled_atom_rows,
+                    offsets,
+                    frame_total,
+                    [int(i) for i in request.anchor_frames],
+                    species,
+                )
+                seed_local_distances = _seed_local_distances(
+                    seed_pool, scaled_atom_rows, offsets, local_anchor_descriptors, frame_total
+                )
 
         num_threads = source_num_threads
         if (
@@ -517,6 +657,9 @@ class GenerationService:
             seed_descriptors=seed_descriptors,
             anchor_descriptors=anchor_descriptors,
             region_radius=request.region_radius if request.anchor_frames else None,
+            selection_strategy=request.selection_strategy,
+            local_anchor_descriptors=local_anchor_descriptors,
+            seed_local_distances=seed_local_distances,
         )
 
         rounds: list = []
@@ -846,6 +989,12 @@ class GenerationService:
 
         candidates = reader.candidates()
         novel_environments = sum(int(c.get("novel_environment_count") or 0) for c in candidates)
+        # The per-candidate counts above are raw frozen-archive counts; the
+        # strictly deduplicated number lives per round in convergence.json.
+        # Both are reported so the results view can distinguish the two
+        # conventions instead of labelling the raw sum as "the" novel count.
+        rounds = reader.convergence().get("rounds", [])
+        unique_novel_environments = sum(int(r.get("unique_novel_environments") or 0) for r in rounds)
         generated_environments = 0
         local_file = root / "local_environment_descriptors.npy"
         if local_file.is_file():
@@ -879,6 +1028,7 @@ class GenerationService:
                 "original_environments": original_environments,
                 "generated_environments": generated_environments,
                 "novel_environments": novel_environments,
+                "unique_novel_environments": unique_novel_environments,
             },
         }
         return _json_safe(payload)

@@ -178,12 +178,30 @@ class GenerationRequest:
     optimizer_params: dict = field(default_factory=dict)
     anchor_frames: list = field(default_factory=list)
     region_radius: float = 15.0
+    # Search-target semantics (audit R3.4): "structure" targets the
+    # mean-pooled structure descriptors of the anchor frames (the G5-2
+    # mechanism); "local_environment" additionally targets their ATOMIC
+    # descriptor rows — optionally filtered to element species — in the
+    # run's atomic space. Never represented by a structure mean alone.
+    target_mode: str = "structure"
+    anchor_species: list = field(default_factory=list)
+    # Batch selection strategy (audit R3): "structure_fps_v1" is the G3
+    # baseline (novelty ranking + FPS over mean-pooled structure rows);
+    # "local_incremental_maximin_v1" accepts the fitness elite by marginal
+    # strictly-new environment count. Only meaningful with a
+    # local-environment objective; the worker/engine fail fast otherwise.
+    selection_strategy: str = "structure_fps_v1"
 
 
 def _int(params: dict, key: str, default: int, *, lo: int, hi: int) -> int:
+    """A required integer knob with the same strict semantics as
+    :func:`_optional_count`: fractional floats are rejected instead of being
+    silently truncated (``max_generations=3.9`` is a client bug, not a 3)."""
     value = params.get(key, default)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise AppError(INVALID_PARAMS, f"{key} must be a number")
+        raise AppError(INVALID_PARAMS, f"{key} must be an integer")
+    if float(value) != int(value):
+        raise AppError(INVALID_PARAMS, f"{key} must be an integer")
     value = int(value)
     if value < lo or value > hi:
         raise AppError(INVALID_PARAMS, f"{key} must be between {lo} and {hi}")
@@ -541,6 +559,36 @@ def parse_request(params: dict) -> GenerationRequest:
     if not 0.01 <= float(region_radius) <= 100.0:
         raise AppError(INVALID_PARAMS, "region_radius must be in [0.01, 100]")
     region_radius = float(region_radius)
+    selection_strategy = str(params.get("selection_strategy") or "structure_fps_v1")
+    if selection_strategy not in ("structure_fps_v1", "local_incremental_maximin_v1"):
+        raise AppError(
+            INVALID_PARAMS,
+            "selection_strategy must be structure_fps_v1 or local_incremental_maximin_v1",
+        )
+    target_mode = str(params.get("target_mode") or "structure")
+    if target_mode not in ("structure", "local_environment"):
+        raise AppError(INVALID_PARAMS, "target_mode must be structure or local_environment")
+    anchor_species = params.get("anchor_species")
+    if anchor_species in (None, [], ""):
+        anchor_species = []
+    else:
+        if not isinstance(anchor_species, list) or any(isinstance(s, bool) or not isinstance(s, str) for s in anchor_species):
+            raise AppError(INVALID_PARAMS, "anchor_species must be a list of element symbols")
+        anchor_species = [s.strip() for s in anchor_species]
+        unknown = [s for s in anchor_species if s not in _SYMBOL_TO_Z]
+        if unknown:
+            raise AppError(INVALID_PARAMS, f"anchor_species contains unknown element symbols: {', '.join(unknown)}")
+        if len(set(anchor_species)) != len(anchor_species):
+            raise AppError(INVALID_PARAMS, "anchor_species must not repeat a symbol")
+    if target_mode == "local_environment":
+        # The local anchor rows are the anchor frames' atom rows — without
+        # anchors there is nothing to target; the atomic-space kernel is
+        # implemented for the random optimizer's targeted branch only (the
+        # recommended targeting optimizer; GA/PSO are a documented extension).
+        if not anchor_frames:
+            raise AppError(INVALID_PARAMS, "target_mode local_environment requires anchor_frames")
+        if optimizer != "random":
+            raise AppError(INVALID_PARAMS, "target_mode local_environment is currently supported with the random optimizer")
     operators = parse_operators(params.get("operators"))
     operator_names = {spec.name for spec in operators}
     for spec in operators:
@@ -588,4 +636,7 @@ def parse_request(params: dict) -> GenerationRequest:
         optimizer_params=dict(optimizer_params),
         anchor_frames=[int(i) for i in anchor_frames],
         region_radius=region_radius,
+        selection_strategy=selection_strategy,
+        target_mode=target_mode,
+        anchor_species=list(anchor_species),
     )

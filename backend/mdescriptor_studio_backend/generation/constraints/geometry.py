@@ -40,17 +40,24 @@ def _contact_violation(
 ) -> tuple[bool, str | None]:
     """Check pair cutoffs with the shared periodic spatial-neighbor scan.
 
+    Self-image contacts (an atom too close to its own periodic image — the
+    failure mode of single-atom cells and short lattice vectors generally)
+    are checked whenever any minimum-distance checking is active; ``mode =
+    "none"`` remains the switch that turns the whole check off (P1-05).
+
     The reason is set when the periodic image stencil cannot be bounded.
     """
     positions = np.asarray(candidate.positions, dtype=np.float64)
     n = positions.shape[0]
-    if n < 2:
-        return False, None
     numbers = np.asarray(candidate.atomic_numbers, dtype=np.int64)
     cell = np.asarray(candidate.cell, dtype=np.float64)
     pbc = np.asarray(candidate.pbc, dtype=bool)
     periodic_axes = tuple(int(a) for a in np.flatnonzero(pbc))
     periodic = bool(periodic_axes) and abs(float(np.linalg.det(cell))) > 1e-10
+    if n < 2 and not (n == 1 and periodic):
+        # A single non-periodic atom cannot touch anything. A periodic one
+        # still can — through its own images — so it must reach the scan.
+        return False, None
 
     pair_radii = radii_for(numbers) if covalent else np.full(n, 0.5, dtype=np.float64)
     coefficient = factor if covalent else (float(absolute) if absolute is not None else 0.0)
@@ -72,7 +79,7 @@ def _contact_violation(
         pbc,
         coefficient=coefficient,
         max_images_per_axis=MAX_IMAGES_PER_AXIS,
-        include_self_images=False,
+        include_self_images=True,
         pair_radii=pair_radii,
         pair_cutoff_matrix=pair_cutoff_matrix,
     ):

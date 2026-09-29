@@ -22,6 +22,7 @@ import numpy as np
 _TARGET_IMMIGRANT_SHARE = 0.15
 
 from ...analysis.sampling.fps import farthest_point_sampling
+from .._distance import min_sqdist_to_set
 from ..optimization import ObservationBatch, OptimizationContext, ProposalBatch
 
 
@@ -65,6 +66,10 @@ class RandomSearchOptimizer:
         self._targeted_accepted: list = []
         self._targeted_descriptors: list[np.ndarray] = []
         self._targeted_pending: dict[int, object] = {}
+        # Per-accepted-entry minimum atom-row distance to the local anchors
+        # (audit R3.4); None where the entry has no atomic signal. Maintained
+        # in lockstep with _targeted_accepted.
+        self._targeted_local_distances: list = []
 
     @property
     def batch_size(self) -> int:
@@ -84,6 +89,7 @@ class RandomSearchOptimizer:
         self._targeted_accepted = []
         self._targeted_descriptors = []
         self._targeted_pending = {}
+        self._targeted_local_distances = []
 
     def _require_context(self) -> OptimizationContext:
         if self._context is None:
@@ -105,21 +111,30 @@ class RandomSearchOptimizer:
                         return ProposalBatch(candidates=children)
                     if id(seed) in self._feedback_seed_ids:
                         operator = self._displacement_operator
+                        children.append(operator.apply(seed, rng, getattr(operator, "operator_params", {})))
                     else:
-                        available = []
-                        for candidate_operator in self.operators:
-                            params = getattr(candidate_operator, "operator_params", {})
-                            can_apply = getattr(candidate_operator, "can_apply", None)
-                            if can_apply is None or can_apply(seed, params):
-                                available.append(candidate_operator)
-                        if not available:
+                        child = self._choose_and_apply(seed, rng)
+                        if child is None:
                             continue
-                        operator = available[int(rng.integers(len(available)))]
-                    operator_params = getattr(operator, "operator_params", {})
-                    children.append(operator.apply(seed, rng, operator_params))
+                        children.append(child)
         finally:
             self._feedback_seed_ids.clear()
         return ProposalBatch(candidates=children)
+
+    def _choose_and_apply(self, parent, rng: np.random.Generator):
+        """Uniformly pick one applicable operator and apply it with that
+        operator's own ``operator_params``. The params must come from the
+        operator actually selected — never from the last one filtered."""
+        available = []
+        for candidate_operator in self.operators:
+            params = getattr(candidate_operator, "operator_params", {})
+            can_apply = getattr(candidate_operator, "can_apply", None)
+            if can_apply is None or can_apply(parent, params):
+                available.append(candidate_operator)
+        if not available:
+            return None
+        operator = available[int(rng.integers(len(available)))]
+        return operator.apply(parent, rng, getattr(operator, "operator_params", {}))
 
     def _targeting_active(self) -> bool:
         return bool(self._context is not None and self._context.anchor_descriptors)
@@ -137,10 +152,13 @@ class RandomSearchOptimizer:
     def _propose_targeted(self, budget: int, rng: np.random.Generator) -> ProposalBatch:
         """Search-target proposals: parents drawn by exp(-(d/r)^2) over the
         min-anchor distance (r = region radius, robust-scaled units), with a
-        fixed immigrant share on uniform seeds. The mechanics are the ones
-        validated in the G5-2 sweep; the engine's selection and acceptance
-        are untouched. Accepted structures join the parent pool nearest-first,
-        so the region fills outward one mutation shell at a time.
+        fixed immigrant share on uniform seeds. With local-environment
+        anchors (audit R3.4) the weight additionally multiplies
+        exp(-(d_local/r)^2), where d_local is the parent's minimum atom-row
+        distance to the local anchors — the atomic-space target signal, never
+        a structure mean. The engine's selection and acceptance are untouched.
+        Accepted structures join the parent pool nearest-first, so the region
+        fills outward one mutation shell at a time.
         """
         context = self._require_context()
         self._targeted_pending.clear()
@@ -154,7 +172,18 @@ class RandomSearchOptimizer:
         pool = list(zip(seed_pool, seed_descs)) + list(zip(self._targeted_accepted, self._targeted_descriptors))
         radius = context.region_radius if context.region_radius is not None else 15.0
         distances = np.asarray([self._anchor_distance(descriptor) for _, descriptor in pool], dtype=np.float64)
-        weights = np.maximum(np.exp(-np.square(distances / radius)), 1e-12)
+        weights = np.exp(-np.square(distances / radius))
+        local_anchors = list(context.local_anchor_descriptors)
+        if local_anchors:
+            # Per-seed distances come precomputed from the worker; accepted
+            # entries were measured at observe time. Entries without an
+            # atomic signal stay on their structure merit (neutral factor).
+            seed_local = list(context.seed_local_distances)
+            local_dists = (seed_local + [None] * len(seed_pool))[: len(seed_pool)] + list(self._targeted_local_distances)
+            for index, dl in enumerate(local_dists[: len(pool)]):
+                if dl is not None:
+                    weights[index] *= float(np.exp(-np.square(min(float(dl), 1e12) / radius)))
+        weights = np.maximum(weights, 1e-12)
         immigrant_slots = int(round(_TARGET_IMMIGRANT_SHARE * n_slots))
         target_slots = n_slots - immigrant_slots
 
@@ -167,24 +196,12 @@ class RandomSearchOptimizer:
                     return pool[index][0]
             return pool[-1][0]
 
-        def _apply_uniform(parent):
-            available = []
-            for candidate_operator in self.operators:
-                params = getattr(candidate_operator, "operator_params", {})
-                can_apply = getattr(candidate_operator, "can_apply", None)
-                if can_apply is None or can_apply(parent, params):
-                    available.append(candidate_operator)
-            if not available:
-                return None
-            operator = available[int(rng.integers(len(available)))]
-            return operator.apply(parent, rng, params)
-
         for _ in range(target_slots):
             for _ in range(self.children_per_seed):
                 if cap is not None and len(children) >= cap:
                     return ProposalBatch(candidates=children)
                 parent = _draw_parent()
-                child = _apply_uniform(parent)
+                child = self._choose_and_apply(parent, rng)
                 if child is None:
                     continue
                 self._targeted_pending[id(child)] = child
@@ -194,7 +211,7 @@ class RandomSearchOptimizer:
                 if cap is not None and len(children) >= cap:
                     return ProposalBatch(candidates=children)
                 seed = seed_pool[int(rng.integers(len(seed_pool)))]
-                child = _apply_uniform(seed)
+                child = self._choose_and_apply(seed, rng)
                 if child is None:
                     continue
                 self._targeted_pending[id(child)] = child
@@ -230,9 +247,13 @@ class RandomSearchOptimizer:
 
     def _observe_targeted(self, observations: ObservationBatch) -> None:
         """Accepted own proposals join the targeted parent pool in selection
-        order; on overflow the NEAREST-to-anchor parents are retained."""
+        order; on overflow the parents nearest to the target region are
+        retained — combined structure + local-environment distance when
+        local anchors are active (audit R3.4), structure distance otherwise.
+        """
         if self._context is None:
             return
+        local_anchors = list(self._context.local_anchor_descriptors)
         accepted = [
             obs
             for obs in observations.observations
@@ -244,14 +265,33 @@ class RandomSearchOptimizer:
                 continue
             self._targeted_accepted.append(obs.candidate)
             self._targeted_descriptors.append(np.asarray(obs.structure_descriptor, dtype=np.float64))
+            if local_anchors and obs.local_descriptor is not None and np.asarray(obs.local_descriptor).shape[0]:
+                rows = np.asarray(obs.local_descriptor, dtype=np.float64)
+                d2 = min_sqdist_to_set(rows, np.asarray(local_anchors, dtype=np.float64), workers=1)
+                self._targeted_local_distances.append(float(np.sqrt(np.clip(d2, 0.0, None)).min()))
+            else:
+                self._targeted_local_distances.append(None)
         limit = min(256, max(1, 4 * int(self._context.n_seeds)))
         if len(self._targeted_accepted) > limit:
-            ranked = sorted(
-                zip(self._targeted_accepted, self._targeted_descriptors),
-                key=lambda entry: (self._anchor_distance(entry[1]), entry[0].candidate_id),
-            )
-            self._targeted_accepted = [entry[0] for entry in ranked[:limit]]
-            self._targeted_descriptors = [entry[1] for entry in ranked[:limit]]
+            if local_anchors:
+
+                def _combined(index: int) -> float:
+                    structure = float(self._anchor_distance(self._targeted_descriptors[index]))
+                    local = self._targeted_local_distances[index]
+                    return float(np.hypot(structure, local)) if local is not None else structure
+
+                def _key(index: int) -> tuple:
+                    return (_combined(index), self._targeted_accepted[index].candidate_id)
+
+            else:
+
+                def _key(index: int) -> tuple:
+                    return (self._anchor_distance(self._targeted_descriptors[index]), self._targeted_accepted[index].candidate_id)
+
+            order = sorted(range(len(self._targeted_accepted)), key=_key)[:limit]
+            self._targeted_accepted = [self._targeted_accepted[i] for i in order]
+            self._targeted_descriptors = [self._targeted_descriptors[i] for i in order]
+            self._targeted_local_distances = [self._targeted_local_distances[i] for i in order]
 
     def state_dict(self) -> dict:
         """Serializable state; the parent pool keeps only lineage ids."""
@@ -271,6 +311,7 @@ class RandomSearchOptimizer:
             state["targeting"] = {
                 "anchors": len(self._context.anchor_descriptors),
                 "region_radius": self._context.region_radius,
+                "local_anchors": len(self._context.local_anchor_descriptors),
                 "parent_pool": len(pool),
                 "nearest_parent_distance": min(finite) if finite else None,
             }

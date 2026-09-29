@@ -13,6 +13,7 @@ export function discoveryStats(discovery: GenerationPcaDiscovery | null | undefi
   return {
     generated: discovery.generated_environments,
     novel: discovery.novel_environments,
+    uniqueNovel: discovery.unique_novel_environments,
     fraction: discovery.generated_environments > 0
       ? (discovery.novel_environments / discovery.generated_environments) * 100
       : 0,

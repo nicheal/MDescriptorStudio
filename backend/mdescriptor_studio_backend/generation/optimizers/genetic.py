@@ -10,10 +10,13 @@ repulsion semantics).
 What survives, mapped onto the G3.5 optimizer contract:
 
 * **Square-cumulative rank roulette** (USPEX ``update_STUFF`` tournament):
-  parents are drawn only from the accepted pool, with Σk² ticket counts so
-  selection pressure decays cubically with rank distance — and never touches
-  fitness *values*, which is what makes it safe under the mixed-metric
-  fitnesses (novelty/coverage/composite) of gen-4.
+  parents are drawn only from the accepted pool. The cumulative table
+  boundary for rank r is Σ_{k=1}^{m-r} k², so the *per-draw marginal weight*
+  of rank r is (m−r)² and the selection probability decays quadratically
+  with rank distance — the same distribution USPEX's cumulative tournament
+  table plus last-hit threshold draw produces. It never touches fitness
+  *values*, which is what makes it safe under the mixed-metric fitnesses
+  (novelty/coverage/composite) of gen-4.
 * **Continuous amplitude genes**: one genome per pool entry holds the
   displacement σ, strain and shear amplitude caps plus a per-operator mask
   weight. A child is born from its parent's genome mutated (clipped), so
@@ -87,6 +90,11 @@ class GeneticOptimizer:
         batch_accept: int = 8,
         parent_fraction: float = 0.7,
         immigrant_fraction: float = 0.15,
+        # Internal experiment knobs (audit P2-01), deliberately NOT public
+        # request params — parse_request rejects them, so only in-repo
+        # harnesses can set them. Public exposure requires a benchmark-backed
+        # decision; G4-1.5 further showed the reverted levers must not be
+        # re-enabled on the same benchmark seeds.
         gene_mutation_rate: float = 0.3,
         pressure_warmup_pool: int = _PRESSURE_WARMUP_POOL,
         autofrac: bool = False,
@@ -216,9 +224,16 @@ class GeneticOptimizer:
     def _roulette_pick(self, eligible: list[tuple[object, dict]], rng: np.random.Generator):
         """USPEX square-cumulative roulette over ``eligible`` ranks.
 
-        Rank r (0-based) holds Σ_{k=1}^{m-r} k² tickets, so draw probability
-        decays cubically with rank distance; independent of fitness scale.
-        A cold pool draws uniformly instead — with ~8 entries the cubic
+        The cumulative table boundary for rank r (0-based) is
+        Σ_{k=1}^{m-r} k², so the per-draw *marginal* weight of rank r is
+        (m−r)² and P(rank r) ∝ (m−r)² — the probability decays
+        quadratically with rank distance, exactly the distribution USPEX's
+        cumulative tournament table plus last-hit threshold draw yields
+        (the table itself grows cubically toward the best rank; the draw
+        probability is the difference of consecutive entries). Independent
+        of fitness scale.
+
+        A cold pool draws uniformly instead — with ~8 entries the squared
         profile would pin every round on one or two lineages.
         """
         m = len(eligible)

@@ -346,7 +346,17 @@ export default function GenerationConfigPanel({
             aria-label={t("Objective")}
             value={config.objective.type}
             options={objectiveOptions}
-            onChange={(type) => update((c) => ({ ...c, objective: { ...c.objective, type } }))}
+            onChange={(type) =>
+              update((c) => ({
+                ...c,
+                objective: { ...c.objective, type },
+                // The local selection strategy is only meaningful for
+                // local-environment objectives — never submit the pair the
+                // backend would reject.
+                selectionStrategy:
+                  type === "local_environment_novelty" || type === "composite" ? c.selectionStrategy : "structure_fps_v1",
+              }))
+            }
           />
         </div>
         <Collapse ghost activeKey={objectiveAdvancedOpen ? ["objective"] : []} onChange={(keys) => setObjectiveAdvancedOpen(Array.isArray(keys) ? keys.includes("objective") : keys === "objective")} items={[{ key: "objective", label: t("Advanced objective scoring"), children: <div>
@@ -410,6 +420,23 @@ export default function GenerationConfigPanel({
                 </span>
               </div>
             )}
+            <div style={rowStyle}>
+              <span style={labelStyle}>{t("Batch selection")}</span>
+              <Select
+                id="objective-selectionStrategy"
+                style={{ minWidth: 280 }}
+                aria-label={t("Batch selection")}
+                value={config.selectionStrategy}
+                options={[
+                  { value: "structure_fps_v1", label: t("Structure FPS (baseline)") },
+                  { value: "local_incremental_maximin_v1", label: t("Local incremental maximin") },
+                ]}
+                onChange={(selectionStrategy) => update((c) => ({ ...c, selectionStrategy }))}
+              />
+              <span style={{ fontSize: 13, color: "#616161" }}>
+                {t("How accepted candidates are chosen within a round. The local strategy picks by marginal new-environment count and keeps more distinct environments; it only applies to local-environment objectives.")}
+              </span>
+            </div>
           </>
         )}
         <div style={rowStyle}>
@@ -471,8 +498,42 @@ export default function GenerationConfigPanel({
             onChange={(v) => update((c) => ({ ...c, searchTarget: { ...c.searchTarget, regionRadius: v ?? 15.0 } }))}
           />
         </div>
+        <div style={rowStyle}>
+          <span style={labelStyle}>{t("Anchor semantics")}</span>
+          <Select
+            id="searchTarget-targetMode"
+            style={{ minWidth: 240 }}
+            aria-label={t("Anchor semantics")}
+            value={config.searchTarget.targetMode}
+            disabled={!anchorsSet}
+            options={[
+              { value: "structure", label: t("Structure-level target") },
+              { value: "local_environment", label: t("Local-environment target (atomic space)") },
+            ]}
+            onChange={(targetMode) => update((c) => ({ ...c, searchTarget: { ...c.searchTarget, targetMode } }))}
+          />
+          {config.searchTarget.targetMode === "local_environment" && (
+            <>
+              <span style={labelStyle}>{t("Anchor species")}</span>
+              <Input
+                id="searchTarget-anchorSpecies"
+                aria-label={t("Anchor species")}
+                style={{ width: 160 }}
+                placeholder={t("e.g. C, O (empty = all)")}
+                value={config.searchTarget.anchorSpecies}
+                status={issueFor("searchTarget.anchorSpecies") ? "error" : undefined}
+                aria-describedby={`generation-anchor-help${issueFor("searchTarget.anchorSpecies") ? ` ${issueMessageId("searchTarget.anchorSpecies")}` : ""}`}
+                onChange={(event) =>
+                  update((c) => ({ ...c, searchTarget: { ...c.searchTarget, anchorSpecies: event.target.value } }))
+                }
+              />
+            </>
+          )}
+        </div>
         <div id="generation-anchor-help" style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
           {t("Anchor indices start at 0 and refer to the full source dataset. Anchors can sit outside the selected seed view; they are added to the candidate seed pool. Use up to 16 unique frames. The radius is in robust-scaled descriptor units.")}
+          {" "}
+          {t("With a local-environment target the anchors' atomic descriptor rows (optionally filtered to the given element species) steer proposals in atomic space as well — never through a structure mean.")}
         </div>
         {anchorResetNotice && <Alert type="info" showIcon closable onClose={() => setAnchorResetNotice(false)} style={{ marginTop: 6 }} message={t("Target anchor frames were cleared because they belong to the previous source dataset")} />}
         {anchorVisibleError && <div id="generation-anchor-error" role="alert" style={{ color: "#C42B1C", fontSize: 12 }}>{t(anchorVisibleError)}</div>}

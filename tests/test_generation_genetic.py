@@ -272,16 +272,28 @@ class TestParentSelection:
         counts = [picks.count(f"seed_{i}") for i in range(6)]
         assert max(counts) / min(counts) < 1.5  # flat, unlike the cubic profile
 
-    def test_roulette_pressure_decays_with_rank_when_warm(self):
+    def test_roulette_marginal_weights_are_squared_rank_distances(self):
+        # P1-04: the draw distribution's marginal weight for rank r is
+        # (m−r)² — the quadratic profile USPEX's cumulative tournament table
+        # plus last-hit threshold draw yields (the table itself grows
+        # cubically toward the best rank; the probability is the difference
+        # of consecutive entries). Tight enough to reject the cubic
+        # misreading of the old docstring.
         optimizer = _optimizer(pressure_warmup_pool=0)
         optimizer.initialize(_context())
-        pool = _seed_pool(5)
+        pool = _seed_pool(4)
         eligible = [(candidate, optimizer._initial_genome()) for candidate in pool]
         rng = np.random.default_rng(9)
-        picks = [optimizer._roulette_pick(eligible, rng)[0].candidate_id for _ in range(2000)]
-        best = picks.count("seed_0")
-        worst = picks.count("seed_4")
-        assert best > 3 * worst  # cubic decay between adjacent extremes is steeper still
+        draws = 40_000
+        picks = [optimizer._roulette_pick(eligible, rng)[0].candidate_id for _ in range(draws)]
+        m = 4
+        weights = [(m - r) ** 2 for r in range(m)]  # (16, 9, 4, 1)
+        total = sum(weights)
+        for r, candidate in enumerate(pool):
+            expected = weights[r] / total
+            observed = picks.count(candidate.candidate_id) / draws
+            assert abs(observed - expected) < 0.02, (candidate.candidate_id, expected, observed)
+        assert picks.count("seed_0") > picks.count("seed_3") * 5
 
     def test_pool_children_come_from_pool_immigrants_from_seeds(self):
         optimizer = _optimizer(immigrant_fraction=0.0, pressure_warmup_pool=0)

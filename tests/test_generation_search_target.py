@@ -65,6 +65,28 @@ def _accepted(candidate, rank, descriptor) -> CandidateObservation:
     )
 
 
+class _RecordingOperator:
+    """Spy operator: records the params every apply() call received."""
+
+    def __init__(self, name: str, marker: str, *, applicable: bool = True) -> None:
+        self.name = name
+        self.operator_params = {"marker": marker}
+        self.applicable = applicable
+        self.received: list[dict] = []
+
+    def can_apply(self, parent, params: dict) -> bool:
+        return self.applicable
+
+    def apply(self, parent, rng, params: dict):
+        self.received.append(dict(params))
+        return parent.child(
+            candidate_id=f"{parent.candidate_id}_{self.name}_{len(self.received)}",
+            positions=np.asarray(parent.positions, dtype=np.float64),
+            operator=self.name,
+            operator_params=dict(params),
+        )
+
+
 class TestLifecycle:
     def test_propose_before_initialize_is_an_error(self):
         optimizer = _optimizer()
@@ -183,6 +205,213 @@ class TestTargetedPool:
         assert optimizer._targeted_accepted == []
 
 
+class TestOperatorParamBinding:
+    """The params handed to apply() must belong to the operator actually
+    selected — in both the targeted and the classic proposal branch."""
+
+    @staticmethod
+    def _spy_optimizer(operators, n_seeds=2) -> RandomSearchOptimizer:
+        optimizer = RandomSearchOptimizer(list(operators), children_per_seed=6)
+        optimizer.initialize(_context(n_seeds=n_seeds))
+        return optimizer
+
+    def test_targeted_branch_binds_the_selected_operator_params(self):
+        op_a = _RecordingOperator("op_a", "a")
+        op_b = _RecordingOperator("op_b", "b")
+        optimizer = self._spy_optimizer([op_a, op_b])
+        proposal = optimizer.propose(budget=1000, rng=np.random.default_rng(8))
+        # Both operators must be exercised so the binding is checked per side.
+        assert op_a.received and op_b.received
+        for operator in (op_a, op_b):
+            for params in operator.received:
+                assert params["marker"] == operator.operator_params["marker"]
+        for candidate in proposal.candidates:
+            expected = op_a.operator_params["marker"] if candidate.operator == "op_a" else op_b.operator_params["marker"]
+            assert candidate.operator_params["marker"] == expected
+
+    def test_classic_branch_binds_the_selected_operator_params(self):
+        op_a = _RecordingOperator("op_a", "a")
+        op_b = _RecordingOperator("op_b", "b")
+        optimizer = RandomSearchOptimizer([op_a, op_b], children_per_seed=6)
+        optimizer.initialize(OptimizationContext(seed_pool=tuple(_seed_pool()), n_seeds=4, budget=Budget()))
+        optimizer.propose(budget=1000, rng=np.random.default_rng(9))
+        assert op_a.received and op_b.received
+        for operator in (op_a, op_b):
+            for params in operator.received:
+                assert params["marker"] == operator.operator_params["marker"]
+
+    def test_single_operator_receives_its_own_params(self):
+        only = _RecordingOperator("only_op", "only")
+        optimizer = self._spy_optimizer([only])
+        optimizer.propose(budget=1000, rng=np.random.default_rng(10))
+        assert only.received
+        assert all(params["marker"] == "only" for params in only.received)
+
+    def test_inapplicable_operator_is_skipped_in_the_targeted_branch(self):
+        blocked = _RecordingOperator("blocked_op", "blocked", applicable=False)
+        fallback = _RecordingOperator("fallback_op", "fallback")
+        optimizer = self._spy_optimizer([blocked, fallback])
+        proposal = optimizer.propose(budget=1000, rng=np.random.default_rng(11))
+        assert blocked.received == []
+        assert fallback.received
+        assert all(params["marker"] == "fallback" for params in fallback.received)
+        assert {candidate.operator for candidate in proposal.candidates} == {"fallback_op"}
+
+
+class TestLocalAnchorTargeting:
+    """R3.4: local-environment anchors — the atomic-space target signal."""
+
+    def test_local_kernel_distinguishes_structurally_identical_seeds(self):
+        # Both seeds sit ON the structure anchor, so structure targeting
+        # cannot tell them apart; only the atomic-space signal does:
+        # seed_0's environments are the target, seed_1's are far from it.
+        optimizer = _optimizer()
+        near = np.zeros(6)
+        optimizer.initialize(
+            OptimizationContext(
+                seed_pool=tuple(_seed_pool(2)),
+                n_seeds=2,
+                budget=Budget(),
+                seed_descriptors=(near, near),
+                anchor_descriptors=(near,),
+                region_radius=15.0,
+                local_anchor_descriptors=(np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]),),
+                seed_local_distances=(0.0, 50.0),
+            )
+        )
+        proposal = optimizer.propose(budget=1000, rng=np.random.default_rng(21))
+        parents = [candidate.parent_candidate_id for candidate in proposal.candidates]
+        assert parents.count("seed_0") > parents.count("seed_1") * 5
+
+    def test_local_kernel_is_inert_without_local_anchors(self):
+        # Same context minus the local anchors: both structure-identical
+        # seeds are equally likely again — the local signal is additive, not
+        # a replacement for the structure kernel.
+        near = np.zeros(6)
+
+        def _make(with_local: bool) -> RandomSearchOptimizer:
+            optimizer = _optimizer()
+            context = OptimizationContext(
+                seed_pool=tuple(_seed_pool(2)),
+                n_seeds=2,
+                budget=Budget(),
+                seed_descriptors=(near, near),
+                anchor_descriptors=(near,),
+                region_radius=15.0,
+                seed_local_distances=(0.0, 50.0),
+            )
+            if with_local:
+                context = OptimizationContext(
+                    seed_pool=tuple(_seed_pool(2)),
+                    n_seeds=2,
+                    budget=Budget(),
+                    seed_descriptors=(near, near),
+                    anchor_descriptors=(near,),
+                    region_radius=15.0,
+                    local_anchor_descriptors=(np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]),),
+                    seed_local_distances=(0.0, 50.0),
+                )
+            optimizer.initialize(context)
+            return optimizer
+
+        parents_without = [
+            candidate.parent_candidate_id for candidate in _make(False).propose(budget=1000, rng=np.random.default_rng(22)).candidates
+        ]
+        parents_with = [
+            candidate.parent_candidate_id for candidate in _make(True).propose(budget=1000, rng=np.random.default_rng(22)).candidates
+        ]
+        assert parents_without.count("seed_1") > 0
+        assert parents_with.count("seed_1") == 0
+
+    def test_retention_uses_the_combined_distance(self):
+        # Six accepted children, only the first locally exact: after the
+        # nearest-combined pruning to 4, the locally-exact entry survives
+        # and sorts first.
+        optimizer = _optimizer(children_per_seed=6)
+        anchor = np.zeros(6)
+        optimizer.initialize(
+            OptimizationContext(
+                seed_pool=tuple(_seed_pool(1)),
+                n_seeds=1,
+                budget=Budget(),
+                seed_descriptors=(np.full(6, 10.0),),
+                anchor_descriptors=(anchor,),
+                region_radius=15.0,
+                local_anchor_descriptors=(np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]),),
+                seed_local_distances=(5.0,),
+            )
+        )
+        proposal = optimizer.propose(budget=100, rng=np.random.default_rng(7))
+        observations = []
+        for rank, candidate in enumerate(proposal.candidates):
+            local_rows = np.array([[2.0, 0.0, 0.0, 0.0, 0.0, 0.0]]) if rank == 0 else np.full((1, 6), 100.0)
+            observations.append(
+                CandidateObservation(
+                    candidate_id=candidate.candidate_id,
+                    generation=1,
+                    candidate=candidate,
+                    valid=True,
+                    accepted=True,
+                    selection_rank=rank,
+                    structure_descriptor=anchor if rank == 0 else np.full(6, 100.0),
+                    local_descriptor=local_rows,
+                )
+            )
+        optimizer.observe(ObservationBatch(generation=1, observations=observations))
+        assert len(optimizer._targeted_accepted) == 4
+        assert optimizer._targeted_local_distances[0] == pytest.approx(0.0)
+        assert optimizer.state_dict()["targeting"]["local_anchors"] == 1
+
+    def test_engine_feeds_local_descriptors_through_observations(self):
+        from mdescriptor_studio_backend.analysis.sampling import fit_scaling
+        from mdescriptor_studio_backend.generation.archive import DescriptorArchive, LocalEnvironmentArchive
+        from mdescriptor_studio_backend.generation.constraints import build_constraints
+        from mdescriptor_studio_backend.generation.engine import GenerationEngine
+        from mdescriptor_studio_backend.generation.evaluator import DescriptorEvaluation
+        from mdescriptor_studio_backend.generation.objectives import CompositeObjective
+
+        pool = _seed_pool(6)
+        reference = np.stack([candidate.positions.mean(axis=0) for candidate in pool])
+        structure_scaling, _ = fit_scaling(reference, "robust")
+        atom_reference = np.concatenate([candidate.positions for candidate in pool])
+        local_scaling, _ = fit_scaling(atom_reference, "robust")
+        local_archive = LocalEnvironmentArchive(atom_reference, local_scaling)
+        anchor = np.asarray(reference[0], dtype=np.float64)
+
+        class _StubEvaluator:
+            def evaluate(self, candidates, *, return_atomic=False, control=None):
+                rows = np.concatenate([np.asarray(c.positions, dtype=np.float64) for c in candidates])
+                offsets = np.concatenate([[0], np.cumsum([len(c.positions) for c in candidates])]).astype(np.int64)
+                pooled = np.stack(
+                    [rows[int(offsets[i]) : int(offsets[i + 1])].mean(axis=0) for i in range(len(candidates))]
+                )
+                return DescriptorEvaluation(structure_values=pooled, atomic_values=rows, row_offsets=offsets)
+
+        optimizer = _optimizer(children_per_seed=2)
+        engine = GenerationEngine(
+            seed_pool=pool,
+            evaluator=_StubEvaluator(),
+            structure_archive=DescriptorArchive(reference, structure_scaling),
+            local_archive=local_archive,
+            objective=CompositeObjective(structure_weight=0.0, local_weight=1.0, novelty_threshold=0.25),
+            optimizer=optimizer,
+            constraints=build_constraints({"min_distance_mode": "none"}),
+            budget=Budget(max_evaluations=60, max_accepted=6, max_generations=3),
+            rng=np.random.default_rng(13),
+            n_seeds=3,
+            seed_descriptors=tuple(np.asarray(row, dtype=np.float64) for row in reference),
+            anchor_descriptors=(anchor,),
+            region_radius=15.0,
+            local_anchor_descriptors=(np.zeros(3),),
+            seed_local_distances=tuple(0.0 for _ in pool),
+        )
+        result = engine.run()
+        assert result.accepted_count > 0
+        # Observations carried atomic rows into the optimizer's pool.
+        assert any(dl is not None for dl in optimizer._targeted_local_distances)
+        assert optimizer.state_dict()["targeting"]["local_anchors"] == 1
+
+
 class TestRequestGating:
     @staticmethod
     def _request(**overrides) -> dict:
@@ -212,11 +441,43 @@ class TestRequestGating:
         assert request.anchor_frames == []
         assert request.region_radius == 15.0
 
-    def test_anchor_validation(self):
+    def test_target_mode_defaults_to_structure(self):
+        request = parse_request(self._request())
+        assert request.target_mode == "structure"
+        assert request.anchor_species == []
+
+    def test_local_mode_normalizes_species(self):
+        request = parse_request(self._request(target_mode="local_environment", anchor_species=["C", "O"]))
+        assert request.target_mode == "local_environment"
+        assert request.anchor_species == ["C", "O"]
+
+    def test_local_mode_requires_anchors(self):
         from mdescriptor_studio_backend.errors import AppError
 
-        # An empty list is "no target", not an error.
-        assert parse_request(self._request(anchor_frames=[])).anchor_frames == []
+        with pytest.raises(AppError, match="requires anchor_frames"):
+            parse_request(self._request(anchor_frames=[], target_mode="local_environment"))
+
+    def test_local_mode_requires_the_random_optimizer(self):
+        from mdescriptor_studio_backend.errors import AppError
+
+        with pytest.raises(AppError, match="random optimizer"):
+            parse_request(
+                self._request(
+                    optimizer="genetic",
+                    optimizer_params={"children_per_seed": 4, "batch_accept": 2, "n_seeds": 8},
+                    target_mode="local_environment",
+                )
+            )
+
+    def test_unknown_species_rejected(self):
+        from mdescriptor_studio_backend.errors import AppError
+
+        with pytest.raises(AppError, match="unknown element symbols"):
+            parse_request(self._request(target_mode="local_environment", anchor_species=["Xx"]))
+
+    def test_anchor_mode_and_strategy_gating(self):
+        from mdescriptor_studio_backend.errors import AppError
+
         with pytest.raises(AppError, match="anchor_frames"):
             parse_request(self._request(anchor_frames=[1, 2.5]))
         with pytest.raises(AppError, match="anchor_frames"):

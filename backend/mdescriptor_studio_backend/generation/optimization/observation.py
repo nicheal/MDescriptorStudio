@@ -42,6 +42,10 @@ class CandidateObservation:
     # Scaled structure descriptor for candidates that reached evaluation —
     # the input for optimizer-maintained descriptor-diverse parent pools.
     structure_descriptor: np.ndarray | None = None
+    # Scaled ATOMIC descriptor rows of the candidate, populated only while
+    # local-environment targeting is active (audit R3.4) — the atomic-space
+    # signal the targeted branch multiplies into its proposal weights.
+    local_descriptor: np.ndarray | None = None
 
 
 @dataclass(frozen=True)

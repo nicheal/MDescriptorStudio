@@ -40,3 +40,12 @@ class OptimizationContext:
     # Target-region width in robust-scaled descriptor units; meaningful only
     # together with anchor_descriptors.
     region_radius: float | None = None
+    # Local-environment anchors (audit R3.4): scaled ATOMIC descriptor rows of
+    # the anchor frames (optionally species-filtered) — the atomic-space
+    # target definition. Empty unless the request asked for
+    # target_mode="local_environment" on an atom-level run.
+    local_anchor_descriptors: tuple = ()
+    # Per-seed minimum distance from the seed's own atom rows to the local
+    # anchors (aligned with seed_pool; None where the seed has no reference
+    # rows). Precomputed by the worker, which owns the frozen reference rows.
+    seed_local_distances: tuple = ()

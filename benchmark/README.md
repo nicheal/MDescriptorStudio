@@ -81,3 +81,29 @@ the run's own geometry constraints (the worker refuses pathological anchors).
 Discovery and proximity are deliberately different yardsticks: target_region
 trades global discovery for accepted structures concentrated around the
 anchors, so compare each optimizer on the metric it is aiming at.
+
+## Pre-registered sweeps (audit P1-06/R4)
+
+`--config benchmark/config.json` runs the frozen R4 pre-registration instead
+of ad-hoc flags: repeats, budget, optimizer groups, anchor frames, region
+radius and the selection strategy all come from the config, and the frozen
+scenario keys (operators/objective/constraints/optimizer_params/region
+radius) are validated against the harness constants — a divergence exits
+instead of benchmarking a different experiment.
+
+A pre-registered run writes, into its `results/<utc>/` directory:
+
+* `config.used.json` — the exact frozen scenario;
+* `environment.json` — python/platform/cpu/package versions;
+* `run_results.jsonl` — one JSON line per run (per-seed canonical record),
+  appended incrementally so an interrupted sweep still leaves data;
+* `summary.json` and `genetic_vs_random.json` — aggregated views;
+* `SHA256SUMS` — checksums of everything above.
+
+Historical sweeps produced before the 2026-09-29 harness fixes (anchor roles
+split into metric vs search anchors, within_radius at the configured 15.0
+radius, worker-consistent forced anchors) are kept as historical records only:
+their `random` label ran with anchors present, so proximity numbers for
+untargeted groups are not interpretable and must never be mixed with
+post-fix results in the same table or figure. See
+`docs/generation_verification_matrix.md` for the version fields to cite.
