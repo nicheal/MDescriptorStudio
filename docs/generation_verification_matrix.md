@@ -44,3 +44,10 @@
   - **P1 策略口径**：local 策略的 fitness elite 排序改为与 FPS 共享 `_fitness_elite_order`（稳定升序反转 = 同分取后输入序；FPS 历史顺序逐位不变，golden 基线不受影响）；`max_candidates` 精英上限不再把池截断到预算以下（等预算接收数与 FPS 一致，审计案例 J）。两策略版本号维持 `local_incremental_maximin_v1` / `structure_fps_v1`——口径修正记录于本行，跨版本比较局域策略结果时注意分界。
   - **P1 边界**：全空原子行批次跳过 local archive 更新（此前在结构档案更新后抛 ValueError，状态不一致）。
   - **顺序依赖契约（不修码）**：严格计数 = "给定访问顺序（选择序 → 行序）的贪心严格间隔代表数"，非排列不变量；已写入 docstring 并由 `test_visit_order_is_part_of_the_metric_contract` 钉住。排列不变指标需要稳定候选身份 + 版本化重定义（升 gen-5），未排期。
+
+## 5. 用户决策记录
+
+> **用户决策（2026-09-30）**：① P1-06 原始 extxyz 数据暂不发布，留待以后——仓库内汇总包
+> （`benchmark/published/2026-09-30-r4/`，配对分析可独立复算）即为现行发布形态；② R5.1 完整状态机
+> 与能量/力筛选接口**等待 mdescriptor 引擎支持能量和力预测**后再设计，当前以 accepted.extxyz 的
+> 显式状态字段（geometry_passed/descriptor_novel/energy_screened=false/train_set_ready=false）为准。
