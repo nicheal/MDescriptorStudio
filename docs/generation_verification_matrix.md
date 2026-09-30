@@ -40,7 +40,7 @@
 - 审计修复批次落地前的全部 L4 数值（含三份 docs/reviews 记录中的表格）为历史记录；R4 预注册重跑（`benchmark/config.json` 冻结场景）完成前，不得将新旧数值混入同一图表或结论。
 - P1-04 裁定（2026-09-29）：轮盘实现的边际权重 (m−r)² 为 USPEX 忠实移植（累计表 + 阈值抽样的边际即相邻表项之差），docstring 表述已修正，分布检验钉住平方剖面；实现未变 → gen-4 不升版。若未来改用累计票数（立方压力），须升 gen-5 并重做 L4。
 - 2026-09-30 局域选择审计批次（`docs/plan/MDescriptorStudio_Local_Selection_Audit_2026-09-30.md`；完成记录 `docs/reviews/2026-09-30-local-selection-audit-fixes.md`）：
-  - **P0 计数空间统一**：`count_strict_unique_environments` 的批内比较（已计入去重、候选内去重）从 raw 空间移入 archive 缩放空间（与阈值、局域策略同空间；archive 掩码仍以 raw 行查询，避免二次缩放）。字段语义（"冻结档案 + 本轮已计入去重"）不变，属计数正确性修复 → gen-4 维持；**所有 2026-09-30 修复前产生的 unique_novel_environments 数值（含正在进行的 R4 重跑，其进程内存加载的是修复前代码）在引用时须注明"缩放空间修复前口径"**，不得与修复后运行直接混排。
+  - **P0 计数空间统一**：`count_strict_unique_environments` 的批内比较（已计入去重、候选内去重）从 raw 空间移入 archive 缩放空间（与阈值、局域策略同空间；archive 掩码仍以 raw 行查询，避免二次缩放）。字段语义（"冻结档案 + 本轮已计入去重"）不变，属计数正确性修复 → gen-4 维持；**所有 2026-09-30 修复前产生的 unique_novel_environments 数值（含已完成的 R4 重跑 20260929T043150Z，其进程加载的是修复前代码）在引用时须注明"缩放空间修复前口径"**，不得与修复后运行直接混排。
   - **P1 策略口径**：local 策略的 fitness elite 排序改为与 FPS 共享 `_fitness_elite_order`（稳定升序反转 = 同分取后输入序；FPS 历史顺序逐位不变，golden 基线不受影响）；`max_candidates` 精英上限不再把池截断到预算以下（等预算接收数与 FPS 一致，审计案例 J）。两策略版本号维持 `local_incremental_maximin_v1` / `structure_fps_v1`——口径修正记录于本行，跨版本比较局域策略结果时注意分界。
   - **P1 边界**：全空原子行批次跳过 local archive 更新（此前在结构档案更新后抛 ValueError，状态不一致）。
   - **顺序依赖契约（不修码）**：严格计数 = "给定访问顺序（选择序 → 行序）的贪心严格间隔代表数"，非排列不变量；已写入 docstring 并由 `test_visit_order_is_part_of_the_metric_contract` 钉住。排列不变指标需要稳定候选身份 + 版本化重定义（升 gen-5），未排期。

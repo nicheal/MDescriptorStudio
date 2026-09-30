@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mdescriptor_studio_backend.analysis.sampling import fit_scaling
+from mdescriptor_studio_backend.analysis.sampling import apply_scaling, fit_scaling
 from mdescriptor_studio_backend.errors import AppError, INVALID_PARAMS
 from mdescriptor_studio_backend.generation.archive import LocalEnvironmentArchive
 from mdescriptor_studio_backend.generation.engine import (
@@ -32,6 +32,23 @@ def _one_dim_archive(rows: list[float]) -> LocalEnvironmentArchive:
 
 def _offsets(sizes: list[int]) -> np.ndarray:
     return np.concatenate([[0], np.cumsum(sizes)]).astype(np.int64)
+
+
+def _scaled_oracle(selected, atomic, offsets, threshold, archive) -> int:
+    """Independent scalar-loop strict count, written straight from the
+    metric definition in the archive's scaled space — not via the engine
+    helpers — so it can catch a space or ordering regression in the shared
+    counter (2026-09-30 audit §7.1)."""
+    atomic = np.asarray(atomic, dtype=np.float64)
+    scaled = apply_scaling(archive.scaling, atomic)
+    memory: list[np.ndarray] = []
+    for index in selected:
+        for j in range(int(offsets[index]), int(offsets[index + 1])):
+            if archive.nearest_per_row(atomic[j : j + 1])[0] <= threshold:
+                continue
+            if all(np.linalg.norm(scaled[j] - kept) > threshold for kept in memory):
+                memory.append(scaled[j])
+    return len(memory)
 
 
 class TestSameMeanDifferentEnvironments:
@@ -66,7 +83,12 @@ class TestSameMeanDifferentEnvironments:
         assert fps_unique == 2
         # The local strategy claims both genuinely distinct environment groups.
         assert local_unique == 4
-        assert set(local) == {0, 2}
+        # Equal fitness everywhere: the shared elite order (the FPS
+        # baseline's reversed-stable, see _fitness_elite_order) picks the
+        # *later* input index first, so the first pick is c3 and the second
+        # is the env-distinct c2 — c1, the near-duplicate FPS wastes a slot
+        # on, is never selected.
+        assert set(local) == {2, 3}
         # The premise: structure values do not track environment redundancy.
         assert structure_values[0] == structure_values[3]  # same structure, same envs
         assert structure_values[0, 0] != structure_values[1, 0]  # far structure, dup envs
@@ -103,23 +125,32 @@ class TestFixedSyntheticBenchmark:
             assert local_unique >= fps_unique, f"seed {seed}: {local_unique} < {fps_unique}"
 
     def test_local_strategy_reports_what_it_optimizes(self):
-        # The greedy's total gain equals the strict unique count of its
-        # selection — strategy and reported metric are one definition.
+        # The strict unique count of the selection equals an independent
+        # scaled-space oracle — the strategy optimizes exactly the metric
+        # the benchmark reports (2026-09-30 audit §7.1: this used to assert
+        # only ``unique > 0`` while the counter lived in raw space).
         rng = np.random.default_rng(17)
         n_candidates, rows_per_candidate, dim = 30, 5, 3
         atomic = rng.uniform(0.0, 15.0, size=(n_candidates * rows_per_candidate, dim))
         offsets = _offsets([rows_per_candidate] * n_candidates)
-        structure_values = atomic[:, :].reshape(n_candidates, rows_per_candidate, dim).mean(axis=1)
+        structure_values = atomic.reshape(n_candidates, rows_per_candidate, dim).mean(axis=1)
         fitness = rng.uniform(0.0, 1.0, size=n_candidates)
         reference = rng.uniform(0.0, 15.0, size=(20, dim))
         scaling, _ = fit_scaling(reference, "robust")
         archive = LocalEnvironmentArchive(reference, scaling)
+        threshold = 0.5
         local = select_local_incremental_batch(
             fitness, structure_values, atomic, offsets, budget=6,
-            local_archive=archive, threshold=0.5,
+            local_archive=archive, threshold=threshold,
         )
-        unique = count_strict_unique_environments(local, atomic, offsets, 0.5, archive)
+        unique = count_strict_unique_environments(local, atomic, offsets, threshold, archive)
         assert unique > 0
+        # Robust scaling moves every row: raw-space comparisons cannot agree
+        # with this oracle — the equality locks the counter (and the greedy
+        # memory, whose gains this count sums over the selection) into the
+        # archive's scaled space, across the within-candidate and
+        # cross-candidate dedup branches alike.
+        assert unique == _scaled_oracle(local, atomic, offsets, threshold, archive)
 
 
 class TestBoundedConsideration:
@@ -169,6 +200,55 @@ class TestBoundedConsideration:
         )
         assert sorted(selection) == [0, 1, 2]
         assert count_strict_unique_environments(selection, atomic, offsets, 1.0, archive) == 1
+
+    def test_budget_above_the_elite_cap_still_fills_like_fps(self):
+        # 2026-09-30 audit case J: 129 one-row candidates, budget 129 — the
+        # old pool truncation at max_candidates=128 silently accepted one
+        # fewer than the uncapped FPS baseline. The cap may only limit the
+        # elite surplus beyond the budget, never the budget itself.
+        n = 129
+        atomic = np.arange(3.0, 3.0 + 2.0 * n, 2.0)[:, None]  # pairwise distance 2 > threshold
+        offsets = _offsets([1] * n)
+        fitness = np.ones(n)
+        archive = _one_dim_archive([0.0])
+        local = select_local_incremental_batch(
+            fitness, atomic, atomic, offsets, budget=n,
+            local_archive=archive, threshold=1.0,
+        )
+        fps = select_diverse_batch(fitness, atomic, budget=n)
+        assert len(local) == len(fps) == n
+        assert count_strict_unique_environments(local, atomic, offsets, 1.0, archive) == n
+
+
+class TestEliteTieContract:
+    def test_equal_fitness_elites_match_the_fps_baseline(self):
+        # 2026-09-30 audit case F: with equal fitness and a budget/pool
+        # cutoff inside the tie group, the strategies used to pick different
+        # identities (local kept earlier ties via ``argsort(-fitness)``;
+        # FPS's reversed stable sort keeps later ones). Both now share the
+        # FPS baseline's elite order, so the picks agree under any input
+        # permutation of the tie group.
+        rows = np.array([[3.0], [5.0]])
+        offsets = _offsets([1, 1])
+        fitness = np.ones(2)
+        structure = np.array([[0.0], [2.0]])
+        archive = _one_dim_archive([100.0])  # every row far outside → gain 1 each
+        for f, s, r in (
+            (fitness, structure, rows),
+            (fitness, structure[::-1], rows[::-1]),
+        ):
+            local = select_local_incremental_batch(
+                f, s, r, offsets, 1, local_archive=archive, threshold=1.0
+            )
+            assert local == select_diverse_batch(f, s, 1)
+
+    def test_empty_reference_archive_rejected_empty_accepted_supported(self):
+        # 2026-09-30 audit case H (contract): "no accepted structures yet"
+        # is a valid archive state; a truly empty reference set is not.
+        archive = _one_dim_archive([5.0])
+        assert archive.accepted_matrix is None
+        with pytest.raises(ValueError, match="non-empty"):
+            LocalEnvironmentArchive(np.empty((0, 1)), archive.scaling)
 
 
 class TestEngineIntegration:

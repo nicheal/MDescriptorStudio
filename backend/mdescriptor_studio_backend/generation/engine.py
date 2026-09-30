@@ -80,6 +80,12 @@ def _candidate_novel_rows(
     one definition: archive-near rows are dropped, rows within ``threshold``
     of an already-counted row are dropped, and within-candidate duplicates
     are deduped greedily in fixed row order.
+
+    Space contract (2026-09-30 audit P0): ``rows`` must already live in the
+    space every batch-internal comparison is defined in (the archive's
+    scaled space) and ``archive_novel`` must be a mask over those same row
+    indices — computed by querying the archive with the RAW rows, since
+    ``nearest_per_row`` scales internally.
     """
     fresh = rows[archive_novel]
     if fresh.shape[0] and counted is not None:
@@ -118,15 +124,33 @@ def count_strict_unique_environments(
     only through the formal local_archive update. This one function is the
     single definition behind the round metric, the discovery-rate stop and
     the local selection strategy (P0-02/P1-01/P1-03).
+
+    Every batch-internal comparison (already-counted dedup, within-candidate
+    dedup) runs in the archive's scaled space — the space the threshold is
+    defined in and the local strategy optimizes in (2026-09-30 audit P0: a
+    raw-space counter over-counted when the archive scale > 1 and
+    under-counted when < 1). The frozen-archive mask still queries raw rows
+    because ``nearest_per_row`` applies the scaling itself — never pass it
+    scaled rows, that would scale twice.
+
+    The count is defined for the given visit order (selection order, then
+    stored row order): threshold nearness is not transitive, so permuting
+    candidates or atomic rows may legitimately change the greedy count. A
+    permutation-invariant metric needs stable candidate identities and a
+    versioned redefinition, not a silent change here.
     """
+    atomic_values = np.asarray(atomic_values, dtype=np.float64)
+    threshold = float(threshold)
+    scaled = apply_scaling(local_archive.scaling, atomic_values)
     counted: np.ndarray | None = None
     unique = 0
     for index in selected:
         lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
-        rows = np.asarray(atomic_values[lo:hi], dtype=np.float64)
+        rows = atomic_values[lo:hi]
         if rows.shape[0] == 0:
             continue
-        block = _candidate_novel_rows(rows, local_archive.nearest_per_row(rows) > threshold, counted, threshold)
+        archive_novel = local_archive.nearest_per_row(rows) > threshold
+        block = _candidate_novel_rows(scaled[lo:hi], archive_novel, counted, threshold)
         if block.shape[0]:
             unique += int(block.shape[0])
             counted = block if counted is None else np.vstack([counted, block])
@@ -205,6 +229,20 @@ class GenerationRunResult:
         return int(sum(r.evaluations for r in self.rounds)) if self.rounds else 0
 
 
+def _fitness_elite_order(fitness: np.ndarray, finite: np.ndarray, pool_size: int) -> np.ndarray:
+    """Descending-fitness elite order: stable ascending argsort, reversed.
+
+    This is ``structure_fps_v1``'s historical order, kept bit-identical on
+    purpose — equal-fitness ties resolve to the *later* input index first.
+    Both selection strategies share this one helper so a pool cutoff or
+    budget that falls inside an equal-fitness group leaves the same elite
+    membership and pick order in both (2026-09-30 audit P1: the local
+    strategy used to sort ``-fitness`` stably and kept *earlier* ties, so
+    the two strategies could pick different identities from one tie group).
+    """
+    return finite[np.argsort(fitness[finite], kind="stable")[::-1][:pool_size]]
+
+
 def select_diverse_batch(
     fitness: np.ndarray,
     candidate_values: np.ndarray,
@@ -226,7 +264,7 @@ def select_diverse_batch(
     if finite.size == 0 or budget <= 0:
         return []
     pool_size = min(max(int(budget) * int(top_pool_factor), int(budget)), int(finite.size))
-    ranked = finite[np.argsort(fitness[finite], kind="stable")[::-1][:pool_size]]
+    ranked = _fitness_elite_order(fitness, finite, pool_size)
     pool = candidate_values[ranked]
     picked = farthest_point_sampling(pool, n_samples=min(int(budget), pool.shape[0]))
     return [int(ranked[i]) for i in picked.indices]
@@ -256,16 +294,21 @@ def select_local_incremental_batch(
     ``count_strict_unique_environments`` semantics, so the strategy optimizes
     the metric the benchmark reports). Ties break on the maximin structure
     distance to the already-selected candidates — before the first selection
-    the ranked order decides — and zero-gain candidates still fill the batch
-    so accepted counts stay comparable with the baseline at equal budget.
+    the ranked order decides, which is the shared descending-fitness elite
+    order of :func:`_fitness_elite_order` (ties in reverse input order,
+    identical to the FPS baseline so equal-fitness cutoffs compare fairly) —
+    and zero-gain candidates still fill the batch so accepted counts stay
+    comparable with the baseline at equal budget.
 
     Compute is bounded by design (audit R3.3): the elite pool caps the
     per-step candidate sweep at ``max_candidates`` (on top of the
-    ``budget * top_pool_factor`` bound), all distance passes run through the
-    blocked ``min_sqdist_to_set`` kernel (no materialized N×M matrix), and
-    the batch memory holds only the counted novel rows. Atomic rows are
-    scaled once with the archive's own scaling so every comparison lives in
-    the space the threshold is defined in.
+    ``budget * top_pool_factor`` bound) — but never below the requested
+    budget, so acceptance counts stay equal to the uncapped FPS baseline
+    whenever the budget exceeds the cap (2026-09-30 audit case J) —, all
+    distance passes run through the blocked ``min_sqdist_to_set`` kernel (no
+    materialized N×M matrix), and the batch memory holds only the counted
+    novel rows. Atomic rows are scaled once with the archive's own scaling
+    so every comparison lives in the space the threshold is defined in.
     """
     fitness = np.asarray(fitness, dtype=np.float64)
     finite = np.flatnonzero(np.isfinite(fitness))
@@ -274,9 +317,13 @@ def select_local_incremental_batch(
     pool_size = min(
         max(int(budget) * int(top_pool_factor), int(budget)),
         int(finite.size),
-        max(1, int(max_candidates)),
+        # The elite cap bounds the sweep, but truncating the pool below the
+        # budget would silently accept fewer candidates than the FPS
+        # baseline at the same budget — the cap may only limit the elite
+        # surplus beyond it.
+        max(int(budget), max(1, int(max_candidates))),
     )
-    ranked = finite[np.argsort(-fitness[finite], kind="stable")[:pool_size]]
+    ranked = _fitness_elite_order(fitness, finite, pool_size)
     candidate_values = np.asarray(candidate_values, dtype=np.float64)
     atomic_values = np.asarray(atomic_values, dtype=np.float64)
     threshold = float(threshold)
@@ -629,7 +676,15 @@ class GenerationEngine:
                             )
                             for k in range(len(entries))
                         ]
-                        self.local_archive.add(rows, local_entries)
+                        # A degenerate evaluator may return zero-length atom
+                        # row segments for every accepted structure (the
+                        # objective scores them 0 and the strategies fill the
+                        # batch). Such a batch contributes nothing to the
+                        # environment archive — skip the add instead of
+                        # raising after the structure archive was updated
+                        # (2026-09-30 audit: all-empty local batch).
+                        if rows.shape[0]:
+                            self.local_archive.add(rows, local_entries)
                     best_round_fitness = float(max(fitness[i] for i in selected))
                     if scores.novel_environment_count is not None:
                         novel_environments = int(sum(int(scores.novel_environment_count[i]) for i in selected))

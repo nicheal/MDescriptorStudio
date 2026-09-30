@@ -580,3 +580,150 @@ class TestUniqueEnvironmentMetric:
             # A single-candidate selection cannot dedup anything away, and
             # its rows are far from the frozen reference (σ=10 displacement).
             assert record.unique_novel_environments == record.novel_environments > 0
+
+    def test_counter_counts_in_the_archive_scaled_space(self):
+        # 2026-09-30 audit P0 / case A: the counter must dedup in the same
+        # scaled space the threshold is defined in. The old raw-space counter
+        # over-counted when the archive scale > 1 and under-counted when < 1,
+        # in both the within-candidate and the cross-candidate branch.
+        for reference, blocks, expected in [
+            ((-10.0, 10.0), [(30.0, 35.0)], 1),  # standardized scale 10 → scaled gap 0.5
+            ((-10.0, 10.0), [(30.0,), (35.0,)], 1),
+            ((-0.1, 0.1), [(0.3, 0.45)], 2),  # standardized scale 0.1 → scaled gap 1.5
+            ((-0.1, 0.1), [(0.3,), (0.45,)], 2),
+        ]:
+            engine = _engine(42)
+            ref = np.asarray(reference, dtype=np.float64)[:, None]
+            scaling, _ = fit_scaling(ref, "standardized")
+            engine.local_archive = LocalEnvironmentArchive(ref, scaling)
+            atomic = np.asarray([v for block in blocks for v in block], dtype=np.float64)[:, None]
+            offsets = np.concatenate([[0], np.cumsum([len(b) for b in blocks])]).astype(np.int64)
+            assert (
+                engine._count_unique_novel_environments(list(range(len(blocks))), atomic, offsets, 1.0)
+                == expected
+            ), (reference, blocks)
+
+    def test_visit_order_is_part_of_the_metric_contract(self):
+        # 2026-09-30 audit P1 / cases B+C: threshold nearness is not
+        # transitive, so the greedy count is defined for the GIVEN visit
+        # order — selection order, then stored row order. Permuting
+        # candidates or atom rows may legitimately change it. This pins the
+        # documented semantics: a permutation-invariant metric needs stable
+        # candidate identities and a versioned redefinition, not a silent
+        # change here.
+        engine = _engine(42)
+        reference = np.array([[0.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+        rows = np.array([[3.0], [3.75], [4.5]])
+        offsets = np.arange(4, dtype=np.int64)
+        # A first picks 3.0, then 4.5 is still 1.5 away → two environments.
+        assert engine._count_unique_novel_environments([0, 1, 2], rows, offsets, 1.0) == 2
+        # B first claims 3.75; 3.0 and 4.5 both sit 0.75 away → one.
+        assert engine._count_unique_novel_environments([1, 0, 2], rows, offsets, 1.0) == 1
+        # Same within one structure's atom row order:
+        assert engine._count_unique_novel_environments([0], rows, np.array([0, 3]), 1.0) == 2
+        reordered = np.array([[3.75], [3.0], [4.5]])
+        assert engine._count_unique_novel_environments([0], reordered, np.array([0, 3]), 1.0) == 1
+
+    def test_discarded_duplicate_rows_still_enter_the_next_round_archive(self):
+        # 2026-09-30 audit §7.6: rows dropped by same-round dedup never join
+        # the round's counted set, but the formal archive update stores every
+        # accepted structure's rows — next round they are legitimate
+        # references (4.5 sits 0.75 from the stored 3.75 and counts 0).
+        engine = _engine(42)
+        reference = np.array([[0.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+        rows = np.array([[3.0], [3.75]])
+        offsets = np.array([0, 2])
+        assert engine._count_unique_novel_environments([0], rows, offsets, 1.0) == 1
+        engine.local_archive.add(rows, [])
+        assert engine._count_unique_novel_environments(
+            [0], np.array([[4.5]]), np.array([0, 1]), 1.0
+        ) == 0
+
+
+class TestArchiveUpdateContract:
+    def test_local_archive_updated_once_per_round_with_frozen_queries(self, monkeypatch):
+        # 2026-09-30 audit §7.5: the update order contract is locked by spy,
+        # not by archive sizes — exactly one local add per accepting round
+        # carrying the whole accepted batch, and every nearest-per-row query
+        # inside a round sees the frozen pre-round archive.
+        class _ConstantEvaluator:
+            def evaluate(self, candidates, *, return_atomic=False, control=None):
+                n = len(candidates)
+                return DescriptorEvaluation(
+                    structure_values=np.full((n, 3), 3.0),
+                    atomic_values=np.full((2 * n, 3), 3.0),
+                    row_offsets=np.arange(0, 2 * n + 1, 2),
+                )
+
+        engine = _engine(
+            42,
+            evaluator=_ConstantEvaluator(),
+            objective=CompositeObjective(structure_weight=0.0, local_weight=1.0, novelty_threshold=1.0),
+            budget=Budget(max_evaluations=100, max_accepted=4, max_generations=2),
+            batch_accept=2,
+        )
+        engine.selection_strategy = "local_incremental_maximin_v1"
+        engine.constraints = build_constraints({"min_distance_mode": "none"})
+        reference = np.zeros((1, 3))
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+
+        events: list[tuple] = []
+        original_query = engine.local_archive.nearest_per_row
+        original_add = engine.local_archive.add
+
+        def query(rows):
+            events.append(("query", engine.local_archive.atom_row_count))
+            return original_query(rows)
+
+        def add(rows, entries):
+            events.append(("add", engine.local_archive.atom_row_count, len(rows), len(entries)))
+            return original_add(rows, entries)
+
+        monkeypatch.setattr(engine.local_archive, "nearest_per_row", query)
+        monkeypatch.setattr(engine.local_archive, "add", add)
+        result = engine.run()
+        # Round 1: every row is one identical novel environment → unique 1.
+        # Round 2: the same rows now sit distance 0 in the updated archive → 0.
+        assert [r.unique_novel_environments for r in result.rounds] == [1, 0]
+        assert [r.accepted for r in result.rounds] == [2, 2]
+        assert [x for x in events if x[0] == "add"] == [("add", 0, 4, 2), ("add", 4, 4, 2)]
+        first = events.index(("add", 0, 4, 2))
+        second = events.index(("add", 4, 4, 2))
+        assert all(x == ("query", 0) for x in events[:first])
+        assert all(x == ("query", 4) for x in events[first + 1 : second])
+
+    def test_all_empty_atom_rows_complete_without_local_add(self):
+        # 2026-09-30 audit case H (engine path): a degenerate evaluator may
+        # return zero-length atom row segments for every candidate; the
+        # objective scores them 0 and the strategy fills the batch. The
+        # engine used to raise in LocalEnvironmentArchive.add AFTER the
+        # structure archive was already updated — the empty batch now skips
+        # the local add and the round completes consistently.
+        class _EmptyAtomicEvaluator:
+            def evaluate(self, candidates, *, return_atomic=False, control=None):
+                n = len(candidates)
+                return DescriptorEvaluation(
+                    structure_values=np.zeros((n, 3)),
+                    atomic_values=np.empty((0, 3)),
+                    row_offsets=np.zeros(n + 1, dtype=np.int64),
+                )
+
+        engine = _engine(
+            42,
+            evaluator=_EmptyAtomicEvaluator(),
+            objective=CompositeObjective(structure_weight=0.0, local_weight=1.0, novelty_threshold=1.0),
+            budget=Budget(max_evaluations=100, max_accepted=2, max_generations=1),
+            batch_accept=2,
+        )
+        engine.selection_strategy = "local_incremental_maximin_v1"
+        engine.constraints = build_constraints({"min_distance_mode": "none"})
+        result = engine.run()
+        assert [r.accepted for r in result.rounds] == [2]
+        assert result.rounds[0].unique_novel_environments == 0
+        assert engine.structure_archive.size == 2
+        assert engine.local_archive.atom_row_count == 0
