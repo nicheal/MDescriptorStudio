@@ -1,0 +1,77 @@
+{
+  "config_version": 1,
+  "kind": "generation-benchmark-preregistration",
+  "preregistered_at": "2026-09-30",
+  "note": "Second-material pre-registration (audit R4 default-switch gate: a second material class — PdCuNiP metallic glass, 9615 frames x ~54-100 atoms, multicomponent Pd/Cu/Ni/P — to test whether the optimizer conclusions transfer beyond the single carbon dataset). Scenario otherwise frozen and identical to benchmark/config.json. To be run AFTER the selection-strategy sweep completes.",
+  "algorithm_version": "gen-4",
+  "harness_min_version": "2026-09-29",
+  "selection_strategy": "structure_fps_v1",
+  "dataset_id": "ds_9ca89d14f8f0",
+  "descriptor_run_id": "run_644f6186340c",
+  "repeats": 20,
+  "seed_base": 1000,
+  "budget_evaluations": 10000,
+  "anchor_frames": [
+    1322,
+    5075
+  ],
+  "region_radius": 15.0,
+  "groups": [
+    "random",
+    "random-reuse",
+    "genetic",
+    "pso",
+    "target_region",
+    "genetic-target",
+    "pso-target"
+  ],
+  "primary_groups": [
+    "random",
+    "genetic",
+    "pso"
+  ],
+  "primary_metric": "unique_per_100_evals",
+  "metric_definition": "count_strict_unique_environments(sum over rounds) / descriptor evaluations * 100, threshold 0.25 robust-scaled units",
+  "secondary_metrics": [
+    "final_coverage_radius",
+    "anchor_proximity.median",
+    "anchor_proximity.p90",
+    "anchor_proximity.within_radius",
+    "accepted",
+    "wall_seconds"
+  ],
+  "operators": {
+    "atomic_displacement": {
+      "enabled": true,
+      "max_sigma": 0.15
+    },
+    "isotropic_strain": {
+      "enabled": true,
+      "max_strain": 0.05
+    },
+    "anisotropic_strain": {
+      "enabled": true,
+      "max_strain": 0.05
+    },
+    "cell_shear": {
+      "enabled": true,
+      "max_shear": 0.05
+    }
+  },
+  "objective": {
+    "type": "local_environment_novelty",
+    "aggregation": "top_fraction_mean",
+    "top_fraction": 0.2,
+    "novelty_threshold": 0.25,
+    "scaling": "robust"
+  },
+  "constraints": {
+    "min_distance_mode": "covalent",
+    "min_distance_factor": 0.7
+  },
+  "optimizer_params": {
+    "children_per_seed": 8,
+    "batch_accept": 8,
+    "n_seeds": 64
+  }
+}

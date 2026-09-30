@@ -465,8 +465,11 @@ def main() -> int:
     args = parser.parse_args()
 
     config = None
+    global DATASET_ID, RUN_ID
     if args.config:
         config = _load_preregistration(Path(args.config))
+        DATASET_ID = str(config["dataset_id"])
+        RUN_ID = str(config["descriptor_run_id"])
         repeats = int(config["repeats"])
         budget = int(config["budget_evaluations"])
         optimizers = [str(name) for name in config["groups"]]
