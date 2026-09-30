@@ -9,7 +9,7 @@ import { GENERATION_OBJECTIVE_LABELS, GENERATION_OPTIMIZER_LABELS } from "../fea
 import type { GenerationCatalog, GenerationConfig, GenerationObjectiveType, GenerationOptimizer } from "../features/generation/types";
 import type { DatasetView, RunRow } from "../types/protocol";
 import { useT } from "../i18n";
-import { parseAnchorFrames, validateConfigFields } from "../features/generation/submission";
+import { parseAnchorFrames, validateConfigFields, estimateRunResources } from "../features/generation/submission";
 import { useWorkspace } from "../stores/workspace";
 
 const sectionTitle = (index: number, label: string) => (
@@ -162,6 +162,7 @@ export default function GenerationConfigPanel({
     ? `${selectedSeedView?.name ?? t("Selected view")} · ${selectedSeedView?.number_of_frames ?? "—"}`
     : `${t("Full dataset")} · ${datasetFrameCount ?? "—"}`;
   const anchorParse = parseAnchorFrames(anchorInput, datasetFrameCount ?? undefined);
+  const runEstimate = estimateRunResources(config);
   const anchorVisibleError = anchorError ?? (!anchorParse.ok && anchorInput.trim() ? anchorParse.reason : null);
   const reuseTargetConflict = anchorParse.ok && anchorParse.frames.length > 0 && config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds;
   const reuseDisplacementConflict = config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds && !config.searchSpace.atomicDisplacement;
@@ -1119,6 +1120,11 @@ export default function GenerationConfigPanel({
             config.searchSpace.antisiteSwap && t("Antisite swap"),
           ].filter(Boolean).join(", ") || t("None")}</div>
           <div>{t("Stops at")}: {config.budget.maxEvaluations.toLocaleString()} {t("evaluations")}, {config.budget.maxAccepted} {t("accepted")}, {config.budget.maxGenerations} {t("generations")}{config.budget.noImprovementRounds != null ? ` · ${config.budget.noImprovementRounds} ${t("No-improvement rounds")}` : ""}{config.budget.targetNovelty != null ? ` · ${t("Target novelty")} ≥ ${config.budget.targetNovelty}` : ""}</div>
+          <div>{t("Resource estimate")}: ≤ {runEstimate.evaluations.toLocaleString()} {t("evaluations")} · ≤ {runEstimate.rounds} {t("rounds")}{runEstimate.roundsCappedByGenerations ? ` (${t("capped by max generations")})` : ""} · ≈ {runEstimate.wallSeconds < 90 ? `${runEstimate.wallSeconds} s` : `${Math.round(runEstimate.wallSeconds / 60)} min`} ({t("calibrated on this machine's R4 benchmark")}) · {t("Active metric")}: {t({
+            unique_novel_environments: "Unique novel environments",
+            structure_novelty: "Structure novelty",
+            coverage_radius: "Coverage radius",
+          }[runEstimate.activeMetric])}</div>
           {issues.length > 0 && <div id="generation-error-summary" role="alert" aria-live="assertive" tabIndex={-1} style={{ color: "#C42B1C", marginTop: 4 }}>
             {issues.map((issue) => <span key={`${issue.field}-${issue.reason}`} style={{ display: "inline-flex", alignItems: "center" }}>
               <Button type="link" danger size="small" style={{ paddingInline: 4 }} aria-label={t(issue.reason)} onClick={() => focusIssue(issue)}>{t(issue.reason)}</Button>

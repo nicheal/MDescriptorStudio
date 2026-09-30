@@ -18,6 +18,48 @@ export type AnchorFrameParse =
   | { ok: true; frames: number[] }
   | { ok: false; reason: string };
 
+
+/** Pre-run resource estimate (audit R5.3). The seconds-per-evaluation
+ *  constant is calibrated on this machine's R4 pre-registered rerun
+ *  (benchmark/results/2026-09-30-r4: 10 000 evaluations in 235-436 s
+ *  across optimizers), so the wall-clock figure is machine-specific and
+ *  the UI must label it as such. */
+const SECONDS_PER_EVALUATION = 0.035;
+
+export type ActiveMetric = "unique_novel_environments" | "structure_novelty" | "coverage_radius";
+
+export interface RunResourceEstimate {
+  evaluations: number;
+  rounds: number;
+  roundsCappedByGenerations: boolean;
+  wallSeconds: number;
+  activeMetric: ActiveMetric;
+}
+
+export function activeMetricOf(config: GenerationConfig): ActiveMetric {
+  const type = config.objective.type;
+  if (type === "coverage") return "coverage_radius";
+  if (type === "local_environment_novelty" && config.objective.noveltyThreshold != null) {
+    return "unique_novel_environments";
+  }
+  if (type === "composite" && config.objective.noveltyThreshold != null) return "unique_novel_environments";
+  return "structure_novelty";
+}
+
+export function estimateRunResources(config: GenerationConfig): RunResourceEstimate {
+  const roundSize = Math.max(1, config.optimizer.nSeeds * config.optimizer.childrenPerSeed);
+  const evaluations = Math.max(1, Math.floor(config.budget.maxEvaluations));
+  const roundsByEvaluations = Math.ceil(evaluations / roundSize);
+  const rounds = Math.min(roundsByEvaluations, Math.max(1, config.budget.maxGenerations));
+  return {
+    evaluations,
+    rounds,
+    roundsCappedByGenerations: config.budget.maxGenerations < roundsByEvaluations,
+    wallSeconds: Math.round(evaluations * SECONDS_PER_EVALUATION),
+    activeMetric: activeMetricOf(config),
+  };
+}
+
 /** Element symbols for the local-anchor species filter (audit R3.4); null on
  *  invalid input, [] when unset (= all atoms of the anchor frames). */
 export function parseAnchorSpecies(value: string): string[] | null {

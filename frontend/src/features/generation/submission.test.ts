@@ -2,7 +2,7 @@
 // backend's parse_request. These tests pin the per-optimizer param mapping:
 // a field missing (or misspelled) here silently reverts the run to defaults.
 import { describe, expect, it } from "vitest";
-import { buildSubmitPayload, parseAnchorFrames, parseAnchorSpecies, validateConfig, validateConfigFields } from "./submission";
+import { buildSubmitPayload, estimateRunResources, parseAnchorFrames, parseAnchorSpecies, validateConfig, validateConfigFields } from "./submission";
 import { defaultGenerationConfig, defaultOptimizerConfig } from "./generationStore";
 import type { GenerationConfig } from "./types";
 
@@ -182,5 +182,31 @@ describe("parseAnchorFrames", () => {
   it("checks source dataset bounds and the backend's 16-anchor limit", () => {
     expect(parseAnchorFrames("5", 5)).toMatchObject({ ok: false });
     expect(parseAnchorFrames(Array.from({ length: 17 }, (_, index) => String(index)).join(","))).toMatchObject({ ok: false });
+  });
+});
+
+describe("estimateRunResources", () => {
+  it("derives rounds from the round size and caps by max generations", () => {
+    const base = config(defaultOptimizerConfig("random")); // n_seeds 64 × children 8 = 512/round
+    base.budget = { ...base.budget, maxEvaluations: 10_000, maxGenerations: 200 };
+    const estimate = estimateRunResources(base);
+    expect(estimate.evaluations).toBe(10_000);
+    expect(estimate.rounds).toBe(20);
+    expect(estimate.roundsCappedByGenerations).toBe(false);
+    expect(estimate.wallSeconds).toBeGreaterThan(0);
+
+    const capped = { ...base, budget: { ...base.budget, maxGenerations: 5 } };
+    expect(estimateRunResources(capped).rounds).toBe(5);
+    expect(estimateRunResources(capped).roundsCappedByGenerations).toBe(true);
+  });
+
+  it("reports the active scientific metric per objective", () => {
+    const base = config(defaultOptimizerConfig("random")); // default objective: local_environment_novelty with threshold
+    expect(estimateRunResources(base).activeMetric).toBe("unique_novel_environments");
+    const structure = {
+      ...base,
+      objective: { ...base.objective, type: "novelty" as const, aggregation: "mean" as const },
+    };
+    expect(estimateRunResources(structure).activeMetric).toBe("structure_novelty");
   });
 });
