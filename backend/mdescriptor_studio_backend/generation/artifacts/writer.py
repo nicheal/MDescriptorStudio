@@ -172,6 +172,11 @@ class GenerationArtifactWriter:
             accepted = list(run.accepted)
             evaluations = list(run.evaluations)
             # accepted.extxyz carries full provenance in every frame header.
+            # The four status fields are the R5.1 state model: acceptance
+            # means geometry-passed AND descriptor-novel; no energy/force
+            # screening exists in this pipeline and no trainability claim is
+            # made — novelty never implies physical trustworthiness.
+            status = "geometry_passed=true descriptor_novel=true energy_screened=false train_set_ready=false"
             extra = {
                 i: (
                     f'generation_id="{generation_id}" candidate_id="{c.candidate_id}" '
@@ -179,7 +184,8 @@ class GenerationArtifactWriter:
                     f"generation={c.generation} operator={c.operator} "
                     f"fitness={e.fitness:.10g} "
                     f"novelty={e.novelty if e.novelty is not None else float('nan'):.10g} "
-                    f"local_novelty={e.local_diversity if e.local_diversity is not None else float('nan'):.10g}"
+                    f"local_novelty={e.local_diversity if e.local_diversity is not None else float('nan'):.10g} "
+                    f"{status}"
                 )
                 for i, (c, e) in enumerate(zip(accepted, evaluations))
             }

@@ -317,6 +317,48 @@ class RandomSearchOptimizer:
             }
         return state
 
+    def snapshot_state(self, register_candidate) -> dict:
+        """Full continuation state at a round boundary (audit R5.5).
+
+        Pool ids map back to candidate objects through the snapshot's
+        candidate table on load; every referenced candidate is registered
+        through ``register_candidate`` so the engine persists it.
+        ``_feedback_seed_ids`` and the pending bookkeeping are intra-round
+        (propose() clears them) and deliberately not persisted.
+        """
+        for candidate in self._feedback_seed_pool:
+            register_candidate(candidate)
+        for candidate in self._targeted_accepted:
+            register_candidate(candidate)
+        return {
+            "feedback_pool": [candidate.candidate_id for candidate in self._feedback_seed_pool],
+            "feedback_descriptors": [np.asarray(descriptor).tolist() for descriptor in self._feedback_descriptors],
+            "targeted_accepted": [candidate.candidate_id for candidate in self._targeted_accepted],
+            "targeted_descriptors": [np.asarray(descriptor).tolist() for descriptor in self._targeted_descriptors],
+            "targeted_local_distances": [
+                None if distance is None else float(distance) for distance in self._targeted_local_distances
+            ],
+        }
+
+    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+        def _candidates(ids: list) -> list:
+            missing = [cid for cid in ids if cid not in candidates_by_id]
+            if missing:
+                raise ValueError(f"snapshot references unknown candidates: {', '.join(missing[:3])}")
+            return [candidates_by_id[cid] for cid in ids]
+
+        self._feedback_seed_pool = _candidates(state.get("feedback_pool", []))
+        self._feedback_descriptors = [
+            np.asarray(descriptor, dtype=np.float64) for descriptor in state.get("feedback_descriptors", [])
+        ]
+        self._targeted_accepted = _candidates(state.get("targeted_accepted", []))
+        self._targeted_descriptors = [
+            np.asarray(descriptor, dtype=np.float64) for descriptor in state.get("targeted_descriptors", [])
+        ]
+        self._targeted_local_distances = list(state.get("targeted_local_distances", []))
+        self._targeted_pending = {}
+        self._feedback_seed_ids = set()
+
     def choose_seeds(
         self,
         seed_pool: list,

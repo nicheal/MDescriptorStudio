@@ -133,6 +133,11 @@ def test_accepted_extxyz_carries_provenance(tmp_path):
         "parent_frame=0",
         "generation=1",
         "operator=atomic_displacement",
+        # R5.1 state model: explicit statuses, never novel-implies-trustworthy.
+        "geometry_passed=true",
+        "descriptor_novel=true",
+        "energy_screened=false",
+        "train_set_ready=false",
         "fitness=",
         "novelty=",
         "local_novelty=",

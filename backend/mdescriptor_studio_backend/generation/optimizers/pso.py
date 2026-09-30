@@ -306,3 +306,54 @@ class PSOOptimizer:
                 for particle in self._particles
             ],
         }
+
+    def snapshot_state(self, register_candidate) -> dict:
+        """Full continuation state at a round boundary (audit R5.5); particle
+        memory references map back to candidate objects through the snapshot's
+        candidate table on load. Particle positions and pbests may reference
+        candidates that were evaluated without being accepted, so every
+        referenced object is registered for persistence. ``_pending`` is
+        intra-round bookkeeping (propose() clears it) and not persisted."""
+        for particle in self._particles:
+            if particle.position is not None:
+                register_candidate(particle.position)
+            if particle.pbest is not None:
+                register_candidate(particle.pbest)
+        return {
+            "particles": [
+                {
+                    "position": particle.position.candidate_id if particle.position is not None else None,
+                    "position_desc": None if particle.position_desc is None else np.asarray(particle.position_desc).tolist(),
+                    "pbest": particle.pbest.candidate_id if particle.pbest is not None else None,
+                    "pbest_desc": None if particle.pbest_desc is None else np.asarray(particle.pbest_desc).tolist(),
+                    "pbest_z": None if particle.pbest_z is None else float(particle.pbest_z),
+                }
+                for particle in self._particles
+            ]
+        }
+
+    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+        particles = []
+        for entry in state.get("particles", []):
+            particle = _Particle()
+
+            def _candidate(cid):
+                if cid is None:
+                    return None
+                candidate = candidates_by_id.get(cid)
+                if candidate is None:
+                    raise ValueError(f"snapshot references unknown candidate: {cid}")
+                return candidate
+
+            def _descriptor(rows):
+                return None if rows is None else np.asarray(rows, dtype=np.float64)
+
+            particle.position = _candidate(entry.get("position"))
+            particle.position_desc = _descriptor(entry.get("position_desc"))
+            particle.pbest = _candidate(entry.get("pbest"))
+            particle.pbest_desc = _descriptor(entry.get("pbest_desc"))
+            particle.pbest_z = entry.get("pbest_z")
+            particles.append(particle)
+        if particles:
+            self._particles = particles
+        self._pending = {}

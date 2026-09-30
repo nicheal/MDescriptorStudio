@@ -1,0 +1,223 @@
+{
+  "config": {
+    "config_version": 1,
+    "kind": "generation-benchmark-preregistration",
+    "preregistered_at": "2026-09-29",
+    "note": "R4 pre-registration (audit P1-06/R4). The scenario below is frozen before any rerun: per-seed rows land in run_results.jsonl with SHA256SUMS, and historical sweep results (pre-2026-09-29 harness) must never be mixed into the same tables or figures. Primary comparison: paired per-seed differences on unique_per_100_evals across repeats; targeting groups are interpreted on anchor_proximity only.",
+    "algorithm_version": "gen-4",
+    "harness_min_version": "2026-09-29",
+    "selection_strategy": "structure_fps_v1",
+    "dataset_id": "ds_d56748fb4391",
+    "descriptor_run_id": "run_57a8b8c40286",
+    "repeats": 20,
+    "seed_base": 1000,
+    "budget_evaluations": 10000,
+    "anchor_frames": [
+      1322,
+      5075
+    ],
+    "region_radius": 15.0,
+    "groups": [
+      "random",
+      "random-reuse",
+      "genetic",
+      "pso",
+      "target_region",
+      "genetic-target",
+      "pso-target"
+    ],
+    "primary_groups": [
+      "random",
+      "genetic",
+      "pso"
+    ],
+    "primary_metric": "unique_per_100_evals",
+    "metric_definition": "count_strict_unique_environments(sum over rounds) / descriptor evaluations * 100, threshold 0.25 robust-scaled units",
+    "secondary_metrics": [
+      "final_coverage_radius",
+      "anchor_proximity.median",
+      "anchor_proximity.p90",
+      "anchor_proximity.within_radius",
+      "accepted",
+      "wall_seconds"
+    ],
+    "operators": {
+      "atomic_displacement": {
+        "enabled": true,
+        "max_sigma": 0.15
+      },
+      "isotropic_strain": {
+        "enabled": true,
+        "max_strain": 0.05
+      },
+      "anisotropic_strain": {
+        "enabled": true,
+        "max_strain": 0.05
+      },
+      "cell_shear": {
+        "enabled": true,
+        "max_shear": 0.05
+      }
+    },
+    "objective": {
+      "type": "local_environment_novelty",
+      "aggregation": "top_fraction_mean",
+      "top_fraction": 0.2,
+      "novelty_threshold": 0.25,
+      "scaling": "robust"
+    },
+    "constraints": {
+      "min_distance_mode": "covalent",
+      "min_distance_factor": 0.7
+    },
+    "optimizer_params": {
+      "children_per_seed": 8,
+      "batch_accept": 8,
+      "n_seeds": 64
+    },
+    "dataset": "ds_d56748fb4391",
+    "run": "run_57a8b8c40286"
+  },
+  "summary": {
+    "random": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 8.421,
+        "median": 8.3,
+        "stdev": 0.5954025617397996
+      },
+      "final_coverage_radius": {
+        "mean": 36.382007201574616,
+        "median": 37.14418246059704,
+        "stdev": 4.391808612761941
+      },
+      "accepted": {
+        "mean": 177.5
+      },
+      "anchor_proximity": {
+        "median_of_medians": 47.4969,
+        "mean_within_radius": 0.054680000000000006
+      }
+    },
+    "random-reuse": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 7.976000000000001,
+        "median": 7.26,
+        "stdev": 1.890790422297678
+      },
+      "final_coverage_radius": {
+        "mean": 38.0373258728227,
+        "median": 39.06729474525305,
+        "stdev": 7.00826610141069
+      },
+      "accepted": {
+        "mean": 218.9
+      },
+      "anchor_proximity": {
+        "median_of_medians": 98.2884,
+        "mean_within_radius": 0.028820000000000002
+      }
+    },
+    "genetic": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 11.909,
+        "median": 12.175,
+        "stdev": 3.516467874983287
+      },
+      "final_coverage_radius": {
+        "mean": 39.46709576360986,
+        "median": 38.39047110407749,
+        "stdev": 6.581752647315874
+      },
+      "accepted": {
+        "mean": 192.5
+      },
+      "anchor_proximity": {
+        "median_of_medians": 55.092600000000004,
+        "mean_within_radius": 0.080305
+      }
+    },
+    "pso": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 13.325999999999999,
+        "median": 13.780000000000001,
+        "stdev": 5.714949371235888
+      },
+      "final_coverage_radius": {
+        "mean": 41.67254634008814,
+        "median": 41.14132856410946,
+        "stdev": 5.647900171164566
+      },
+      "accepted": {
+        "mean": 222.05
+      },
+      "anchor_proximity": {
+        "median_of_medians": 59.3748,
+        "mean_within_radius": 0.13042
+      }
+    },
+    "target_region": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 12.145,
+        "median": 12.600000000000001,
+        "stdev": 1.7353097706173384
+      },
+      "final_coverage_radius": {
+        "mean": 42.67916236515539,
+        "median": 41.71948292991161,
+        "stdev": 4.753392444865493
+      },
+      "accepted": {
+        "mean": 211.0
+      },
+      "anchor_proximity": {
+        "median_of_medians": 25.25935,
+        "mean_within_radius": 0.21563
+      }
+    },
+    "genetic-target": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 10.0115,
+        "median": 9.405000000000001,
+        "stdev": 1.9793786239226958
+      },
+      "final_coverage_radius": {
+        "mean": 41.53698305217467,
+        "median": 43.22709703753876,
+        "stdev": 6.080243471026836
+      },
+      "accepted": {
+        "mean": 194.05
+      },
+      "anchor_proximity": {
+        "median_of_medians": 26.437849999999997,
+        "mean_within_radius": 0.2251
+      }
+    },
+    "pso-target": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 14.019,
+        "median": 13.575,
+        "stdev": 3.1023469893139395
+      },
+      "final_coverage_radius": {
+        "mean": 43.213413320211274,
+        "median": 44.38629355564316,
+        "stdev": 4.35711842879463
+      },
+      "accepted": {
+        "mean": 208.2
+      },
+      "anchor_proximity": {
+        "median_of_medians": 54.41185,
+        "mean_within_radius": 0.16212
+      }
+    }
+  }
+}

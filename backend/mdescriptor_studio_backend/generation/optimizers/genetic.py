@@ -508,3 +508,42 @@ class GeneticOptimizer:
             ],
             "operator_stats": {name: dict(counters) for name, counters in self._operator_stats.items()},
         }
+
+    def snapshot_state(self, register_candidate) -> dict:
+        """Full continuation state at a round boundary (audit R5.5); the
+        pool's candidate ids map back to objects through the snapshot's
+        candidate table on load, registering every referenced candidate.
+        ``_pending`` is intra-round bookkeeping (propose() clears it) and
+        deliberately not persisted."""
+        for candidate, _genome in self._pool:
+            register_candidate(candidate)
+        return {
+            "pool": [
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "genome": {
+                        key: (dict(value) if isinstance(value, dict) else float(value))
+                        for key, value in genome.items()
+                    },
+                }
+                for candidate, genome in self._pool
+            ],
+            "pool_descriptors": [np.asarray(descriptor).tolist() for descriptor in self._pool_descriptors],
+            "operator_stats": {name: dict(counters) for name, counters in self._operator_stats.items()},
+            "rounds": int(self._rounds),
+        }
+
+    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+        pool = []
+        for entry in state.get("pool", []):
+            candidate = candidates_by_id.get(entry["candidate_id"])
+            if candidate is None:
+                raise ValueError(f"snapshot references unknown candidate: {entry['candidate_id']}")
+            pool.append((candidate, dict(entry["genome"])))
+        self._pool = pool
+        self._pool_descriptors = [
+            np.asarray(descriptor, dtype=np.float64) for descriptor in state.get("pool_descriptors", [])
+        ]
+        self._operator_stats = {name: dict(counters) for name, counters in state.get("operator_stats", {}).items()}
+        self._rounds = int(state.get("rounds", 0))
+        self._pending = {}

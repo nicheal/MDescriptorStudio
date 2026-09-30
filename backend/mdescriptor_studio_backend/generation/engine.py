@@ -18,8 +18,11 @@ optimizers (GA/PSO) can steer the next round; Random ignores the feedback.
 
 from __future__ import annotations
 
+import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 
@@ -27,6 +30,7 @@ from ..analysis.sampling import apply_scaling
 from ..analysis.sampling.fps import farthest_point_sampling
 from ..errors import AppError, JOB_CANCELLED
 from ._distance import min_sqdist_to_set
+from .registry import GENERATION_ALGORITHM_VERSION
 from .optimization import CandidateObservation, ObservationBatch, OptimizationContext
 from .evaluator import DescriptorEvaluator
 from .models import (
@@ -47,6 +51,47 @@ _GEOMETRY_REJECTION_CODES = {
     "composition differs from the parent structure": "composition_lock",
     "atom count differs from the parent structure": "atom_count_lock",
 }
+
+SNAPSHOT_VERSION = 1
+
+
+def _rng_from_state(state: dict) -> np.random.Generator:
+    """Rebuild a Generator from a persisted bit-generator state (R5.5)."""
+    bit_generator = getattr(np.random, state["bit_generator"])()
+    bit_generator.state = state
+    return np.random.Generator(bit_generator)
+
+
+def _candidate_record(candidate: StructureCandidate) -> dict:
+    return {
+        "candidate_id": candidate.candidate_id,
+        "atomic_numbers": np.asarray(candidate.atomic_numbers).tolist(),
+        "positions": np.asarray(candidate.positions, dtype=np.float64).tolist(),
+        "cell": np.asarray(candidate.cell, dtype=np.float64).tolist(),
+        "pbc": np.asarray(candidate.pbc, dtype=bool).tolist(),
+        "parent_frame": candidate.parent_frame,
+        "parent_candidate_id": candidate.parent_candidate_id,
+        "generation": candidate.generation,
+        "operator": candidate.operator,
+        "operator_params": dict(candidate.operator_params or {}),
+        "metadata": {k: (v.tolist() if isinstance(v, np.ndarray) else v) for k, v in (candidate.metadata or {}).items()},
+    }
+
+
+def _candidate_from_record(record: dict) -> StructureCandidate:
+    return StructureCandidate(
+        candidate_id=record["candidate_id"],
+        atomic_numbers=np.asarray(record["atomic_numbers"], dtype=np.int64),
+        positions=np.asarray(record["positions"], dtype=np.float64),
+        cell=np.asarray(record["cell"], dtype=np.float64),
+        pbc=np.asarray(record["pbc"], dtype=bool),
+        parent_frame=record["parent_frame"],
+        parent_candidate_id=record["parent_candidate_id"],
+        generation=int(record["generation"]),
+        operator=record["operator"],
+        operator_params=dict(record.get("operator_params") or {}),
+        metadata=dict(record.get("metadata") or {}),
+    )
 
 
 def _geometry_rejection_code(reason: str | None) -> str:
@@ -219,6 +264,10 @@ class GenerationRunResult:
     rounds: list = field(default_factory=list)  # list[RoundRecord]
     evaluated: list = field(default_factory=list)  # list[EvaluatedRecord]
     stopped_by: str = "max_generations"
+    # Resume mirrors (audit R5.5), updated at every round boundary so a
+    # snapshot taken from on_round is fully consistent.
+    best_fitness: float | None = None
+    stagnant: int = 0
 
     @property
     def accepted_count(self) -> int:
@@ -407,6 +456,11 @@ class GenerationEngine:
                 "local_incremental_maximin_v1 requires a local-environment archive and a novelty threshold"
             )
         self.selection_strategy = selection_strategy
+        # Resume support (audit R5.5): populated by restore_state(), consumed
+        # (and cleared) at the top of run().
+        self._resume: dict | None = None
+        self._resume_candidates: dict | None = None
+        self._active_result: GenerationRunResult | None = None
         self.seed_pool = list(seed_pool)
         self.evaluator = evaluator
         self.structure_archive = structure_archive
@@ -450,6 +504,7 @@ class GenerationEngine:
         stagnant = 0
         total_evaluations = 0
         generation = 0
+        self._active_result = result
         needs_atomic = bool(getattr(self.objective, "needs_atomic", False))
         # The discovery-rate stop measures novel *environments* per 100
         # descriptor evaluations. Objectives that never produce that metric
@@ -469,6 +524,42 @@ class GenerationEngine:
                 seed_local_distances=self.seed_local_distances,
             )
         )
+        if self._resume is not None:
+            # Continue an interrupted run (audit R5.5): replay the recorded
+            # history, then hand the optimizer its pools/genomes/memory back.
+            # The fresh initialize() above rebuilt the context; the restored
+            # pools reference the snapshot's accepted candidates.
+            resume, candidates_by_id = self._resume, self._resume_candidates
+            self._resume = None
+            self._resume_candidates = None
+            result.rounds = [RoundRecord(**record) for record in resume["rounds"]]
+            result.accepted = [candidates_by_id[cid] for cid in resume["accepted_order"]]
+            result.evaluations = [
+                CandidateEvaluation(
+                    candidate_id=entry["candidate_id"],
+                    valid=True,
+                    rejection_reason=None,
+                    structure_descriptor=np.asarray(entry["structure_descriptor"], dtype=np.float64),
+                    atomic_descriptors=(
+                        None
+                        if entry["atomic_descriptors"] is None
+                        else np.asarray(entry["atomic_descriptors"], dtype=np.float64)
+                    ),
+                    novelty=entry["novelty"],
+                    local_diversity=entry["local_diversity"],
+                    penalty=0.0,
+                    fitness=entry["fitness"],
+                    novel_environment_count=entry["novel_environment_count"],
+                    atom_count=entry["atom_count"],
+                )
+                for entry in resume["evaluations"]
+            ]
+            generation = int(resume["generation"])
+            total_evaluations = int(resume["total_evaluations"])
+            stagnant = int(resume["stagnant"])
+            best_fitness = -np.inf if resume["best_fitness"] is None else float(resume["best_fitness"])
+            self.rng = _rng_from_state(resume["rng"])
+            self.optimizer.load_state(resume["optimizer"], candidates_by_id)
 
         while True:
             try:
@@ -775,6 +866,16 @@ class GenerationEngine:
                 unique_novel_environments=unique_novel_environments,
             )
             result.rounds.append(record)
+            # The stagnation bookkeeping for the round just finished is
+            # applied BEFORE on_round so a snapshot taken there sees a fully
+            # consistent round boundary (audit R5.5).
+            if best_round_fitness > best_fitness + 1e-9:
+                best_fitness = best_round_fitness
+                stagnant = 0
+            else:
+                stagnant += 1
+            result.best_fitness = None if best_fitness == -np.inf else float(best_fitness)
+            result.stagnant = stagnant
             if on_round is not None:
                 on_round(record)
 
@@ -808,13 +909,158 @@ class GenerationEngine:
                     f"generation {generation}: accepted {len(result.accepted)}",
                 )
 
-            if best_round_fitness > best_fitness + 1e-9:
-                best_fitness = best_round_fitness
-                stagnant = 0
-            else:
-                stagnant += 1
             if self.budget.target_novelty is not None and best_round_novelty is not None and best_round_novelty >= self.budget.target_novelty:
                 result.stopped_by = "target_novelty"
                 break
 
         return result
+
+    # -- resume (audit R5.5) -------------------------------------------------
+
+    def snapshot_state(self) -> dict:
+        """Full continuation state at a round boundary (audit R5.5).
+
+        Call from ``on_round``: every bit of search-carrying state is
+        recorded — RNG bit-generator state, optimizer pools/genomes/memory,
+        accepted archives as a per-round replay (raw rows, so replaying
+        ``add`` re-applies the scaling identically), the accepted candidates
+        themselves, counters and round history. Intra-round optimizer
+        bookkeeping is deliberately dropped (propose() clears it), and the
+        descriptor-space map rows are not part of the snapshot — the
+        artifact writer streams those per round.
+        """
+        result = self._active_result
+        if result is None:
+            raise RuntimeError("snapshot_state requires a started run (call from on_round)")
+        # Candidate persistence: everything accepted, plus anything the
+        # optimizer references beyond that (PSO particle memory can hold
+        # evaluated-but-rejected candidates).
+        registered: dict = {}
+        for candidate in result.accepted:
+            registered[candidate.candidate_id] = candidate
+
+        def register_candidate(candidate) -> None:
+            if candidate is not None and candidate.candidate_id not in registered:
+                registered[candidate.candidate_id] = candidate
+
+        evaluations = [
+            {
+                "candidate_id": evaluation.candidate_id,
+                "structure_descriptor": np.asarray(evaluation.structure_descriptor, dtype=np.float64).tolist(),
+                "atomic_descriptors": (
+                    None
+                    if evaluation.atomic_descriptors is None
+                    else np.asarray(evaluation.atomic_descriptors, dtype=np.float64).tolist()
+                ),
+                "novelty": evaluation.novelty,
+                "local_diversity": evaluation.local_diversity,
+                "fitness": evaluation.fitness,
+                "novel_environment_count": evaluation.novel_environment_count,
+                "atom_count": evaluation.atom_count,
+            }
+            for evaluation in result.evaluations
+        ]
+        # Per-round archive replay blocks, derived from the acceptance order.
+        replay = []
+        cursor = 0
+        for record in result.rounds:
+            count = record.accepted
+            block = evaluations[cursor : cursor + count]
+            cursor += count
+            entries = [
+                {
+                    "candidate_id": entry["candidate_id"],
+                    "structure_index": cursor - count + offset,
+                    "fitness": entry["fitness"],
+                    "novelty": entry["novelty"],
+                    "generation": record.generation,
+                }
+                for offset, entry in enumerate(block)
+            ]
+            replay.append(
+                {
+                    "structure_rows": [entry["structure_descriptor"] for entry in block],
+                    "local_rows": (
+                        None
+                        if any(entry["atomic_descriptors"] is None for entry in block) or self.local_archive is None
+                        else [row for entry in block for row in entry["atomic_descriptors"]]
+                    ),
+                    "entries": entries,
+                }
+            )
+        return {
+            "version": SNAPSHOT_VERSION,
+            "algorithm_version": GENERATION_ALGORITHM_VERSION,
+            "generation": int(result.rounds[-1].generation) if result.rounds else 0,
+            "total_evaluations": int(sum(record.evaluations for record in result.rounds)),
+            "best_fitness": result.best_fitness,
+            "stagnant": int(result.stagnant),
+            "rng": self.rng.bit_generator.state,
+            "optimizer": self.optimizer.snapshot_state(register_candidate),
+            "accepted_order": [candidate.candidate_id for candidate in result.accepted],
+            "rounds": [record.to_json() for record in result.rounds],
+            "candidates": [_candidate_record(candidate) for candidate in registered.values()],
+            "evaluations": evaluations,
+            "archive_replay": replay,
+        }
+
+    def write_snapshot(self, directory) -> None:
+        """Atomically persist snapshot_state() into ``directory``.
+
+        Data files are written first and state.json replaces last, so a
+        crash mid-write leaves the previous snapshot readable.
+        """
+        state = self.snapshot_state()
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        candidates, evaluations = state["candidates"], state["evaluations"]
+        (directory / "candidates.json").write_text(
+            json.dumps(candidates, ensure_ascii=False), encoding="utf-8"
+        )
+        (directory / "evaluations.json").write_text(
+            json.dumps(evaluations, ensure_ascii=False), encoding="utf-8"
+        )
+        state["candidates"] = None
+        state["evaluations"] = None
+        tmp = directory / "state.json.tmp"
+        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, directory / "state.json")
+
+    def restore_state(self, directory) -> None:
+        """Load a snapshot written by write_snapshot into this engine.
+
+        The engine must be constructed with the same seed pool / objective /
+        operators as the interrupted run (the context is rebuilt
+        identically); archives start empty and are replayed here, the RNG
+        and the optimizer state are applied when run() starts.
+        """
+        directory = Path(directory)
+        state = json.loads((directory / "state.json").read_text(encoding="utf-8"))
+        if state.get("version") != SNAPSHOT_VERSION:
+            raise ValueError(f"unsupported snapshot version: {state.get('version')}")
+        if state.get("algorithm_version") != GENERATION_ALGORITHM_VERSION:
+            raise ValueError(
+                f"snapshot algorithm version {state.get('algorithm_version')} does not match "
+                f"the running {GENERATION_ALGORITHM_VERSION} — persisted metric semantics differ"
+            )
+        candidates = [_candidate_from_record(record) for record in json.loads((directory / "candidates.json").read_text(encoding="utf-8"))]
+        candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
+        evaluations = json.loads((directory / "evaluations.json").read_text(encoding="utf-8"))
+        cursor = 0
+        for round_replay in state["archive_replay"]:
+            entries = [ArchiveEntry(**entry) for entry in round_replay["entries"]]
+            count = len(entries)
+            structure_rows = np.asarray(
+                [evaluations[cursor + offset]["structure_descriptor"] for offset in range(count)],
+                dtype=np.float64,
+            )
+            self.structure_archive.add(structure_rows, entries)
+            if self.local_archive is not None:
+                local_block = round_replay.get("local_rows")
+                if local_block is None:
+                    raise ValueError("snapshot lacks local archive rows for a run with a local archive")
+                self.local_archive.add(np.asarray(local_block, dtype=np.float64), entries)
+            cursor += count
+        self.rng = _rng_from_state(state["rng"])
+        self._resume = state | {"evaluations": evaluations}
+        self._resume_candidates = candidates_by_id
