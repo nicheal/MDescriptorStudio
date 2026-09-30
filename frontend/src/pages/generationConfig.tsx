@@ -968,7 +968,7 @@ export default function GenerationConfigPanel({
         {config.optimizer.type === "random" && (
           <div style={rowStyle}>
             <span style={labelStyle}>{t("Reuse accepted structures as seeds")}</span>
-            <Tooltip title={t("G4-2 benchmark: this mode lost novel-environment discovery in 20/20 paired seeds against plain random. Keep it off for exploration; it only helps when densely resampling around the accepted set.")}>
+            <Tooltip title={t("Benchmark verdict (R4 rerun, 20 paired seeds, fixed metrics): discovery statistically ties plain random (-0.5/100, 95% CI [-1.2, +0.3]) and coverage is slightly worse. Off by default; enable it to densify around the accepted set, not for discovery.")}>
               <Switch
                 id="optimizer-reuseAcceptedSeeds"
                 aria-label={t("Reuse accepted structures as seeds")}
@@ -994,7 +994,7 @@ export default function GenerationConfigPanel({
               "Parents are drawn from accepted structures by rank-weighted roulette; displacement, strain and shear amplitudes plus the operator mask are inherited genes, and a fixed share of every round stays on fresh seed structures."
             )}
             <div>
-              {t("Benchmark verdict (20 paired seeds): slower discovery than plain random (-6.5/100). Keep random for exploration; use the genetic algorithm as an evolution-strategy baseline or for experiments.")}
+              {t("Benchmark verdict (R4 rerun, 20 paired seeds, fixed metrics): +3.5 unique environments/100 vs plain random (95% CI [+1.8, +5.1], 16/20) on the carbon benchmark, with a high-variance profile. Single-dataset evidence; multi-dataset confirmation pending.")}
             </div>
           </div>
         )}
@@ -1004,7 +1004,7 @@ export default function GenerationConfigPanel({
               "Each round slot remembers its best structure (personal/global best); the farther the particle sits from a memory target, the stronger the pull to propose around it, and a fixed share of every round stays on fresh seed structures."
             )}
             <div>
-              {t("Benchmark verdict (20 paired seeds): highest variance of all optimizers and worse coverage; without crossover the memory adds no gain over the genetic algorithm. Not recommended as a primary optimizer.")}
+              {t("Benchmark verdict (R4 rerun, 20 paired seeds, fixed metrics): +4.9 unique environments/100 vs plain random (95% CI [+2.5, +7.4], 15/20) on the carbon benchmark, with the highest variance of all optimizers and weak anchor targeting (proximity 54 vs random 48). Statistically tied with the genetic algorithm.")}
             </div>
           </div>
         )}
