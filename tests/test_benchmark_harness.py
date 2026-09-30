@@ -113,6 +113,14 @@ class TestPreregistration:
         assert config["selection_strategy"] == "structure_fps_v1"
         assert config["primary_metric"] == "unique_per_100_evals"
 
+    def test_local_selection_config_loads(self):
+        # The second pre-registration (selection-strategy comparison) must
+        # validate against the same frozen scenario constants.
+        harness = _load_harness()
+        config = harness._load_preregistration(REPO / "benchmark" / "config.local-selection.json")
+        assert config["selection_strategy"] == "local_incremental_maximin_v1"
+        assert len(config["groups"]) == 7
+
     def test_diverging_scenario_is_rejected(self, tmp_path):
         import json
 

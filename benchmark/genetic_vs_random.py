@@ -41,6 +41,7 @@ import os
 import sqlite3
 import statistics
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -269,7 +270,8 @@ def run_once(
     # logic and do not report a targeting block in state_dict.
     assert bool(engine.anchor_descriptors) == targeting, "search anchors disagree with the run's targeting flag"
     started = time.perf_counter()
-    result = engine.run()
+    with _PeakRSS() as rss:
+        result = engine.run()
     if targeting and registry_name == "random":
         assert optimizer_obj.state_dict().get("targeting"), "targeting run shows no targeting state"
     elapsed = time.perf_counter() - started
@@ -310,6 +312,7 @@ def run_once(
         "unique_per_100_evals": round(100.0 * total_unique / total_evals, 6) if total_evals else None,
         "final_coverage_radius": coverage,
         "wall_seconds": round(elapsed, 1),
+        "peak_rss_mb": rss.peak_mb,
         "rounds": rounds,
     }
 
@@ -339,6 +342,47 @@ def _load_preregistration(path: Path) -> dict:
         if key not in config:
             raise SystemExit(f"pre-registration is missing '{key}'")
     return config
+
+
+class _PeakRSS:
+    """Peak resident-memory sampler for one run (audit R4: real wall time
+    AND peak RSS under an identical budget). Uses psutil when available;
+    degrades to None otherwise. Samples the whole process, which includes
+    the descriptor engine and the archives — the run's true footprint."""
+
+    def __init__(self) -> None:
+        try:
+            import psutil
+
+            self._process = psutil.Process()
+            self._peak = 0.0
+            self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._ok = True
+        except Exception:
+            self._ok = False
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._peak = max(self._peak, self._process.memory_info().rss / (1024.0 * 1024.0))
+            except Exception:
+                pass
+            self._stop.wait(0.5)
+
+    def __enter__(self) -> "_PeakRSS":
+        if self._ok:
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._ok:
+            self._stop.set()
+            self._thread.join(timeout=2.0)
+
+    @property
+    def peak_mb(self) -> float | None:
+        return round(self._peak, 1) if self._ok else None
 
 
 def _environment_facts() -> dict:
