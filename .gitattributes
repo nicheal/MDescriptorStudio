@@ -1,0 +1,7 @@
+# Byte-identical publication artifacts: the SHA256SUMS manifests hash the
+# files exactly as the sweep wrote them (CRLF on the Windows runner). Git
+# must never normalize these blobs, or a fresh checkout cannot verify them
+# (external review 2026-10-01). When this attribute is first committed,
+# re-add the pack so the stored bytes match the manifests:
+#   git add benchmark/published/
+benchmark/published/** -text

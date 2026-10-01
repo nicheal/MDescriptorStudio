@@ -154,3 +154,190 @@ class TestPreregistration:
         assert len(lines) == 2  # missing files are skipped
         expected = hashlib.sha256((tmp_path / "run_results.jsonl").read_bytes()).hexdigest()
         assert lines[0].startswith(expected)
+
+
+def _mutated_config(tmp_path: Path, mutations: dict) -> Path:
+    import json
+
+    config = json.loads((REPO / "benchmark" / "config.json").read_text(encoding="utf-8"))
+    config.update(mutations)
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return path
+
+
+class TestPreregistrationContract:
+    """The 2026-10-01 external review showed the load-time checks accepted
+    configs that only failed (or silently ran) later; the full registration
+    contract is now enforced at load."""
+
+    def test_pdcunip_config_loads_with_material_specific_anchors(self):
+        harness = _load_harness()
+        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        assert config["dataset_id"] == "ds_9ca89d14f8f0"
+        # 2026-10-01 pre-run correction: the copied carbon indices are not
+        # valid anchors on PdCuNiP (one fails geometry, one sits in the
+        # dense core); the re-derived pair is pinned here.
+        assert config["anchor_frames"] == [2256, 2133]
+        assert config["metric_caliber"] == harness.METRIC_CALIBER
+        assert "peak_rss_mb" in config["secondary_metrics"]
+        assert config["max_accepted"] == harness.MAX_ACCEPTED
+        assert config["max_generations"] == harness.MAX_GENERATIONS
+
+    def test_wrong_metric_caliber_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"metric_caliber": "strict-unique-raw"})
+        with pytest.raises(SystemExit, match="metric_caliber"):
+            harness._load_preregistration(path)
+
+    def test_missing_metric_caliber_is_rejected(self, tmp_path):
+        import json
+
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {})
+        config = json.loads(path.read_text(encoding="utf-8"))
+        del config["metric_caliber"]
+        path.write_text(json.dumps(config), encoding="utf-8")
+        with pytest.raises(SystemExit, match="metric_caliber"):
+            harness._load_preregistration(path)
+
+    def test_unknown_primary_metric_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"primary_metric": "wall_seconds"})
+        with pytest.raises(SystemExit, match="primary_metric"):
+            harness._load_preregistration(path)
+
+    def test_unknown_algorithm_version_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"algorithm_version": "unsupported"})
+        with pytest.raises(SystemExit, match="algorithm_version"):
+            harness._load_preregistration(path)
+
+    def test_unknown_selection_strategy_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"selection_strategy": "invalid"})
+        with pytest.raises(SystemExit, match="selection_strategy"):
+            harness._load_preregistration(path)
+
+    def test_zero_repeats_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"repeats": 0})
+        with pytest.raises(SystemExit, match="repeats"):
+            harness._load_preregistration(path)
+
+    def test_unknown_group_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"groups": ["nonsense"]})
+        with pytest.raises(SystemExit, match="groups"):
+            harness._load_preregistration(path)
+
+    def test_primary_group_outside_groups_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"primary_groups": ["nonsense"]})
+        with pytest.raises(SystemExit, match="primary_groups"):
+            harness._load_preregistration(path)
+
+    def test_unknown_secondary_metric_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"secondary_metrics": ["not_a_metric"]})
+        with pytest.raises(SystemExit, match="secondary_metrics"):
+            harness._load_preregistration(path)
+
+    def test_future_harness_min_version_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"harness_min_version": "2999-01-01"})
+        with pytest.raises(SystemExit, match="harness_min_version"):
+            harness._load_preregistration(path)
+
+    def test_diverging_budget_cap_is_rejected(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"max_accepted": 999})
+        with pytest.raises(SystemExit, match="max_accepted"):
+            harness._load_preregistration(path)
+
+    def test_missing_dataset_id_is_rejected(self, tmp_path):
+        import json
+
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {})
+        config = json.loads(path.read_text(encoding="utf-8"))
+        del config["dataset_id"]
+        path.write_text(json.dumps(config), encoding="utf-8")
+        with pytest.raises(SystemExit, match="dataset_id"):
+            harness._load_preregistration(path)
+
+    def test_apply_preregistration_resolves_the_material(self):
+        harness = _load_harness()
+        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        params = harness.apply_preregistration(config)
+        assert harness.DATASET_ID == "ds_9ca89d14f8f0"
+        assert harness.RUN_ID == "run_644f6186340c"
+        assert params["anchor_frames"] == [2256, 2133]
+        assert params["budget"] == 10000
+
+
+def _load_resume():
+    import sys
+
+    sys.path.insert(0, str(REPO / "benchmark"))
+    spec = importlib.util.spec_from_file_location("benchmark_resume_sweep", REPO / "benchmark" / "resume_sweep.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault("benchmark_resume_sweep", module)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestResumeMaterialGuard:
+    """The resume path must never extend a sweep with another material's
+    rows (the 2026-10-01 review: resuming a second-material sweep appended
+    default-carbon rows because the module ids were never applied)."""
+
+    def _harness_and_resume(self):
+        harness = _load_harness()
+        return harness, _load_resume()
+
+    def test_used_config_divergence_is_refused(self, tmp_path):
+        import json
+
+        harness, resume = self._harness_and_resume()
+        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        (tmp_path / "config.used.json").write_text(
+            json.dumps(config | {"dataset_id": "ds_d56748fb4391"}), encoding="utf-8"
+        )
+        with pytest.raises(SystemExit, match="diverges"):
+            resume._verify_used_config(config, tmp_path / "config.used.json")
+
+    def test_used_config_tolerates_later_annotations(self, tmp_path):
+        # A sweep started before metric_caliber existed must still resume:
+        # keys added to the pre-registration afterwards are annotations, not
+        # scenario changes; the free-text note is excluded as well.
+        import json
+
+        harness, resume = self._harness_and_resume()
+        config = harness._load_preregistration(REPO / "benchmark" / "config.json")
+        used = {k: v for k, v in config.items() if k not in ("metric_caliber",)}
+        used["note"] = used["note"] + " 2026-10-01 caliber annotation ..."
+        (tmp_path / "config.used.json").write_text(json.dumps(used), encoding="utf-8")
+        resume._verify_used_config(config, tmp_path / "config.used.json")
+
+    def test_rows_of_another_material_are_refused(self, tmp_path):
+        harness, resume = self._harness_and_resume()
+        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        rows = [{"optimizer": "random", "seed": 1000, "dataset_id": "ds_d56748fb4391", "descriptor_run_id": "run_57a8b8c40286"}]
+        with pytest.raises(SystemExit, match="mixed-material"):
+            resume._verify_row_identities(rows, config)
+
+    def test_matching_rows_pass(self):
+        harness, resume = self._harness_and_resume()
+        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        rows = [{"optimizer": "random", "seed": 1000, "dataset_id": "ds_9ca89d14f8f0", "descriptor_run_id": "run_644f6186340c"}]
+        resume._verify_row_identities(rows, config)
+
+    def test_legacy_rows_without_identity_only_fit_the_default_experiment(self):
+        harness, resume = self._harness_and_resume()
+        rows = [{"optimizer": "random", "seed": 1000}]
+        carbon = harness._load_preregistration(REPO / "benchmark" / "config.json")
+        resume._verify_row_identities(rows, carbon)  # default carbon: admissible
+        pdcunip = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        with pytest.raises(SystemExit, match="predates material identity"):
+            resume._verify_row_identities(rows, pdcunip)

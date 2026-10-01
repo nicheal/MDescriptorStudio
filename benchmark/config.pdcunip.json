@@ -2,18 +2,21 @@
   "config_version": 1,
   "kind": "generation-benchmark-preregistration",
   "preregistered_at": "2026-09-30",
-  "note": "Second-material pre-registration (audit R4 default-switch gate: a second material class — PdCuNiP metallic glass, 9615 frames x ~54-100 atoms, multicomponent Pd/Cu/Ni/P — to test whether the optimizer conclusions transfer beyond the single carbon dataset). Scenario otherwise frozen and identical to benchmark/config.json. To be run AFTER the selection-strategy sweep completes.",
+  "note": "Second-material pre-registration (audit R4 default-switch gate: a second material class — PdCuNiP metallic glass, 9615 frames, median 106 atoms (range 2-256), multicomponent Pd/Cu/Ni/P — to test whether the optimizer conclusions transfer beyond the single carbon dataset). Scenario otherwise frozen and identical to benchmark/config.json. To be run AFTER the selection-strategy sweep completes. 2026-10-01 pre-run corrections (external review, docs/reviews/2026-10-01-pdcunip-review-response.md): anchor_frames re-derived for THIS material — the copied carbon indices are not valid anchors here (1322 fails the run's geometry constraints; 5075 sits in the dense core with 7719/9615 frames within region_radius on PdCuNiP, versus 21/6738 for the same index on carbon); replacements 2256/2133 are the most distinctive geometry-valid bulk-like frames (54 atoms each, nearest cloud frame ~27 scaled units away, mutually >40 apart). max_accepted/max_generations added to freeze the budget contract; metric_caliber stamped (the current engine counts strict-unique environments in the archive scaled space); peak_rss_mb registered. Analysis contract: primary comparison is paired per-seed unique_per_100_evals differences WITHIN this material; anchor proximity is interpreted for the targeting groups only; coverage radius is smallest-is-best; cross-material value comparisons against carbon are out of scope of this pre-registration.",
   "algorithm_version": "gen-4",
   "harness_min_version": "2026-09-29",
+  "metric_caliber": "strict-unique-scaled",
   "selection_strategy": "structure_fps_v1",
   "dataset_id": "ds_9ca89d14f8f0",
   "descriptor_run_id": "run_644f6186340c",
   "repeats": 20,
   "seed_base": 1000,
   "budget_evaluations": 10000,
+  "max_accepted": 500,
+  "max_generations": 10000,
   "anchor_frames": [
-    1322,
-    5075
+    2256,
+    2133
   ],
   "region_radius": 15.0,
   "groups": [
@@ -38,7 +41,8 @@
     "anchor_proximity.p90",
     "anchor_proximity.within_radius",
     "accepted",
-    "wall_seconds"
+    "wall_seconds",
+    "peak_rss_mb"
   ],
   "operators": {
     "atomic_displacement": {

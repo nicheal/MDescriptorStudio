@@ -58,7 +58,7 @@ from mdescriptor_studio_backend.generation.archive import (  # noqa: E402
     LocalEnvironmentArchive,
 )
 from mdescriptor_studio_backend.generation.constraints import build_constraints  # noqa: E402
-from mdescriptor_studio_backend.generation.engine import GenerationEngine  # noqa: E402
+from mdescriptor_studio_backend.generation.engine import GENERATION_ALGORITHM_VERSION, GenerationEngine  # noqa: E402
 from mdescriptor_studio_backend.generation.evaluator import DescriptorEvaluator  # noqa: E402
 from mdescriptor_studio_backend.generation.models import Budget, OperatorSpec, StructureCandidate  # noqa: E402
 from mdescriptor_studio_backend.generation.registry import GENERATION_REGISTRY  # noqa: E402
@@ -73,11 +73,46 @@ WORKERS = max(1, os.cpu_count() or 1)
 
 DATASET_ID = "ds_d56748fb4391"  # carbon, 6738 extxyz frames
 RUN_ID = "run_57a8b8c40286"  # NEP, atom-level rows, 35 features, device=cpu
+# Pre-2026-10-01 harness default (carbon). Rows written before rows carried
+# material identity can only have been produced against these ids; the resume
+# path uses that fact to admit legacy rows for the default experiment only.
+DEFAULT_DATASET_ID = DATASET_ID
+DEFAULT_RUN_ID = RUN_ID
 SEED_POOL_CAP = 512  # services/generation_service.py::_SEED_POOL_CAP
 
 # Labels whose search policy consumes the anchors; every other label runs
 # strictly untargeted (search_anchors = ()) regardless of --anchor-frames.
 TARGETING_LABELS = {"target_region", "genetic-target", "pso-target"}
+
+# Identity stamps written into environment.json and checked against every
+# pre-registration (external review 2026-10-01): the counting space is part
+# of the experiment — the published R4 pack (results 20260929T043150Z) was
+# produced by pre-2026-09-30 code whose strict dedup counted in RAW space
+# ("strict-unique-raw"); the current engine counts in the archive scaled
+# space. A config stamped with another caliber is refused instead of
+# silently mixing counting spaces across materials or code versions.
+HARNESS_VERSION = "2026-10-01"
+METRIC_CALIBER = "strict-unique-scaled"
+
+# The run's full budget contract (external review: caps that actually bind
+# must be part of the registration, not harness-internal folklore).
+MAX_ACCEPTED = 500
+MAX_GENERATIONS = 10_000
+
+KNOWN_OPTIMIZERS = {"random", "random-reuse", "genetic", "pso"} | TARGETING_LABELS
+KNOWN_SELECTION_STRATEGIES = ("structure_fps_v1", "local_incremental_maximin_v1")
+PRIMARY_METRICS = ("unique_per_100_evals",)
+KNOWN_SECONDARY_METRICS = (
+    "final_coverage_radius",
+    "anchor_proximity.median",
+    "anchor_proximity.p90",
+    "anchor_proximity.within_radius",
+    "accepted",
+    "wall_seconds",
+    "peak_rss_mb",
+    "unique_novel_environments",
+    "unique_per_100_evals",
+)
 
 
 def search_anchor_role(label: str, metric_anchors: tuple) -> tuple[tuple, bool]:
@@ -90,7 +125,9 @@ def search_anchor_role(label: str, metric_anchors: tuple) -> tuple[tuple, bool]:
     targeting = label in TARGETING_LABELS
     return (metric_anchors if targeting else ()), targeting
 # Experiment-wide region radius for the proximity statistics (robust-scaled
-# descriptor units; one mutation moves this descriptor ~13-18 units). All
+# descriptor units; one displacement mutation moves this descriptor single
+# to low-double-digit units on both benchmarked materials — measured
+# 2026-10-01, see docs/reviews/2026-10-01-pdcunip-review-response.md). All
 # groups report within_radius at THIS radius — never a per-group default.
 REGION_RADIUS = 15.0
 
@@ -111,17 +148,67 @@ CONSTRAINTS = {"min_distance_mode": "covalent", "min_distance_factor": 0.7}
 OPTIMIZER_PARAMS = {"children_per_seed": 8, "batch_accept": 8, "n_seeds": 64}
 
 
-def _load_run_config() -> tuple[dict, dict]:
+def _load_run_config(dataset_id: str | None = None, run_id: str | None = None) -> tuple[dict, dict]:
+    """Load the descriptor run + dataset rows the harness benchmarks against.
+
+    Explicit ids (a pre-registration's) win over the module defaults. The
+    run must belong to the dataset and its recorded dataset fingerprint must
+    still match — the harness must not silently benchmark a different
+    material pairing than the pre-registration froze (external review
+    2026-10-01; the app's submit/worker gates mirror this).
+    """
+    dataset_id = dataset_id or DATASET_ID
+    run_id = run_id or RUN_ID
     db = sqlite3.connect(f"file:{(DATA_ROOT / 'database.sqlite').as_posix()}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
     try:
-        run_row = dict(db.execute("SELECT * FROM descriptor_runs WHERE id=?", (RUN_ID,)).fetchone())
-        dataset_row = dict(db.execute("SELECT * FROM datasets WHERE id=?", (DATASET_ID,)).fetchone())
+        run_row = db.execute("SELECT * FROM descriptor_runs WHERE id=?", (run_id,)).fetchone()
+        dataset_row = db.execute("SELECT * FROM datasets WHERE id=?", (dataset_id,)).fetchone()
     finally:
         db.close()
+    if not dataset_row:
+        raise SystemExit(f"dataset {dataset_id} is not registered in the app database")
+    dataset_row = dict(dataset_row)
     if not run_row or run_row["status"] != "COMPLETED":
-        raise SystemExit(f"descriptor run {RUN_ID} is not COMPLETED")
+        raise SystemExit(f"descriptor run {run_id} is not COMPLETED")
+    run_row = dict(run_row)
+    if run_row.get("dataset_id") != dataset_id:
+        raise SystemExit(
+            f"descriptor run {run_id} belongs to dataset {run_row.get('dataset_id')!r}, "
+            f"not the pre-registered {dataset_id!r} — reconcile the pre-registration"
+        )
+    metadata_path = Path(run_row["result_path"]) / "metadata.json"
+    if not metadata_path.is_file():
+        raise SystemExit(f"descriptor run {run_id} has no result metadata.json — fingerprint freshness cannot be verified")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("dataset_fingerprint") != dataset_row.get("fingerprint"):
+        raise SystemExit(
+            f"descriptor run {run_id} was computed against a different dataset fingerprint "
+            "than the dataset currently carries — re-run the descriptor before benchmarking"
+        )
     return run_row, dataset_row
+
+
+def apply_preregistration(config: dict) -> dict:
+    """Point the module's data bindings at a pre-registered config and return
+    the resolved run parameters.
+
+    The main harness and resume_sweep MUST resolve their material through
+    this helper — reading the ids off module globals silently benchmarks the
+    default carbon dataset under a second-material pre-registration
+    (the 2026-10-01 review's resume finding).
+    """
+    global DATASET_ID, RUN_ID
+    DATASET_ID = str(config["dataset_id"])
+    RUN_ID = str(config["descriptor_run_id"])
+    return {
+        "seed_base": int(config["seed_base"]),
+        "repeats": int(config["repeats"]),
+        "budget": int(config["budget_evaluations"]),
+        "groups": [str(name) for name in config["groups"]],
+        "anchor_frames": [int(index) for index in config["anchor_frames"]],
+        "selection_strategy": str(config["selection_strategy"]),
+    }
 
 
 def _reference_matrices(run_row: dict, needs_atomic: bool):
@@ -239,6 +326,21 @@ def run_once(
         for candidate in seed_pool
     )
     constraints = build_constraints(CONSTRAINTS)
+    if anchor_frames:
+        # Worker parity (services/generation_service.py): anchors must index
+        # the dataset and satisfy the run's own geometry constraints — a
+        # pathological anchor wastes every mutation of itself on rejections.
+        if not all(0 <= int(index) < len(frame_adapter) for index in anchor_frames):
+            raise SystemExit("anchor_frames contains a dataset frame index out of range")
+        for index in anchor_frames:
+            anchor_candidate = StructureCandidate.from_frame(
+                frame_adapter.get_frame(int(index)), candidate_id=f"anchor_{index}", parent_frame=int(index)
+            )
+            verdict = constraints.validate(anchor_candidate)
+            if not verdict.valid:
+                raise SystemExit(
+                    f"anchor frame {index} violates the run's geometry constraints: " + "; ".join(verdict.reasons)
+                )
 
     engine = GenerationEngine(
         seed_pool=seed_pool,
@@ -250,8 +352,8 @@ def run_once(
         constraints=constraints,
         budget=Budget(
             max_evaluations=budget,
-            max_accepted=500,
-            max_generations=10_000,  # the evaluation budget is the binding cap
+            max_accepted=MAX_ACCEPTED,
+            max_generations=MAX_GENERATIONS,  # the evaluation budget is the binding cap
             no_improvement_rounds=None,
             discovery_window=0,  # same-budget comparison: no early stopping
         ),
@@ -302,6 +404,10 @@ def run_once(
         "optimizer": label,
         "targeting_enabled": targeting,
         "selection_strategy": selection_strategy,
+        # Material identity on every row (external review 2026-10-01): a
+        # resumed or concatenated table can be checked for mixed materials.
+        "dataset_id": dataset_row["id"],
+        "descriptor_run_id": run_row["id"],
         "anchor_frames": list(anchor_frames),
         "anchor_proximity": proximity,
         "seed": seed,
@@ -318,12 +424,17 @@ def run_once(
 
 
 def _load_preregistration(path: Path) -> dict:
-    """Load and validate a frozen pre-registration config (audit R4).
+    """Load and validate a frozen pre-registration config (audit R4; full
+    contract per the 2026-10-01 external review).
 
-    The frozen scenario keys must match the harness constants exactly — a
-    divergence means the config and the code disagree about the experiment,
-    which is precisely what pre-registration exists to surface. Exit instead
-    of silently benchmarking a different scenario.
+    Two layers. The frozen scenario keys must match the harness constants
+    exactly — a divergence means the config and the code disagree about the
+    experiment, which is precisely what pre-registration exists to surface.
+    And the bookkeeping contract (metric identity incl. counting space,
+    algorithm/harness versions, material binding, budget caps, group and
+    metric names, well-typed counts) must hold at LOAD time — a config that
+    only fails mid-sweep, or worse runs, defeats the registration. Exit
+    instead of silently benchmarking a different scenario.
     """
     config = json.loads(path.read_text(encoding="utf-8"))
     if config.get("kind") != "generation-benchmark-preregistration":
@@ -338,9 +449,60 @@ def _load_preregistration(path: Path) -> dict:
             raise SystemExit(f"pre-registration '{key}' diverges from the harness constants — reconcile first")
     if float(config.get("region_radius", -1)) != REGION_RADIUS:
         raise SystemExit("pre-registration 'region_radius' diverges from the harness REGION_RADIUS")
-    for key in ("repeats", "budget_evaluations", "groups", "anchor_frames", "seed_base", "selection_strategy"):
-        if key not in config:
-            raise SystemExit(f"pre-registration is missing '{key}'")
+    if config.get("metric_caliber") != METRIC_CALIBER:
+        raise SystemExit(
+            f"pre-registration 'metric_caliber' is {config.get('metric_caliber')!r} but this harness counts "
+            f"in {METRIC_CALIBER!r} — re-baseline or reconcile first (never mix counting spaces)"
+        )
+    if config.get("algorithm_version") != GENERATION_ALGORITHM_VERSION:
+        raise SystemExit(
+            f"pre-registration 'algorithm_version' is {config.get('algorithm_version')!r}, "
+            f"the engine reports {GENERATION_ALGORITHM_VERSION!r}"
+        )
+    harness_min = str(config.get("harness_min_version") or "")
+    if not harness_min or harness_min > HARNESS_VERSION:
+        raise SystemExit(f"pre-registration 'harness_min_version' ({harness_min!r}) exceeds this harness ({HARNESS_VERSION})")
+    if config.get("selection_strategy") not in KNOWN_SELECTION_STRATEGIES:
+        raise SystemExit(f"pre-registration 'selection_strategy' must be one of {list(KNOWN_SELECTION_STRATEGIES)}")
+    if config.get("primary_metric") not in PRIMARY_METRICS:
+        raise SystemExit(f"pre-registration 'primary_metric' must be one of {list(PRIMARY_METRICS)}")
+    for key in ("dataset_id", "descriptor_run_id", "preregistered_at", "metric_definition"):
+        value = config.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise SystemExit(f"pre-registration is missing a usable '{key}'")
+    for key, minimum in (("repeats", 1), ("budget_evaluations", 1), ("seed_base", 0)):
+        value = config.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise SystemExit(f"pre-registration '{key}' must be an integer >= {minimum}")
+    groups = config.get("groups")
+    if (
+        not isinstance(groups, list)
+        or not groups
+        or len(set(groups)) != len(groups)
+        or not all(group in KNOWN_OPTIMIZERS for group in groups)
+    ):
+        raise SystemExit(f"pre-registration 'groups' must be a duplicate-free list of known labels {sorted(KNOWN_OPTIMIZERS)}")
+    primary_groups = config.get("primary_groups")
+    if not isinstance(primary_groups, list) or not primary_groups or not all(group in groups for group in primary_groups):
+        raise SystemExit("pre-registration 'primary_groups' must be a non-empty subset of 'groups'")
+    secondary = config.get("secondary_metrics")
+    if (
+        not isinstance(secondary, list)
+        or not secondary
+        or len(set(secondary)) != len(secondary)
+        or not all(metric in KNOWN_SECONDARY_METRICS for metric in secondary)
+    ):
+        raise SystemExit(f"pre-registration 'secondary_metrics' must be a duplicate-free subset of {list(KNOWN_SECONDARY_METRICS)}")
+    anchors = config.get("anchor_frames")
+    if (
+        not isinstance(anchors, list)
+        or not anchors
+        or not all(isinstance(index, int) and not isinstance(index, bool) and index >= 0 for index in anchors)
+    ):
+        raise SystemExit("pre-registration 'anchor_frames' must be a non-empty list of non-negative frame indices")
+    for key, cap in (("max_accepted", MAX_ACCEPTED), ("max_generations", MAX_GENERATIONS)):
+        if key in config and config[key] != cap:
+            raise SystemExit(f"pre-registration '{key}' diverges from the harness budget cap {cap}")
     return config
 
 
@@ -401,6 +563,11 @@ def _environment_facts() -> dict:
         "platform": platform.platform(),
         "cpu_count": os.cpu_count(),
         "packages": packages,
+        # Identity stamps (external review 2026-10-01): a results directory
+        # states which counting space and code produced it.
+        "harness_version": HARNESS_VERSION,
+        "metric_caliber": METRIC_CALIBER,
+        "algorithm_version": GENERATION_ALGORITHM_VERSION,
     }
 
 
@@ -417,6 +584,19 @@ def _write_sha256sums(out_dir: Path, names: list[str]) -> None:
     (out_dir / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _distribution(values: list) -> dict | None:
+    """mean/median/stdev/p90 over the non-None entries; None when absent."""
+    present = [value for value in values if value is not None]
+    if not present:
+        return None
+    return {
+        "mean": statistics.fmean(present),
+        "median": statistics.median(present),
+        "stdev": statistics.stdev(present) if len(present) > 1 else 0.0,
+        "p90": float(np.quantile(present, 0.9)),
+    }
+
+
 def _summarise(runs: list[dict]) -> dict:
     groups: dict[str, list[dict]] = {}
     for run in runs:
@@ -428,18 +608,16 @@ def _summarise(runs: list[dict]) -> dict:
         accepted = [r["accepted"] for r in group]
         summary[name] = {
             "repeats": len(group),
-            "unique_per_100_evals": {
-                "mean": statistics.fmean(per_100),
-                "median": statistics.median(per_100),
-                "stdev": statistics.stdev(per_100) if len(per_100) > 1 else 0.0,
-            },
-            "final_coverage_radius": {
-                "mean": statistics.fmean(coverage),
-                "median": statistics.median(coverage),
-                "stdev": statistics.stdev(coverage) if len(coverage) > 1 else 0.0,
-            },
+            "unique_per_100_evals": _distribution(per_100),
+            "final_coverage_radius": _distribution(coverage),
             "accepted": {"mean": statistics.fmean(accepted)},
         }
+        wall = _distribution([r.get("wall_seconds") for r in group])
+        if wall is not None:
+            summary[name]["wall_seconds"] = wall
+        rss = _distribution([r.get("peak_rss_mb") for r in group])
+        if rss is not None:
+            summary[name]["peak_rss_mb"] = rss
         proximities = [r["anchor_proximity"] for r in group if r.get("anchor_proximity")]
         if proximities:
             summary[name]["anchor_proximity"] = {
@@ -465,38 +643,35 @@ def main() -> int:
     args = parser.parse_args()
 
     config = None
-    global DATASET_ID, RUN_ID
     if args.config:
         config = _load_preregistration(Path(args.config))
-        DATASET_ID = str(config["dataset_id"])
-        RUN_ID = str(config["descriptor_run_id"])
-        repeats = int(config["repeats"])
-        budget = int(config["budget_evaluations"])
-        optimizers = [str(name) for name in config["groups"]]
-        anchor_frames = [int(i) for i in config["anchor_frames"]]
-        selection_strategy = str(config["selection_strategy"])
+        params = apply_preregistration(config)
     else:
-        repeats = 1 if args.pilot else args.repeats
-        budget = 400 if args.pilot else args.budget
-        optimizers = [name.strip() for name in args.optimizers.split(",")]
-        anchor_frames = []
-        selection_strategy = "structure_fps_v1"
+        params = {
+            "seed_base": 1000,
+            "repeats": 1 if args.pilot else args.repeats,
+            "budget": 400 if args.pilot else args.budget,
+            "groups": [name.strip() for name in args.optimizers.split(",")],
+            "anchor_frames": [],
+            "selection_strategy": "structure_fps_v1",
+        }
+    repeats, budget = params["repeats"], params["budget"]
+    optimizers, selection_strategy = params["groups"], params["selection_strategy"]
 
     out_dir = REPO / "benchmark" / "results" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir.mkdir(parents=True, exist_ok=True)
     if config is not None:
-        (out_dir / "config.used.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
-        (out_dir / "environment.json").write_text(json.dumps(_environment_facts(), indent=2), encoding="utf-8")
+        (out_dir / "config.used.json").write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n")
+        (out_dir / "environment.json").write_text(json.dumps(_environment_facts(), indent=2), encoding="utf-8", newline="\n")
 
     run_row, dataset_row = _load_run_config()
     runs: list[dict] = []
     results_jsonl = out_dir / "run_results.jsonl"
     for repeat in range(repeats):
-        seed = int(config["seed_base"]) + repeat if config is not None else 1000 + repeat
+        seed = params["seed_base"] + repeat
         for optimizer in optimizers:
             print(f"[repeat {repeat + 1}/{repeats}] {optimizer} seed={seed} budget={budget}", flush=True)
-            if not anchor_frames:
-                anchor_frames = [int(i) for i in str(args.anchor_frames).split(",") if i.strip()]
+            anchor_frames = params["anchor_frames"] or [int(i) for i in str(args.anchor_frames).split(",") if i.strip()]
             run = run_once(
                 optimizer=optimizer, seed=seed, budget=budget, run_row=run_row, dataset_row=dataset_row,
                 anchor_frames=anchor_frames, selection_strategy=selection_strategy,
@@ -512,9 +687,10 @@ def main() -> int:
             (out_dir / "genetic_vs_random.json").write_text(
                 json.dumps({"args": vars(args) | {"dataset": DATASET_ID, "run": RUN_ID}, "runs": runs, "summary": _summarise(runs)}, indent=2),
                 encoding="utf-8",
+                newline="\n",
             )
             if config is not None:
-                with open(results_jsonl, "a", encoding="utf-8") as fh:
+                with open(results_jsonl, "a", encoding="utf-8", newline="\n") as fh:
                     fh.write(json.dumps(run, ensure_ascii=False) + "\n")
 
     summary = _summarise(runs)
@@ -524,6 +700,7 @@ def main() -> int:
         (out_dir / "summary.json").write_text(
             json.dumps({"args": vars(args) | {"dataset": DATASET_ID, "run": RUN_ID}, "summary": summary}, indent=2),
             encoding="utf-8",
+            newline="\n",
         )
         _write_sha256sums(
             out_dir,

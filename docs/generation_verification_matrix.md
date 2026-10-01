@@ -30,8 +30,9 @@
 - Python：见 results 目录 `environment.json`（每次 sweep 落盘）
 - 数据集：`ds_d56748fb4391`（carbon），6738 帧 extxyz，fingerprint `v4:446a981b307a6a23f0e50ad1e211524c1986bb8b6d711ae6aad1b0af9523e0cf`
 - 描述符运行：`run_57a8b8c40286`（NEP，atom 级 35 特征，device=cpu，status COMPLETED）
+- 第二材料（2026-09-30 注册，2026-10-01 外部审阅时本地核实绑定）：`ds_9ca89d14f8f0`（PdCuNiP 金属玻璃，9615 帧，多组分 Pd/Cu/Ni/P，每帧原子数中位 106、范围 2-256），fingerprint `v4:c3a81d61cb69c78e2a6845f11a4969b8f3d02cef87b887e7a6897f83fa94b5eb`；描述符运行 `run_644f6186340c`（NEP，atom 级 35 特征，[736798,35]）。核实项（2026-10-01）：run.dataset_id 与 dataset 一致、结果 metadata.dataset_fingerprint 与 dataset 当前指纹一致、文件指纹重算一致、values 全有限、row_offsets 单调且末端对齐、无零方差特征
 - 几何约束：`min_distance_mode=covalent, factor=0.7`（自 2026-09-29 起含自镜像检查——P1-05；此前的 L4 结果产生于无自镜像检查的过滤器，候选通过率可能略有差异）
-- 种子：repeat i → seed 1000+i（20 repeats）；锚点帧 1322,5075；`REGION_RADIUS=15.0`（robust-scaled 单位，非 Å）
+- 种子：repeat i → seed 1000+i（20 repeats）；锚点帧——carbon 为 1322,5075，**PdCuNiP 为 2256,2133**（2026-10-01 起预注册；原样拷贝的 carbon 索引在该材料不可用：1322 未通过运行几何约束预检，5075 落在密集核心——7719/9615 帧在其 r=15 邻域内，而 carbon 上同索引仅 21/6738；替代帧为最具区分度的几何合法体相帧，各 54 原子，最近云帧 ≈27 缩放单位，两锚点相距 >40）；`REGION_RADIUS=15.0`（robust-scaled 单位，非 Å）。单次 displacement 扰动（σ≤0.15 Å）的描述符位移在同批探针下两材料量级相当（carbon 1.1-9.1，PdCuNiP 0.65-8.7 缩放单位），r=15 大于扰动步长的设计在两材料均成立；原子级阈值 0.25 在两材料均处于有响应区间（采样 NN<0.25 比例 ≈0.6-0.8%）
 
 ## 4. 已知既有失败与结果混排禁令
 
@@ -45,6 +46,13 @@
   - **P1 策略口径**：local 策略的 fitness elite 排序改为与 FPS 共享 `_fitness_elite_order`（稳定升序反转 = 同分取后输入序；FPS 历史顺序逐位不变，golden 基线不受影响）；`max_candidates` 精英上限不再把池截断到预算以下（等预算接收数与 FPS 一致，审计案例 J）。两策略版本号维持 `local_incremental_maximin_v1` / `structure_fps_v1`——口径修正记录于本行，跨版本比较局域策略结果时注意分界。
   - **P1 边界**：全空原子行批次跳过 local archive 更新（此前在结构档案更新后抛 ValueError，状态不一致）。
   - **顺序依赖契约（不修码）**：严格计数 = "给定访问顺序（选择序 → 行序）的贪心严格间隔代表数"，非排列不变量；已写入 docstring 并由 `test_visit_order_is_part_of_the_metric_contract` 钉住。排列不变指标需要稳定候选身份 + 版本化重定义（升 gen-5），未排期。
+- 2026-10-01 外部审阅批次（PdCuNiP 预注册审阅，回应记录 `docs/reviews/2026-10-01-pdcunip-review-response.md`；harness 升版 2026-10-01）：
+  - **resume 材料护栏**：`resume_sweep.py` 此前从模块默认 ID 解析数据绑定——对第二材料 sweep 恢复会补跑 carbon 行并混入同一张表。现恢复前强制：① 预注册 ID 经 `apply_preregistration` 注入 harness 模块；② 校验目录内冻结的 `config.used.json` 与给定配置一致（后加的注记键与 note 除外）；③ 逐行核验 dataset_id/descriptor_run_id（2026-10-01 前的无身份行仅对默认 carbon 配置可续）。混合材料恢复在装载即被拒绝。
+  - **预注册完整合同**：`_load_preregistration` 此前只查键存在（`primary_metric="wall_seconds"`、`algorithm_version="unsupported"`、`repeats=0`、`groups=["nonsense"]` 等均能通过加载）。现加载时校验：metric_caliber（口径不符 = 拒绝，杜绝 raw/scaled 混排）、algorithm_version == 引擎版本、harness_min_version ≤ 当前、selection_strategy/primary_metric/secondary_metrics/groups/primary_groups 取值合法、repeats/budget/seed_base 整型下界、max_accepted/max_generations 与 harness 预算上限一致、dataset_id/descriptor_run_id 存在。
+  - **数据绑定门**：`_load_run_config` 现校验 run.dataset_id == 预注册 dataset、结果 metadata.dataset_fingerprint == dataset 当前指纹（与提交/worker 的 freshness 门对齐）。
+  - **锚点几何预检**（worker 同款）：harness `run_once` 现在锚点越界或违反运行几何约束时 fail fast——PdCuNiP 拷贝锚点 1322 即因此被替换（见 §3）。
+  - **预算合同**：`max_accepted=500`/`max_generations=10000` 从 run_once 字面量提取为 harness 常量并入预注册（config.pdcunip.json）；工件（config.used.json/run_results.jsonl/summary 等）显式 LF 写盘，发布校验不再受换行转换影响。
+  - **进行中 sweep 的口径警示**：selection-strategy sweep（20260930T101403Z，scaled 口径）与 fps 基线（20260929T043150Z，raw 口径）的跨 sweep 配对 unique 差值**混杂了计数口径与选择策略两个因子**——引用时必须带口径注解，或先在修复后代码上重跑 fps 基线再下策略结论。
 
 ## 5. 用户决策记录
 
