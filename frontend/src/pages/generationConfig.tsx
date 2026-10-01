@@ -1,8 +1,9 @@
 // Three-group expansion workflow form:
 // SOURCE/TARGET → STRUCTURE/GEOMETRY → SEARCH STRATEGY/STOPPING CONDITIONS.
-import { Alert, Button, Card, Collapse, Input, InputNumber, Select, Slider, Switch, Tooltip } from "antd";
+import { Alert, App as AntApp, Button, Card, Collapse, Input, InputNumber, Select, Slider, Space, Switch, Tooltip } from "antd";
 import { useEffect, useRef, useState } from "react";
-import { Play16Regular } from "@fluentui/react-icons";
+import { Document16Regular, Play16Regular } from "@fluentui/react-icons";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useGenerationStore } from "../features/generation/generationStore";
 import { defaultOptimizerConfig } from "../features/generation/generationStore";
 import { GENERATION_OBJECTIVE_LABELS, GENERATION_OPTIMIZER_LABELS } from "../features/generation/labels";
@@ -163,6 +164,7 @@ export default function GenerationConfigPanel({
     : `${t("Full dataset")} · ${datasetFrameCount ?? "—"}`;
   const anchorParse = parseAnchorFrames(anchorInput, datasetFrameCount ?? undefined);
   const runEstimate = estimateRunResources(config);
+  const { message } = AntApp.useApp();
   const anchorVisibleError = anchorError ?? (!anchorParse.ok && anchorInput.trim() ? anchorParse.reason : null);
   const reuseTargetConflict = anchorParse.ok && anchorParse.frames.length > 0 && config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds;
   const reuseDisplacementConflict = config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds && !config.searchSpace.atomicDisplacement;
@@ -233,8 +235,8 @@ export default function GenerationConfigPanel({
   });
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0 }}>
-    <div id="generation-config-fields" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 620px), 1fr))", gap: 12, paddingBottom: 12, flex: "1 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden", alignContent: "start" }}>
+    <div className="generation-config-root" style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%", minHeight: 0 }}>
+    <div id="generation-config-fields" className="generation-config-grid" style={{ paddingBottom: 12, flex: "1 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
       {submitError && <Alert type="error" showIcon closable onClose={onDismissSubmitError} message={t("Submission failed")}
         description={submitError} style={{ gridColumn: "1 / -1" }} />}
       {catalogFailed && <Alert type="error" showIcon message={t("Could not load the expansion catalog")}
@@ -859,16 +861,37 @@ export default function GenerationConfigPanel({
                   update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningModel } }))
                 }
               />
-              <Input
-                id="constraints-energyScreeningCheckpoint"
-                aria-label={t("Model checkpoint")}
-                style={{ width: 240 }}
-                placeholder={t("Optional checkpoint override")}
-                value={config.constraints.energyScreeningCheckpoint}
-                onChange={(event) =>
-                  update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningCheckpoint: event.target.value } }))
-                }
-              />
+              <Space.Compact>
+                <Input
+                  id="constraints-energyScreeningCheckpoint"
+                  aria-label={t("Model checkpoint")}
+                  style={{ width: 240 }}
+                  placeholder={t("Optional checkpoint override")}
+                  value={config.constraints.energyScreeningCheckpoint}
+                  onChange={(event) =>
+                    update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningCheckpoint: event.target.value } }))
+                  }
+                />
+                <Button
+                  icon={<Document16Regular />}
+                  title={t("Browse for a model checkpoint")}
+                  onClick={async () => {
+                    try {
+                      const selected = await openDialog({
+                        multiple: false,
+                        title: t("Select a model checkpoint"),
+                        filters: [{ name: "Model checkpoint", extensions: ["pt", "txt", "ckpt", "pth"] }],
+                      });
+                      const chosen = Array.isArray(selected) ? selected[0] : selected;
+                      if (chosen) {
+                        update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningCheckpoint: chosen } }));
+                      }
+                    } catch {
+                      message.error(t("Could not open the file dialog"));
+                    }
+                  }}
+                />
+              </Space.Compact>
               <span style={labelStyle}>{t("Max energy/atom")}</span>
               <InputNumber
                 id="constraints-energyScreeningMaxEnergy"
@@ -897,7 +920,7 @@ export default function GenerationConfigPanel({
       </Subsection>
       </Card>
 
-      <Card title={sectionTitle(3, t("Search strategy and stopping conditions"))} size="small" style={{ gridColumn: "1 / -1" }}>
+      <Card title={sectionTitle(3, t("Search strategy and stopping conditions"))} size="small">
       <Subsection title={subsectionTitle(t("OPTIMIZER"))}>
         <div style={rowStyle}>
           <span style={labelStyle}>{t("Method")}</span>

@@ -1315,6 +1315,8 @@ export const zhDict: Record<string, string> = {
   "NEP (bundled nep89)": "NEP（内置 nep89）",
   "DPA4C": "DPA4C",
   "Model checkpoint": "模型检查点",
+  "Browse for a model checkpoint": "浏览选择模型检查点文件",
+  "Select a model checkpoint": "选择模型检查点文件",
   "Optional checkpoint override": "可选检查点覆盖路径",
   "Max energy/atom": "最大原子能量",
   "Max force": "最大原子力",
