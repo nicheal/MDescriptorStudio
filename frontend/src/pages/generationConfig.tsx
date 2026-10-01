@@ -855,7 +855,7 @@ export default function GenerationConfigPanel({
                 value={config.constraints.energyScreeningModel}
                 options={[
                   { value: "NEP", label: t("NEP (bundled nep89)") },
-                  { value: "DPA4C", label: t("DPA4C") },
+                  { value: "DPA4C", label: t("DPA4C (Air-OMat24)") },
                 ]}
                 onChange={(energyScreeningModel) =>
                   update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningModel } }))

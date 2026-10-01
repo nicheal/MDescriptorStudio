@@ -1313,7 +1313,7 @@ export const zhDict: Record<string, string> = {
   "ENERGY AND FORCE SCREENING": "能量与力筛选",
   "Energy/force screening": "能量/力筛选",
   "NEP (bundled nep89)": "NEP（内置 nep89）",
-  "DPA4C": "DPA4C",
+  "DPA4C (Air-OMat24)": "DPA4C（Air-OMat24）",
   "Model checkpoint": "模型检查点",
   "Browse for a model checkpoint": "浏览选择模型检查点文件",
   "Select a model checkpoint": "选择模型检查点文件",
