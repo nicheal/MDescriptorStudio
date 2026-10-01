@@ -225,6 +225,11 @@ class RoundRecord:
     # region count it once — the benchmark-honest number (G3.5 A12). None
     # when the objective does not produce environment counts.
     unique_novel_environments: int | None = None
+    # The strict-dedup counterpart over the post-screening kept set (R5.1):
+    # what actually entered the local archive this round. Equals
+    # unique_novel_environments unless screening rejected a selected
+    # candidate; None when the objective produces no counts.
+    archived_unique_novel_environments: int | None = None
     # Candidates removed after selection by energy/force screening (R5.1):
     # still counted as discovered, never archived or fed back.
     rejected_screening: int = 0
@@ -245,6 +250,7 @@ class RoundRecord:
             "coverage_radius": self.coverage_radius,
             "novel_environments": self.novel_environments,
             "unique_novel_environments": self.unique_novel_environments,
+            "archived_unique_novel_environments": self.archived_unique_novel_environments,
             "rejected_screening": self.rejected_screening,
         }
 
@@ -561,6 +567,15 @@ class GenerationEngine:
                     fitness=entry["fitness"],
                     novel_environment_count=entry["novel_environment_count"],
                     atom_count=entry["atom_count"],
+                    # Screening measurements must survive a resume (2026-10-01
+                    # audit P1): without them a restored accepted candidate
+                    # would silently revert to "not screened". .get() keeps
+                    # pre-R5.1 snapshots (no recorded measurements) loadable.
+                    energy=entry.get("energy"),
+                    energy_per_atom=entry.get("energy_per_atom"),
+                    max_force=entry.get("max_force"),
+                    screening_status=entry.get("screening_status"),
+                    screening_reasons=tuple(entry.get("screening_reasons") or ()),
                 )
                 for entry in resume["evaluations"]
             ]
@@ -628,7 +643,7 @@ class GenerationEngine:
             # Energy/force screening (R5.1) state for this round; the gate
             # below only runs when candidates reached evaluation.
             rejected_screening = 0
-            screening_meta: dict[int, dict] = {}
+            screening_verdicts: dict[int, object] = {}
             screening_reasons: dict[int, tuple[str, ...]] = {}
 
             evaluations_this_round = 0
@@ -638,6 +653,7 @@ class GenerationEngine:
             mean_round_novelty = None
             novel_environments = 0
             unique_novel_environments: int | None = None
+            archived_unique_novel_environments: int | None = None
 
             if valid:
                 try:
@@ -696,37 +712,52 @@ class GenerationEngine:
                     selected = select_diverse_batch(fitness, scaled_values, budget=batch_budget)
                 # Second-stage energy/force screening (R5.1): runs on the
                 # selected batch, before anything downstream. Screened-out
-                # candidates stay valid and novel (their rows still count as
-                # discovered) but are never archived or fed back as parents.
-                if self.energy_screening is not None and selected:
-                    screen_verdicts = self.energy_screening.screen([valid[i] for i in selected])
+                # candidates stay valid and novel (their environments still
+                # count as discovered) but are never archived or fed back as
+                # parents. The discovery metrics below therefore run on the
+                # PRE-screening selection — screening removes implausible
+                # structures from the archive, it does not un-discover the
+                # descriptor-space regions they explored.
+                discovered = list(selected)
+                if self.energy_screening is not None and discovered:
+                    screen_verdicts = self.energy_screening.screen([valid[i] for i in discovered])
                     kept: list[int] = []
-                    for index, verdict in zip(selected, screen_verdicts):
+                    for index, verdict in zip(discovered, screen_verdicts):
                         if verdict.accepted:
                             kept.append(index)
-                            if verdict.status == "pass":
-                                screening_meta[index] = {
-                                    "energy": verdict.energy,
-                                    "energy_per_atom": verdict.energy_per_atom,
-                                    "max_force": verdict.max_force,
-                                }
+                            screening_verdicts[index] = verdict
                         else:
                             screening_reasons[index] = tuple(verdict.reasons) or ("energy_screening",)
-                    rejected_screening = len(selected) - len(kept)
+                    rejected_screening = len(discovered) - len(kept)
                     selected = kept
                 selected_set = set(selected)
                 selection_rank = {index: rank for rank, index in enumerate(selected)}
                 # Unique novel environments must be counted against the
                 # *pre-round* archive (A12: "frozen archive + already counted
-                # this round"). Every accepted candidate's rows are zero
+                # this round"). Every selected candidate's rows are zero
                 # distance to its own just-added block, so counting after the
                 # archive update would make this metric structurally zero.
+                # Both metrics count the pre-screening selection (see the
+                # gate above); the archived variant tracks what actually
+                # entered the local archive. The discovery-rate stop reads
+                # the discovered metric — a strict screen must never be able
+                # to fake saturation.
                 if scores.novel_environment_count is not None and self.local_archive is not None and evaluation.atomic_values is not None:
                     threshold = getattr(self.objective, "novel_environment_threshold", None)
                     if threshold is not None:
                         unique_novel_environments = self._count_unique_novel_environments(
-                            selected, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
+                            discovered, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
                         )
+                        if rejected_screening:
+                            archived_unique_novel_environments = (
+                                self._count_unique_novel_environments(
+                                    selected, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
+                                )
+                                if selected
+                                else 0
+                            )
+                        else:
+                            archived_unique_novel_environments = unique_novel_environments
                 # Every evaluated candidate (accepted or not) feeds the
                 # descriptor-space map the results view animates.
                 for index in range(len(valid)):
@@ -748,6 +779,7 @@ class GenerationEngine:
                     entries = []
                     for order, index in enumerate(selected):
                         candidate = valid[index]
+                        verdict = screening_verdicts.get(index)
                         entries.append(
                             ArchiveEntry(
                                 candidate_id=candidate.candidate_id,
@@ -782,9 +814,17 @@ class GenerationEngine:
                                     else None
                                 ),
                                 atom_count=int(candidate.atomic_numbers.size),
-                                energy=(screening_meta.get(index) or {}).get("energy"),
-                                energy_per_atom=(screening_meta.get(index) or {}).get("energy_per_atom"),
-                                max_force=(screening_meta.get(index) or {}).get("max_force"),
+                                # Verdict provenance (2026-10-01 audit): kept
+                                # candidates carry their full verdict, so an
+                                # accepted frame without measurements is
+                                # explainable (unscreenable), not mysterious.
+                                energy=(verdict.energy if verdict is not None else None),
+                                energy_per_atom=(verdict.energy_per_atom if verdict is not None else None),
+                                max_force=(verdict.max_force if verdict is not None else None),
+                                screening_status=(verdict.status if verdict is not None else None),
+                                screening_reasons=(
+                                    tuple(verdict.reasons) if verdict is not None else ()
+                                ),
                             )
                         )
                         result.accepted.append(candidate)
@@ -815,8 +855,11 @@ class GenerationEngine:
                         if rows.shape[0]:
                             self.local_archive.add(rows, local_entries)
                     best_round_fitness = float(max(fitness[i] for i in selected))
-                    if scores.novel_environment_count is not None:
-                        novel_environments = int(sum(int(scores.novel_environment_count[i]) for i in selected))
+                # Raw discovery counts read the pre-screening selection, same
+                # as the strict metric above — an all-rejected round still
+                # discovered environments (R5.1: "counted as discovered").
+                if scores.novel_environment_count is not None:
+                    novel_environments = int(sum(int(scores.novel_environment_count[i]) for i in discovered))
                 if scores.novelty is not None:
                     finite_novelty = scores.novelty[np.isfinite(scores.novelty)]
                     if finite_novelty.size:
@@ -903,6 +946,7 @@ class GenerationEngine:
                 coverage_radius=self.structure_archive.accepted_coverage_radius(),
                 novel_environments=novel_environments,
                 unique_novel_environments=unique_novel_environments,
+                archived_unique_novel_environments=archived_unique_novel_environments,
                 rejected_screening=rejected_screening,
             )
             result.rounds.append(record)
@@ -997,6 +1041,11 @@ class GenerationEngine:
                 "fitness": evaluation.fitness,
                 "novel_environment_count": evaluation.novel_environment_count,
                 "atom_count": evaluation.atom_count,
+                "energy": evaluation.energy,
+                "energy_per_atom": evaluation.energy_per_atom,
+                "max_force": evaluation.max_force,
+                "screening_status": evaluation.screening_status,
+                "screening_reasons": list(evaluation.screening_reasons),
             }
             for evaluation in result.evaluations
         ]

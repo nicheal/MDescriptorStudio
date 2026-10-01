@@ -8,6 +8,7 @@ published atomically → row settled. Big arrays never enter SQLite.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import logging
 import os
@@ -212,6 +213,17 @@ class GenerationService:
         if request.target_mode != "structure" or request.anchor_species:
             payload["target_mode"] = request.target_mode
             payload["anchor_species"] = request.anchor_species
+        # Screening results depend on the installed predictor wheel (the
+        # bundled NEP/DPA4C models move between releases), so screening runs
+        # fold the package version into the key — a cached run computed with
+        # an older model is never replayed after an upgrade (2026-10-01
+        # audit). Known limitation: the *content* of an explicit checkpoint
+        # replaced in place at the same path is not captured.
+        if (request.constraints.get("energy_screening") or {}).get("enabled"):
+            try:
+                payload["screening_mdescriptor_version"] = importlib.metadata.version("mdescriptor")
+            except importlib.metadata.PackageNotFoundError:
+                payload["screening_mdescriptor_version"] = "unknown"
         blob = json.dumps(_json_safe(payload), sort_keys=True, ensure_ascii=False)
         return "gen:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

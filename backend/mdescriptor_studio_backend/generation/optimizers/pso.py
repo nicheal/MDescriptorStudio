@@ -270,6 +270,13 @@ class PSOOptimizer:
         for obs in observations.observations:
             if obs.fitness is None or not np.isfinite(obs.fitness) or obs.candidate is None or obs.structure_descriptor is None:
                 continue
+            if obs.screening_rejection:
+                # Screening-rejected children never enter memory (R5.1): a
+                # physically implausible structure must not parent the next
+                # generation. Deliberately NOT the same as accepted=False —
+                # valid children the batch selection did not pick stay
+                # eligible memory targets.
+                continue
             pending = self._pending.get(id(obs.candidate))
             if pending is None:
                 continue

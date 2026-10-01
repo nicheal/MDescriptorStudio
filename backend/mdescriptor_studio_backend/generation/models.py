@@ -123,6 +123,12 @@ class CandidateEvaluation:
     energy: float | None = None
     energy_per_atom: float | None = None
     max_force: float | None = None
+    # Verdict provenance (2026-10-01 audit): None when no verdict was
+    # obtained (screening disabled or the candidate never reached the gate);
+    # "unscreenable" candidates carry their reasons so an accepted frame's
+    # missing measurements stay explainable.
+    screening_status: str | None = None
+    screening_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

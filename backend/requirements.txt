@@ -2,10 +2,11 @@
 # The MDescriptor engine remains the only descriptor implementation; these
 # packages provide CPU-first post-processing in Studio Backend.
 # Release builds install the latest PyPI mdescriptor at build time (pip leaves
-# an already-satisfied dev .venv untouched). The floor is the version that
-# started shipping the CUDA plugin (_cuda.pyd + cudart64_12.dll) in the wheel;
-# older wheels declare device "cuda" in schemas but raise DEVICE_UNAVAILABLE.
-mdescriptor>=0.3.4
+# an already-satisfied dev .venv untouched). The floor is 0.3.5: the first
+# wheel shipping the mdescriptor.predictors package (NEP/DPA4C energy+force
+# predictors) that R5.1 energy/force screening requires — 0.3.4 started the
+# CUDA plugin (_cuda.pyd + cudart64_12.dll) but cannot screen.
+mdescriptor>=0.3.5
 numpy==2.5.2
 scipy==1.18.1
 scikit-learn==1.9.0

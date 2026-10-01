@@ -11,7 +11,8 @@
 |---|---|---|
 | 指标版本（算法版本） | `GENERATION_ALGORITHM_VERSION = "gen-4"` | 持久化指标语义变化（如发现率停止改读严格唯一计数之类**改变停止行为/指标口径**的改动）。审计修复批次中 P0-02/P1-01 只收紧了 unique 指标计数与停止条件读取口径——`unique_novel_environments` 的字段语义（"冻结档案 + 本轮已计入去重"）自 A12 引入即未变，变化的是计数正确性（修复高估/低估），故 gen-4 维持；重新引用历史 unique 数值时须注明"修复后重算" |
 | 策略版本 | `selection_strategy = structure_fps_v1`（默认）\| `local_incremental_maximin_v1` | 批内选择语义变化。两策略共用同一严格计数定义（`count_strict_unique_environments`） |
-| 基准版本 | harness 2026-09-29（P0-03/P0-04 修复后） | 锚点角色、种子池装配、半径口径变化。**修复前的全部归档 sweep（20260925T042355Z 及以前、20260925T090608Z、20260925T133939Z、20260925T151421Z、20260926T024832Z）均产生于"锚点传给所有优化器 + within_radius=1.0"的旧 harness**，其 unique/coverage 数值仍可用于当时声明的对照，proximity 数值仅 target_region/genetic-target/pso-target 组可解释，random 组的"无定向"声明不成立（P0-03） |
+| 计数口径 | `metric_caliber = "strict-unique-scaled"`（当前引擎，2026-09-30 缩放空间修复起，基准 harness 未启用能量筛选，故不受 §5 筛选计数分界影响）；历史发布值 `"strict-unique-raw"`（修复前代码，含已发布的 R4 包 2026-09-30-r4） | 计数比较空间变化。2026-10-01 起预注册必须声明口径并在加载时强校验（不符即拒绝），`environment.json` 携带 harness/口径/算法版本戳，逐 run 行携带 dataset_id/descriptor_run_id——跨口径或跨材料数值一律不得混排 |
+| 基准版本 | harness 2026-10-01（预注册完整合同校验 + dataset↔run/fingerprint 门 + 锚点几何预检 + 预算合同 max_accepted/max_generations 入注册；此前 2026-09-29 为 P0-03/P0-04 修复后） | 锚点角色、种子池装配、半径口径、注册合同变化。**修复前的全部归档 sweep（20260925T042355Z 及以前、20260925T090608Z、20260925T133939Z、20260925T151421Z、20260926T024832Z）均产生于"锚点传给所有优化器 + within_radius=1.0"的旧 harness**，其 unique/coverage 数值仍可用于当时声明的对照，proximity 数值仅 target_region/genetic-target/pso-target 组可解释，random 组的"无定向"声明不成立（P0-03） |
 
 ## 2. 五层验证矩阵
 
@@ -56,3 +57,15 @@
 > 引擎在选择后、归档前做第二阶段筛选（`rejected_screening` 入轮记录与观测），accepted.extxyz
 > 状态字段动态翻转并记录 energy_per_atom/max_force；解析/提交双端校验，UI 约束卡可配置。
 > DPA4C 需显式 checkpoint；部分周期候选不做筛选（不静默拒绝）。
+> **更新（2026-10-01，R5.1 外部审计修复批次，`docs/reviews/2026-10-01-r51-audit-fixes.md`）**：
+> ① 上面"状态字段动态翻转并记录 energy_per_atom/max_force"至此才真正落地（此前 writer 固定写
+> energy_screened=false）；`train_set_ready` 语义 = 携带测量值**且**配置了至少一个上限（纯测量
+> pass 不作可训练宣称）。② `novel_environments` / `unique_novel_environments` 两项发现指标改为
+> 按筛选**前**选择集计数（轮记录 docstring 的既有契约），新增 `archived_unique_novel_environments`
+> 记录实际归档口径；discovery_saturated 停机读"发现"口径——严格筛选不得伪造饱和。修复前后的
+> unique 数值在引用时须注明口径分界（与上面 2026-09-30 缩放空间分界同理）。③ PSO 记忆排除
+> screening_rejection 候选（不排除全部未接收）；快照/恢复保留能量与力测量值；capability 门从
+> "模块存在"加深到"predictor 类 + native DPA4C 可解析"；ScreeningSpec 校验 checkpoint 类型并
+> trim；适配层拒绝非有限预测（unscreenable）；`requirements.txt` 下限升 0.3.5；启用筛选的运行
+> 将 mdescriptor 版本折叠进 cache key。DPA4C 0.3.5 起有内置默认模型（Air-OMat24），显式
+> checkpoint 仅为可选覆盖。

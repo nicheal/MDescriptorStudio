@@ -145,6 +145,11 @@ export interface GenerationRound {
   novel_environments: number;
   /** Selection-order-deduplicated novel environments; null when the objective emits no counts. */
   unique_novel_environments: number | null;
+  /** Strict-dedup counterpart over the post-screening kept set (R5.1); equals
+   *  unique_novel_environments when no selected candidate was screened out. */
+  archived_unique_novel_environments?: number | null;
+  /** Selected candidates removed by energy/force screening (R5.1); older runs omit it. */
+  rejected_screening?: number;
 }
 
 export interface GenerationPreview {

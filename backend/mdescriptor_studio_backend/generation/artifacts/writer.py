@@ -172,13 +172,38 @@ class GenerationArtifactWriter:
             accepted = list(run.accepted)
             evaluations = list(run.evaluations)
             # accepted.extxyz carries full provenance in every frame header.
-            # The four status fields are the R5.1 state model: acceptance
-            # means geometry-passed AND descriptor-novel; no energy/force
-            # screening exists in this pipeline and no trainability claim is
-            # made — novelty never implies physical trustworthiness.
-            status = "geometry_passed=true descriptor_novel=true energy_screened=false train_set_ready=false"
-            extra = {
-                i: (
+            # The status fields are the R5.1 state model: acceptance means
+            # geometry-passed AND descriptor-novel; the energy/force flags
+            # flip only when this frame actually carries screening
+            # measurements (fail never reaches the accepted list, and an
+            # unscreenable verdict — partial periodicity, non-finite
+            # prediction — has none, which energy_screen_status explains).
+            # train_set_ready additionally requires configured bounds: a
+            # measure-only pass without any bound is a measurement, not a
+            # plausibility verdict (2026-10-01 audit). Novelty still never
+            # implies trustworthiness.
+            screening_cfg = ((request.get("constraints") or {}).get("energy_screening") or {})
+            bounds_configured = bool(screening_cfg.get("enabled")) and (
+                screening_cfg.get("max_energy_per_atom") is not None or screening_cfg.get("max_force") is not None
+            )
+            extra = {}
+            for i, (c, e) in enumerate(zip(accepted, evaluations)):
+                measured = e.energy is not None
+                status = (
+                    "geometry_passed=true descriptor_novel=true "
+                    f"energy_screened={str(measured).lower()} "
+                    f"energy_screen_pass={str(measured).lower()} "
+                    f"train_set_ready={str(measured and bounds_configured).lower()}"
+                )
+                if e.screening_status is not None and e.screening_status != "pass":
+                    status += f' energy_screen_status="{e.screening_status}"'
+                if measured:
+                    status += f" screen_energy={e.energy:.10g}"
+                    if e.energy_per_atom is not None:
+                        status += f" screen_energy_per_atom={e.energy_per_atom:.10g}"
+                    if e.max_force is not None:
+                        status += f" screen_max_force={e.max_force:.10g}"
+                extra[i] = (
                     f'generation_id="{generation_id}" candidate_id="{c.candidate_id}" '
                     f"parent_frame={-1 if c.parent_frame is None else c.parent_frame} "
                     f"generation={c.generation} operator={c.operator} "
@@ -187,8 +212,6 @@ class GenerationArtifactWriter:
                     f"local_novelty={e.local_diversity if e.local_diversity is not None else float('nan'):.10g} "
                     f"{status}"
                 )
-                for i, (c, e) in enumerate(zip(accepted, evaluations))
-            }
             write_extxyz(staging / "accepted.extxyz", [c.to_frame() for c in accepted], extra_comments=extra)
             manifest["files"]["accepted"] = {
                 "path": "accepted.extxyz",
@@ -221,6 +244,13 @@ class GenerationArtifactWriter:
                                     "local_diversity": e.local_diversity,
                                     "novel_environment_count": e.novel_environment_count,
                                     "atom_count": e.atom_count,
+                                    # R5.1 screening provenance (2026-10-01
+                                    # audit): verdict + measured values.
+                                    "screening_status": e.screening_status,
+                                    "screening_reasons": list(e.screening_reasons),
+                                    "energy": e.energy,
+                                    "energy_per_atom": e.energy_per_atom,
+                                    "max_force": e.max_force,
                                 }
                             ),
                             ensure_ascii=False,

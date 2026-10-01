@@ -10,9 +10,11 @@ CPU or CUDA); the default NEP model (nep89) is bundled with the wheel.
 Statuses surfaced per candidate (accepted.extxyz frame headers):
 geometry_passed, descriptor_novel, energy_screened, energy_screen_pass,
 train_set_ready. A candidate the screener cannot judge (partial
-periodicity, predictor unavailable) stays energy_screened=false and is
+periodicity, non-finite prediction) stays energy_screened=false and is
 *not* rejected — screening is best-effort per frame, never a silent
-rejection.
+rejection. A predictor that *errors* is a global failure, not a per-frame
+one: the exception propagates and fails the round (configuration and
+capability problems are caught at submit time instead).
 """
 
 from __future__ import annotations
@@ -28,14 +30,21 @@ _SCREENING_MODELS = ("NEP", "DPA4C")
 
 
 def mdescriptor_predictors_available() -> bool:
-    """True when the installed mdescriptor ships the predictors package."""
-    import importlib.util
+    """True when the installed mdescriptor ships working energy/force predictors.
 
+    Deliberately deeper than a module-existence probe (2026-10-01 audit P2):
+    the predictors package must export both predictor classes and the native
+    extension must carry the DPA4C backend, so a broken or partial wheel is
+    rejected at submit time instead of failing inside the worker. This still
+    does not load or checksum a model — bundled-model integrity and explicit
+    checkpoint loadability surface at EnergyForceScreen construction."""
     try:
-        import mdescriptor  # noqa: F401
-    except ImportError:
+        from mdescriptor.predictors import DPA4C, NEP  # noqa: F401
+
+        import mdescriptor._native as native
+    except (ImportError, AttributeError):
         return False
-    return importlib.util.find_spec("mdescriptor.predictors") is not None
+    return hasattr(native, "Dpa4cPredictor")
 
 
 @dataclass(frozen=True)
@@ -48,6 +57,16 @@ class ScreeningSpec:
     num_threads: int | None = None
     max_energy_per_atom: float | None = None  # eV/atom upper bound
     max_force: float | None = None  # eV/angstrom max-|F| upper bound
+
+    def __post_init__(self) -> None:
+        # The frontend trims the checkpoint path before submitting; the API
+        # must not hand a whitespace-only string (or a non-string like 42) to
+        # the predictor loader (2026-10-01 audit P2). Empty after trimming
+        # means "no override" — the bundled default applies.
+        if self.checkpoint is not None:
+            if not isinstance(self.checkpoint, str):
+                raise ValueError("energy_screening checkpoint must be a string path when set")
+            object.__setattr__(self, "checkpoint", self.checkpoint.strip() or None)
 
     def validate(self) -> None:
         if self.model not in _SCREENING_MODELS:
@@ -115,11 +134,12 @@ class EnergyForceScreen:
         from mdescriptor.predictors import DPA4C, NEP
 
         execution = ExecutionOptions(device=spec.device, num_threads=spec.num_threads)
-        # model=None resolves the bundled default resource for either model.
+        # model=None resolves the bundled default resource for either model
+        # (checkpoint is pre-normalized: None or a non-empty trimmed path).
         if spec.model == "NEP":
-            self._predictor = NEP(model=spec.checkpoint or None, execution=execution)
+            self._predictor = NEP(model=spec.checkpoint, execution=execution)
         else:
-            self._predictor = DPA4C(model=spec.checkpoint or None, execution=execution)
+            self._predictor = DPA4C(model=spec.checkpoint, execution=execution)
 
     @staticmethod
     def _batch(candidates: list[StructureCandidate]):
@@ -173,6 +193,16 @@ class EnergyForceScreen:
                 total = float(energy[position])
                 per_atom = total / atoms if atoms else None
                 max_force = float(np.linalg.norm(forces[lo:hi], axis=1).max()) if atoms else None
+                if any(
+                    value is not None and not np.isfinite(value) for value in (total, per_atom, max_force)
+                ):
+                    # A non-finite prediction is a frame the screener cannot
+                    # judge, not a bound violation — never a silent pass
+                    # (2026-10-01 audit). The official 0.3.5 PredictionResult
+                    # rejects non-finite values upstream, so this guards
+                    # third-party predictor stand-ins.
+                    verdicts[index] = ScreeningVerdict(status="unscreenable", reasons=("non_finite_prediction",))
+                    continue
                 reasons = []
                 if spec.max_energy_per_atom is not None and per_atom is not None and per_atom > spec.max_energy_per_atom:
                     reasons.append("energy_above_bound")
