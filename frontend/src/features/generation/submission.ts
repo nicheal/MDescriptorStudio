@@ -143,9 +143,6 @@ export function validateConfigFields(config: GenerationConfig): ConfigIssue[] {
   if (anchorFrames.length > 0 && config.optimizer.type === "random" && config.optimizer.reuseAcceptedSeeds) {
     add("optimizer.reuseAcceptedSeeds", "Accepted-seed feedback is unavailable with a target region");
   }
-  if (config.constraints.energyScreeningEnabled && config.constraints.energyScreeningModel === "DPA4C" && !config.constraints.energyScreeningCheckpoint.trim()) {
-    add("constraints.energyScreeningCheckpoint", "DPA4C screening requires a model checkpoint path");
-  }
   if (config.searchTarget.targetMode === "local_environment") {
     if (anchorFrames.length === 0) {
       add("searchTarget.anchorFrames", "Local-environment targeting requires anchor frames");
@@ -314,8 +311,8 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
       enabled: true,
       model: config.constraints.energyScreeningModel,
     };
-    if (config.constraints.energyScreeningModel === "DPA4C") {
-      screening.checkpoint = config.constraints.energyScreeningCheckpoint;
+    if (config.constraints.energyScreeningCheckpoint.trim()) {
+      screening.checkpoint = config.constraints.energyScreeningCheckpoint.trim();
     }
     if (config.constraints.energyScreeningMaxEnergy != null) {
       screening.max_energy_per_atom = config.constraints.energyScreeningMaxEnergy;

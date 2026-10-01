@@ -853,25 +853,22 @@ export default function GenerationConfigPanel({
                 value={config.constraints.energyScreeningModel}
                 options={[
                   { value: "NEP", label: t("NEP (bundled nep89)") },
-                  { value: "DPA4C", label: t("DPA4C (checkpoint)") },
+                  { value: "DPA4C", label: t("DPA4C") },
                 ]}
                 onChange={(energyScreeningModel) =>
                   update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningModel } }))
                 }
               />
-              {config.constraints.energyScreeningModel === "DPA4C" && (
-                <Input
-                  id="constraints-energyScreeningCheckpoint"
-                  aria-label={t("Model checkpoint")}
-                  style={{ width: 260 }}
-                  placeholder={t("path/to/checkpoint.pt")}
-                  value={config.constraints.energyScreeningCheckpoint}
-                  status={issueFor("constraints.energyScreeningCheckpoint") ? "error" : undefined}
-                  onChange={(event) =>
-                    update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningCheckpoint: event.target.value } }))
-                  }
-                />
-              )}
+              <Input
+                id="constraints-energyScreeningCheckpoint"
+                aria-label={t("Model checkpoint")}
+                style={{ width: 240 }}
+                placeholder={t("Optional checkpoint override")}
+                value={config.constraints.energyScreeningCheckpoint}
+                onChange={(event) =>
+                  update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningCheckpoint: event.target.value } }))
+                }
+              />
               <span style={labelStyle}>{t("Max energy/atom")}</span>
               <InputNumber
                 id="constraints-energyScreeningMaxEnergy"

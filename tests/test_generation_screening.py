@@ -74,9 +74,11 @@ class TestScreeningSpec:
         assert spec.model == "NEP" and spec.device == "cpu"
         assert spec.max_energy_per_atom is None and spec.max_force is None
 
-    def test_dpa4c_requires_checkpoint(self):
-        with pytest.raises(ValueError, match="checkpoint"):
-            ScreeningSpec(model="DPA4C").validate()
+    def test_dpa4c_resolves_the_bundled_default(self):
+        # mdescriptor 0.3.5 bundles DPA4C-Air-OMat24-v20260819.pt with a
+        # checksum identity — no user checkpoint is required (an explicit
+        # path is an optional override).
+        ScreeningSpec(model="DPA4C").validate()
         ScreeningSpec(model="DPA4C", checkpoint="model.pt").validate()
 
     def test_bounds_must_be_finite_numbers(self):
@@ -226,12 +228,11 @@ class TestParseValidation:
         with pytest.raises(AppError, match="unknown energy_screening keys"):
             parse_request(self._payload(energy_screening={"enabled": True, "mode": "fast"}))
 
-    def test_dpa4c_checkpoint_required_at_parse(self):
-        from mdescriptor_studio_backend.errors import AppError
+    def test_dpa4c_without_checkpoint_parses(self):
         from mdescriptor_studio_backend.generation.models import parse_request
 
-        with pytest.raises(AppError, match="checkpoint"):
-            parse_request(self._payload(energy_screening={"enabled": True, "model": "DPA4C"}))
+        request = parse_request(self._payload(energy_screening={"enabled": True, "model": "DPA4C"}))
+        assert request.constraints["energy_screening"]["model"] == "DPA4C"
 
     def test_valid_config_parses(self):
         from mdescriptor_studio_backend.generation.models import parse_request

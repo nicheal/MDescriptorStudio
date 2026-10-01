@@ -583,8 +583,6 @@ def parse_request(params: dict) -> GenerationRequest:
             model = energy_screening.get("model") or "NEP"
             if model not in ("NEP", "DPA4C"):
                 raise AppError(INVALID_PARAMS, "energy_screening model must be NEP or DPA4C")
-            if model == "DPA4C" and not energy_screening.get("checkpoint"):
-                raise AppError(INVALID_PARAMS, "energy_screening with DPA4C requires a checkpoint path")
             device = energy_screening.get("device") or "cpu"
             if device not in ("cpu", "cuda"):
                 raise AppError(INVALID_PARAMS, "energy_screening device must be cpu or cuda")

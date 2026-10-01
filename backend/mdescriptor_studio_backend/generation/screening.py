@@ -54,8 +54,9 @@ class ScreeningSpec:
             raise ValueError(f"energy_screening model must be one of {', '.join(_SCREENING_MODELS)}")
         if self.device not in ("cpu", "cuda"):
             raise ValueError("energy_screening device must be cpu or cuda")
-        if self.model == "DPA4C" and not self.checkpoint:
-            raise ValueError("energy_screening with DPA4C requires a checkpoint path")
+        # Both models ship a bundled default (NEP: nep89_20250409, DPA4C:
+        # DPA4C-Air-OMat24-v20260819) that auto-resolves with checksum
+        # verification; ``checkpoint`` is an optional explicit override.
         for key, value in (("max_energy_per_atom", self.max_energy_per_atom), ("max_force", self.max_force)):
             if value is not None and (
                 isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value)
@@ -114,10 +115,11 @@ class EnergyForceScreen:
         from mdescriptor.predictors import DPA4C, NEP
 
         execution = ExecutionOptions(device=spec.device, num_threads=spec.num_threads)
+        # model=None resolves the bundled default resource for either model.
         if spec.model == "NEP":
-            self._predictor = NEP(model=spec.checkpoint, execution=execution)
+            self._predictor = NEP(model=spec.checkpoint or None, execution=execution)
         else:
-            self._predictor = DPA4C(model=spec.checkpoint, execution=execution)
+            self._predictor = DPA4C(model=spec.checkpoint or None, execution=execution)
 
     @staticmethod
     def _batch(candidates: list[StructureCandidate]):
