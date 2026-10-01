@@ -54,3 +54,27 @@ class Optimizer(Protocol):
     def state_dict(self) -> dict:
         """Serializable optimizer state for artifacts and reproducibility."""
         ...
+
+    def snapshot_state(self, register_candidate) -> dict:
+        """Full continuation state at a round boundary (audit R5.5).
+
+        Every candidate a persisted reference needs is registered through
+        ``register_candidate`` so the engine persists it in the snapshot's
+        candidate table; ``type``/``config``/``rounds`` echo back the
+        optimizer identity and configuration so a restore can verify them.
+        """
+        ...
+
+    def validate_snapshot(self, state: dict, candidates_by_id: dict):
+        """Strictly validate a persisted snapshot state against this
+        optimizer (audit R5.5 transactional restore): required fields
+        present — never silently defaulted to empty memory —, references
+        resolvable against the snapshot's candidate table, and the
+        snapshot's ``type``/``config`` identical to this instance's.
+        Returns the rebuilt state WITHOUT mutating the optimizer."""
+        ...
+
+    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+        """Apply a snapshot state (re-validated via :meth:`validate_snapshot`,
+        so assignment happens only after every check passed)."""
+        ...

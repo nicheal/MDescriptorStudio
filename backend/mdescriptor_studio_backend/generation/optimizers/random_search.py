@@ -24,6 +24,7 @@ _TARGET_IMMIGRANT_SHARE = 0.15
 from ...analysis.sampling.fps import farthest_point_sampling
 from .._distance import min_sqdist_to_set
 from ..optimization import ObservationBatch, OptimizationContext, ProposalBatch
+from ..snapshot import require_keys
 
 
 class RandomSearchOptimizer:
@@ -331,6 +332,8 @@ class RandomSearchOptimizer:
         for candidate in self._targeted_accepted:
             register_candidate(candidate)
         return {
+            "type": self.name,
+            "config": self._config(),
             "feedback_pool": [candidate.candidate_id for candidate in self._feedback_seed_pool],
             "feedback_descriptors": [np.asarray(descriptor).tolist() for descriptor in self._feedback_descriptors],
             "targeted_accepted": [candidate.candidate_id for candidate in self._targeted_accepted],
@@ -340,22 +343,84 @@ class RandomSearchOptimizer:
             ],
         }
 
-    def load_state(self, state: dict, candidates_by_id: dict) -> None:
-        def _candidates(ids: list) -> list:
-            missing = [cid for cid in ids if cid not in candidates_by_id]
+    def _config(self) -> dict:
+        """The constructor-level knobs a resume must reproduce exactly."""
+        return {
+            "children_per_seed": self.children_per_seed,
+            "batch_accept": self.batch_accept,
+            "reuse_accepted_seeds": self.reuse_accepted_seeds,
+        }
+
+    def validate_snapshot(self, state: dict, candidates_by_id: dict) -> tuple:
+        """Strictly validate a persisted Random-search state against this
+        optimizer (audit R5.5 transactional restore) and return the rebuilt
+        pools WITHOUT mutating the optimizer. All five fields are required —
+        the snapshot always writes them, so absence means corruption, and
+        silently defaulting them restored an amnesiac optimizer whose
+        trajectory diverged from the uninterrupted run (R5.5 case 2)."""
+        require_keys(
+            state,
+            (
+                "type",
+                "config",
+                "feedback_pool",
+                "feedback_descriptors",
+                "targeted_accepted",
+                "targeted_descriptors",
+                "targeted_local_distances",
+            ),
+            "random state",
+        )
+        if state["type"] != self.name:
+            raise ValueError(f"snapshot optimizer type {state['type']!r} does not match {self.name!r}")
+        if state["config"] != self._config():
+            raise ValueError("snapshot was produced with a different random-search configuration")
+        fields = {
+            "feedback_pool": state["feedback_pool"],
+            "feedback_descriptors": state["feedback_descriptors"],
+            "targeted_accepted": state["targeted_accepted"],
+            "targeted_descriptors": state["targeted_descriptors"],
+            "targeted_local_distances": state["targeted_local_distances"],
+        }
+        for name, value in fields.items():
+            if not isinstance(value, list):
+                raise ValueError(f"snapshot random {name} must be a JSON array")
+        if len(fields["feedback_pool"]) != len(fields["feedback_descriptors"]):
+            raise ValueError("snapshot random feedback pool and descriptor lengths disagree")
+        if len(fields["targeted_accepted"]) != len(fields["targeted_descriptors"]) or len(
+            fields["targeted_accepted"]
+        ) != len(fields["targeted_local_distances"]):
+            raise ValueError("snapshot random targeted pool, descriptors and local distances disagree")
+        for name in ("feedback_pool", "targeted_accepted"):
+            missing = [cid for cid in fields[name] if cid not in candidates_by_id]
             if missing:
                 raise ValueError(f"snapshot references unknown candidates: {', '.join(missing[:3])}")
-            return [candidates_by_id[cid] for cid in ids]
+        for distance in fields["targeted_local_distances"]:
+            if distance is not None and (isinstance(distance, bool) or not isinstance(distance, (int, float))):
+                raise ValueError("snapshot random targeted local distances must be numbers or null")
 
-        self._feedback_seed_pool = _candidates(state.get("feedback_pool", []))
-        self._feedback_descriptors = [
-            np.asarray(descriptor, dtype=np.float64) for descriptor in state.get("feedback_descriptors", [])
-        ]
-        self._targeted_accepted = _candidates(state.get("targeted_accepted", []))
-        self._targeted_descriptors = [
-            np.asarray(descriptor, dtype=np.float64) for descriptor in state.get("targeted_descriptors", [])
-        ]
-        self._targeted_local_distances = list(state.get("targeted_local_distances", []))
+        def _rows(matrix, what):
+            try:
+                return np.asarray(matrix, dtype=np.float64)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"snapshot random {what} is malformed: {exc}") from exc
+
+        return (
+            [candidates_by_id[cid] for cid in fields["feedback_pool"]],
+            [_rows(rows, "feedback descriptor") for rows in fields["feedback_descriptors"]],
+            [candidates_by_id[cid] for cid in fields["targeted_accepted"]],
+            [_rows(rows, "targeted descriptor") for rows in fields["targeted_descriptors"]],
+            list(fields["targeted_local_distances"]),
+        )
+
+    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+        (
+            self._feedback_seed_pool,
+            self._feedback_descriptors,
+            self._targeted_accepted,
+            self._targeted_descriptors,
+            self._targeted_local_distances,
+        ) = self.validate_snapshot(state, candidates_by_id)
         self._targeted_pending = {}
         self._feedback_seed_ids = set()
 

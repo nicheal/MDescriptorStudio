@@ -51,6 +51,7 @@ import numpy as np
 
 from ...analysis.sampling.fps import farthest_point_sampling
 from ..optimization import ObservationBatch, OptimizationContext, ProposalBatch
+from ..snapshot import require_keys
 
 # Amplitude-gene bounds mirror the operator-level validation (displacement
 # A11 semantics, strain/shear range checks) so a mutated genome can never
@@ -518,6 +519,8 @@ class GeneticOptimizer:
         for candidate, _genome in self._pool:
             register_candidate(candidate)
         return {
+            "type": self.name,
+            "config": self._config(),
             "pool": [
                 {
                     "candidate_id": candidate.candidate_id,
@@ -533,17 +536,75 @@ class GeneticOptimizer:
             "rounds": int(self._rounds),
         }
 
-    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+    def _config(self) -> dict:
+        """The constructor-level knobs a resume must reproduce exactly."""
+        return {
+            "children_per_seed": self.children_per_seed,
+            "batch_accept": self.batch_accept,
+            "parent_fraction": self.parent_fraction,
+            "immigrant_fraction": self.immigrant_fraction,
+            "gene_mutation_rate": self.gene_mutation_rate,
+            "pressure_warmup_pool": self.pressure_warmup_pool,
+            "autofrac": self.autofrac,
+        }
+
+    def validate_snapshot(self, state: dict, candidates_by_id: dict) -> tuple:
+        """Strictly validate a persisted GA state against this optimizer
+        (audit R5.5 transactional restore): required fields present, pool
+        entries and descriptors aligned, every referenced candidate known,
+        and the snapshot's configuration identical to this instance's.
+        Returns the rebuilt pool/descriptors/stats WITHOUT mutating the
+        optimizer. An empty pool is legitimate (zero-accept rounds); a
+        missing field is not."""
+        require_keys(state, ("type", "config", "rounds", "pool", "pool_descriptors", "operator_stats"), "genetic state")
+        if state["type"] != self.name:
+            raise ValueError(f"snapshot optimizer type {state['type']!r} does not match {self.name!r}")
+        if state["config"] != self._config():
+            raise ValueError("snapshot was produced with a different genetic configuration")
+        rounds = state["rounds"]
+        if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 0:
+            raise ValueError("snapshot genetic rounds must be a non-negative integer")
+        pool_raw = state["pool"]
+        descriptors_raw = state["pool_descriptors"]
+        if not isinstance(pool_raw, list) or not isinstance(descriptors_raw, list):
+            raise ValueError("snapshot genetic pool and pool_descriptors must be JSON arrays")
+        if len(pool_raw) != len(descriptors_raw):
+            raise ValueError("snapshot genetic pool and pool_descriptors lengths disagree")
         pool = []
-        for entry in state.get("pool", []):
+        for entry in pool_raw:
+            require_keys(entry, ("candidate_id", "genome"), "genetic pool entry")
             candidate = candidates_by_id.get(entry["candidate_id"])
             if candidate is None:
                 raise ValueError(f"snapshot references unknown candidate: {entry['candidate_id']}")
-            pool.append((candidate, dict(entry["genome"])))
+            genome = entry["genome"]
+            require_keys(genome, ("sigma", "strain", "shear", "mask"), "genetic genome")
+            if not isinstance(genome["mask"], dict):
+                raise ValueError("snapshot genetic genome mask must be an object")
+            pool.append(
+                (
+                    candidate,
+                    {key: (dict(value) if isinstance(value, dict) else float(value)) for key, value in genome.items()},
+                )
+            )
+        descriptors = []
+        for rows in descriptors_raw:
+            try:
+                descriptors.append(np.asarray(rows, dtype=np.float64))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"snapshot genetic pool descriptor is malformed: {exc}") from exc
+        stats_raw = state["operator_stats"]
+        if not isinstance(stats_raw, dict):
+            raise ValueError("snapshot genetic operator_stats must be an object")
+        stats = {}
+        for name, counters in stats_raw.items():
+            require_keys(counters, ("proposed", "accepted"), "genetic operator stats")
+            stats[name] = dict(counters)
+        return pool, descriptors, stats, rounds
+
+    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+        pool, descriptors, stats, rounds = self.validate_snapshot(state, candidates_by_id)
         self._pool = pool
-        self._pool_descriptors = [
-            np.asarray(descriptor, dtype=np.float64) for descriptor in state.get("pool_descriptors", [])
-        ]
-        self._operator_stats = {name: dict(counters) for name, counters in state.get("operator_stats", {}).items()}
-        self._rounds = int(state.get("rounds", 0))
+        self._pool_descriptors = descriptors
+        self._operator_stats = stats
+        self._rounds = rounds
         self._pending = {}

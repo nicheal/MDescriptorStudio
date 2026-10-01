@@ -18,10 +18,12 @@ optimizers (GA/PSO) can steer the next round; Random ignores the feedback.
 
 from __future__ import annotations
 
+import hashlib
 import json
-import os
+import re
+import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +33,7 @@ from ..analysis.sampling.fps import farthest_point_sampling
 from ..errors import AppError, JOB_CANCELLED
 from ._distance import min_sqdist_to_set
 from .registry import GENERATION_ALGORITHM_VERSION
+from .snapshot import durable_write, fsync_directory, require_keys
 from .optimization import CandidateObservation, ObservationBatch, OptimizationContext
 from .evaluator import DescriptorEvaluator
 from .models import (
@@ -52,13 +55,95 @@ _GEOMETRY_REJECTION_CODES = {
     "atom count differs from the parent structure": "atom_count_lock",
 }
 
-SNAPSHOT_VERSION = 1
+# v2 (audit R5.5 hardening): the manifest references uniquely named, hashed
+# data files instead of overwriting candidates.json/evaluations.json in
+# place, records counts + a run-configuration fingerprint, and optimizer
+# states carry strict required-field validation. v1 snapshots are rejected
+# on load.
+SNAPSHOT_VERSION = 2
+
+# Manifest-referenced data file names: a strict single-segment pattern so a
+# hand-edited manifest cannot point outside the snapshot directory.
+_DATA_FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\.json")
+
+_ROUND_RECORD_KEYS = (
+    "generation",
+    "evaluations",
+    "proposed",
+    "rejected_geometry",
+    "rejected_geometry_by_reason",
+    "rejected_duplicate",
+    "accepted",
+    "best_fitness",
+    "best_novelty",
+    "mean_novelty",
+    "coverage_radius",
+    "novel_environments",
+    "unique_novel_environments",
+    "archived_unique_novel_environments",
+    "rejected_screening",
+)
+
+_EVALUATION_KEYS = (
+    "candidate_id",
+    "structure_descriptor",
+    "atomic_descriptors",
+    "novelty",
+    "local_diversity",
+    "fitness",
+    "novel_environment_count",
+    "atom_count",
+    "energy",
+    "energy_per_atom",
+    "max_force",
+    "screening_status",
+    "screening_reasons",
+)
 
 
-def _rng_from_state(state: dict) -> np.random.Generator:
-    """Rebuild a Generator from a persisted bit-generator state (R5.5)."""
-    bit_generator = getattr(np.random, state["bit_generator"])()
-    bit_generator.state = state
+def _encode_rng_state(state):
+    """JSON-safe encoding of a bit-generator state (audit R5.5).
+
+    PCG64's state is plain Python integers, but MT19937, Philox and SFC64
+    carry ndarray leaves that json.dumps cannot serialize; every ndarray
+    becomes a tagged {dtype, data} record restored bit-exactly on load.
+    """
+    if isinstance(state, np.ndarray):
+        return {"__ndarray__": {"dtype": state.dtype.str, "data": state.tolist()}}
+    if isinstance(state, dict):
+        return {key: _encode_rng_state(value) for key, value in state.items()}
+    if isinstance(state, (list, tuple)):
+        return [_encode_rng_state(value) for value in state]
+    return state
+
+
+def _decode_rng_state(state):
+    if isinstance(state, dict) and set(state) == {"__ndarray__"}:
+        payload = state["__ndarray__"]
+        return np.asarray(payload["data"], dtype=np.dtype(payload["dtype"]))
+    if isinstance(state, dict):
+        return {key: _decode_rng_state(value) for key, value in state.items()}
+    if isinstance(state, list):
+        return [_decode_rng_state(value) for value in state]
+    return state
+
+
+def _rng_from_state(state) -> np.random.Generator:
+    """Rebuild a Generator from a persisted bit-generator state (R5.5).
+
+    The bit-generator name is validated against numpy's BitGenerator types —
+    an arbitrary np.random attribute must never be instantiated from file
+    content — and ndarray leaves are decoded before the state assignment.
+    """
+    name = state.get("bit_generator") if isinstance(state, dict) else None
+    bit_generator_cls = getattr(np.random, name, None) if isinstance(name, str) else None
+    if not (isinstance(bit_generator_cls, type) and issubclass(bit_generator_cls, np.random.BitGenerator)):
+        raise ValueError(f"snapshot references unknown bit generator: {name!r}")
+    bit_generator = bit_generator_cls()
+    try:
+        bit_generator.state = _decode_rng_state(state)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"snapshot bit-generator state is not loadable: {exc}") from exc
     return np.random.Generator(bit_generator)
 
 
@@ -92,6 +177,54 @@ def _candidate_from_record(record: dict) -> StructureCandidate:
         operator_params=dict(record.get("operator_params") or {}),
         metadata=dict(record.get("metadata") or {}),
     )
+
+
+def _objective_fingerprint(objective) -> dict:
+    """The objective's scoring-relevant configuration, for the snapshot
+    fingerprint. CompositeObjective's inner local objective carries the
+    aggregation knobs, so it is folded in via the private attribute."""
+    payload = {"class": type(objective).__name__}
+    for attr in (
+        "structure_weight",
+        "local_weight",
+        "aggregation",
+        "top_fraction",
+        "quantile",
+        "novel_environment_threshold",
+        "novelty_threshold",
+    ):
+        value = getattr(objective, attr, None)
+        if value is not None:
+            payload[attr] = value
+    inner = getattr(objective, "_local", None)
+    if inner is not None and inner is not objective:
+        payload["local"] = _objective_fingerprint(inner)
+    return payload
+
+
+def _archive_fingerprint(archive) -> dict:
+    """Frozen scaling plus a content hash of the scaled reference — any
+    change to the reference set or to the scaling transform invalidates a
+    snapshot taken against the old archive."""
+    scaling = archive.scaling
+    reference = np.ascontiguousarray(archive.reference, dtype=np.float64)
+    return {
+        "mode": scaling.mode,
+        "center": np.asarray(scaling.center, dtype=np.float64).tolist(),
+        "scale": np.asarray(scaling.scale, dtype=np.float64).tolist(),
+        "reference_shape": list(reference.shape),
+        "reference_sha256": hashlib.sha256(reference.tobytes()).hexdigest(),
+    }
+
+
+def _screening_fingerprint(screening) -> dict | None:
+    if screening is None:
+        return None
+    payload = {"class": type(screening).__name__}
+    spec = getattr(screening, "spec", None)
+    if spec is not None and is_dataclass(spec):
+        payload["spec"] = asdict(spec)
+    return payload
 
 
 def _geometry_rejection_code(reason: str | None) -> str:
@@ -468,10 +601,15 @@ class GenerationEngine:
             )
         self.selection_strategy = selection_strategy
         # Resume support (audit R5.5): populated by restore_state(), consumed
-        # (and cleared) at the top of run().
+        # (and cleared) at the top of run(). restore_state() validates the
+        # whole snapshot and prepares this payload transactionally; run()
+        # only applies it.
         self._resume: dict | None = None
         self._resume_candidates: dict | None = None
         self._active_result: GenerationRunResult | None = None
+        # The run definition is fixed at construction, so the fingerprint is
+        # computed once and reused by every snapshot write / restore check.
+        self._config_fingerprint_cache: str | None = None
         self.seed_pool = list(seed_pool)
         self.evaluator = evaluator
         self.structure_archive = structure_archive
@@ -541,50 +679,49 @@ class GenerationEngine:
             )
         )
         if self._resume is not None:
-            # Continue an interrupted run (audit R5.5): replay the recorded
-            # history, then hand the optimizer its pools/genomes/memory back.
-            # The fresh initialize() above rebuilt the context; the restored
-            # pools reference the snapshot's accepted candidates.
+            # Continue an interrupted run (audit R5.5). restore_state() has
+            # already validated and prepared everything — the optimizer's
+            # pools/genomes/memory (its load_state runs after the fresh
+            # initialize() above, which rebuilt the context and reset the
+            # optimizer), the decoded RNG, the replayed result history
+            # (rounds, accepted candidates, evaluations with their screening
+            # verdicts) and the round-boundary mirrors.
             resume, candidates_by_id = self._resume, self._resume_candidates
             self._resume = None
             self._resume_candidates = None
-            result.rounds = [RoundRecord(**record) for record in resume["rounds"]]
-            result.accepted = [candidates_by_id[cid] for cid in resume["accepted_order"]]
-            result.evaluations = [
-                CandidateEvaluation(
-                    candidate_id=entry["candidate_id"],
-                    valid=True,
-                    rejection_reason=None,
-                    structure_descriptor=np.asarray(entry["structure_descriptor"], dtype=np.float64),
-                    atomic_descriptors=(
-                        None
-                        if entry["atomic_descriptors"] is None
-                        else np.asarray(entry["atomic_descriptors"], dtype=np.float64)
-                    ),
-                    novelty=entry["novelty"],
-                    local_diversity=entry["local_diversity"],
-                    penalty=0.0,
-                    fitness=entry["fitness"],
-                    novel_environment_count=entry["novel_environment_count"],
-                    atom_count=entry["atom_count"],
-                    # Screening measurements must survive a resume (2026-10-01
-                    # audit P1): without them a restored accepted candidate
-                    # would silently revert to "not screened". .get() keeps
-                    # pre-R5.1 snapshots (no recorded measurements) loadable.
-                    energy=entry.get("energy"),
-                    energy_per_atom=entry.get("energy_per_atom"),
-                    max_force=entry.get("max_force"),
-                    screening_status=entry.get("screening_status"),
-                    screening_reasons=tuple(entry.get("screening_reasons") or ()),
-                )
-                for entry in resume["evaluations"]
-            ]
-            generation = int(resume["generation"])
-            total_evaluations = int(resume["total_evaluations"])
-            stagnant = int(resume["stagnant"])
-            best_fitness = -np.inf if resume["best_fitness"] is None else float(resume["best_fitness"])
-            self.rng = _rng_from_state(resume["rng"])
             self.optimizer.load_state(resume["optimizer"], candidates_by_id)
+            self.rng = resume["rng"]
+            generation = resume["generation"]
+            total_evaluations = resume["total_evaluations"]
+            stagnant = resume["stagnant"]
+            best_fitness = -np.inf if resume["best_fitness"] is None else float(resume["best_fitness"])
+            # Mirror the restored round-boundary bookkeeping into the fresh
+            # result even when no new round runs (fixpoint): a budget-
+            # exhausted resume must still report — and re-snapshot — the
+            # restored values, not the fresh defaults.
+            result.best_fitness = resume["best_fitness"]
+            result.stagnant = stagnant
+            result.rounds = resume["rounds"]
+            result.accepted = resume["accepted"]
+            result.evaluations = resume["evaluations"]
+            # The scientific stops are decided AFTER on_round — i.e. after
+            # the snapshot was taken — so a restored run must re-derive them
+            # from the replayed history instead of silently running a round
+            # the original never ran (R5.5: target/discovery stops gained a
+            # round on resume). Raising a stop threshold re-enables the run
+            # deliberately; extending a budget alone does not.
+            if self._discovery_saturated(result.rounds, generation, counts_environments):
+                result.stopped_by = "discovery_saturated"
+                return result
+            last_round = result.rounds[-1] if result.rounds else None
+            if (
+                self.budget.target_novelty is not None
+                and last_round is not None
+                and last_round.best_novelty is not None
+                and last_round.best_novelty >= self.budget.target_novelty
+            ):
+                result.stopped_by = "target_novelty"
+                return result
 
         while True:
             try:
@@ -963,28 +1100,12 @@ class GenerationEngine:
             if on_round is not None:
                 on_round(record)
 
-            # Discovery-rate saturation (G3): the scientific stop. When the
-            # trailing window of rounds produced fewer novel environments per
-            # 100 descriptor evaluations than the threshold, expanding
-            # further is not paying off — the archive has converged onto the
-            # reachable frontier of the operator family. Only objectives that
-            # actually produce novel_environment_count may trigger it.
-            # The rate reads the same strictly deduplicated metric the
-            # benchmark and the results view report (raw counts stay on the
-            # record as a diagnostic): raw sums let repeated environments
-            # hold the rate above the floor and postpone a saturation stop
-            # that already fired.
-            window = int(getattr(self.budget, "discovery_window", 0) or 0)
-            if window and counts_environments and generation >= window:
-                gained = sum(
-                    r.unique_novel_environments if r.unique_novel_environments is not None else r.novel_environments
-                    for r in result.rounds[-window:]
-                )
-                spent = sum(r.evaluations for r in result.rounds[-window:])
-                min_rate = float(getattr(self.budget, "min_novel_per_100_evals", 0.0) or 0.0)
-                if spent > 0 and gained < min_rate * spent / 100.0:
-                    result.stopped_by = "discovery_saturated"
-                    break
+            # Discovery-rate saturation (G3): the scientific stop, shared
+            # verbatim with the resume re-check so a restored run re-derives
+            # the original stop decision exactly (one definition).
+            if self._discovery_saturated(result.rounds, generation, counts_environments):
+                result.stopped_by = "discovery_saturated"
+                break
             if progress is not None:
                 fraction_cap = self.budget.max_evaluations
                 progress(
@@ -999,7 +1120,69 @@ class GenerationEngine:
 
         return result
 
+    def _discovery_saturated(self, rounds: list, generation: int, counts_environments: bool) -> bool:
+        """Discovery-rate saturation (G3): the trailing ``discovery_window``
+        rounds produced fewer novel environments per 100 descriptor
+        evaluations than the threshold — expanding further is not paying
+        off, the archive has converged onto the reachable frontier of the
+        operator family. Only objectives that actually produce
+        novel_environment_count may trigger it. The rate reads the same
+        strictly deduplicated metric the benchmark and the results view
+        report (raw counts stay on the record as a diagnostic): raw sums
+        let repeated environments hold the rate above the floor and
+        postpone a saturation stop that already fired. Shared by the round
+        loop and the resume re-check so both decide identically.
+        """
+        window = int(getattr(self.budget, "discovery_window", 0) or 0)
+        if not window or not counts_environments or generation < window:
+            return False
+        gained = sum(
+            record.unique_novel_environments if record.unique_novel_environments is not None else record.novel_environments
+            for record in rounds[-window:]
+        )
+        spent = sum(record.evaluations for record in rounds[-window:])
+        min_rate = float(getattr(self.budget, "min_novel_per_100_evals", 0.0) or 0.0)
+        return spent > 0 and gained < min_rate * spent / 100.0
+
     # -- resume (audit R5.5) -------------------------------------------------
+
+    def _config_fingerprint(self) -> str:
+        """SHA-256 over the run-definition inputs a resume must reproduce:
+        the frozen scaling and reference content of both archives, the
+        objective and operator configuration, the seed-pool geometry, the
+        targeting context and the screening stage. Budgets and stop
+        thresholds are deliberately excluded — extending them between the
+        interruption and the resume is the point of the feature; everything
+        in here changes the trajectory itself and must be rejected."""
+        if self._config_fingerprint_cache is None:
+            payload = {
+                "selection_strategy": self.selection_strategy,
+                "n_seeds": int(self.n_seeds),
+                "duplicate_threshold": self.duplicate_threshold,
+                "region_radius": self.region_radius,
+                "seed_descriptors": [np.asarray(value, dtype=np.float64).tolist() for value in self.seed_descriptors],
+                "anchor_descriptors": [np.asarray(value, dtype=np.float64).tolist() for value in self.anchor_descriptors],
+                "local_anchor_descriptors": [
+                    np.asarray(value, dtype=np.float64).tolist() for value in self.local_anchor_descriptors
+                ],
+                "seed_local_distances": [None if value is None else float(value) for value in self.seed_local_distances],
+                "objective": _objective_fingerprint(self.objective),
+                "evaluator": type(self.evaluator).__name__,
+                "energy_screening": _screening_fingerprint(self.energy_screening),
+                "operators": [
+                    {
+                        "name": getattr(operator, "name", type(operator).__name__),
+                        "params": dict(getattr(operator, "operator_params", {}) or {}),
+                    }
+                    for operator in self.optimizer.operators
+                ],
+                "seed_pool": [_candidate_record(candidate) for candidate in self.seed_pool],
+                "structure_archive": _archive_fingerprint(self.structure_archive),
+                "local_archive": None if self.local_archive is None else _archive_fingerprint(self.local_archive),
+            }
+            blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            self._config_fingerprint_cache = hashlib.sha256(blob).hexdigest()
+        return self._config_fingerprint_cache
 
     def snapshot_state(self) -> dict:
         """Full continuation state at a round boundary (audit R5.5).
@@ -1008,10 +1191,12 @@ class GenerationEngine:
         recorded — RNG bit-generator state, optimizer pools/genomes/memory,
         accepted archives as a per-round replay (raw rows, so replaying
         ``add`` re-applies the scaling identically), the accepted candidates
-        themselves, counters and round history. Intra-round optimizer
-        bookkeeping is deliberately dropped (propose() clears it), and the
-        descriptor-space map rows are not part of the snapshot — the
-        artifact writer streams those per round.
+        themselves, counters and round history, the screening verdicts of
+        every accepted evaluation (R5.1), plus manifest counts and a run-
+        configuration fingerprint restore_state() verifies. Intra-round
+        optimizer bookkeeping is deliberately dropped (propose() clears
+        it), and the descriptor-space map rows are not part of the
+        snapshot — the artifact writer streams those per round.
         """
         result = self._active_result
         if result is None:
@@ -1050,21 +1235,26 @@ class GenerationEngine:
             for evaluation in result.evaluations
         ]
         # Per-round archive replay blocks, derived from the acceptance order.
+        # The replayed ArchiveEntry rows are the ARCHIVE's own entries — not
+        # recomputed values — so a restored archive is identical to the
+        # original one, metadata included (R5.5 byte-exact fixpoint).
+        archive_entries = self.structure_archive.entries
         replay = []
         cursor = 0
         for record in result.rounds:
             count = record.accepted
             block = evaluations[cursor : cursor + count]
+            live_entries = archive_entries[cursor : cursor + count]
             cursor += count
             entries = [
                 {
-                    "candidate_id": entry["candidate_id"],
-                    "structure_index": cursor - count + offset,
-                    "fitness": entry["fitness"],
-                    "novelty": entry["novelty"],
-                    "generation": record.generation,
+                    "candidate_id": entry.candidate_id,
+                    "structure_index": entry.structure_index,
+                    "fitness": entry.fitness,
+                    "novelty": entry.novelty,
+                    "generation": entry.generation,
                 }
-                for offset, entry in enumerate(block)
+                for entry in live_entries
             ]
             replay.append(
                 {
@@ -1077,6 +1267,11 @@ class GenerationEngine:
                     "entries": entries,
                 }
             )
+        # The optimizer registers its extra referenced candidates (PSO
+        # particle memory can hold evaluated-but-rejected children) as a
+        # side effect — it must run BEFORE the candidate table is built.
+        optimizer_state = self.optimizer.snapshot_state(register_candidate)
+        candidates = [_candidate_record(candidate) for candidate in registered.values()]
         return {
             "version": SNAPSHOT_VERSION,
             "algorithm_version": GENERATION_ALGORITHM_VERSION,
@@ -1084,47 +1279,90 @@ class GenerationEngine:
             "total_evaluations": int(sum(record.evaluations for record in result.rounds)),
             "best_fitness": result.best_fitness,
             "stagnant": int(result.stagnant),
-            "rng": self.rng.bit_generator.state,
-            "optimizer": self.optimizer.snapshot_state(register_candidate),
+            "budget": asdict(self.budget),
+            "rng": _encode_rng_state(self.rng.bit_generator.state),
+            "optimizer": optimizer_state,
             "accepted_order": [candidate.candidate_id for candidate in result.accepted],
             "rounds": [record.to_json() for record in result.rounds],
-            "candidates": [_candidate_record(candidate) for candidate in registered.values()],
+            "candidates": candidates,
             "evaluations": evaluations,
             "archive_replay": replay,
+            "counts": {
+                "candidates": len(candidates),
+                "evaluations": len(evaluations),
+                "accepted": len(result.accepted),
+                "rounds": len(result.rounds),
+            },
+            "config_fingerprint": self._config_fingerprint(),
         }
 
     def write_snapshot(self, directory) -> None:
-        """Atomically persist snapshot_state() into ``directory``.
+        """Durably persist snapshot_state() into ``directory``.
 
-        Data files are written first and state.json replaces last, so a
-        crash mid-write leaves the previous snapshot readable.
+        Commit protocol (audit R5.5): both data files are written under
+        unique, manifest-referenced names and fsynced BEFORE the manifest
+        replaces state.json. v1 overwrote the data files in place, so a
+        crash mid-write destroyed the previous snapshot while its manifest
+        still pointed at it. Here the manifest is the commit point: before
+        it lands the old snapshot is fully intact, after it lands the new
+        one is (its data files are already durable), and stale data files
+        are unlinked only once the new manifest is committed.
         """
         state = self.snapshot_state()
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        candidates, evaluations = state["candidates"], state["evaluations"]
-        (directory / "candidates.json").write_text(
-            json.dumps(candidates, ensure_ascii=False), encoding="utf-8"
+        token = uuid.uuid4().hex[:16]
+        files: dict = {}
+        for key in ("candidates", "evaluations"):
+            data = json.dumps(state.pop(key), ensure_ascii=False).encode("utf-8")
+            name = f"{key}-{token}.json"
+            durable_write(directory / name, data)
+            files[key] = {"name": name, "sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+        state["files"] = files
+        durable_write(directory / "state.json", json.dumps(state, ensure_ascii=False).encode("utf-8"))
+        fsync_directory(directory)
+        keep = {entry["name"] for entry in files.values()}
+        stale_files = (
+            list(directory.glob("candidates-*.json"))
+            + list(directory.glob("evaluations-*.json"))
+            + list(directory.glob("*.json.tmp"))
         )
-        (directory / "evaluations.json").write_text(
-            json.dumps(evaluations, ensure_ascii=False), encoding="utf-8"
-        )
-        state["candidates"] = None
-        state["evaluations"] = None
-        tmp = directory / "state.json.tmp"
-        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, directory / "state.json")
+        for stale in stale_files:
+            if stale.name not in keep:
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass  # a locked stale file must not fail the committed snapshot
 
     def restore_state(self, directory) -> None:
         """Load a snapshot written by write_snapshot into this engine.
 
-        The engine must be constructed with the same seed pool / objective /
-        operators as the interrupted run (the context is rebuilt
-        identically); archives start empty and are replayed here, the RNG
-        and the optimizer state are applied when run() starts.
+        Transactional (audit R5.5): every field, reference, count, dimension
+        and hash is validated — and the optimizer state checked against this
+        engine's type and configuration — BEFORE anything is mutated, so a
+        rejected snapshot leaves the engine untouched instead of half-
+        restored. The engine must be constructed with the same run
+        definition as the interrupted run (the configuration fingerprint is
+        verified) and fresh, empty archives, which are replayed here; the
+        RNG and optimizer state are applied when run() starts.
+
+        Resume semantics: the continuation is faithful to the recorded
+        history. Extending ``max_generations``/``max_evaluations`` between
+        the interruption and the resume is supported, but an expanded
+        evaluation budget only stops truncating the remaining rounds' batch
+        sizes — it does not retroactively turn the already-truncated rounds
+        into ones proposed under the larger budget. The scientific stops
+        (target novelty, discovery saturation) re-derive from the replayed
+        history: a run that already reached them stays stopped.
         """
         directory = Path(directory)
-        state = json.loads((directory / "state.json").read_text(encoding="utf-8"))
+        manifest_path = directory / "state.json"
+        try:
+            state = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"snapshot manifest {manifest_path} is not valid JSON: {exc}") from exc
+        if not isinstance(state, dict):
+            raise ValueError("snapshot manifest must be a JSON object")
         if state.get("version") != SNAPSHOT_VERSION:
             raise ValueError(f"unsupported snapshot version: {state.get('version')}")
         if state.get("algorithm_version") != GENERATION_ALGORITHM_VERSION:
@@ -1132,24 +1370,230 @@ class GenerationEngine:
                 f"snapshot algorithm version {state.get('algorithm_version')} does not match "
                 f"the running {GENERATION_ALGORITHM_VERSION} — persisted metric semantics differ"
             )
-        candidates = [_candidate_from_record(record) for record in json.loads((directory / "candidates.json").read_text(encoding="utf-8"))]
-        candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
-        evaluations = json.loads((directory / "evaluations.json").read_text(encoding="utf-8"))
-        cursor = 0
-        for round_replay in state["archive_replay"]:
-            entries = [ArchiveEntry(**entry) for entry in round_replay["entries"]]
-            count = len(entries)
-            structure_rows = np.asarray(
-                [evaluations[cursor + offset]["structure_descriptor"] for offset in range(count)],
-                dtype=np.float64,
+        require_keys(
+            state,
+            (
+                "generation",
+                "total_evaluations",
+                "best_fitness",
+                "stagnant",
+                "rng",
+                "optimizer",
+                "accepted_order",
+                "rounds",
+                "archive_replay",
+                "files",
+                "counts",
+                "config_fingerprint",
+            ),
+            "manifest",
+        )
+        for key in ("generation", "total_evaluations", "stagnant"):
+            value = state[key]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"snapshot {key} must be a non-negative integer")
+        best_fitness = state["best_fitness"]
+        if best_fitness is not None and (isinstance(best_fitness, bool) or not isinstance(best_fitness, (int, float))):
+            raise ValueError("snapshot best_fitness must be a number or null")
+
+        files = state["files"]
+        if not isinstance(files, dict) or set(files) != {"candidates", "evaluations"}:
+            raise ValueError("snapshot manifest must reference exactly the candidates and evaluations data files")
+        payloads: dict = {}
+        for key, entry in files.items():
+            if not isinstance(entry, dict):
+                raise ValueError(f"snapshot manifest file entry for {key} must be an object")
+            name = entry.get("name")
+            if not isinstance(name, str) or not _DATA_FILE_NAME.fullmatch(name):
+                raise ValueError(f"snapshot manifest references an unsafe data file name: {name!r}")
+            data = (directory / name).read_bytes()
+            if len(data) != entry.get("bytes"):
+                raise ValueError(
+                    f"snapshot data file {name} holds {len(data)} bytes but the manifest recorded {entry.get('bytes')}"
+                )
+            digest = hashlib.sha256(data).hexdigest()
+            if digest != entry.get("sha256"):
+                raise ValueError(f"snapshot data file {name} fails its manifest SHA-256 check — truncated or corrupted")
+            try:
+                payloads[key] = json.loads(data.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"snapshot data file {name} is not valid JSON: {exc}") from exc
+
+        if self.structure_archive.size != 0 or (self.local_archive is not None and self.local_archive.size != 0):
+            raise ValueError("refusing to restore into a non-empty archive — restore into a freshly constructed engine")
+        if state["config_fingerprint"] != self._config_fingerprint():
+            raise ValueError(
+                "snapshot configuration fingerprint does not match this engine — the run definition "
+                "(archives/scaling, objective, operators, seed pool, targeting or screening) changed "
+                "since the snapshot was taken"
             )
-            self.structure_archive.add(structure_rows, entries)
-            if self.local_archive is not None:
-                local_block = round_replay.get("local_rows")
-                if local_block is None:
-                    raise ValueError("snapshot lacks local archive rows for a run with a local archive")
-                self.local_archive.add(np.asarray(local_block, dtype=np.float64), entries)
+
+        candidates_payload = payloads["candidates"]
+        evaluations_payload = payloads["evaluations"]
+        if not isinstance(candidates_payload, list) or not isinstance(evaluations_payload, list):
+            raise ValueError("snapshot candidates and evaluations files must hold JSON arrays")
+
+        candidates = []
+        for record in candidates_payload:
+            try:
+                candidates.append(_candidate_from_record(record))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"snapshot candidate record is malformed: {exc}") from exc
+        candidates_by_id: dict = {}
+        for candidate in candidates:
+            if candidate.candidate_id in candidates_by_id:
+                raise ValueError(f"snapshot candidate table lists {candidate.candidate_id!r} twice")
+            candidates_by_id[candidate.candidate_id] = candidate
+
+        evaluations = []
+        for entry in evaluations_payload:
+            require_keys(entry, _EVALUATION_KEYS, "evaluation record")
+            if entry["candidate_id"] not in candidates_by_id:
+                raise ValueError(f"snapshot evaluations reference unknown candidate: {entry['candidate_id']}")
+            try:
+                structure_rows = np.asarray(entry["structure_descriptor"], dtype=np.float64)
+                atomic_rows = (
+                    None
+                    if entry["atomic_descriptors"] is None
+                    else np.asarray(entry["atomic_descriptors"], dtype=np.float64)
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"snapshot evaluation descriptor is malformed: {exc}") from exc
+            if structure_rows.ndim != 1:
+                raise ValueError("snapshot evaluation structure_descriptor must be a flat row")
+            if atomic_rows is not None and atomic_rows.ndim != 2:
+                raise ValueError("snapshot evaluation atomic_descriptors must be a 2-D row matrix")
+            evaluations.append(
+                CandidateEvaluation(
+                    candidate_id=entry["candidate_id"],
+                    valid=True,
+                    rejection_reason=None,
+                    structure_descriptor=structure_rows,
+                    atomic_descriptors=atomic_rows,
+                    novelty=entry["novelty"],
+                    local_diversity=entry["local_diversity"],
+                    penalty=0.0,
+                    fitness=entry["fitness"],
+                    novel_environment_count=entry["novel_environment_count"],
+                    atom_count=entry["atom_count"],
+                    # Screening verdicts survived the snapshot (R5.1): a
+                    # restored accepted candidate keeps its measurements and
+                    # its "unscreenable" provenance.
+                    energy=entry["energy"],
+                    energy_per_atom=entry["energy_per_atom"],
+                    max_force=entry["max_force"],
+                    screening_status=entry["screening_status"],
+                    screening_reasons=tuple(entry["screening_reasons"] or ()),
+                )
+            )
+
+        accepted_order = state["accepted_order"]
+        if not isinstance(accepted_order, list):
+            raise ValueError("snapshot accepted_order must be a JSON array")
+        missing = sorted({cid for cid in accepted_order if cid not in candidates_by_id})
+        if missing:
+            raise ValueError(f"snapshot accepted order references unknown candidates: {', '.join(missing[:3])}")
+        if len(accepted_order) != len(evaluations):
+            raise ValueError("snapshot evaluations do not align with the accepted order")
+
+        if not isinstance(state["rounds"], list):
+            raise ValueError("snapshot rounds must be a JSON array")
+        rounds = []
+        for record in state["rounds"]:
+            require_keys(record, _ROUND_RECORD_KEYS, "round record")
+            try:
+                rounds.append(RoundRecord(**record))
+            except TypeError as exc:
+                raise ValueError(f"snapshot round record is malformed: {exc}") from exc
+
+        counts = state["counts"]
+        expected_counts = {
+            "candidates": len(candidates),
+            "evaluations": len(evaluations),
+            "accepted": len(accepted_order),
+            "rounds": len(rounds),
+        }
+        if counts != expected_counts:
+            raise ValueError(f"snapshot manifest counts {counts} do not match the recorded data {expected_counts}")
+
+        replay = state["archive_replay"]
+        if not isinstance(replay, list) or len(replay) != len(rounds):
+            raise ValueError("snapshot archive replay must carry one block per recorded round")
+        replay_blocks: list = []
+        cursor = 0
+        for round_replay in replay:
+            require_keys(round_replay, ("entries", "local_rows"), "archive replay block")
+            entries_payload = round_replay["entries"]
+            if not isinstance(entries_payload, list):
+                raise ValueError("snapshot archive replay entries must be a JSON array")
+            entries = []
+            for entry in entries_payload:
+                require_keys(entry, ("candidate_id", "structure_index", "fitness", "novelty", "generation"), "archive entry")
+                if entry["candidate_id"] not in candidates_by_id:
+                    raise ValueError(f"snapshot archive replay references unknown candidate: {entry['candidate_id']}")
+                try:
+                    entries.append(ArchiveEntry(**entry))
+                except TypeError as exc:
+                    raise ValueError(f"snapshot archive entry is malformed: {exc}") from exc
+            count = len(entries)
+            structure_rows = None
+            local_rows = None
+            if count:
+                try:
+                    structure_rows = np.asarray(
+                        [evaluations_payload[cursor + offset]["structure_descriptor"] for offset in range(count)],
+                        dtype=np.float64,
+                    )
+                except (IndexError, TypeError, ValueError) as exc:
+                    raise ValueError(f"snapshot archive replay structure rows are malformed: {exc}") from exc
+                if structure_rows.ndim != 2:
+                    raise ValueError("snapshot archive replay structure rows must form a 2-D matrix")
+                if self.local_archive is not None:
+                    local_block = round_replay["local_rows"]
+                    if local_block is None:
+                        raise ValueError("snapshot lacks local archive rows for a run with a local archive")
+                    try:
+                        local_rows = np.asarray(local_block, dtype=np.float64)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(f"snapshot local archive rows are malformed: {exc}") from exc
+                    # A batch whose candidates all had zero atom rows never
+                    # reached the local archive (the engine skips the add),
+                    # so an all-empty block replays as nothing.
+                    local_rows = None if local_rows.size == 0 else local_rows
+                    if local_rows is not None and local_rows.ndim != 2:
+                        raise ValueError("snapshot local archive rows must form a 2-D matrix")
+            replay_blocks.append((structure_rows, local_rows, entries))
             cursor += count
-        self.rng = _rng_from_state(state["rng"])
-        self._resume = state | {"evaluations": evaluations}
+        if cursor != len(evaluations):
+            raise ValueError("snapshot archive replay does not cover every recorded evaluation")
+
+        rng = _rng_from_state(state["rng"])
+
+        optimizer_state = state["optimizer"]
+        require_keys(optimizer_state, ("type", "config"), "optimizer state")
+        if optimizer_state["type"] != self.optimizer.name:
+            raise ValueError(
+                f"snapshot optimizer type {optimizer_state['type']!r} does not match this engine's {self.optimizer.name!r}"
+            )
+        self.optimizer.validate_snapshot(optimizer_state, candidates_by_id)
+
+        # Everything validated — the only mutations below are the archive
+        # replay and the prepared-resume stash, and neither can fail.
+        for structure_rows, local_rows, entries in replay_blocks:
+            if not entries:
+                continue
+            self.structure_archive.add(structure_rows, entries)
+            if local_rows is not None:
+                self.local_archive.add(local_rows, entries)
+        self._resume = {
+            "generation": state["generation"],
+            "total_evaluations": state["total_evaluations"],
+            "stagnant": state["stagnant"],
+            "best_fitness": None if best_fitness is None else float(best_fitness),
+            "rng": rng,
+            "optimizer": optimizer_state,
+            "accepted": [candidates_by_id[cid] for cid in accepted_order],
+            "rounds": rounds,
+            "evaluations": evaluations,
+        }
         self._resume_candidates = candidates_by_id

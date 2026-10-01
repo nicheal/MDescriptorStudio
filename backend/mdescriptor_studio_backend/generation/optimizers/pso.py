@@ -40,8 +40,13 @@ from __future__ import annotations
 import numpy as np
 
 from ..optimization import ObservationBatch, OptimizationContext, ProposalBatch
+from ..snapshot import require_keys
 
 _APPLY_ERRORS = (ValueError, ZeroDivisionError, np.linalg.LinAlgError)
+
+
+def _descriptor(rows):
+    return None if rows is None else np.asarray(rows, dtype=np.float64)
 
 
 class _Particle:
@@ -327,6 +332,9 @@ class PSOOptimizer:
             if particle.pbest is not None:
                 register_candidate(particle.pbest)
         return {
+            "type": self.name,
+            "config": self._config(),
+            "rounds": int(self._rounds),
             "particles": [
                 {
                     "position": particle.position.candidate_id if particle.position is not None else None,
@@ -336,31 +344,70 @@ class PSOOptimizer:
                     "pbest_z": None if particle.pbest_z is None else float(particle.pbest_z),
                 }
                 for particle in self._particles
-            ]
+            ],
         }
 
-    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+    def _config(self) -> dict:
+        """The constructor-level knobs a resume must reproduce exactly."""
+        return {
+            "children_per_seed": self.children_per_seed,
+            "batch_accept": self.batch_accept,
+            "pso_weight_pbest": self.pso_weight_pbest,
+            "pso_weight_gbest": self.pso_weight_gbest,
+            "pso_weight_mut": self.pso_weight_mut,
+            "pso_weight_anchor": self.pso_weight_anchor,
+            "immigrant_fraction": self.immigrant_fraction,
+        }
+
+    @staticmethod
+    def _snapshot_candidate(candidate_id, candidates_by_id: dict):
+        if candidate_id is None:
+            return None
+        candidate = candidates_by_id.get(candidate_id)
+        if candidate is None:
+            raise ValueError(f"snapshot references unknown candidate: {candidate_id}")
+        return candidate
+
+    def validate_snapshot(self, state: dict, candidates_by_id: dict) -> list:
+        """Strictly validate a persisted PSO state against this optimizer
+        (audit R5.5 transactional restore): required fields present (never
+        silently defaulted to empty memory), particle entries internally
+        consistent, every referenced candidate known, and the snapshot's
+        configuration identical to this instance's. Returns the rebuilt
+        particle list WITHOUT mutating the optimizer."""
+        require_keys(state, ("type", "config", "rounds", "particles"), "pso state")
+        if state["type"] != self.name:
+            raise ValueError(f"snapshot optimizer type {state['type']!r} does not match {self.name!r}")
+        if state["config"] != self._config():
+            raise ValueError("snapshot was produced with a different PSO configuration")
+        rounds = state["rounds"]
+        if isinstance(rounds, bool) or not isinstance(rounds, int) or rounds < 0:
+            raise ValueError("snapshot pso rounds must be a non-negative integer")
+        particles_raw = state["particles"]
+        if not isinstance(particles_raw, list) or not particles_raw:
+            raise ValueError("snapshot pso state must carry a non-empty particle list")
         particles = []
-        for entry in state.get("particles", []):
+        for entry in particles_raw:
+            require_keys(entry, ("position", "position_desc", "pbest", "pbest_desc", "pbest_z"), "pso particle")
+            position = self._snapshot_candidate(entry["position"], candidates_by_id)
+            position_desc = _descriptor(entry["position_desc"])
+            pbest = self._snapshot_candidate(entry["pbest"], candidates_by_id)
+            pbest_desc = _descriptor(entry["pbest_desc"])
+            pbest_z = entry["pbest_z"]
+            if (position is None) != (position_desc is None):
+                raise ValueError("snapshot pso particle position and its descriptor disagree")
+            if (pbest is None) != (pbest_desc is None) or (pbest is None) != (pbest_z is None):
+                raise ValueError("snapshot pso particle pbest memory is incomplete")
+            if pbest_z is not None and (isinstance(pbest_z, bool) or not isinstance(pbest_z, (int, float))):
+                raise ValueError("snapshot pso particle pbest_z must be a number or null")
             particle = _Particle()
-
-            def _candidate(cid):
-                if cid is None:
-                    return None
-                candidate = candidates_by_id.get(cid)
-                if candidate is None:
-                    raise ValueError(f"snapshot references unknown candidate: {cid}")
-                return candidate
-
-            def _descriptor(rows):
-                return None if rows is None else np.asarray(rows, dtype=np.float64)
-
-            particle.position = _candidate(entry.get("position"))
-            particle.position_desc = _descriptor(entry.get("position_desc"))
-            particle.pbest = _candidate(entry.get("pbest"))
-            particle.pbest_desc = _descriptor(entry.get("pbest_desc"))
-            particle.pbest_z = entry.get("pbest_z")
+            particle.position, particle.position_desc = position, position_desc
+            particle.pbest, particle.pbest_desc, particle.pbest_z = pbest, pbest_desc, pbest_z
             particles.append(particle)
-        if particles:
-            self._particles = particles
+        return particles
+
+    def load_state(self, state: dict, candidates_by_id: dict) -> None:
+        particles = self.validate_snapshot(state, candidates_by_id)
+        self._particles = particles
+        self._rounds = int(state["rounds"])
         self._pending = {}
