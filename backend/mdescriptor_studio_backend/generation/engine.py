@@ -225,6 +225,9 @@ class RoundRecord:
     # region count it once — the benchmark-honest number (G3.5 A12). None
     # when the objective does not produce environment counts.
     unique_novel_environments: int | None = None
+    # Candidates removed after selection by energy/force screening (R5.1):
+    # still counted as discovered, never archived or fed back.
+    rejected_screening: int = 0
     rejected_geometry_by_reason: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> dict:
@@ -242,6 +245,7 @@ class RoundRecord:
             "coverage_radius": self.coverage_radius,
             "novel_environments": self.novel_environments,
             "unique_novel_environments": self.unique_novel_environments,
+            "rejected_screening": self.rejected_screening,
         }
 
 
@@ -442,6 +446,7 @@ class GenerationEngine:
         selection_strategy: str = "structure_fps_v1",
         local_anchor_descriptors: tuple = (),
         seed_local_distances: tuple = (),
+        energy_screening=None,
     ) -> None:
         if not seed_pool:
             raise ValueError("seed pool must not be empty")
@@ -484,6 +489,11 @@ class GenerationEngine:
         # target_mode="local_environment" on atom-level runs.
         self.local_anchor_descriptors = tuple(local_anchor_descriptors)
         self.seed_local_distances = tuple(seed_local_distances)
+        # Second-stage energy/force screening (audit R5.1): any object with
+        # screen(candidates) -> list[ScreeningVerdict]; None disables it.
+        if energy_screening is not None and not hasattr(energy_screening, "screen"):
+            raise ValueError("energy_screening must provide screen(candidates)")
+        self.energy_screening = energy_screening
 
     def _check_geometry(self, candidate: StructureCandidate) -> ConstraintResult:
         return self.constraints.validate(candidate)
@@ -615,6 +625,11 @@ class GenerationEngine:
             # Duplicate filtering needs descriptors, so it runs after scoring
             # (below), against the frozen archive.
             rejected_duplicate = 0
+            # Energy/force screening (R5.1) state for this round; the gate
+            # below only runs when candidates reached evaluation.
+            rejected_screening = 0
+            screening_meta: dict[int, dict] = {}
+            screening_reasons: dict[int, tuple[str, ...]] = {}
 
             evaluations_this_round = 0
             accepted_this_round = 0
@@ -679,6 +694,26 @@ class GenerationEngine:
                     # structure_fps_v1: the G3 baseline — novelty ranking then
                     # farthest-point sampling over mean-pooled structure rows.
                     selected = select_diverse_batch(fitness, scaled_values, budget=batch_budget)
+                # Second-stage energy/force screening (R5.1): runs on the
+                # selected batch, before anything downstream. Screened-out
+                # candidates stay valid and novel (their rows still count as
+                # discovered) but are never archived or fed back as parents.
+                if self.energy_screening is not None and selected:
+                    screen_verdicts = self.energy_screening.screen([valid[i] for i in selected])
+                    kept: list[int] = []
+                    for index, verdict in zip(selected, screen_verdicts):
+                        if verdict.accepted:
+                            kept.append(index)
+                            if verdict.status == "pass":
+                                screening_meta[index] = {
+                                    "energy": verdict.energy,
+                                    "energy_per_atom": verdict.energy_per_atom,
+                                    "max_force": verdict.max_force,
+                                }
+                        else:
+                            screening_reasons[index] = tuple(verdict.reasons) or ("energy_screening",)
+                    rejected_screening = len(selected) - len(kept)
+                    selected = kept
                 selected_set = set(selected)
                 selection_rank = {index: rank for rank, index in enumerate(selected)}
                 # Unique novel environments must be counted against the
@@ -747,6 +782,9 @@ class GenerationEngine:
                                     else None
                                 ),
                                 atom_count=int(candidate.atomic_numbers.size),
+                                energy=(screening_meta.get(index) or {}).get("energy"),
+                                energy_per_atom=(screening_meta.get(index) or {}).get("energy_per_atom"),
+                                max_force=(screening_meta.get(index) or {}).get("max_force"),
                             )
                         )
                         result.accepted.append(candidate)
@@ -836,6 +874,7 @@ class GenerationEngine:
                             else None
                         ),
                         structure_descriptor=np.asarray(scaled_values[index], dtype=np.float64),
+                        screening_rejection=screening_reasons.get(index, ()),
                         local_descriptor=(
                             apply_scaling(
                                 self.local_archive.scaling,
@@ -864,6 +903,7 @@ class GenerationEngine:
                 coverage_radius=self.structure_archive.accepted_coverage_radius(),
                 novel_environments=novel_environments,
                 unique_novel_environments=unique_novel_environments,
+                rejected_screening=rejected_screening,
             )
             result.rounds.append(record)
             # The stagnation bookkeeping for the round just finished is

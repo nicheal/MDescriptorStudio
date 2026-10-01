@@ -46,6 +46,9 @@ class CandidateObservation:
     # local-environment targeting is active (audit R3.4) — the atomic-space
     # signal the targeted branch multiplies into its proposal weights.
     local_descriptor: np.ndarray | None = None
+    # Non-empty when energy/force screening (audit R5.1) rejected the
+    # candidate after selection; the candidate stays valid and novel.
+    screening_rejection: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

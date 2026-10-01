@@ -58,6 +58,14 @@ export interface ConstraintConfig {
   maxVolumePerAtom: number | null; // Å³/atom, fully periodic structures only
   compositionLocked: boolean;
   atomCountLocked: boolean;
+  /** Energy/force screening (audit R5.1): second-stage filter backed by the
+   *  mdescriptor NEP/DPA4C predictors. Off by default — unscreened
+   *  candidates are never train-ready. */
+  energyScreeningEnabled: boolean;
+  energyScreeningModel: "NEP" | "DPA4C";
+  energyScreeningCheckpoint: string;
+  energyScreeningMaxEnergy: number | null; // eV/atom upper bound (may be negative)
+  energyScreeningMaxForce: number | null; // eV/Å max-|F| upper bound
 }
 
 export type OptimizerConfig =

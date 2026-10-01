@@ -832,6 +832,72 @@ export default function GenerationConfigPanel({
           />
         </div>
       </Subsection>
+      <Subsection title={subsectionTitle(t("ENERGY AND FORCE SCREENING"))}>
+        <div style={rowStyle}>
+          <span style={labelStyle}>{t("Energy/force screening")}</span>
+          <Switch
+            id="constraints-energyScreeningEnabled"
+            aria-label={t("Energy/force screening")}
+            checked={config.constraints.energyScreeningEnabled}
+            onChange={(energyScreeningEnabled) =>
+              update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningEnabled } }))
+            }
+          />
+          {config.constraints.energyScreeningEnabled && (
+            <>
+              <span style={labelStyle}>{t("Model")}</span>
+              <Select
+                id="constraints-energyScreeningModel"
+                style={{ minWidth: 140 }}
+                aria-label={t("Model")}
+                value={config.constraints.energyScreeningModel}
+                options={[
+                  { value: "NEP", label: t("NEP (bundled nep89)") },
+                  { value: "DPA4C", label: t("DPA4C (checkpoint)") },
+                ]}
+                onChange={(energyScreeningModel) =>
+                  update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningModel } }))
+                }
+              />
+              {config.constraints.energyScreeningModel === "DPA4C" && (
+                <Input
+                  id="constraints-energyScreeningCheckpoint"
+                  aria-label={t("Model checkpoint")}
+                  style={{ width: 260 }}
+                  placeholder={t("path/to/checkpoint.pt")}
+                  value={config.constraints.energyScreeningCheckpoint}
+                  status={issueFor("constraints.energyScreeningCheckpoint") ? "error" : undefined}
+                  onChange={(event) =>
+                    update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningCheckpoint: event.target.value } }))
+                  }
+                />
+              )}
+              <span style={labelStyle}>{t("Max energy/atom")}</span>
+              <InputNumber
+                id="constraints-energyScreeningMaxEnergy"
+                step={0.1}
+                value={config.constraints.energyScreeningMaxEnergy ?? undefined}
+                placeholder={t("none")}
+                aria-label={t("Max energy/atom")}
+                onChange={(v) => update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningMaxEnergy: v ?? null } }))}
+              />
+              <span style={labelStyle}>{t("Max force")}</span>
+              <InputNumber
+                id="constraints-energyScreeningMaxForce"
+                min={0}
+                step={0.5}
+                value={config.constraints.energyScreeningMaxForce ?? undefined}
+                placeholder={t("none")}
+                aria-label={t("Max force")}
+                onChange={(v) => update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningMaxForce: v ?? null } }))}
+              />
+            </>
+          )}
+        </div>
+        <div style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
+          {t("Second-stage filter (audit R5.1): after selection, accepted candidates are predicted with the engine's NEP/DPA4C energy and force models (CPU or CUDA); candidates above a bound are rejected and never enter the dataset. Unscreened candidates carry energy_screened=false and are never train-ready.")}
+        </div>
+      </Subsection>
       </Card>
 
       <Card title={sectionTitle(3, t("Search strategy and stopping conditions"))} size="small" style={{ gridColumn: "1 / -1" }}>

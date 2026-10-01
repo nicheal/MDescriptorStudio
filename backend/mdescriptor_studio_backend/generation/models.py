@@ -118,6 +118,11 @@ class CandidateEvaluation:
     fitness: float
     novel_environment_count: int | None = None
     atom_count: int | None = None
+    # Energy/force screening (audit R5.1): measured when the run enables the
+    # second-stage filter; None means "not screened", never "passed".
+    energy: float | None = None
+    energy_per_atom: float | None = None
+    max_force: float | None = None
 
 
 @dataclass(frozen=True)
@@ -565,6 +570,35 @@ def parse_request(params: dict) -> GenerationRequest:
             INVALID_PARAMS,
             "selection_strategy must be structure_fps_v1 or local_incremental_maximin_v1",
         )
+    energy_screening = constraints.get("energy_screening") if isinstance(constraints, dict) else None
+    if energy_screening is not None:
+        if not isinstance(energy_screening, dict):
+            raise AppError(INVALID_PARAMS, "energy_screening must be an object")
+        unknown = set(energy_screening) - {
+            "enabled", "model", "checkpoint", "device", "num_threads", "max_energy_per_atom", "max_force",
+        }
+        if unknown:
+            raise AppError(INVALID_PARAMS, f"unknown energy_screening keys: {', '.join(sorted(unknown))}")
+        if energy_screening.get("enabled"):
+            model = energy_screening.get("model") or "NEP"
+            if model not in ("NEP", "DPA4C"):
+                raise AppError(INVALID_PARAMS, "energy_screening model must be NEP or DPA4C")
+            if model == "DPA4C" and not energy_screening.get("checkpoint"):
+                raise AppError(INVALID_PARAMS, "energy_screening with DPA4C requires a checkpoint path")
+            device = energy_screening.get("device") or "cpu"
+            if device not in ("cpu", "cuda"):
+                raise AppError(INVALID_PARAMS, "energy_screening device must be cpu or cuda")
+            for key in ("max_energy_per_atom", "max_force"):
+                value = energy_screening.get(key)
+                if value is not None and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not np.isfinite(float(value))
+                ):
+                    raise AppError(INVALID_PARAMS, f"energy_screening {key} must be a finite number when set")
+            threads = energy_screening.get("num_threads")
+            if threads is not None and (isinstance(threads, bool) or not isinstance(threads, int) or not 1 <= threads <= 64):
+                raise AppError(INVALID_PARAMS, "energy_screening num_threads must be an integer in [1, 64]")
     target_mode = str(params.get("target_mode") or "structure")
     if target_mode not in ("structure", "local_environment"):
         raise AppError(INVALID_PARAMS, "target_mode must be structure or local_environment")

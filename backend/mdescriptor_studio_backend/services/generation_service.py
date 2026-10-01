@@ -32,6 +32,7 @@ from ..generation.artifacts import GenerationArtifactReader, GenerationArtifactW
 from ..generation.archive import DescriptorArchive, LocalEnvironmentArchive
 from ..generation.constraints import build_constraints
 from ..generation.engine import GenerationEngine
+from ..generation.screening import EnergyForceScreen, ScreeningSpec, mdescriptor_predictors_available
 from ..generation.evaluator import DescriptorEvaluator, evaluate_batch
 from ..generation.models import StructureCandidate, parse_request
 from ..generation.registry import GENERATION_ALGORITHM_VERSION, GENERATION_REGISTRY
@@ -293,6 +294,17 @@ class GenerationService:
                 INVALID_PARAMS,
                 "the local selection strategy requires a novelty threshold and an atom-level descriptor run",
             )
+        # Energy/force screening (R5.1): validate the configuration and the
+        # engine capability at Run-click time, not after queueing.
+        try:
+            screening_spec = ScreeningSpec.from_constraints(request.constraints)
+        except ValueError as exc:
+            raise AppError(INVALID_PARAMS, str(exc)) from exc
+        if screening_spec is not None and not mdescriptor_predictors_available():
+            raise AppError(
+                INVALID_PARAMS,
+                "energy_screening requires mdescriptor >= 0.3.5 (predictors package missing)",
+            )
         # Local-environment anchors live in the run's atomic descriptor space:
         # they need atom-level reference rows and the local archive's scaling
         # (built only for atomic-capable objectives).
@@ -457,6 +469,13 @@ class GenerationService:
             raise AppError(RESULT_INCOMPATIBLE, "descriptor run belongs to a different dataset")
         objective = GENERATION_REGISTRY.build_objective(request.objective)
         needs_atomic = bool(getattr(objective, "needs_atomic", False))
+        # The screening predictor loads its model once per run (R5.1); the
+        # spec is re-derived from the request (submit already validated it).
+        try:
+            screening_spec = ScreeningSpec.from_constraints(request.constraints)
+        except ValueError as exc:
+            raise AppError(INVALID_PARAMS, str(exc)) from exc
+        energy_screening = EnergyForceScreen(screening_spec) if screening_spec is not None else None
 
         # Reference descriptor matrix (raw rows + optional row offsets).
         raw_values, run_meta = self.results.load_values(run_row["id"], mmap=True)
@@ -660,6 +679,7 @@ class GenerationService:
             selection_strategy=request.selection_strategy,
             local_anchor_descriptors=local_anchor_descriptors,
             seed_local_distances=seed_local_distances,
+            energy_screening=energy_screening,
         )
 
         rounds: list = []

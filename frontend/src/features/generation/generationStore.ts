@@ -75,6 +75,11 @@ export const defaultGenerationConfig = (): GenerationConfig => ({
     // operators unlock these switches explicitly.
     compositionLocked: true,
     atomCountLocked: true,
+    energyScreeningEnabled: false,
+    energyScreeningModel: "NEP",
+    energyScreeningCheckpoint: "",
+    energyScreeningMaxEnergy: null,
+    energyScreeningMaxForce: null,
   },
   optimizer: { ...defaultOptimizerConfig("random") },
   searchTarget: { anchorFrames: [], regionRadius: 15.0, targetMode: "structure", anchorSpecies: "" },

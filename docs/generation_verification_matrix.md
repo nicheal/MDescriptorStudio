@@ -51,3 +51,8 @@
 > （`benchmark/published/2026-09-30-r4/`，配对分析可独立复算）即为现行发布形态；② R5.1 完整状态机
 > 与能量/力筛选接口**等待 mdescriptor 引擎支持能量和力预测**后再设计，当前以 accepted.extxyz 的
 > 显式状态字段（geometry_passed/descriptor_novel/energy_screened=false/train_set_ready=false）为准。
+> **更新（2026-09-30，引擎 0.3.5 提供 NEP/DPA4C 能量/力预测器后）**：R5.1 已实现——
+> `generation/screening.py`（NEP/DPA4C、CPU/CUDA、逐候选三态判定 pass/fail/unscreenable），
+> 引擎在选择后、归档前做第二阶段筛选（`rejected_screening` 入轮记录与观测），accepted.extxyz
+> 状态字段动态翻转并记录 energy_per_atom/max_force；解析/提交双端校验，UI 约束卡可配置。
+> DPA4C 需显式 checkpoint；部分周期候选不做筛选（不静默拒绝）。
