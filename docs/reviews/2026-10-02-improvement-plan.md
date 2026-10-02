@@ -89,6 +89,7 @@
 | A — CI 转绿 + 数据完整性 | ✅ | `f526a61`,CI run 37007251566 success |
 | B — 模型/描述符身份 | ✅ | 同上(与 A 同提交) |
 | C — 产品化 resume | ✅ | `57cb04a`,CI run 37015303356 success;杀进程→重启→resume 字节级一致验收 |
-| D — screening UI 语义 | ✅ | `0405ef6`(CI 待确认);后端 747/前端 252/E2E 58 |
-| E — gen-5 指标 | ⏸ 按 §4 顺序约束等待 | PdCuNiP sweep repeat 7/20、fps 重基线 16/20 仍在跑(2026-10-02 晚核实) |
+| D — screening UI 语义 | ✅ | `0405ef6`(CI 经后继提交链确认 success);后端 747/前端 252/E2E 58 |
+| E1 — 锚点语义落地 | ✅(提前,不受 sweep 门控) | `90a6ea4`:种子范围汇总行 "+ N 个锚点";锚点清单本就随 params_json 持久化 |
+| E2–E4 — gen-5 指标/GA-PSO 局部目标 | ⏸ 按 §4 顺序约束等待 | PdCuNiP sweep repeat 7/20、fps 重基线 16/20 仍在跑(2026-10-02 晚核实);提前升版会破坏 benchmark resume 的 algorithm_version 校验 |
 | F — 冻结后再基准 | ⏸ 依赖 E | 同上;预计 sweep 完成后 2026-10-04 前后解锁 |
