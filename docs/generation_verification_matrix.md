@@ -77,3 +77,16 @@
 > trim；适配层拒绝非有限预测（unscreenable）；`requirements.txt` 下限升 0.3.5；启用筛选的运行
 > 将 mdescriptor 版本折叠进 cache key。DPA4C 0.3.5 起有内置默认模型（Air-OMat24），显式
 > checkpoint 仅为可选覆盖。
+> **更新（2026-10-02，外部审查 P0/P1 修复批次，计划与执行记录 `docs/reviews/2026-10-02-improvement-plan.md`，提交 `f526a61`）**：
+> ① **候选 ID 唯一性不变量**：strain/shear ID 追加形变矩阵内容摘要后缀（同 |ΔV| 不同形变不再可能碰撞；
+> 无 RNG 消耗，搜索轨迹与 golden 基线数值逐位不变，基线仅重镕 9 个 ID 字符串）；引擎运行时强制全 run
+> 唯一（碰撞提案原位改名 `<id>_x<k>`，对象身份保留），restore 回填已发放 ID 集，快照 accepted 表加硬断言。
+> ID 格式变化**不属于指标语义**——`unique_novel_environments` 等口径与停止行为未动，gen-4 维持；
+> 旧工件中的旧格式 ID 仍可读（ID 为不透明字符串，无解析依赖）。② **快照指纹收紧**：并入
+> GeometryConstraints 全量、evaluator 身份（`DescriptorEvaluator.signature()`：描述符名/参数/adapter/
+> device/mdescriptor 版本）与 screening 模型内容身份（`model_identity()`：解析资源 sha256 + 包版本）——
+> 此三者的历史快照（如有）将被指纹拒绝，属刻意的兼容性破坏。③ **缓存键**：显式 screening checkpoint
+> 以文件内容 sha256 入键（原地替换模型不再复用旧缓存）；`metadata.json` 增 `screening_model_identity`。
+> ④ **SSW/外部优化器正式移出范围**（用户决策 2026-10-02）：原 G5 规划的 ExternalGenerationAdapter/SSW
+> 不再排期，G5 以"局部目标搜索覆盖 GA/PSO"收尾；本行即该决策的记录载体。⑤ 锚点增强语义获确认保留
+> （锚点可位于所选种子视图之外并并入种子池；前端提示文案已披露），种子范围汇总行的显性化归入 gen-5 前的契约澄清。
