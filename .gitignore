@@ -53,3 +53,6 @@ tmp/
 /output/
 /benchmark/results/
 /scripts/create_analysis_report_pdf.py
+
+# Playwright test artifacts
+test-results/
