@@ -162,3 +162,43 @@ def test_exact_bounds_pass_and_prediction_failure_is_not_unscreenable():
     screen._predictor.predict = broken
     with pytest.raises(RuntimeError, match="unavailable"):
         screen.screen([_candidate()])
+
+
+class _MixedScreen:
+    """Deterministic three-state cycle: pass, fail, unscreenable, pass, ..."""
+
+    def __init__(self, spec: ScreeningSpec) -> None:
+        self.spec = spec
+
+    def screen(self, candidates):
+        cycle = ("pass", "fail", "unscreenable")
+        return [
+            ScreeningVerdict(
+                status=cycle[index % 3],
+                reasons=() if cycle[index % 3] == "pass" else ("cycle",),
+            )
+            for index in range(len(candidates))
+        ]
+
+
+def test_round_record_reports_the_screening_breakdown():
+    # 2026-10-02 audit D: pass/fail/unscreenable + train-ready are visible per
+    # round — screened-out candidates must not hide inside "Other candidates
+    # not selected", and a measure-only pass (no bounds configured) is not
+    # train-ready.
+    bounded = _EngineFixture()._engine(
+        _MixedScreen(ScreeningSpec(max_energy_per_atom=0.0, max_force=1.0)), max_generations=1
+    )
+    record = bounded.run().rounds[0]
+    assert record.screening_passed >= 1
+    assert record.rejected_screening >= 1
+    assert record.screening_unscreenable >= 1
+    assert record.screening_train_ready == record.screening_passed
+    payload = record.to_json()
+    assert payload["screening_train_ready"] == record.screening_train_ready
+    assert payload["screening_unscreenable"] == record.screening_unscreenable
+
+    measure_only = _EngineFixture()._engine(_MixedScreen(ScreeningSpec()), max_generations=1)
+    record = measure_only.run().rounds[0]
+    assert record.screening_passed >= 1
+    assert record.screening_train_ready == 0

@@ -41,8 +41,12 @@ export default function GenerationRunPanel({
       proposed: acc.proposed + r.proposed,
       rejectedGeometry: acc.rejectedGeometry + r.rejected_geometry,
       rejectedDuplicate: acc.rejectedDuplicate + r.rejected_duplicate,
+      rejectedScreening: acc.rejectedScreening + (r.rejected_screening ?? 0),
+      screeningPassed: acc.screeningPassed + (r.screening_passed ?? 0),
+      screeningUnscreenable: acc.screeningUnscreenable + (r.screening_unscreenable ?? 0),
+      screeningTrainReady: acc.screeningTrainReady + (r.screening_train_ready ?? 0),
     }),
-    { proposed: 0, rejectedGeometry: 0, rejectedDuplicate: 0 },
+    { proposed: 0, rejectedGeometry: 0, rejectedDuplicate: 0, rejectedScreening: 0, screeningPassed: 0, screeningUnscreenable: 0, screeningTrainReady: 0 },
   );
   const geometryReasonTotals = rounds.reduce<Record<string, number>>((acc, round) => {
     for (const [reason, count] of Object.entries(round.rejected_geometry_by_reason ?? {})) {
@@ -50,17 +54,22 @@ export default function GenerationRunPanel({
     }
     return acc;
   }, {});
-  const rejectedOther = otherCandidateCount(totals.proposed, totals.rejectedGeometry, totals.rejectedDuplicate, preview?.accepted ?? 0);
+  const rejectedOther = otherCandidateCount(totals.proposed, totals.rejectedGeometry, totals.rejectedDuplicate, preview?.accepted ?? 0, totals.rejectedScreening);
+  const screeningActive = totals.rejectedScreening > 0 || totals.screeningPassed > 0 || totals.screeningUnscreenable > 0;
   const latest = rounds[rounds.length - 1];
   const evaluations = preview?.evaluations ?? row.evaluations;
-  let params: { budget?: Record<string, unknown>; objective?: Record<string, unknown> } = {};
+  let params: { budget?: Record<string, unknown>; objective?: Record<string, unknown>; screening?: Record<string, unknown> } = {};
   try {
     const parsed: unknown = JSON.parse(row.params_json || "{}");
     if (parsed && typeof parsed === "object") {
       const record = parsed as Record<string, unknown>;
       const budget = record.budget && typeof record.budget === "object" ? record.budget as Record<string, unknown> : undefined;
       const objective = record.objective && typeof record.objective === "object" ? record.objective as Record<string, unknown> : undefined;
-      params = { budget, objective };
+      const constraints = record.constraints && typeof record.constraints === "object" ? record.constraints as Record<string, unknown> : undefined;
+      const screening = constraints?.energy_screening && typeof constraints.energy_screening === "object"
+        ? constraints.energy_screening as Record<string, unknown>
+        : undefined;
+      params = { budget, objective, screening };
     }
   } catch {
     // A damaged saved configuration should not blank the live monitor.
@@ -151,17 +160,49 @@ export default function GenerationRunPanel({
           {metric(t("Best novelty"), latest?.best_novelty != null ? latest.best_novelty.toFixed(3) : "—")}
           {metric(t("Mean novelty"), latest?.mean_novelty != null ? latest.mean_novelty.toFixed(3) : "—")}
           {metric(t("Coverage radius"), latest?.coverage_radius != null ? latest.coverage_radius.toFixed(3) : "—")}
+          {screeningActive && metric(t("Train-ready"), `${totals.screeningTrainReady}`)}
         </div>
         <Collapse ghost style={{ marginTop: 8 }} items={[{ key: "rejections", label: t("Candidate selection details"), children: (
           <div style={{ display: "flex", flexDirection: "column", gap: 6, color: "#616161", fontSize: 12 }}>
             <span>{t("Rejected — geometry")}: <b>{totals.rejectedGeometry}</b></span>
             <span>{t("Rejected — duplicate")}: <b>{totals.rejectedDuplicate}</b></span>
+            {screeningActive && (
+              <span>
+                {t("Rejected — energy/force screening")}: <b>{totals.rejectedScreening}</b>
+                {" · "}{t("Screening passed")}: <b>{totals.screeningPassed}</b>
+                {" · "}{t("Unscreenable")}: <b>{totals.screeningUnscreenable}</b>
+                {" · "}{t("Train-ready")}: <b>{totals.screeningTrainReady}</b>
+              </span>
+            )}
             <span>{t("Other candidates not selected")}: <b>{rejectedOther}</b></span>
             {Object.keys(geometryReasonTotals).length > 0 && <span>
               {t("Geometry rejection reasons")}: {Object.entries(geometryReasonTotals).map(([reason, count]) =>
                 `${t(GENERATION_GEOMETRY_REJECTION_LABELS[reason] ?? reason)} ${count}`,
               ).join(" · ")}
             </span>}
+            {screeningActive && params.screening && (
+              <span>
+                {t("Screening bounds")}:{" "}
+                {params.screening.max_energy_per_atom != null
+                  ? `${t("energy")} ≤ ${String(params.screening.max_energy_per_atom)} eV/atom`
+                  : t("energy: measure only")}
+                {" · "}
+                {params.screening.max_force != null
+                  ? `${t("force")} ≤ ${String(params.screening.max_force)} eV/Å`
+                  : t("force: measure only")}
+              </span>
+            )}
+            {screeningActive && preview?.screening_model_identity && (
+              <span>
+                {t("Screening model")}: <b>{String(preview.screening_model_identity.model ?? "—")}</b>
+                {preview.screening_model_identity.resolved_source === "package"
+                  ? ` · ${t("bundled default model")}`
+                  : ` · ${t("explicit checkpoint")}`}
+                {preview.screening_model_identity.sha256
+                  ? ` · SHA256 ${String(preview.screening_model_identity.sha256).slice(0, 16)}…`
+                  : ""}
+              </span>
+            )}
           </div>
         )}]} />
         <div style={{ marginTop: 8, fontSize: 12, color: "#616161" }}>

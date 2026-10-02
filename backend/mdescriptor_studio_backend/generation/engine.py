@@ -393,8 +393,19 @@ class RoundRecord:
     # candidate; None when the objective produces no counts.
     archived_unique_novel_environments: int | None = None
     # Candidates removed after selection by energy/force screening (R5.1):
-    # still counted as discovered, never archived or fed back.
+    # still counted as discovered, never archived or fed back. Equal to the
+    # round's "fail" verdict count — the screening breakdown below carries
+    # the other two states explicitly.
     rejected_screening: int = 0
+    # Screening verdict breakdown over the selected batch (2026-10-02 audit
+    # D): "pass" = judged physically plausible; "unscreenable" = the screener
+    # could not judge the frame (partial periodicity, non-finite prediction) —
+    # kept but never equivalent to a screened pass; "train_ready" = pass AND
+    # at least one energy/force bound configured (the writer's
+    # train_set_ready semantics, one definition at the source).
+    screening_passed: int = 0
+    screening_unscreenable: int = 0
+    screening_train_ready: int = 0
     rejected_geometry_by_reason: dict[str, int] = field(default_factory=dict)
 
     def to_json(self) -> dict:
@@ -414,6 +425,9 @@ class RoundRecord:
             "unique_novel_environments": self.unique_novel_environments,
             "archived_unique_novel_environments": self.archived_unique_novel_environments,
             "rejected_screening": self.rejected_screening,
+            "screening_passed": self.screening_passed,
+            "screening_unscreenable": self.screening_unscreenable,
+            "screening_train_ready": self.screening_train_ready,
         }
 
 
@@ -856,6 +870,12 @@ class GenerationEngine:
             novel_environments = 0
             unique_novel_environments: int | None = None
             archived_unique_novel_environments: int | None = None
+            # Screening verdict breakdown (2026-10-02 audit D); the gate below
+            # only runs when candidates reached evaluation, so a round without
+            # screening — or with none reaching it — keeps all three at zero.
+            screening_passed = 0
+            screening_unscreenable = 0
+            screening_train_ready = 0
 
             if valid:
                 try:
@@ -928,9 +948,23 @@ class GenerationEngine:
                         if verdict.accepted:
                             kept.append(index)
                             screening_verdicts[index] = verdict
+                            if verdict.status == "pass":
+                                screening_passed += 1
+                            else:
+                                screening_unscreenable += 1
                         else:
                             screening_reasons[index] = tuple(verdict.reasons) or ("energy_screening",)
                     rejected_screening = len(discovered) - len(kept)
+                    # Train-ready = a screened pass under at least one
+                    # configured bound (the writer's train_set_ready
+                    # semantics); a measure-only pass is a measurement, not a
+                    # plausibility verdict.
+                    spec = getattr(self.energy_screening, "spec", None)
+                    if spec is not None and (
+                        getattr(spec, "max_energy_per_atom", None) is not None
+                        or getattr(spec, "max_force", None) is not None
+                    ):
+                        screening_train_ready = screening_passed
                     selected = kept
                 selected_set = set(selected)
                 selection_rank = {index: rank for rank, index in enumerate(selected)}
@@ -1150,6 +1184,9 @@ class GenerationEngine:
                 unique_novel_environments=unique_novel_environments,
                 archived_unique_novel_environments=archived_unique_novel_environments,
                 rejected_screening=rejected_screening,
+                screening_passed=screening_passed,
+                screening_unscreenable=screening_unscreenable,
+                screening_train_ready=screening_train_ready,
             )
             result.rounds.append(record)
             # The stagnation bookkeeping for the round just finished is

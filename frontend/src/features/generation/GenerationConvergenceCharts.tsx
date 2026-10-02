@@ -8,6 +8,13 @@ export default function GenerationConvergenceCharts({ rounds }: { rounds: Genera
   if (rounds.length === 0) return <Typography.Text type="secondary">{t("No convergence rounds were recorded")}</Typography.Text>;
   const generations = rounds.map((round) => round.generation);
   const uniqueTrace = rounds.map((round) => round.unique_novel_environments);
+  const archivedTrace = rounds.map((round) => round.archived_unique_novel_environments);
+  // Post-screening kept-set series (2026-10-02 audit D): only meaningful when
+  // the backend reports it AND screening actually diverged from the discovered
+  // count somewhere — otherwise the line would just overlap the first one.
+  const archivedDiffers = archivedTrace.some(
+    (value, index) => value != null && value !== uniqueTrace[index],
+  );
   return (
     <Row gutter={[12, 12]}>
       <Col xs={24} xl={12}>
@@ -33,6 +40,16 @@ export default function GenerationConvergenceCharts({ rounds }: { rounds: Genera
                     mode: "lines+markers" as const,
                     line: { color: "#8FBCE6" },
                     name: t("Unique novel environments"),
+                  }]
+                : []),
+              ...(archivedDiffers
+                ? [{
+                    x: generations,
+                    y: archivedTrace,
+                    type: "scatter" as const,
+                    mode: "lines+markers" as const,
+                    line: { color: "#C42B1C", dash: "dot" as const },
+                    name: t("Archived (post-screening)"),
                   }]
                 : []),
             ]}

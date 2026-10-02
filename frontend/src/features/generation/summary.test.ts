@@ -13,6 +13,13 @@ describe("generation summaries", () => {
     expect(otherCandidateCount(3, 2, 2, 1)).toBe(0);
   });
 
+  it("keeps screened-out candidates out of the generic other bucket", () => {
+    // 2026-10-02 audit D: an energy/force screening rejection is its own
+    // label, not "other candidate not selected".
+    expect(otherCandidateCount(14, 2, 3, 4, 2)).toBe(3);
+    expect(otherCandidateCount(3, 2, 2, 1, 1)).toBe(0);
+  });
+
   it("keeps missing discovery data unavailable instead of inventing zero counts", () => {
     expect(discoveryStats(null)).toBeNull();
     expect(discoveryStats({

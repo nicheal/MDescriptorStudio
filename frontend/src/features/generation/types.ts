@@ -150,6 +150,12 @@ export interface GenerationRound {
   archived_unique_novel_environments?: number | null;
   /** Selected candidates removed by energy/force screening (R5.1); older runs omit it. */
   rejected_screening?: number;
+  /** Screening verdict breakdown over the selected batch (2026-10-02 audit D);
+   *  "fail" is rejected_screening; older runs omit these. */
+  screening_passed?: number;
+  screening_unscreenable?: number;
+  /** Screened passes under at least one configured energy/force bound. */
+  screening_train_ready?: number;
 }
 
 export interface GenerationPreview {
@@ -158,6 +164,9 @@ export interface GenerationPreview {
   accepted: number;
   evaluations: number;
   rounds: GenerationRound[];
+  /** Content identity of the loaded screening predictor (2026-10-02 audit D);
+   *  present on terminal previews of screening-enabled runs. */
+  screening_model_identity?: Record<string, unknown> | null;
 }
 
 export interface GenerationRow {

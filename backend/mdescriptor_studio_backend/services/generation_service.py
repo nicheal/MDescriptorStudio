@@ -924,12 +924,20 @@ class GenerationService:
                 )
                 cancelled = cancelled or ctx.cancel_requested
 
+            screening_identity = None
+            if energy_screening is not None:
+                identity_getter = getattr(energy_screening, "model_identity", None)
+                screening_identity = identity_getter() if callable(identity_getter) else None
             preview = {
                 "status": "CANCELLED" if cancelled else "COMPLETED",
                 "stopped_by": "cancelled" if cancelled else run.stopped_by,
                 "accepted": run.accepted_count,
                 "evaluations": run.evaluation_count,
                 "rounds": [r.to_json() for r in run.rounds],
+                # Content identity of the screening predictor (2026-10-02 audit
+                # D): the results view can show WHAT was loaded, not just the
+                # configured path. None when screening was disabled.
+                "screening_model_identity": screening_identity,
             }
             self.db.execute(
                 "UPDATE generation_runs SET status = ?, finished_at = ?, updated_at = ?,"
