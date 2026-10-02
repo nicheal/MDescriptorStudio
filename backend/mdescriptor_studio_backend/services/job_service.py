@@ -174,6 +174,15 @@ class JobService:
             " WHERE status IN ('QUEUED', 'RUNNING')",
             (_NOW(),),
         )
+        # Generation runs interrupted mid-flight WITH a persisted engine
+        # snapshot become INTERRUPTED (resumable via generation.resume); the
+        # rest — never-started QUEUED rows and snapshot-less RUNNING rows —
+        # stay CANCELLED (nothing to resume from).
+        self.db.execute(
+            "UPDATE generation_runs SET status = 'INTERRUPTED', finished_at = ?, resumable = 1"
+            " WHERE status = 'RUNNING' AND snapshot_path IS NOT NULL AND snapshot_version IS NOT NULL",
+            (_NOW(),),
+        )
         self.db.execute(
             "UPDATE generation_runs SET status = 'CANCELLED', finished_at = ?"
             " WHERE status IN ('QUEUED', 'RUNNING')",
@@ -274,7 +283,7 @@ class JobService:
             )
         if row["generation_run_id"]:
             self.db.execute(
-                "UPDATE generation_runs SET status = ?, finished_at = ?, error_message = ?"
+                "UPDATE generation_runs SET status = ?, finished_at = ?, error_message = ?, resumable = 0"
                 " WHERE id = ? AND status IN ('QUEUED', 'RUNNING')",
                 (status, _NOW(), message, row["generation_run_id"]),
             )

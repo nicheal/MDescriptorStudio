@@ -315,3 +315,31 @@ def test_descriptor_submit_reuses_completed_cache(tmp_path) -> None:
     assert retry["cache"] is None
     assert retry["job_id"] != first["job_id"]
     jobs.shutdown()
+
+
+def test_zombie_generation_runs_with_snapshots_become_interrupted(tmp_path: Path) -> None:
+    # Productized R5.5 (2026-10-02): a crash/restart must not discard a run
+    # that already persisted a round-boundary engine snapshot — RUNNING rows
+    # with a snapshot become INTERRUPTED (resumable via generation.resume);
+    # snapshot-less RUNNING rows and never-started QUEUED rows stay CANCELLED
+    # (nothing to resume from).
+    db = Database(tmp_path / "db.sqlite3")
+    db.execute(
+        "INSERT INTO generation_runs (id, dataset_id, optimizer, objective, params_json, status, created_at,"
+        " snapshot_path, snapshot_version, resumable, last_snapshot_generation, updated_at)"
+        " VALUES ('gen_snap', 'ds', 'random', 'novelty', '{}', 'RUNNING', 't', 'C:/snapshots/gen_snap', 3, 1, 2, 't')"
+    )
+    db.execute(
+        "INSERT INTO generation_runs (id, dataset_id, optimizer, objective, params_json, status, created_at, updated_at)"
+        " VALUES ('gen_bare', 'ds', 'random', 'novelty', '{}', 'RUNNING', 't', 't')"
+    )
+    db.execute(
+        "INSERT INTO generation_runs (id, dataset_id, optimizer, objective, params_json, status, created_at, updated_at)"
+        " VALUES ('gen_queued', 'ds', 'random', 'novelty', '{}', 'QUEUED', 't', 't')"
+    )
+    JobService(db, emit=lambda *_args: None)  # the constructor sweeps zombies
+    rows = {row["id"]: row for row in db.query("SELECT id, status, resumable FROM generation_runs")}
+    assert rows["gen_snap"]["status"] == "INTERRUPTED"
+    assert rows["gen_snap"]["resumable"] == 1
+    assert rows["gen_bare"]["status"] == "CANCELLED"
+    assert rows["gen_queued"]["status"] == "CANCELLED"

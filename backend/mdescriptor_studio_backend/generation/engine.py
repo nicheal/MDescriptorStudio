@@ -60,7 +60,12 @@ _GEOMETRY_REJECTION_CODES = {
 # place, records counts + a run-configuration fingerprint, and optimizer
 # states carry strict required-field validation. v1 snapshots are rejected
 # on load.
-SNAPSHOT_VERSION = 2
+# v3 (resume productization, 2026-10-02): the evaluated-candidate records
+# (the descriptor-space map) join the snapshot as a third data file — the
+# artifact writer streams them to a spool file that a crash destroys, so a
+# resumed run would otherwise republish a partial map. v2 snapshots are
+# rejected on load.
+SNAPSHOT_VERSION = 3
 
 # Manifest-referenced data file names: a strict single-segment pattern so a
 # hand-edited manifest cannot point outside the snapshot directory.
@@ -763,6 +768,7 @@ class GenerationEngine:
             result.rounds = resume["rounds"]
             result.accepted = resume["accepted"]
             result.evaluations = resume["evaluations"]
+            result.evaluated = resume["evaluated"]
             # The scientific stops are decided AFTER on_round — i.e. after
             # the snapshot was taken — so a restored run must re-derive them
             # from the replayed history instead of silently running a round
@@ -1260,11 +1266,11 @@ class GenerationEngine:
         accepted archives as a per-round replay (raw rows, so replaying
         ``add`` re-applies the scaling identically), the accepted candidates
         themselves, counters and round history, the screening verdicts of
-        every accepted evaluation (R5.1), plus manifest counts and a run-
-        configuration fingerprint restore_state() verifies. Intra-round
-        optimizer bookkeeping is deliberately dropped (propose() clears
-        it), and the descriptor-space map rows are not part of the
-        snapshot — the artifact writer streams those per round.
+        every accepted evaluation (R5.1), the evaluated-candidate records
+        the descriptor-space map is rebuilt from (v3), plus manifest counts
+        and a run-configuration fingerprint restore_state() verifies.
+        Intra-round optimizer bookkeeping is deliberately dropped (propose()
+        clears it).
         """
         result = self._active_result
         if result is None:
@@ -1343,10 +1349,25 @@ class GenerationEngine:
                 }
             )
         # The optimizer registers its extra referenced candidates (PSO
-        # particle memory can hold evaluated-but-rejected children) as a
-        # side effect — it must run BEFORE the candidate table is built.
+        # particle memory can hold evaluated-but-rejected children) as a side
+        # effect — it must run BEFORE the candidate table is built.
         optimizer_state = self.optimizer.snapshot_state(register_candidate)
         candidates = [_candidate_record(candidate) for candidate in registered.values()]
+        # Evaluated records are self-contained (scalars + one descriptor row
+        # each); their candidate_id may reference a candidate that is NOT in
+        # the candidate table (evaluated-but-rejected), so restore validates
+        # shape only.
+        evaluated = [
+            {
+                "candidate_id": record.candidate_id,
+                "generation": int(record.generation),
+                "structure_descriptor": np.asarray(record.structure_descriptor, dtype=np.float32).tolist(),
+                "novelty": record.novelty,
+                "fitness": float(record.fitness),
+                "accepted": bool(record.accepted),
+            }
+            for record in result.evaluated
+        ]
         return {
             "version": SNAPSHOT_VERSION,
             "algorithm_version": GENERATION_ALGORITHM_VERSION,
@@ -1367,7 +1388,9 @@ class GenerationEngine:
                 "evaluations": len(evaluations),
                 "accepted": len(result.accepted),
                 "rounds": len(result.rounds),
+                "evaluated": len(evaluated),
             },
+            "evaluated": evaluated,
             "config_fingerprint": self._config_fingerprint(),
         }
 
@@ -1388,7 +1411,7 @@ class GenerationEngine:
         directory.mkdir(parents=True, exist_ok=True)
         token = uuid.uuid4().hex[:16]
         files: dict = {}
-        for key in ("candidates", "evaluations"):
+        for key in ("candidates", "evaluations", "evaluated"):
             data = json.dumps(state.pop(key), ensure_ascii=False).encode("utf-8")
             name = f"{key}-{token}.json"
             durable_write(directory / name, data)
@@ -1400,6 +1423,7 @@ class GenerationEngine:
         stale_files = (
             list(directory.glob("candidates-*.json"))
             + list(directory.glob("evaluations-*.json"))
+            + list(directory.glob("evaluated-*.json"))
             + list(directory.glob("*.json.tmp"))
         )
         for stale in stale_files:
@@ -1472,8 +1496,10 @@ class GenerationEngine:
             raise ValueError("snapshot best_fitness must be a number or null")
 
         files = state["files"]
-        if not isinstance(files, dict) or set(files) != {"candidates", "evaluations"}:
-            raise ValueError("snapshot manifest must reference exactly the candidates and evaluations data files")
+        if not isinstance(files, dict) or set(files) != {"candidates", "evaluations", "evaluated"}:
+            raise ValueError(
+                "snapshot manifest must reference exactly the candidates, evaluations, and evaluated data files"
+            )
         payloads: dict = {}
         for key, entry in files.items():
             if not isinstance(entry, dict):
@@ -1505,8 +1531,11 @@ class GenerationEngine:
 
         candidates_payload = payloads["candidates"]
         evaluations_payload = payloads["evaluations"]
-        if not isinstance(candidates_payload, list) or not isinstance(evaluations_payload, list):
-            raise ValueError("snapshot candidates and evaluations files must hold JSON arrays")
+        evaluated_payload = payloads["evaluated"]
+        if not isinstance(candidates_payload, list) or not isinstance(evaluations_payload, list) or not isinstance(
+            evaluated_payload, list
+        ):
+            raise ValueError("snapshot candidates, evaluations, and evaluated files must hold JSON arrays")
 
         candidates = []
         for record in candidates_payload:
@@ -1571,6 +1600,35 @@ class GenerationEngine:
         if len(accepted_order) != len(evaluations):
             raise ValueError("snapshot evaluations do not align with the accepted order")
 
+        # Evaluated records (v3): the descriptor-space map's rows. These are
+        # NOT referentially validated — an evaluated-but-rejected candidate
+        # has no row in the candidate table by design.
+        evaluated_records = []
+        for entry in evaluated_payload:
+            require_keys(entry, ("candidate_id", "generation", "structure_descriptor", "fitness", "accepted"), "evaluated record")
+            try:
+                descriptor_row = np.asarray(entry["structure_descriptor"], dtype=np.float32)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"snapshot evaluated descriptor is malformed: {exc}") from exc
+            if descriptor_row.ndim != 1 or not np.isfinite(descriptor_row.astype(np.float64)).all():
+                raise ValueError("snapshot evaluated structure_descriptor must be a finite flat row")
+            novelty = entry["novelty"]
+            if novelty is not None and (isinstance(novelty, bool) or not isinstance(novelty, (int, float))):
+                raise ValueError("snapshot evaluated novelty must be a number or null")
+            fitness = entry["fitness"]
+            if isinstance(fitness, bool) or not isinstance(fitness, (int, float)):
+                raise ValueError("snapshot evaluated fitness must be a number")
+            evaluated_records.append(
+                EvaluatedRecord(
+                    candidate_id=str(entry["candidate_id"]),
+                    generation=int(entry["generation"]),
+                    structure_descriptor=descriptor_row,
+                    novelty=None if novelty is None else float(novelty),
+                    fitness=float(fitness),
+                    accepted=bool(entry["accepted"]),
+                )
+            )
+
         if not isinstance(state["rounds"], list):
             raise ValueError("snapshot rounds must be a JSON array")
         rounds = []
@@ -1587,6 +1645,7 @@ class GenerationEngine:
             "evaluations": len(evaluations),
             "accepted": len(accepted_order),
             "rounds": len(rounds),
+            "evaluated": len(evaluated_records),
         }
         if counts != expected_counts:
             raise ValueError(f"snapshot manifest counts {counts} do not match the recorded data {expected_counts}")
@@ -1674,5 +1733,6 @@ class GenerationEngine:
             "accepted": [candidates_by_id[cid] for cid in accepted_order],
             "rounds": rounds,
             "evaluations": evaluations,
+            "evaluated": evaluated_records,
         }
         self._resume_candidates = candidates_by_id

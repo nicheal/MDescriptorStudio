@@ -65,6 +65,7 @@ const JOB_STATUS_PAIRS: Record<string, Pair> = {
   COMPLETED: { en: "COMPLETED", zh: "已完成" },
   FAILED: { en: "FAILED", zh: "失败" },
   CANCELLED: { en: "CANCELLED", zh: "已取消" },
+  INTERRUPTED: { en: "INTERRUPTED", zh: "已中断" },
   STALE: { en: "STALE", zh: "已过期" },
 };
 

@@ -36,10 +36,15 @@ class _FakeDb:
 
     def execute(self, sql, params=()):
         self.executed.append((sql, params))
+        return 1
 
 
 class _FakeJobs:
+    def __init__(self) -> None:
+        self.submitted: list[tuple] = []
+
     def submit(self, job_type, runner, **kwargs):
+        self.submitted.append((job_type, kwargs.get("generation_run_id")))
         return "job_1"
 
 
@@ -334,3 +339,108 @@ class TestScreeningModelIdentity:
         request = self._screening_request(str(tmp_path / "missing.pt"))
         with pytest.raises(AppError, match="not readable"):
             service._cache_key(request, dataset, {"signature": "same"}, None)
+
+
+class TestGenerationResumeRpc:
+    """generation.resume guards (productized R5.5, 2026-10-02)."""
+
+    class _ResumeDb:
+        """Routes the four lookups resume() makes; records writes."""
+
+        def __init__(self, generation_row, dataset_rows, descriptor_rows):
+            self._generation_row = generation_row
+            self._dataset_rows = dataset_rows
+            self._descriptor_rows = descriptor_rows
+            self.executed: list[tuple] = []
+
+        def query_one(self, sql, params=()):
+            if "FROM generation_runs" in sql:
+                return self._generation_row if params[0] == self._generation_row["id"] else None
+            if "FROM datasets" in sql:
+                return self._dataset_rows.get(params[0])
+            if "FROM descriptor_runs" in sql:
+                return self._descriptor_rows.get(params[0])
+            return None  # dataset_views: no seed view selected
+
+        def execute(self, sql, params=()):
+            self.executed.append((sql, params))
+            return 1
+
+    def _resume_service(self, tmp_path: Path, generation_row: dict):
+        dataset_rows = {"ds_A": {"id": "ds_A", "fingerprint": "fp_1", "number_of_frames": 4}}
+        descriptor_rows = {
+            "run_1": {
+                "id": "run_1",
+                "dataset_id": "ds_A",
+                "status": "COMPLETED",
+                "result_path": "run_dir",
+                "device": "cpu",
+                "descriptor_name": "ACE",
+                "descriptor_version": "1",
+                "engine_version": "1",
+                "parameters_json": "{}",
+                "feature_count": 4,
+                "row_semantics": "atom",
+            }
+        }
+        db = self._ResumeDb(generation_row, dataset_rows, descriptor_rows)
+        results = _FakeResults({"dataset_fingerprint": "fp_1"})
+        jobs = _FakeJobs()
+        service = GenerationService(db, jobs, results, None, tmp_path)
+        return service, jobs
+
+    @staticmethod
+    def _interrupted_row(tmp_path: Path, *, status="INTERRUPTED", resumable=1, snapshot=True, version=3):
+        snapshot_dir = tmp_path / "generation_snapshots" / "gen_1"
+        row = {
+            "id": "gen_1",
+            "dataset_id": "ds_A",
+            "descriptor_run_id": "run_1",
+            "status": status,
+            "resumable": resumable,
+            "snapshot_path": str(snapshot_dir) if snapshot else None,
+            "params_json": json.dumps(_payload("ds_A")),
+        }
+        if snapshot:
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            (snapshot_dir / "state.json").write_text(json.dumps({"version": version}), encoding="utf-8")
+        return row
+
+    def test_resume_requeues_and_submits(self, tmp_path: Path):
+        service, jobs = self._resume_service(tmp_path, self._interrupted_row(tmp_path))
+        result = service.resume({"id": "gen_1"})
+        assert result == {"generation_id": "gen_1", "job_id": "job_1"}
+        assert jobs.submitted == [("generation.run", "gen_1")]
+        update = next((sql for sql, _ in service.db.executed if "status = 'QUEUED'" in sql), None)
+        assert update is not None and "resumable = 0" in update
+
+    def test_resume_rejects_non_interrupted_rows(self, tmp_path: Path):
+        service, _ = self._resume_service(tmp_path, self._interrupted_row(tmp_path, status="COMPLETED"))
+        with pytest.raises(AppError, match="not resumable"):
+            service.resume({"id": "gen_1"})
+
+    def test_resume_rejects_a_non_resumable_row(self, tmp_path: Path):
+        service, _ = self._resume_service(tmp_path, self._interrupted_row(tmp_path, resumable=0))
+        with pytest.raises(AppError, match="not resumable"):
+            service.resume({"id": "gen_1"})
+
+    def test_resume_rejects_a_missing_snapshot(self, tmp_path: Path):
+        service, _ = self._resume_service(tmp_path, self._interrupted_row(tmp_path, snapshot=False))
+        with pytest.raises(AppError, match="not resumable"):
+            service.resume({"id": "gen_1"})
+
+    def test_resume_rejects_a_foreign_snapshot_version(self, tmp_path: Path):
+        service, _ = self._resume_service(tmp_path, self._interrupted_row(tmp_path, version=99))
+        with pytest.raises(AppError, match="unsupported engine snapshot version"):
+            service.resume({"id": "gen_1"})
+
+    def test_delete_removes_the_snapshot_directory(self, tmp_path: Path):
+        from mdescriptor_studio_backend.errors import AppError as _AppError
+
+        service, _ = self._resume_service(tmp_path, self._interrupted_row(tmp_path, status="INTERRUPTED"))
+        snapshot_dir = tmp_path / "generation_snapshots" / "gen_1"
+        assert snapshot_dir.is_dir()
+        # delete() refuses a non-terminal row first; mark it terminal.
+        service.db._generation_row["status"] = "COMPLETED"
+        service.delete({"id": "gen_1"})
+        assert not snapshot_dir.exists()

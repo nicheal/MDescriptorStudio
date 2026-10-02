@@ -1660,6 +1660,19 @@ const METHODS: Record<string, Handler> = {
     }
     return { ok: true, already_finished: false };
   },
+  "generation.resume": (p) => {
+    const row = MOCK_GENERATION_ROWS.get(String(p?.id ?? ""));
+    if (!row) throw new MockError("INVALID_PARAMS", "unknown generation run");
+    if (row.status !== "INTERRUPTED" || !row.resumable) {
+      throw new MockError("RESULT_INCOMPATIBLE", `generation run ${String(p?.id ?? "")} is not resumable`);
+    }
+    row.status = "RUNNING";
+    row.finished_at = null;
+    row.resumable = 0;
+    const preview = row.preview as Record<string, unknown> | undefined;
+    if (preview) preview.status = "RUNNING";
+    return { generation_id: row.id, job_id: "job_mock_resume" };
+  },
   "generation.pca": (p) => {
     if (!MOCK_GENERATION_ROWS.has(String(p?.id ?? ""))) throw new MockError("INVALID_PARAMS", "unknown generation run");
     const ring = (n: number, radius: number, jitter: number) =>

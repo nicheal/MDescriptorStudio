@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -204,3 +205,106 @@ def test_generation_cancel_settles_run(tmp_path: Path) -> None:
         assert got["status"] == "CANCELLED"
     finally:
         bp.close()
+
+
+def test_generation_resume_after_interruption(tmp_path: Path) -> None:
+    """Productized R5.5 acceptance: run → hard-kill the backend mid-flight →
+    restart on the same data dir → the run is INTERRUPTED and resumable →
+    generation.resume completes it byte-identically to an uninterrupted
+    fixed-seed reference run in a separate data dir."""
+    ds_dir = tmp_path / "gaas"
+    write_deepmd(ds_dir, 12, 64, seed=31)
+    budget = {"max_evaluations": 100_000, "max_accepted": 10_000, "max_generations": 6}
+
+    def _descriptor_run(process: BackendProcess, vid: int, dataset: str) -> str:
+        sub = process.request(
+            vid,
+            "descriptor.submit",
+            {"dataset_id": dataset, "descriptor_name": "ACE", "parameters": {"species": [31, 33], "N": 1}, "scope": "dataset"},
+        )
+        done = wait_job(process, sub["result"]["job_id"], timeout=300)
+        assert done["status"] == "COMPLETED", done
+        return done["result"]["run_id"]
+
+    bp = BackendProcess(tmp_path)
+    try:
+        assert bp.read_line()["event"] == "backend.ready"
+        ds_id = register_dataset(bp, 400, ds_dir)
+        run_id = _descriptor_run(bp, 401, ds_id)
+        submitted = _submit_generation(bp, 402, ds_id, run_id, budget=budget)
+        generation_id = submitted["generation_id"]
+
+        # Wait for the first persisted round boundary, then hard-kill the
+        # backend mid-run (a graceful shutdown would cancel jobs instead of
+        # leaving them INTERRUPTED).
+        deadline = time.monotonic() + 180
+        while True:
+            row = bp.request(403, "generation.get", {"id": generation_id})["result"]
+            if (row.get("last_snapshot_generation") or 0) >= 1:
+                break
+            assert time.monotonic() < deadline, row
+            assert row["status"] in ("QUEUED", "RUNNING"), row
+            time.sleep(0.2)
+        bp.proc.kill()
+        bp.proc.wait(timeout=15)
+
+        bp = BackendProcess(tmp_path)
+        assert bp.read_line()["event"] == "backend.ready"
+        row = bp.request(404, "generation.get", {"id": generation_id})["result"]
+        assert row["status"] == "INTERRUPTED", row
+        assert row["resumable"] == 1
+        assert (row.get("last_snapshot_generation") or 0) >= 1
+
+        resume_resp = bp.request(405, "generation.resume", {"id": generation_id})
+        assert "result" in resume_resp, resume_resp
+        resumed_job = resume_resp["result"]
+        finished = wait_job(bp, resumed_job["job_id"], timeout=600)
+        assert finished["status"] == "COMPLETED", finished
+        row = bp.request(406, "generation.get", {"id": generation_id})["result"]
+        assert row["status"] == "COMPLETED"
+        assert row["resumable"] == 0
+        resumed_preview = row["preview"]
+        assert resumed_preview["stopped_by"] == "max_generations"
+        assert len(resumed_preview["rounds"]) == 6
+
+        # Snapshot v3: the resumed run's descriptor-space map is COMPLETE.
+        pca = bp.request(407, "generation.pca", {"id": generation_id})["result"]
+        assert len(pca["evaluated"]) == row["evaluations"]
+
+        # The geometry spool restarted mid-run: the manifest records the
+        # offset, and pre-offset ACCEPTED map points still resolve.
+        manifest = json.loads(
+            (tmp_path / "generation" / generation_id / "manifest.json").read_text(encoding="utf-8")
+        )
+        offset = manifest["files"]["evaluated_structures"]["offset"]
+        assert offset >= 1
+        first_accepted = next(i for i, accepted in enumerate(pca["evaluated_accepted"]) if accepted)
+        assert first_accepted < offset
+        frame = bp.request(408, "generation.structure", {"id": generation_id, "index": first_accepted})
+        assert "result" in frame, frame
+    finally:
+        if bp.proc is not None and bp.proc.poll() is None:
+            bp.close()
+
+    # Reference: the same fixed-seed request, uninterrupted, in its own data
+    # dir (same dataset content, so every input to the engine matches).
+    ref_data = tmp_path / "reference_data"
+    ref_data.mkdir()
+    bp_ref = BackendProcess(ref_data)
+    try:
+        assert bp_ref.read_line()["event"] == "backend.ready"
+        ref_ds = register_dataset(bp_ref, 420, ds_dir)
+        ref_run = _descriptor_run(bp_ref, 421, ref_ds)
+        ref_submitted = _submit_generation(bp_ref, 422, ref_ds, ref_run, budget=budget)
+        wait_job(bp_ref, ref_submitted["job_id"], timeout=600)
+        ref_row = bp_ref.request(423, "generation.get", {"id": ref_submitted["generation_id"]})["result"]
+        assert ref_row["status"] == "COMPLETED"
+    finally:
+        bp_ref.close()
+
+    # The continuation must equal the uninterrupted run — round records are
+    # compared as full JSON payloads (positions/fitness ride the rounds).
+    assert ref_row["preview"]["stopped_by"] == resumed_preview["stopped_by"]
+    assert ref_row["preview"]["rounds"] == resumed_preview["rounds"]
+    assert ref_row["accepted_count"] == row["accepted_count"]
+    assert ref_row["evaluations"] == row["evaluations"]

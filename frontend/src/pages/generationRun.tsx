@@ -16,6 +16,8 @@ export default function GenerationRunPanel({
   row,
   onCancel,
   cancelPending = false,
+  onResume,
+  resumePending = false,
   lastUpdatedAt,
   connectionError,
   onRetry,
@@ -24,6 +26,8 @@ export default function GenerationRunPanel({
   row: GenerationRow;
   onCancel: () => void;
   cancelPending?: boolean;
+  onResume?: () => void;
+  resumePending?: boolean;
   lastUpdatedAt?: number | null;
   connectionError?: string | null;
   onRetry?: () => void;
@@ -75,11 +79,18 @@ export default function GenerationRunPanel({
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <Card
         size="small"
-        title={<Space>{t("Expansion run")}<Tag color={row.status === "QUEUED" ? "default" : row.status === "COMPLETED" ? "green" : row.status === "FAILED" ? "red" : row.status === "CANCELLED" ? "orange" : "blue"}>{jobStatusLabel(tr, row.status)}</Tag></Space>}
+        title={<Space>{t("Expansion run")}<Tag color={row.status === "QUEUED" ? "default" : row.status === "COMPLETED" ? "green" : row.status === "FAILED" ? "red" : row.status === "CANCELLED" ? "orange" : row.status === "INTERRUPTED" ? "purple" : "blue"}>{jobStatusLabel(tr, row.status)}</Tag></Space>}
         extra={
-          isActiveGenerationStatus(row.status) ? <Button danger loading={cancelPending} disabled={cancelPending} onClick={onCancel}>
-            {cancelPending ? t("Cancel requested") : t("Cancel")}
-          </Button> : null
+          <Space>
+            {row.status === "INTERRUPTED" && !!row.resumable && onResume ? (
+              <Button type="primary" loading={resumePending} disabled={resumePending} onClick={onResume}>
+                {t("Resume")}
+              </Button>
+            ) : null}
+            {isActiveGenerationStatus(row.status) ? <Button danger loading={cancelPending} disabled={cancelPending} onClick={onCancel}>
+              {cancelPending ? t("Cancel requested") : t("Cancel")}
+            </Button> : null}
+          </Space>
         }
       >
         <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginBottom: 12, fontSize: 12, color: "#616161" }}>
@@ -102,6 +113,19 @@ export default function GenerationRunPanel({
           />
         )}
         {row.status === "QUEUED" && <Alert type="info" showIcon style={{ marginBottom: 12 }} message={t("Run queued; waiting for a worker")} />}
+        {row.status === "INTERRUPTED" && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={t("The run was interrupted (backend restart or shutdown)")}
+            description={
+              resumePending
+                ? undefined
+                : t("Resume continues from the last completed round; everything up to that boundary is kept.")
+            }
+          />
+        )}
         {row.status === "RUNNING" && !preview && (
           <Alert
             type="info"

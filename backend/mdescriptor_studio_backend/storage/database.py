@@ -184,6 +184,12 @@ MIGRATIONS: dict[int, str] = {
     14: """
     ALTER TABLE generation_runs ADD COLUMN error_message TEXT;
     """,
+    15: """
+    ALTER TABLE generation_runs ADD COLUMN snapshot_version INTEGER;
+    ALTER TABLE generation_runs ADD COLUMN snapshot_path TEXT;
+    ALTER TABLE generation_runs ADD COLUMN resumable INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE generation_runs ADD COLUMN last_snapshot_generation INTEGER;
+    """,
 }
 
 

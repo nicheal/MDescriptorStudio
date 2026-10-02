@@ -179,6 +179,11 @@ export interface GenerationRow {
   preview?: GenerationPreview | null;
   artifact_complete?: boolean;
   error_message?: string | null;
+  /** Productized R5.5 resume fields; rows interrupted before a first round omit them. */
+  snapshot_version?: number | null;
+  snapshot_path?: string | null;
+  resumable?: number | boolean | null;
+  last_snapshot_generation?: number | null;
 }
 
 export interface PendingGenerationRegistration {

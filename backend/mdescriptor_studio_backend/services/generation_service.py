@@ -32,7 +32,7 @@ from ..errors import (
 from ..generation.artifacts import GenerationArtifactReader, GenerationArtifactWriter
 from ..generation.archive import DescriptorArchive, LocalEnvironmentArchive
 from ..generation.constraints import build_constraints
-from ..generation.engine import GenerationEngine
+from ..generation.engine import GenerationEngine, RoundRecord, SNAPSHOT_VERSION
 from ..generation.screening import EnergyForceScreen, ScreeningSpec, mdescriptor_predictors_available
 from ..generation.evaluator import DescriptorEvaluator, evaluate_batch
 from ..generation.models import StructureCandidate, parse_request
@@ -67,6 +67,10 @@ _LIST_COLUMNS = (
     "cache_key",
     "stale_reason",
     "updated_at",
+    "snapshot_version",
+    "snapshot_path",
+    "resumable",
+    "last_snapshot_generation",
 )
 
 _SEED_POOL_CAP = 512
@@ -463,6 +467,7 @@ class GenerationService:
         self.db.execute("DELETE FROM jobs WHERE generation_run_id = ?", (generation_id,))
         self.db.execute("DELETE FROM generation_runs WHERE id = ?", (generation_id,))
         self._artifacts.remove_quiet(artifact_path)
+        self._remove_snapshot(generation_id)
         return {"ok": True, "generation_id": generation_id}
 
     def preview(self, params: dict) -> dict:
@@ -484,9 +489,102 @@ class GenerationService:
             raise AppError(JOB_NOT_FOUND, "no job is linked to this generation run")
         return self.jobs.cancel(job["id"])
 
+    # -- resume ---------------------------------------------------------------
+    def _snapshot_dir(self, generation_id: str) -> Path:
+        """Persistent per-run snapshot directory (OUTSIDE the artifact dir:
+        the writer publishes artifacts with os.replace, which refuses a
+        non-empty target, and snapshots must survive until the run settles)."""
+        return self.data_dir / "generation_snapshots" / generation_id
+
+    def _remove_snapshot(self, generation_id: str) -> None:
+        directory = self._snapshot_dir(generation_id)
+        if directory.parent != self.data_dir / "generation_snapshots":
+            return
+        shutil.rmtree(directory, ignore_errors=True)
+
+    def resume(self, params: dict) -> dict:
+        """Continue an INTERRUPTED run from its last round-boundary snapshot.
+
+        The stored params_json re-parses into the same typed request, the
+        cheap context gates re-run, and engine.restore_state() verifies the
+        full run-definition fingerprint before anything continues — a dataset
+        re-import, a re-pointed descriptor run, a replaced screening
+        checkpoint or different constraints reject the resume instead of
+        silently diverging (the 2026-10-02 identity contracts are what make
+        that check trustworthy)."""
+        generation_id = str((params or {}).get("id") or "")
+        row = self._row(generation_id)
+        if row["status"] != "INTERRUPTED" or not row["resumable"] or not row.get("snapshot_path"):
+            raise AppError(
+                RESULT_INCOMPATIBLE,
+                f"generation run {generation_id} is not resumable (status {row['status']})",
+            )
+        snapshot_dir = self._snapshot_dir(generation_id)
+        stored_path = row.get("snapshot_path")
+        if not stored_path or Path(stored_path) != snapshot_dir:
+            raise AppError(ARTIFACT_INVALID, "stored generation snapshot path is invalid")
+        manifest = snapshot_dir / "state.json"
+        stored_version = None
+        if manifest.is_file():
+            try:
+                stored_version = json.loads(manifest.read_text(encoding="utf-8")).get("version")
+            except (OSError, TypeError, ValueError):
+                stored_version = None
+        if stored_version != SNAPSHOT_VERSION:
+            raise AppError(
+                RESULT_INCOMPATIBLE,
+                f"unsupported engine snapshot version: {stored_version} (running {SNAPSHOT_VERSION})"
+                " — start a new run instead",
+            )
+        # params_json is a partial echo of the request: dataset_id and
+        # descriptor_run_id live in their own columns and must be joined
+        # back before re-parsing into the typed request.
+        payload = json.loads(row["params_json"])
+        payload["dataset_id"] = row["dataset_id"]
+        payload["descriptor_run_id"] = row["descriptor_run_id"]
+        request = parse_request(payload)
+        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (request.dataset_id,))
+        if dataset is None:
+            raise AppError(INVALID_PARAMS, "dataset does not exist")
+        # Freshness + seed-view staleness: the frozen reference archive must
+        # still describe the dataset, and a selected view must still exist —
+        # otherwise the rebuilt seed pool cannot match the snapshot's.
+        self._assert_reference_freshness(dataset, request.descriptor_run_id)
+        seed_frame_indices, _seed_scope_hash = self._seed_view(request, dataset)
+        run_row = self.db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (request.descriptor_run_id,))
+        if run_row is None:
+            raise AppError(RESULT_INCOMPATIBLE, "descriptor run does not exist")
+        scaling = str(request.objective.get("scaling") or "robust")
+        signature = self._descriptor_signature(run_row, scaling)
+        # The status guard makes a concurrent second resume a clean rejection.
+        changed = self.db.execute(
+            "UPDATE generation_runs SET status = 'QUEUED', started_at = NULL, finished_at = NULL,"
+            " error_message = NULL, resumable = 0, updated_at = ? WHERE id = ? AND status = 'INTERRUPTED'",
+            (_now(), generation_id),
+        )
+        if not changed:
+            raise AppError(RESULT_INCOMPATIBLE, f"generation run {generation_id} is no longer resumable")
+        job_id = self.jobs.submit(
+            "generation.run",
+            lambda ctx: self._run_generation(
+                ctx, generation_id, request, signature, seed_frame_indices, resume_snapshot=snapshot_dir
+            ),
+            dataset_id=request.dataset_id,
+            descriptor_run_id=request.descriptor_run_id,
+            generation_run_id=generation_id,
+        )
+        return {"generation_id": generation_id, "job_id": job_id}
+
     # -- worker ---------------------------------------------------------------------
     def _run_generation(
-        self, ctx, generation_id: str, request, signature: dict, seed_frame_indices: list[int] | None
+        self,
+        ctx,
+        generation_id: str,
+        request,
+        signature: dict,
+        seed_frame_indices: list[int] | None,
+        *,
+        resume_snapshot: Path | None = None,
     ) -> dict:
         self.db.execute(
             "UPDATE generation_runs SET status = 'RUNNING', started_at = ?, updated_at = ? WHERE id = ?",
@@ -715,6 +813,21 @@ class GenerationService:
         )
 
         rounds: list = []
+        restored_evaluated = 0
+        if resume_snapshot is not None:
+            # Continue an interrupted run (productized R5.5). restore_state
+            # validates the WHOLE snapshot transactionally — run-definition
+            # fingerprint included — so anything drifted since the
+            # interruption fails loudly here instead of diverging. The
+            # preview accumulator is seeded from the snapshot's round
+            # history: a resumed run's live preview continues, not restarts.
+            engine.restore_state(resume_snapshot)
+            state = json.loads((Path(resume_snapshot) / "state.json").read_text(encoding="utf-8"))
+            rounds.extend(RoundRecord(**record) for record in state.get("rounds") or [])
+            # The geometry spool (evaluated.extxyz) restarts with this
+            # execution; the manifest must record where it begins so map
+            # points resolve against the right frames.
+            restored_evaluated = int((state.get("counts") or {}).get("evaluated") or 0)
 
         def on_round(record) -> None:
             rounds.append(record)
@@ -736,6 +849,28 @@ class GenerationService:
                     generation_id,
                 ),
             )
+            # Persist the round-boundary engine snapshot (productized R5.5):
+            # a crash/restart after this point leaves the run INTERRUPTED and
+            # resumable from exactly this boundary. write_snapshot is
+            # transactional, and the DB row is only advanced AFTER it
+            # commits — a failed write keeps the previous boundary, so the
+            # resumed state is always a consistent, older round.
+            snapshot_dir = self._snapshot_dir(generation_id)
+            try:
+                engine.write_snapshot(snapshot_dir)
+            except Exception:  # noqa: BLE001 — a failed snapshot must not kill a healthy run
+                log.warning(
+                    "generation %s: round-%s snapshot failed; keeping the previous boundary",
+                    generation_id,
+                    record.generation,
+                    exc_info=True,
+                )
+            else:
+                self.db.execute(
+                    "UPDATE generation_runs SET snapshot_path = ?, snapshot_version = ?, resumable = 1,"
+                    " last_snapshot_generation = ?, updated_at = ? WHERE id = ?",
+                    (str(snapshot_dir), SNAPSHOT_VERSION, int(record.generation), _now(), generation_id),
+                )
 
         def progress(completed, total, message) -> None:
             ctx.progress(completed, total, message)
@@ -783,6 +918,7 @@ class GenerationService:
                         ),
                     },
                     evaluated_structures_path=evaluated_frames_path,
+                    evaluated_structures_offset=restored_evaluated,
                     ctx=None,
                     json_safe=_json_safe,
                 )
@@ -798,7 +934,7 @@ class GenerationService:
             self.db.execute(
                 "UPDATE generation_runs SET status = ?, finished_at = ?, updated_at = ?,"
                 " evaluations = ?, accepted_count = ?, result_path = ?, artifact_manifest_json = ?,"
-                " preview_json = ?, warnings_json = ?"
+                " preview_json = ?, warnings_json = ?, resumable = 0"
                 " WHERE id = ?",
                 (
                     "CANCELLED" if cancelled else "COMPLETED",
@@ -813,6 +949,10 @@ class GenerationService:
                     generation_id,
                 ),
             )
+            # Terminal either way: the artifacts (if any) are committed, the
+            # snapshot's purpose is served. Cancellation deliberately does
+            # NOT advertise accidental-recovery semantics.
+            self._remove_snapshot(generation_id)
             if cancelled:
                 raise AppError(JOB_CANCELLED, f"job {ctx.job_id} cancelled after saving accepted structures")
         return {"generation_id": generation_id, "accepted": run.accepted_count, "evaluations": run.evaluation_count}
@@ -1102,8 +1242,31 @@ class GenerationService:
         frame_index = params.get("index")
         if isinstance(frame_index, bool) or not isinstance(frame_index, int) or frame_index < 0:
             raise AppError(INVALID_PARAMS, "'index' must be a non-negative integer")
-        adapter = create_adapter(reader.evaluated_extxyz(), "extxyz")
-        frame = adapter.get_frame(frame_index)
+        # Resumed runs (snapshot v3) publish the COMPLETE descriptor map, but
+        # the geometry spool only covers the post-resume portion (manifest
+        # "offset"): map points below the offset resolve through the accepted
+        # artifact — their geometries are the accepted frames' — and points
+        # above it map onto the spool with the offset subtracted.
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        offset = int((manifest.get("files", {}).get("evaluated_structures") or {}).get("offset") or 0)
+        try:
+            if frame_index < offset:
+                accepted_mask = np.asarray(reader.array("evaluated_accepted", mmap=True)).astype(bool)
+                if frame_index >= len(accepted_mask) or not bool(accepted_mask[frame_index]):
+                    raise AppError(
+                        RESULT_INCOMPATIBLE,
+                        "candidate geometry was not persisted for this pre-interruption evaluation",
+                    )
+                accepted_index = int(accepted_mask[: frame_index + 1].sum()) - 1
+                adapter = create_adapter(reader.accepted_extxyz(), "extxyz")
+                frame = adapter.get_frame(accepted_index)
+            else:
+                adapter = create_adapter(reader.evaluated_extxyz(), "extxyz")
+                frame = adapter.get_frame(frame_index - offset)
+        except AppError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a missing/unreadable artifact is a clean 4xx-class error
+            raise AppError(ARTIFACT_INVALID, f"generation structure artifact is unreadable: {exc}") from exc
         return self.frame_service.frame_from(
             frame,
             name=f"{generation_id} candidate {frame_index}",

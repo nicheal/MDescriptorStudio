@@ -169,6 +169,7 @@ def build_methods(jobs, datasets, views, frame_service, descriptors, results, an
                 "generation.delete": generation.delete,
                 "generation.preview": generation.preview,
                 "generation.cancel": generation.cancel,
+                "generation.resume": generation.resume,
                 "generation.materialize": generation.materialize,
                 "generation.add_to_dataset": generation.add_to_dataset,
                 "generation.export": generation.export,

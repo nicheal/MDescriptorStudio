@@ -90,3 +90,9 @@
 > ④ **SSW/外部优化器正式移出范围**（用户决策 2026-10-02）：原 G5 规划的 ExternalGenerationAdapter/SSW
 > 不再排期，G5 以"局部目标搜索覆盖 GA/PSO"收尾；本行即该决策的记录载体。⑤ 锚点增强语义获确认保留
 > （锚点可位于所选种子视图之外并并入种子池；前端提示文案已披露），种子范围汇总行的显性化归入 gen-5 前的契约澄清。
+> **更新（2026-10-02，resume 产品化批次）**：引擎快照升 **v3**（evaluated 候选记录作为第三个带哈希数据文件
+> 入快照——resumed 运行重发布的描述符空间地图完整；v2 快照加载即拒，无生产快照故无兼容负担）。服务层接入
+> R5.5：worker 每轮边界持久化快照至 `generation_snapshots/<id>`，新增 `INTERRUPTED` 状态（重启/关闭僵尸清扫
+> 中"RUNNING 且有快照"的运行改标之，其余仍 CANCELLED）与 `generation.resume` RPC（restore_state 全指纹校验，
+> dataset 重导入/描述符重指/checkpoint 换字节/约束改动均拒绝）；验收测试 = 硬杀后端→重启→resume→与不间断
+> 固定种子参照运行轮次记录逐字节一致（`test_generation_ipc.py::test_generation_resume_after_interruption`）。

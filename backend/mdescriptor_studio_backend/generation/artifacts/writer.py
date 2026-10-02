@@ -149,6 +149,7 @@ class GenerationArtifactWriter:
         run,
         metadata_extra: dict | None = None,
         evaluated_structures_path: Path | None = None,
+        evaluated_structures_offset: int = 0,
         ctx=None,
         json_safe=lambda value: value,
     ) -> tuple[Path, dict]:
@@ -222,10 +223,14 @@ class GenerationArtifactWriter:
                 ensure_no_reparse_points(evaluated_structures_path)
                 evaluated_output = staging / "evaluated.extxyz"
                 shutil.copyfile(evaluated_structures_path, evaluated_output)
-                manifest["files"]["evaluated_structures"] = {
-                    "path": evaluated_output.name,
-                    "bytes": evaluated_output.stat().st_size,
-                }
+                # Resumed runs (snapshot v3) replay the descriptor map from the
+                # snapshot, but the geometry spool only covers the post-resume
+                # portion — the offset records where the spool starts, so a
+                # map point below it resolves through the accepted artifact.
+                entry = {"path": evaluated_output.name, "bytes": evaluated_output.stat().st_size}
+                if evaluated_structures_offset:
+                    entry["offset"] = int(evaluated_structures_offset)
+                manifest["files"]["evaluated_structures"] = entry
 
             with open_text_for_write(staging / "candidates.jsonl") as fh:
                 for c, e in zip(accepted, evaluations):

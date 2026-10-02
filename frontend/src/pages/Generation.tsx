@@ -46,6 +46,7 @@ export default function Generation() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [cancelPending, setCancelPending] = useState(false);
+  const [resumePending, setResumePending] = useState(false);
   const [runLoading, setRunLoading] = useState(false);
   const [runLoadError, setRunLoadError] = useState<string | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -234,7 +235,7 @@ export default function Generation() {
               stopPolling();
               if (state.phase !== "config") state.setPhase("results");
               refreshHistory();
-            } else if (row.status === "FAILED" || row.status === "CANCELLED") {
+            } else if (row.status === "FAILED" || row.status === "CANCELLED" || row.status === "INTERRUPTED") {
               setCancelPending(false);
               stopPolling();
               if (state.phase !== "config") state.setPhase("results");
@@ -391,6 +392,25 @@ export default function Generation() {
     }
   }, [store.activeGenerationId, message, t]);
 
+  const resumeRun = useCallback(async () => {
+    const id = store.activeGenerationId;
+    if (!id) return;
+    setResumePending(true);
+    try {
+      await ipc.request<{ generation_id: string; job_id: string | null }>("generation.resume", { id });
+      setResumePending(false);
+      setConnectionError(null);
+      setRunLoadError(null);
+      setLastUpdatedAt(null);
+      useGenerationStore.getState().setPhase("running");
+      startPolling(id);
+    } catch (error) {
+      console.error(error);
+      setResumePending(false);
+      message.error(messageFromError(error, t("Failed to resume the expansion run")));
+    }
+  }, [store.activeGenerationId, message, t, startPolling]);
+
   const row = store.liveRow;
   const runProblem = runLoadError ?? connectionError;
   const descriptorState = !datasetId
@@ -492,6 +512,7 @@ export default function Generation() {
               id: row.id, dataset: sourceDatasetName ?? row.dataset_id, active: activeDatasetName ?? t("No datasets"),
             })} />}
           <GenerationRunPanel row={row} onCancel={cancelRun} cancelPending={cancelPending}
+            onResume={resumeRun} resumePending={resumePending}
             lastUpdatedAt={lastUpdatedAt} connectionError={connectionError} onRetry={() => openRun(row.id)} sourceDatasetName={sourceDatasetName} />
         </>
       )}
