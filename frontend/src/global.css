@@ -1376,3 +1376,25 @@ body {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Generation config: sections 1–3 sit side by side in three equal columns
+   when the pane is wide, and stack vertically when it is narrow — never a
+   2+1 split. A container query, not a viewport media query, because the
+   right rail toggles at 1280px window width and the pane width must be
+   measured on the pane itself. */
+.generation-config-root {
+  container-type: inline-size;
+}
+
+.generation-config-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  align-content: start;
+}
+
+@container (min-width: 1080px) {
+  .generation-config-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

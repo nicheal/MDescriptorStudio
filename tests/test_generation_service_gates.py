@@ -300,3 +300,37 @@ class TestTargetRegionPersistence:
         saved_params = json.loads(insert[1][5])
         assert saved_params["anchor_frames"] == [0, 2]
         assert saved_params["region_radius"] == 18.0
+
+
+class TestScreeningModelIdentity:
+    def _screening_request(self, checkpoint: str):
+        return parse_request(
+            {
+                **_payload("ds_A"),
+                "constraints": {
+                    "min_distance_mode": "none",
+                    "energy_screening": {"enabled": True, "model": "DPA4C", "checkpoint": checkpoint},
+                },
+            }
+        )
+
+    def test_checkpoint_content_changes_the_cache_key(self, tmp_path: Path):
+        # 2026-10-02 audit P1: the key carried the checkpoint PATH (and the
+        # installed wheel version) but not the file content, so a model
+        # replaced in place replayed cached runs computed with other weights.
+        service = _service(tmp_path)
+        dataset = service.db._dataset_rows["ds_A"]
+        checkpoint = tmp_path / "dpa4c.pt"
+        checkpoint.write_bytes(b"model weights v1")
+        first = service._cache_key(self._screening_request(str(checkpoint)), dataset, {"signature": "same"}, None)
+
+        checkpoint.write_bytes(b"model weights v2 (fine-tuned)")
+        second = service._cache_key(self._screening_request(str(checkpoint)), dataset, {"signature": "same"}, None)
+        assert first != second
+
+    def test_unreadable_checkpoint_fails_instead_of_keying_a_run(self, tmp_path: Path):
+        service = _service(tmp_path)
+        dataset = service.db._dataset_rows["ds_A"]
+        request = self._screening_request(str(tmp_path / "missing.pt"))
+        with pytest.raises(AppError, match="not readable"):
+            service._cache_key(request, dataset, {"signature": "same"}, None)

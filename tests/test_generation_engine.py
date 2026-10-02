@@ -16,6 +16,7 @@ from mdescriptor_studio_backend.generation.evaluator import DescriptorEvaluation
 from mdescriptor_studio_backend.generation.models import Budget, OperatorSpec, StructureCandidate
 from mdescriptor_studio_backend.generation.objectives import CompositeObjective, NoveltyObjective
 from mdescriptor_studio_backend.generation.operators import AtomicDisplacement, IsotropicStrain
+from mdescriptor_studio_backend.generation.optimization import ProposalBatch
 from mdescriptor_studio_backend.generation.optimizers import RandomSearchOptimizer
 from mdescriptor_studio_backend.generation.registry import GENERATION_REGISTRY
 
@@ -727,3 +728,90 @@ class TestArchiveUpdateContract:
         assert result.rounds[0].unique_novel_environments == 0
         assert engine.structure_archive.size == 2
         assert engine.local_archive.atom_row_count == 0
+
+
+# ----------------------------------------------------------- candidate identity
+class TestCandidateIdentity:
+    """The candidate-id uniqueness invariant (2026-10-02 audit P0)."""
+
+    def test_proposal_id_collision_is_renamed_in_place(self):
+        engine = _engine(42)
+        first = _seed_pool(1)[0].child(
+            candidate_id="collide", positions=np.zeros((2, 3)), operator="atomic_displacement"
+        )
+        second = _seed_pool(1)[0].child(
+            candidate_id="collide", positions=np.ones((2, 3)), operator="atomic_displacement"
+        )
+        engine._register_proposal_ids([first])
+        engine._register_proposal_ids([second])
+        assert first.candidate_id == "collide"
+        assert second.candidate_id == "collide_x1"
+        # The rename must preserve object identity: GA/PSO keep their
+        # id()-keyed parent memory alive across the observe round trip.
+        assert engine._issued_candidate_ids >= {"collide", "collide_x1"}
+
+    def test_seed_pool_rejects_duplicate_ids(self):
+        pool = _seed_pool(2)
+        pool[1].candidate_id = pool[0].candidate_id
+        with pytest.raises(ValueError, match="duplicate candidate ids"):
+            _engine(42, pool=pool)
+
+    def test_live_collision_survives_evaluation_and_snapshot(self):
+        # Two children of one parent sharing the operator-minted id — the
+        # exact case the snapshot's candidate table used to silently mask.
+        class _CollisionOptimizer:
+            name = "random"
+            operators = []
+            batch_accept = 2
+
+            def initialize(self, context) -> None:
+                self._seed = context.seed_pool[0]
+
+            def propose(self, *, budget: int, rng: np.random.Generator) -> ProposalBatch:
+                base = self._seed
+                first = base.child(
+                    candidate_id="collide", positions=base.positions + 0.5, operator="atomic_displacement"
+                )
+                second = base.child(
+                    candidate_id="collide", positions=base.positions + 1.5, operator="atomic_displacement"
+                )
+                return ProposalBatch(candidates=[first, second])
+
+            def observe(self, batch) -> None:
+                pass
+
+            def snapshot_state(self, register_candidate) -> dict:
+                return {}
+
+        engine = _engine(
+            42,
+            budget=Budget(max_evaluations=10**6, max_accepted=10**6, max_generations=1),
+        )
+        engine.optimizer = _CollisionOptimizer()
+        result = engine.run()
+        assert [e.candidate_id for e in result.evaluations] == ["collide", "collide_x1"]
+        snapshot = engine.snapshot_state()
+        candidate_ids = [record["candidate_id"] for record in snapshot["candidates"]]
+        assert len(candidate_ids) == len(set(candidate_ids))
+        assert "collide_x1" in candidate_ids
+
+
+def test_evaluator_signature_captures_descriptor_identity():
+    # 2026-10-02 audit P1: the snapshot fingerprint recorded only the Python
+    # class name; signature() must carry the descriptor, its parameters and
+    # the installed wheel version instead.
+    from mdescriptor_studio_backend.generation.evaluator import DescriptorEvaluator
+
+    class _Adapter:
+        def build(self, name, parameters, *, device, num_threads):
+            return object()
+
+    evaluator = DescriptorEvaluator(_Adapter(), "ACE", {"n": 2}, device="cpu")
+    signature = evaluator.signature()
+    assert signature["descriptor_name"] == "ACE"
+    assert signature["descriptor_parameters"] == {"n": 2}
+    assert signature["device"] == "cpu"
+    assert signature["mdescriptor_version"]
+    # Parameters are captured by value: later caller-side mutation must not
+    # rewrite the identity of an already-built evaluator.
+    assert DescriptorEvaluator(_Adapter(), "ACE", {}, device="cpu").signature()["descriptor_parameters"] == {}

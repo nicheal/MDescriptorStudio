@@ -17,6 +17,7 @@ Two consumers need different granularities from the same compute result:
 
 from __future__ import annotations
 
+import importlib.metadata
 from dataclasses import dataclass
 
 import numpy as np
@@ -113,12 +114,38 @@ class DescriptorEvaluator:
         num_threads: int | None = None,
     ) -> None:
         self._adapter = adapter
+        self._descriptor_name = descriptor_name
+        self._descriptor_parameters = dict(descriptor_parameters)
+        self._device = device
         self._descriptor = adapter.build(
             descriptor_name,
             descriptor_parameters,
             device=device,
             num_threads=num_threads,
         )
+
+    def signature(self) -> dict:
+        """Run identity of the descriptor implementation (2026-10-02 audit P1).
+
+        The snapshot fingerprint used to record only the Python class name —
+        ``"DescriptorEvaluator"`` regardless of the descriptor, its
+        parameters, or the installed wheel — so a software upgrade between
+        the interruption and the resume could not invalidate a snapshot even
+        though new candidates would be scored by a different implementation.
+        The signature carries everything that can change the scores and must
+        therefore match for a resume to be accepted."""
+        try:
+            package_version = importlib.metadata.version("mdescriptor")
+        except importlib.metadata.PackageNotFoundError:
+            package_version = "unknown"
+        return {
+            "class": type(self).__name__,
+            "adapter": type(self._adapter).__name__,
+            "descriptor_name": self._descriptor_name,
+            "descriptor_parameters": self._descriptor_parameters,
+            "device": self._device,
+            "mdescriptor_version": package_version,
+        }
 
     def evaluate(self, candidates, *, return_atomic: bool = False, control=None) -> DescriptorEvaluation:
         if not candidates:

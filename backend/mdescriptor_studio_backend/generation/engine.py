@@ -224,6 +224,30 @@ def _screening_fingerprint(screening) -> dict | None:
     spec = getattr(screening, "spec", None)
     if spec is not None and is_dataclass(spec):
         payload["spec"] = asdict(spec)
+    identity = getattr(screening, "model_identity", None)
+    # Content identity of the loaded model (2026-10-02 audit P1): the spec's
+    # checkpoint PATH cannot tell an in-place file replacement apart.
+    if callable(identity):
+        payload["model_identity"] = identity()
+    return payload
+
+
+def _constraints_fingerprint(constraints) -> dict:
+    """Normalized geometry-constraints fingerprint (2026-10-02 audit P0).
+
+    The minimum-distance mode/value/factor, pair cutoffs, displacement and
+    volume bounds and the composition/atom-count locks decide which proposals
+    survive the geometry filter — resuming under different physics must be
+    rejected like any other run-definition change. The pair cutoff matrix is
+    a (max_Z+1)² ndarray, so it enters as shape + content hash."""
+    payload = asdict(constraints) if is_dataclass(constraints) else dict(constraints)
+    matrix = payload.get("pair_cutoff_matrix")
+    if matrix is not None:
+        matrix = np.ascontiguousarray(matrix, dtype=np.float64)
+        payload["pair_cutoff_matrix"] = {
+            "shape": list(matrix.shape),
+            "sha256": hashlib.sha256(matrix.tobytes()).hexdigest(),
+        }
     return payload
 
 
@@ -611,6 +635,19 @@ class GenerationEngine:
         # computed once and reused by every snapshot write / restore check.
         self._config_fingerprint_cache: str | None = None
         self.seed_pool = list(seed_pool)
+        # Candidate-identity invariant (2026-10-02 audit P0): proposal ids
+        # must be unique across the whole run — a collision silently collapses
+        # two distinct structures in the snapshot's candidate table and
+        # misdirects lineage, accepted_order and optimizer memory. Operators
+        # mint ids from parent ids plus operator-specific suffixes; the engine
+        # is the one place that sees every id ever issued, so it renames a
+        # colliding proposal in place (object identity preserved — GA/PSO
+        # keep their id()-keyed parent maps) before it reaches any state a
+        # snapshot persists.
+        seed_ids = [candidate.candidate_id for candidate in self.seed_pool]
+        if len(set(seed_ids)) != len(seed_ids):
+            raise ValueError("seed pool contains duplicate candidate ids")
+        self._issued_candidate_ids: set = set(seed_ids)
         self.evaluator = evaluator
         self.structure_archive = structure_archive
         self.local_archive = local_archive
@@ -641,6 +678,28 @@ class GenerationEngine:
 
     def _check_geometry(self, candidate: StructureCandidate) -> ConstraintResult:
         return self.constraints.validate(candidate)
+
+    def _register_proposal_ids(self, children: list[StructureCandidate]) -> list[StructureCandidate]:
+        """Enforce the candidate-id uniqueness invariant on a fresh batch.
+
+        A colliding proposal is renamed in place (``<id>_x<k>``, object
+        identity preserved) instead of dropped: dropping would silently
+        shrink the optimizer's batch and consume a different number of
+        descriptor evaluations than the operator intended. The rename keeps
+        the operator-minted lineage readable (the original id is a prefix)."""
+        issued = self._issued_candidate_ids
+        for candidate in children:
+            candidate_id = candidate.candidate_id
+            if candidate_id not in issued:
+                issued.add(candidate_id)
+                continue
+            suffix = 1
+            while f"{candidate_id}_x{suffix}" in issued:
+                suffix += 1
+            renamed = f"{candidate_id}_x{suffix}"
+            candidate.candidate_id = renamed
+            issued.add(renamed)
+        return children
 
     def _count_unique_novel_environments(
         self,
@@ -749,7 +808,7 @@ class GenerationEngine:
                 budget=max(1, int(self.budget.max_evaluations - total_evaluations)),
                 rng=self.rng,
             )
-            children = list(proposal.candidates)
+            children = self._register_proposal_ids(list(proposal.candidates))
 
             verdicts: list[ConstraintResult] = []
             if self.workers > 1 and len(children) > 1:
@@ -1149,12 +1208,14 @@ class GenerationEngine:
     def _config_fingerprint(self) -> str:
         """SHA-256 over the run-definition inputs a resume must reproduce:
         the frozen scaling and reference content of both archives, the
-        objective and operator configuration, the seed-pool geometry, the
-        targeting context and the screening stage. Budgets and stop
-        thresholds are deliberately excluded — extending them between the
-        interruption and the resume is the point of the feature; everything
-        in here changes the trajectory itself and must be rejected."""
+        objective and operator configuration, the geometry constraints, the
+        seed-pool geometry, the targeting context and the screening stage.
+        Budgets and stop thresholds are deliberately excluded — extending
+        them between the interruption and the resume is the point of the
+        feature; everything in here changes the trajectory itself and must
+        be rejected."""
         if self._config_fingerprint_cache is None:
+            evaluator_signature = getattr(self.evaluator, "signature", None)
             payload = {
                 "selection_strategy": self.selection_strategy,
                 "n_seeds": int(self.n_seeds),
@@ -1167,7 +1228,14 @@ class GenerationEngine:
                 ],
                 "seed_local_distances": [None if value is None else float(value) for value in self.seed_local_distances],
                 "objective": _objective_fingerprint(self.objective),
-                "evaluator": type(self.evaluator).__name__,
+                # Descriptor implementation identity (2026-10-02 audit P1) —
+                # the bare class name stayed constant across descriptor,
+                # parameter, and wheel changes. Stub evaluators without a
+                # signature (tests) degrade to the class name.
+                "evaluator": (
+                    evaluator_signature() if callable(evaluator_signature) else {"class": type(self.evaluator).__name__}
+                ),
+                "constraints": _constraints_fingerprint(self.constraints),
                 "energy_screening": _screening_fingerprint(self.energy_screening),
                 "operators": [
                     {
@@ -1211,6 +1279,13 @@ class GenerationEngine:
         def register_candidate(candidate) -> None:
             if candidate is not None and candidate.candidate_id not in registered:
                 registered[candidate.candidate_id] = candidate
+
+        accepted_ids = [candidate.candidate_id for candidate in result.accepted]
+        if len(set(accepted_ids)) != len(accepted_ids):
+            # Unreachable through run() (the proposal-id guard renames
+            # collisions before evaluation); a hard stop here keeps a future
+            # code path from persisting an ambiguous candidate table.
+            raise RuntimeError("duplicate candidate ids in the accepted set — candidate-identity invariant violated")
 
         evaluations = [
             {
@@ -1424,8 +1499,8 @@ class GenerationEngine:
         if state["config_fingerprint"] != self._config_fingerprint():
             raise ValueError(
                 "snapshot configuration fingerprint does not match this engine — the run definition "
-                "(archives/scaling, objective, operators, seed pool, targeting or screening) changed "
-                "since the snapshot was taken"
+                "(archives/scaling, objective, operators, geometry constraints, seed pool, targeting "
+                "or screening) changed since the snapshot was taken"
             )
 
         candidates_payload = payloads["candidates"]
@@ -1585,6 +1660,10 @@ class GenerationEngine:
             self.structure_archive.add(structure_rows, entries)
             if local_rows is not None:
                 self.local_archive.add(local_rows, entries)
+        # A post-resume proposal can re-mint an id the pre-crash run already
+        # issued (same parent, same deformation) — it must be renamed like
+        # any other collision, not silently merge with the persisted one.
+        self._issued_candidate_ids.update(candidates_by_id)
         self._resume = {
             "generation": state["generation"],
             "total_evaluations": state["total_evaluations"],

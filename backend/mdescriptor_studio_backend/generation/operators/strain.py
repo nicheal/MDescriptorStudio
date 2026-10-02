@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 
 import numpy as np
 
 from ..models import StructureCandidate
+
+
+def _deformation_tag(deformation: np.ndarray) -> str:
+    """Deterministic content digest of the deformation matrix.
+
+    The strain id used to be the parent id plus the quantized ``|det| - 1``
+    volume change alone, so two distinct deformations of one parent —
+    anisotropic scalings, shears, or compression vs expansion with the same
+    |ΔV| — could land in the same 1e-6 bucket and mint colliding candidate
+    ids (the GA/PSO parent memory only survives that by keying on object
+    identity; the snapshot's candidate table cannot). The digest separates
+    them deterministically and consumes no RNG, so search trajectories are
+    unchanged."""
+    matrix = np.ascontiguousarray(deformation, dtype=np.float64)
+    return hashlib.blake2b(matrix.tobytes(), digest_size=4).hexdigest()
 
 
 def strained(frame, scale: float):
@@ -43,7 +59,7 @@ def _affine_strain(candidate: StructureCandidate, deformation: np.ndarray, opera
     new_cell = cell @ deformation if periodic else cell
     volume_change = abs(float(np.linalg.det(deformation))) - 1.0
     return candidate.child(
-        candidate_id=f"{candidate.candidate_id}_s{int(volume_change * 1e6)}",
+        candidate_id=f"{candidate.candidate_id}_s{int(volume_change * 1e6)}_{_deformation_tag(deformation)}",
         positions=new_positions,
         cell=new_cell,
         operator=operator,

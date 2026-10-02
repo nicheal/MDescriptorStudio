@@ -110,6 +110,23 @@ class TestOperators:
         np.testing.assert_allclose(child.positions, frame.positions * scale, rtol=1e-9)
         np.testing.assert_allclose(child.cell, frame.cell * scale, rtol=1e-9)
 
+    def test_affine_strain_ids_distinguish_equal_volume_deformations(self):
+        # 2026-10-02 audit P0: the id used to be parent + quantized |ΔV| alone,
+        # so distinct deformations sharing one 1e-6 |det|-1 bucket (swapped
+        # anisotropic scalings here; shears, or compression vs expansion via
+        # abs(), likewise) minted colliding candidate ids.
+        from mdescriptor_studio_backend.generation.operators.strain import _affine_strain
+
+        parent = _candidate()
+        swap_a = _affine_strain(parent, np.diag([1.2, 1.0, 1.0 / 1.2]), "test", {})
+        swap_b = _affine_strain(parent, np.diag([1.0 / 1.2, 1.2, 1.0]), "test", {})
+        mirror = _affine_strain(parent, np.diag([-1.2, 1.0, 1.0 / 1.2]), "test", {})
+        assert swap_a.candidate_id != swap_b.candidate_id
+        assert swap_a.candidate_id != mirror.candidate_id
+        for child in (swap_a, swap_b, mirror):
+            assert child.candidate_id.startswith(parent.candidate_id + "_s")
+        assert swap_a.candidate_id == _affine_strain(parent, np.diag([1.2, 1.0, 1.0 / 1.2]), "test", {}).candidate_id
+
     def test_displaced_frame_function(self):
         frame = _frame()
         delta = np.ones_like(frame.positions) * 0.1

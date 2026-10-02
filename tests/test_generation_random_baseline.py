@@ -12,6 +12,12 @@ results and any "GA vs Random" comparison would be tainted.
 Note: the coverage objective and coverage metric changed semantics in G3.5
 (gen-3 → gen-4); these baselines use the novelty and composite objectives,
 which were untouched, so they pin the refactor itself, not the old bugs.
+
+Note (2026-10-02 audit P0): strain candidate ids gained a deterministic
+content-digest suffix (``_s<ΔV>_<8-hex>``) so distinct deformations sharing
+one quantized |ΔV| bucket can no longer collide. The fixture was re-stamped
+with a verified positions/fitness-identical diff — only the 9 strain ids
+changed; the pinned numerics are the pre-refactor values.
 """
 
 from __future__ import annotations

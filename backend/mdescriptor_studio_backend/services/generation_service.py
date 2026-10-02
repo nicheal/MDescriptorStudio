@@ -148,6 +148,22 @@ def _seed_local_distances(
     return tuple(distances)
 
 
+def _sha256_file(path: str) -> str:
+    """Content hash of an explicit screening checkpoint (2026-10-02 audit P1).
+
+    Called at submit time for the cache key; an unreadable checkpoint is a
+    client error that must fail the submit, not silently key a run the
+    worker cannot reproduce."""
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(block)
+    except OSError as exc:
+        raise AppError(INVALID_PARAMS, f"energy_screening checkpoint is not readable: {exc}") from exc
+    return digest.hexdigest()
+
+
 class GenerationService:
     def __init__(self, db, jobs, results, datasets, data_dir: Path, frame_service=None) -> None:
         self.db = db
@@ -217,13 +233,17 @@ class GenerationService:
         # bundled NEP/DPA4C models move between releases), so screening runs
         # fold the package version into the key — a cached run computed with
         # an older model is never replayed after an upgrade (2026-10-01
-        # audit). Known limitation: the *content* of an explicit checkpoint
-        # replaced in place at the same path is not captured.
+        # audit). An explicit checkpoint joins as its file CONTENT hash: the
+        # path alone cannot tell an in-place replacement apart (2026-10-02
+        # audit P1).
         if (request.constraints.get("energy_screening") or {}).get("enabled"):
             try:
                 payload["screening_mdescriptor_version"] = importlib.metadata.version("mdescriptor")
             except importlib.metadata.PackageNotFoundError:
                 payload["screening_mdescriptor_version"] = "unknown"
+            checkpoint = (request.constraints.get("energy_screening") or {}).get("checkpoint")
+            if checkpoint:
+                payload["screening_checkpoint_sha256"] = _sha256_file(checkpoint)
         blob = json.dumps(_json_safe(payload), sort_keys=True, ensure_ascii=False)
         return "gen:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
@@ -753,7 +773,15 @@ class GenerationService:
                     },
                     descriptor_signature=signature,
                     run=run,
-                    metadata_extra={"warnings": warnings},
+                    # Content identity of the screening predictor (2026-10-02
+                    # audit P1): the request echo carries only the checkpoint
+                    # PATH; metadata.json must carry what was actually loaded.
+                    metadata_extra={
+                        "warnings": warnings,
+                        "screening_model_identity": (
+                            energy_screening.model_identity() if energy_screening is not None else None
+                        ),
+                    },
                     evaluated_structures_path=evaluated_frames_path,
                     ctx=None,
                     json_safe=_json_safe,

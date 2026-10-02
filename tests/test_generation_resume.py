@@ -85,12 +85,34 @@ class _StubScreening:
         ]
 
 
+class _IdentifiedScreen(_StubScreening):
+    """Screening stub that also exposes its model content identity."""
+
+    def __init__(self, digest: str) -> None:
+        self._digest = digest
+
+    def model_identity(self) -> dict:
+        return {"model": "NEP", "checkpoint": None, "sha256": self._digest}
+
+
+class _SignedEvaluator(_StubEvaluator):
+    """Evaluator stub that also exposes its descriptor implementation identity."""
+
+    def __init__(self, version: str) -> None:
+        self._version = version
+
+    def signature(self) -> dict:
+        return {"class": "_SignedEvaluator", "mdescriptor_version": self._version}
+
+
 def _build(
     kind: str,
     seed: int,
     max_generations: int,
     duplicate_threshold: float | None = None,
     energy_screening=None,
+    constraints=None,
+    evaluator=None,
     **budget_kwargs,
 ) -> GenerationEngine:
     pool = _seed_pool(6)
@@ -136,12 +158,12 @@ def _build(
 
     return GenerationEngine(
         seed_pool=pool,
-        evaluator=_StubEvaluator(),
+        evaluator=evaluator or _StubEvaluator(),
         structure_archive=structure_archive,
         local_archive=local_archive,
         objective=CompositeObjective(structure_weight=0.0, local_weight=1.0, novelty_threshold=0.25),
         optimizer=optimizer,
-        constraints=build_constraints({"min_distance_mode": "none"}),
+        constraints=constraints if constraints is not None else build_constraints({"min_distance_mode": "none"}),
         budget=Budget(max_generations=max_generations, **budget_kwargs),
         rng=np.random.default_rng(seed),
         n_seeds=4,
@@ -494,6 +516,92 @@ def test_restore_rejects_a_foreign_optimizer_type(tmp_path: Path):
     _, snapshots = _run_with_snapshots("pso", seed=5, max_generations=2, tmp=tmp_path)
     with pytest.raises(ValueError, match="optimizer type"):
         _build("random", seed=5, max_generations=4).restore_state(snapshots[-1])
+
+
+def test_restore_rejects_a_changed_screening_model_identity(tmp_path: Path):
+    # 2026-10-02 audit P1: the fingerprint carried the ScreeningSpec (path +
+    # thresholds) but not the loaded model's content, so replacing the
+    # checkpoint file in place could not invalidate a snapshot.
+    _, snapshots = _run_with_snapshots(
+        "random", seed=5, max_generations=2, tmp=tmp_path, energy_screening=_IdentifiedScreen("digest-A")
+    )
+    with pytest.raises(ValueError, match="fingerprint"):
+        _build(
+            "random", seed=5, max_generations=4, energy_screening=_IdentifiedScreen("digest-B")
+        ).restore_state(snapshots[-1])
+    # Same content identity → same fingerprint → restore proceeds.
+    _build(
+        "random", seed=5, max_generations=4, energy_screening=_IdentifiedScreen("digest-A")
+    ).restore_state(snapshots[-1])
+
+
+def test_restore_rejects_a_changed_evaluator_signature(tmp_path: Path):
+    # 2026-10-02 audit P1: the fingerprint recorded only the evaluator's
+    # Python class name — 'DescriptorEvaluator' across descriptor, parameter,
+    # and wheel changes — so an upgraded implementation could resume.
+    _, snapshots = _run_with_snapshots(
+        "random", seed=5, max_generations=2, tmp=tmp_path, evaluator=_SignedEvaluator("0.3.5")
+    )
+    with pytest.raises(ValueError, match="fingerprint"):
+        _build(
+            "random", seed=5, max_generations=4, evaluator=_SignedEvaluator("9.9.9")
+        ).restore_state(snapshots[-1])
+    _build(
+        "random", seed=5, max_generations=4, evaluator=_SignedEvaluator("0.3.5")
+    ).restore_state(snapshots[-1])
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    ["min_distance", "pair_cutoff", "composition_lock", "volume_bounds", "displacement_bound"],
+)
+def test_restore_rejects_changed_geometry_constraints(tmp_path: Path, mutate: str):
+    # 2026-10-02 audit P0: _config_fingerprint omitted the geometry
+    # constraints entirely, so snapshot(min-distance=A) → engine(min-distance=B)
+    # restored cleanly and kept generating under different physics. Every
+    # constraint knob that steers the geometry filter must invalidate.
+    _, snapshots = _run_with_snapshots("random", seed=5, max_generations=2, tmp=tmp_path)
+
+    constraints: dict = {"min_distance_mode": "none"}
+    if mutate == "min_distance":
+        constraints.update(min_distance_mode="absolute", min_distance=1.5)
+    elif mutate == "pair_cutoff":
+        constraints["min_distance_pairs"] = {"Si-Si": 1.9}
+    elif mutate == "composition_lock":
+        constraints["composition_locked"] = False
+    elif mutate == "volume_bounds":
+        constraints.update(min_volume_per_atom=5.0, max_volume_per_atom=40.0)
+    elif mutate == "displacement_bound":
+        constraints["max_displacement"] = 0.4
+
+    with pytest.raises(ValueError, match="fingerprint"):
+        _build(
+            "random",
+            seed=5,
+            max_generations=4,
+            constraints=build_constraints(constraints),
+        ).restore_state(snapshots[-1])
+
+
+def test_restore_rearms_the_issued_candidate_id_set(tmp_path: Path):
+    # 2026-10-02 audit P0: a post-resume proposal that re-mints an id the
+    # pre-crash run already issued (same parent, same deformation) must be
+    # renamed like any other collision, not silently merge with the
+    # persisted candidate of the same name.
+    _, snapshots = _run_with_snapshots("random", seed=5, max_generations=2, tmp=tmp_path)
+    persisted_ids = {record["candidate_id"] for record in _read_snapshot(snapshots[-1])[1]["candidates"]}
+    assert persisted_ids
+
+    restored = _build("random", seed=5, max_generations=4)
+    restored.restore_state(snapshots[-1])
+    assert restored._issued_candidate_ids >= persisted_ids
+
+    strayed = restored.seed_pool[0].child(
+        candidate_id=sorted(persisted_ids)[0], positions=np.ones((2, 3)), operator="atomic_displacement"
+    )
+    restored._register_proposal_ids([strayed])
+    assert strayed.candidate_id != sorted(persisted_ids)[0]
+    assert strayed.candidate_id.startswith(sorted(persisted_ids)[0] + "_x")
 
 
 def test_restore_rejects_an_incompatible_configuration(tmp_path: Path):

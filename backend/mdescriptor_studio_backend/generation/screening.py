@@ -19,6 +19,7 @@ capability problems are caught at submit time instead).
 
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass
 from typing import Literal
 
@@ -32,12 +33,15 @@ _SCREENING_MODELS = ("NEP", "DPA4C")
 def mdescriptor_predictors_available() -> bool:
     """True when the installed mdescriptor ships working energy/force predictors.
 
-    Deliberately deeper than a module-existence probe (2026-10-01 audit P2):
-    the predictors package must export both predictor classes and the native
-    extension must carry the DPA4C backend, so a broken or partial wheel is
-    rejected at submit time instead of failing inside the worker. This still
-    does not load or checksum a model — bundled-model integrity and explicit
+    Two gates (2026-10-01/02 audits): an explicit find_spec preflight keeps
+    the old-wheel rejection working deterministically, and the deeper checks
+    behind it — the predictors package must export both predictor classes and
+    the native extension must carry the DPA4C backend — reject a broken or
+    partial wheel at submit time instead of failing inside the worker. Neither
+    gate loads or checksums a model — bundled-model integrity and explicit
     checkpoint loadability surface at EnergyForceScreen construction."""
+    if importlib.util.find_spec("mdescriptor.predictors") is None:
+        return False
     try:
         from mdescriptor.predictors import DPA4C, NEP  # noqa: F401
 
@@ -126,6 +130,7 @@ class EnergyForceScreen:
     def __init__(self, spec: ScreeningSpec) -> None:
         spec.validate()
         self.spec = spec
+        self._model_identity: dict | None = None
         if not mdescriptor_predictors_available():
             raise ValueError(
                 "energy_screening requires mdescriptor >= 0.3.5 (the installed wheel lacks the predictors package)"
@@ -140,6 +145,31 @@ class EnergyForceScreen:
             self._predictor = NEP(model=spec.checkpoint, execution=execution)
         else:
             self._predictor = DPA4C(model=spec.checkpoint, execution=execution)
+
+    def model_identity(self) -> dict:
+        """Content identity of the loaded predictor resource (2026-10-02 audit P1).
+
+        The configured checkpoint PATH cannot tell an in-place file
+        replacement apart, so cache keys, snapshot fingerprints and artifact
+        metadata carry the resolved resource's own checksum (verified at load
+        time) plus the installed wheel version instead. Cached once: the
+        resolved-model digest is computed on first access."""
+        if self._model_identity is None:
+            try:
+                package_version = importlib.metadata.version("mdescriptor")
+            except importlib.metadata.PackageNotFoundError:
+                package_version = "unknown"
+            resolved = getattr(self._predictor, "resolved_model", None)
+            path = getattr(resolved, "path", None)
+            self._model_identity = {
+                "model": self.spec.model,
+                "checkpoint": self.spec.checkpoint,
+                "resolved_source": getattr(resolved, "source", None),
+                "resolved_path": None if path is None else str(path),
+                "sha256": getattr(resolved, "digest", None),
+                "mdescriptor_version": package_version,
+            }
+        return self._model_identity
 
     @staticmethod
     def _batch(candidates: list[StructureCandidate]):
