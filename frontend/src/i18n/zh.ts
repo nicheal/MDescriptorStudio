@@ -1025,6 +1025,7 @@ export const zhDict: Record<string, string> = {
   "bundled default model": "内置默认模型",
   "explicit checkpoint": "显式 checkpoint",
   "Archived (post-screening)": "归档（筛选后）",
+  "{count} anchor(s)": "{count} 个锚点",
   "SOURCE": "来源",
   "No completed descriptor runs for this dataset": "该数据集没有已完成的描述符运行",
   "Select a source dataset": "请选择源数据集",

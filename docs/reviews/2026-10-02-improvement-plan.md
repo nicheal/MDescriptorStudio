@@ -69,7 +69,7 @@
   - **global.css 死类审计完成(计划遗留事项闭环)**:20 个未被源码引用的选择器全部是 Ant Design / Plotly 库内部类覆盖(`ant-*`、`js-plotly-plot` 等),属有意样式,未删除;早前记录的"死类"(`.generation-config-grid/.generation-config-root`)已被组件实际使用;
   - 验证:后端 747 通过(5 个已知环境失败)、前端 tsc/eslint/252 单测、E2E 58/58。
 - **E — 契约澄清 + gen-5 科学指标(P2;须等在跑 sweep 结束)**
-  - 锚点语义落地(决策 2 的两处小改);
+  - ~~锚点语义落地~~ **✅ 提前完成(2026-10-02)**:种子范围汇总行显示"视图 + N 个锚点"(`{count} anchor(s)` 插值键,zh 翻译齐备);锚点清单本就随 params_json 持久化并在请求回显中可见——决策 2 的两处小改全部落地,且为纯 UI 汇总、非行为变更,不受 sweep 门控;**剩余 E 严格只剩 gen-5 版本提升相关项(E2 版本提升与指标、E3 GA/PSO 局部目标、E4 SSW 矩阵注记已随 091645c 完成)**;
   - `GENERATION_ALGORITHM_VERSION` 升 gen-5:新增排列不变 `strict_unique_v2` 计数(与 gen-4 口径并存,不动已发布 R4 数值)、`screening_bottleneck` 终止原因(读 archived 发现率,与 descriptor 饱和区分)、archived 发现率次级指标;
   - 把原子空间目标距离暴露到 `OptimizationContext`,补齐 GA/PSO 局部目标搜索(G5 收尾;SSW 按决策 3 移出);
   - 同步更新验证矩阵版本字段与口径注解。

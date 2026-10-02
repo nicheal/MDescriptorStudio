@@ -159,9 +159,14 @@ export default function GenerationConfigPanel({
   });
   const fullDatasetScope = "__full_dataset__";
   const selectedSeedView = views.find((view) => view.id === config.source.seedViewId);
+  // Augmented anchor semantics (user decision 2026-10-02): anchors can sit
+  // outside the selected seed view and join the pool — the scope line must
+  // say so, not just echo the view.
+  const anchorCount = config.searchTarget.anchorFrames.length;
+  const anchorScopeSuffix = anchorCount > 0 ? ` + ${t("{count} anchor(s)", { count: anchorCount })}` : "";
   const seedScopeSummary = config.source.seedViewId
-    ? `${selectedSeedView?.name ?? t("Selected view")} · ${selectedSeedView?.number_of_frames ?? "—"}`
-    : `${t("Full dataset")} · ${datasetFrameCount ?? "—"}`;
+    ? `${selectedSeedView?.name ?? t("Selected view")} · ${selectedSeedView?.number_of_frames ?? "—"}${anchorScopeSuffix}`
+    : `${t("Full dataset")} · ${datasetFrameCount ?? "—"}${anchorScopeSuffix}`;
   const anchorParse = parseAnchorFrames(anchorInput, datasetFrameCount ?? undefined);
   const runEstimate = estimateRunResources(config);
   const { message } = AntApp.useApp();
