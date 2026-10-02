@@ -52,18 +52,22 @@
 
 > 顺序约束:两个在跑 sweep(PdCuNiP `20261002T005922Z`,约 2–3 天;碳 fps 重基线 `20261002T010733Z`,约 1.5–2 天)期间,只允许"非行为变更"(不动 gen-4、不消耗 RNG、只影响引擎快照/缓存键)的修改——A/B 即属此类,benchmark resume 只校验 algorithm_version 字符串,不受影响。**E 的版本提升必须等两个 sweep 结束并归档后才能开始**;C/D 无此约束,可先行。
 
-- **C — 产品化 R5.5 resume(P1,最大单项)**
-  - 快照持久化:`on_round` 在 preview 更新后把引擎快照写入 `data_dir/generation/<id>/snapshot/`(限频),脱离 `TemporaryDirectory` 生命周期;
-  - DB migration:`generation_runs` 增 `snapshot_version`/`snapshot_path`/`resumable`/`last_snapshot_generation`;
-  - 状态语义:新增 `INTERRUPTED`;后端重启僵尸清扫把 RUNNING 改标 INTERRUPTED(可恢复)而非 CANCELLED;用户取消仍为 CANCELLED(不承诺恢复语义);
-  - 新 RPC `generation.resume`:按运行参数重建描述符/档案/算子/screening 上下文(依赖 B 的身份契约校验 checkpoint/描述符未变)→ `restore_state()` → 续跑;产物连续性:从快照重放 accepted 候选,重新生成完整 `accepted.extxyz`/`candidates.jsonl`;
-  - 前端:运行页对 INTERRUPTED 运行提供 Resume 操作与状态徽章;
-  - 验收:固定种子跑 2 轮 → 进程终止/重启 → resume → 与不间断运行逐项一致(字节级)。
-- **D — screening UI 语义补全(P1)**
-  - `otherCandidateCount()` 计入 `rejected_screening`,"Other candidates not selected" 拆出"能量/力筛选拒绝";
-  - 轮次图表并列 `unique_novel_environments` 与 `archived_unique_novel_environments`(切换或双线);
-  - 后端 RoundRecord 增轮级 pass/fail/unscreenable 计数(非行为变更)并贯通 preview;突出 train-ready 计数;unscreenable 不得与 pass 同权呈现;
-  - 运行详情展示 screening 模型身份(B 的产物)与阈值。
+- **C — 产品化 R5.5 resume(P1,最大单项)— ✅ 已完成(2026-10-02,同日批次)**
+  - 引擎快照 **v3**:evaluated 候选记录(描述符空间地图数据)作为第三个带哈希数据文件入快照——resumed 运行重发布的地图与 `generation.pca` 计数完整;v2 快照加载即拒(无生产快照,兼容负担为零);
+  - 快照持久化:worker `on_round` 在 preview 更新后把引擎快照写入 `data_dir/generation_snapshots/<id>/`(事务性写 + 成功后才推进 DB 行——写失败保留上一个一致边界,不致中断健康运行);运行结束(COMPLETED/CANCELLED)清理快照并置 `resumable=0`;
+  - DB migration 15:`generation_runs` 增 `snapshot_version`/`snapshot_path`/`resumable`/`last_snapshot_generation`;`_LIST_COLUMNS` 同步;
+  - 状态语义:新增 `INTERRUPTED`;后端重启/关闭的僵尸清扫把"RUNNING 且有快照"的运行改标 INTERRUPTED(`resumable=1`),无快照 RUNNING 与 QUEUED 仍 CANCELLED;`_settle_linked_runs` 对 FAILED/CANCELLED 运行显式清 `resumable`;
+  - 新 RPC `generation.resume`:状态守卫(仅 INTERRUPTED+resumable,WHERE 守卫防并发重复恢复)、快照版本校验(≠当前 SNAPSHOT_VERSION 拒绝)、`params_json` 补回 dataset/descriptor id 后重解析为类型化请求、新鲜度/种子视图门复用;worker 复用 `_run_generation(resume_snapshot=...)`:`restore_state()` 事务校验全部快照(指纹含 B 的身份契约——dataset 重导入/描述符重指/checkpoint 换字节/约束改动都拒绝),preview 累计器从快照轮次历史播种;
+  - 产物连续性:accepted.extxyz/candidates.jsonl/npy 数组经恢复的 accepted+evaluations 完整重发布;evaluated 几何 spool 只覆盖恢复后部分 → manifest 记录 `evaluated_structures.offset`,`generation.structure` 对偏移前的 accepted 点经 accepted.extxyz 兜底解析(其余前段点报"几何未持久化",不猜);
+  - 前端:INTERRUPTED 徽章(purple)+ Resume 按钮 + 中断说明 Alert;轮询对 INTERRUPTED 停止;mock 后端补 `generation.resume`;zh 翻译;
+  - 验收:`tests/test_generation_ipc.py::test_generation_resume_after_interruption`——固定种子跑→等首个轮次快照→**硬杀后端进程**→同数据目录重启→INTERRUPTED+resumable→resume 完成 6 轮→与独立数据目录中的不间断参照运行**轮次记录逐字节一致**(rounds JSON/accepted/evaluations),地图完整、offset 兜底可用;另有僵尸清扫语义测试、resume RPC 五项守卫测试、快照 v3 roundtrip 全绿。
+- **D — screening UI 语义补全(P1)— ✅ 已完成(2026-10-02,提交 `0405ef6`)**
+  - 引擎 RoundRecord 增筛选三态分解:`screening_passed` / `screening_unscreenable`(fail = `rejected_screening`)与 `screening_train_ready`(= 配置了至少一个能量/力上限的 pass——writer 的 train_set_ready 语义在源头唯一定义);字段默认 0、restore 宽松,旧 v3 快照可继续加载;
+  - 终态 preview 携带 `screening_model_identity`(解析来源 + sha256 + 包版本)——结果页展示"加载了什么",而非仅配置路径;
+  - 前端:"Other candidates not selected" 不再吸收筛掉的候选——能量/力拒绝单独成行,与通过/无法筛选/可训练计数并列;筛选激活时"可训练"进主指标行;收敛图在归档(筛选后)发现曲线与发现曲线出现分歧时叠加第二序列(虚线);详情面板显示阈值与模型身份;
+  - i18n 完整性测试拦截了缺失的 `force` 翻译——补齐;
+  - **global.css 死类审计完成(计划遗留事项闭环)**:20 个未被源码引用的选择器全部是 Ant Design / Plotly 库内部类覆盖(`ant-*`、`js-plotly-plot` 等),属有意样式,未删除;早前记录的"死类"(`.generation-config-grid/.generation-config-root`)已被组件实际使用;
+  - 验证:后端 747 通过(5 个已知环境失败)、前端 tsc/eslint/252 单测、E2E 58/58。
 - **E — 契约澄清 + gen-5 科学指标(P2;须等在跑 sweep 结束)**
   - 锚点语义落地(决策 2 的两处小改);
   - `GENERATION_ALGORITHM_VERSION` 升 gen-5:新增排列不变 `strict_unique_v2` 计数(与 gen-4 口径并存,不动已发布 R4 数值)、`screening_bottleneck` 终止原因(读 archived 发现率,与 descriptor 饱和区分)、archived 发现率次级指标;
@@ -76,4 +80,15 @@
 
 - 本机 5 个既有环境失败随 mdescriptor 0.3.5 升级一并消除(升级本身是挂起事项,须等 sweep 结束、env 隔离进行);
 - `tests/data/LiICOF.xyz`(13.3MB)/`tests/data/PdCuNiP.xyz`(64.3MB)保持不入库(2026-10-01 审查结论);
-- `frontend/src/global.css` 的死类清理(早前挂起事项)仍未做,与 C/D 前端改动一并处理即可。
+- ~~`frontend/src/global.css` 的死类清理~~ **已闭环(2026-10-02)**:审计结论为无可删项——全部未引用选择器均为库内部类覆盖,见 §4 D 记录。
+
+## 6. 完成状态(2026-10-02 晚)
+
+| 里程碑 | 状态 | 证据 |
+|---|---|---|
+| A — CI 转绿 + 数据完整性 | ✅ | `f526a61`,CI run 37007251566 success |
+| B — 模型/描述符身份 | ✅ | 同上(与 A 同提交) |
+| C — 产品化 resume | ✅ | `57cb04a`,CI run 37015303356 success;杀进程→重启→resume 字节级一致验收 |
+| D — screening UI 语义 | ✅ | `0405ef6`(CI 待确认);后端 747/前端 252/E2E 58 |
+| E — gen-5 指标 | ⏸ 按 §4 顺序约束等待 | PdCuNiP sweep repeat 7/20、fps 重基线 16/20 仍在跑(2026-10-02 晚核实) |
+| F — 冻结后再基准 | ⏸ 依赖 E | 同上;预计 sweep 完成后 2026-10-04 前后解锁 |
