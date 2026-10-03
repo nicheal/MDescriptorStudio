@@ -108,3 +108,11 @@
 > 推荐默认（最终版）：全局发现 = random+local（稳健 147.45±10.26）或 random-reuse+local（上限 258.90，重尾）；
 > 已接受区域加密 = random-reuse+fps；定向补采样 = random+search target（不变）。fps 为快路径（wall ≈0.55×，
 > 其下最优发现组 pso-target）。PdCuNiP sweep（20261002T005922Z，进行中）完成后仅做同口径组内迁移验证。
+> **更新（2026-10-03 晚，PdCuNiP sweep 完成分析，记录 `docs/reviews/2026-10-03-pdcunip-sweep-analysis.md`）**：
+> R4 default-switch gate 的答案：**优化器排名不随材料迁移**（同 fps+scaled 口径，组内配对）——carbon 上
+> 毒药的 random-reuse 在 PdCuNiP 上是最优发现组（+27.75，18/20），carbon 上接近垫底的 genetic 在
+> PdCuNiP 上第二（+11.56，17/20）且覆盖半径大幅最优（240 vs 407，20/20）；定向机制（TR/genetic-target
+> proximity 33/37 vs random 55）迁移但发现代价扩大（−30，0/20）；pso-target 两材料均定向失败。
+> 跨材料数值比较不可做（random unique/100 两材料相差近一倍）。**无普适优化器默认值——新材料入库即跑
+> 同设计预注册 sweep**；random 仍是最稳基线（两材料方差均最小）。两条 sweep 均已收口，E2–E4（gen-5）
+> 门控解除。
