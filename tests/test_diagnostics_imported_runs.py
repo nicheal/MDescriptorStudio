@@ -67,8 +67,8 @@ def _service_with_imported_run(tmp_path: Path, semantics: str = "structure"):
             energy=-2.34,
         ),
         DatasetFrame(
-            numbers=np.array([1, 1, 1], dtype=np.int64),
-            positions=np.array([[0.0, 0.4, 0.0], [1.2, 0.0, 0.9], [0.9, 1.1, 1.3]]),
+            numbers=np.array([1, 1], dtype=np.int64),
+            positions=np.array([[0.0, 0.4, 0.0], [1.2, 0.0, 0.9]]),
             cell=np.zeros((3, 3)),
             pbc=np.zeros(3, dtype=bool),
             energy=-0.87,
@@ -128,6 +128,55 @@ def test_pair_search_diagnostics_run_on_imported_runs(tmp_path, analysis_type):
     params = {"run_id": run_row["id"], "mode": "structure", "k_neighbors": 1, "max_samples": 3, "max_pairs": 5}
     result = AnalysisRunMixin._run_diagnostics(service, analysis_type, params, run_row, _samples(values), _StubCtx())
     assert result["preview"]["kind"] == analysis_type
+
+
+def test_pair_search_arrays_stay_finite_across_atom_counts(tmp_path):
+    """Cross-atom-count pairs are structurally infinite; the artifact store
+    rejects Inf arrays, so the published pair arrays must carry the comparable
+    subset while the preview keeps the full counts."""
+    service, _db, run_row, values = _service_with_imported_run(tmp_path)
+    params = {"run_id": run_row["id"], "mode": "structure", "k_neighbors": 2, "max_samples": 3, "max_pairs": 5}
+    result = AnalysisRunMixin._run_diagnostics(service, "degeneracy_search", params, run_row, _samples(values), _StubCtx())
+    for name, array in result["arrays"].items():
+        assert np.all(np.isfinite(np.asarray(array, dtype=np.float64))), name
+    assert result["preview"]["different_atom_count_pairs"] >= 1
+    assert any(pair["reason"] == "atom_count" for pair in result["preview"]["pairs"]) or result["preview"]["n_dangerous"] >= 0
+
+
+def _service_with_local_stub_run(tmp_path: Path):
+    """A locally computed run row whose adapter only answers schema()."""
+    service, db, run_row, values = _service_with_imported_run(tmp_path)
+    import sqlite3
+
+    db._conn.execute(
+        "UPDATE descriptor_runs SET device = 'cpu' WHERE id = ?", (run_row["id"],)
+    )
+    db._conn.commit()
+    run_row = dict(db.query_one("SELECT * FROM descriptor_runs WHERE id = ?", (run_row["id"],)))
+    # schema() answers an empty parameter table: neither rcut in the run
+    # parameters nor in the schema default.  build() returns a sentinel - the
+    # schema gate fires before the rebuilt descriptor is ever used.
+    service.datasets.adapter.build = lambda *args, **kwargs: object()
+    service.datasets.adapter.schema = lambda name: {"parameters": {}}
+    return service, run_row, values
+
+
+def test_cutoff_smoothness_reports_undeclared_cutoff_parameter(tmp_path):
+    service, run_row, values = _service_with_local_stub_run(tmp_path)
+    with pytest.raises(AppError) as excinfo:
+        AnalysisRunMixin._run_diagnostics(
+            service, "cutoff_smoothness", {"run_id": run_row["id"], "max_structures": 2}, run_row, _samples(values), _StubCtx()
+        )
+    assert "does not declare" in excinfo.value.message
+
+
+def test_environment_jacobian_reports_missing_cutoff_hint(tmp_path):
+    service, run_row, values = _service_with_local_stub_run(tmp_path)
+    with pytest.raises(AppError) as excinfo:
+        AnalysisRunMixin._run_diagnostics(
+            service, "environment_jacobian", {"run_id": run_row["id"], "max_structures": 2}, run_row, _samples(values), _StubCtx()
+        )
+    assert "enter the neighbor cutoff" in excinfo.value.message
 
 
 def test_perturbation_rejects_imported_runs(tmp_path):

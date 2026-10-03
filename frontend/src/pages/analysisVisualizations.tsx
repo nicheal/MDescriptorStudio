@@ -818,7 +818,7 @@ function DistanceConsistencyView({ preview, arrays }: { preview: AnalysisPreview
   const finitePairs = dDescriptor
     .map((distance, index) => ({ distance, structural: dStructural[index], energy: energyDeltas[index] }))
     .filter((pair) => Number.isFinite(pair.structural));
-  const energyColored = energyDeltas.length === dDescriptor.length && finitePairs.every((pair) => Number.isFinite(pair.energy));
+  const energyColored = Boolean(preview.energy) && energyDeltas.length === dDescriptor.length && finitePairs.every((pair) => Number.isFinite(pair.energy));
   const binned = records(preview.binned).filter((row) => row.structural_mean != null);
   const collapse = records(preview.collapse ? [preview.collapse] : [])[0] ?? {};
   const dangerousPairs = records(preview.dangerous_pairs);

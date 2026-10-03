@@ -66,7 +66,14 @@ Analysis 页新增 **"描述符诊断"导航组**,五个模块端到端可用(�
 - `submit_generic`:Run 点击即拒绝(imported run × 重算诊断/扰动响应),job 行不再产生;
 - 回归:`tests/test_diagnostics_imported_runs.py` 7 项(imported run 构造经 ResultTransferService,断言 pair-search 可跑、重算诊断/扰动拒绝、提交期拒绝且零 job 行);并在用户真实 DPA4C imported run 上回放验证——degeneracy_search/distance_consistency 正常出结果,三个重算诊断给出明确错误。
 
-## 6. 边界与后续(未决事项,按审查排序)
+## 6. 第二轮实测修复(同日第四批):cutoff 解析与工件有限性
+
+用户在本地计算的碳 NEP run(`run_57a8b8c40286`,运行参数为空)上继续实测,又暴露两类问题:
+
+1. **cutoff_smoothness / environment_jacobian 报 ANALYSIS_INPUT_INVALID**:NEP 的 schema 参数只有 `model`,**不存在可调的 rcut**(截断烧在模型文件里),而解析顺序是 显式值 > 运行参数,用户留空即报错。修复:解析顺序改为 显式值 > 运行参数 > **schema 默认**(运行省略参数时它算的就是默认值);若 descriptor 根本不声明该参数(NEP),cutoff_smoothness 明确报"its cutoff is fixed by the model and the cutoff scan can only rebuild descriptors with a tunable cutoff"(该诊断对模型内嵌截断不适用),jacobian 报"enter the neighbor cutoff in angstrom"(分析球由用户给定,应与描述符自身截断一致)。
+2. **degeneracy_search / distance_consistency 报 ARTIFACT_INVALID**:碳数据集各帧原子数不同,跨原子数配对的结构距离为 inf,而工件存储拒绝含 NaN/Inf 的数组(白名单只有 sensitivity 的 memory_peak_bytes)。修复:**发布数组只携带全有限的可比配对子集**(degeneracy 按 isfinite(structural) ∧ isfinite(ΔE) 过滤;consistency 按 finite ∧ isfinite(ΔE)),preview 表与计数保留完整图景(含 atom_count 理由);能量缺失时 ΔE 数组以零占位(能量信号缺失在 preview 中声明,视图不着色)。回归:`test_pair_search_arrays_stay_finite_across_atom_counts` + schema 门控两项 + IPC catalog 改走 schema 默认路径;并在真实 NEP run 回放(数组全有限、错误文案可操作)。
+
+## 7. 边界与后续(未决事项,按审查排序)
 
 - **effective_dimension 命名/TwoNN**(审查 P1 §3):未动。改名涉及 API/前端/i18n 联动,与 Statistical Diagnostics V2(TwoNN、information imbalance、neighborhood preservation)一并做。
 - **等变描述符**:V1 只校验不变族;D_l(Rx) ≈ W_l(R) D_l(x) 的等变校验待接入等变描述符时加(检查项已在 checks 枚举之外独立可扩展)。

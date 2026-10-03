@@ -151,7 +151,7 @@ def distance_consistency(
             "sample_b": ids[int(cols[index])],
             "descriptor_distance": float(d_descriptor[index]),
             "structural_distance": float(d_structural[index]),
-            "delta_energy": None if energy_rows is None else float(energy_rows[index]),
+            "delta_energy": None if energy_rows is None or not np.isfinite(energy_rows[index]) else float(energy_rows[index]),
         }
         for index in danger_order
     ]
@@ -160,11 +160,22 @@ def distance_consistency(
     n_infinite = int(np.count_nonzero(~finite))
     if n_infinite:
         warnings.append(f"{n_infinite} pair(s) excluded from correlations: different atom counts")
+    # The artifact store rejects NaN/Inf arrays; the scatter consumes the
+    # comparable pairs, the correlations were computed on exactly that set,
+    # and the counts stay in the preview.
+    publish = finite
+    if energy_rows is not None:
+        publish = finite & np.isfinite(energy_rows)
+        published_energy = energy_rows[publish]
+    else:
+        # Zero placeholder keeps the array finite; the preview states the
+        # energy stats are absent and the view does not color by it.
+        published_energy = np.zeros(int(np.count_nonzero(publish)))
     return {
         "arrays": {
-            "d_descriptor": d_descriptor,
-            "d_structural": d_structural,
-            "delta_energy": energy_rows if energy_rows is not None else np.full(d_descriptor.shape, np.nan),
+            "d_descriptor": d_descriptor[publish],
+            "d_structural": d_structural[publish],
+            "delta_energy": published_energy,
         },
         "preview": {
             "kind": "distance_consistency",

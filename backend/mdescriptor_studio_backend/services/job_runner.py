@@ -672,18 +672,31 @@ class AnalysisRunMixin:
 
         if analysis_type == "cutoff_smoothness":
             cutoff_parameter = str(params.get("cutoff_parameter") or "rcut")
+            schema = engine.schema(descriptor_name)
+            declared = schema.get("parameters", {}).get(cutoff_parameter)
+            if not isinstance(declared, dict):
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    f"descriptor {descriptor_name} does not declare a {cutoff_parameter!r} parameter; "
+                    "its cutoff is fixed by the model and the cutoff scan can only rebuild descriptors with a tunable cutoff",
+                )
             raw_base = params.get("cutoff_value")
             if raw_base is not None:
                 try:
                     base_cutoff = float(raw_base)
                 except (TypeError, ValueError) as exc:
                     raise AppError(ANALYSIS_INPUT_INVALID, "cutoff_value must be a number") from exc
-            elif cutoff_parameter in descriptor_parameters and isinstance(descriptor_parameters[cutoff_parameter], (int, float)):
+            elif isinstance(descriptor_parameters.get(cutoff_parameter), (int, float)):
                 base_cutoff = float(descriptor_parameters[cutoff_parameter])
+            elif isinstance(declared.get("default"), (int, float)):
+                # The run omitted the parameter, so it was computed on the
+                # schema default - that value is the base the stored matrix
+                # corresponds to.
+                base_cutoff = float(declared["default"])
             else:
                 raise AppError(
                     ANALYSIS_INPUT_INVALID,
-                    f"cutoff parameter {cutoff_parameter!r} is not a number in the descriptor run parameters; pass cutoff_value explicitly",
+                    f"cutoff parameter {cutoff_parameter!r} has no value in the run parameters or schema default; pass cutoff_value explicitly",
                 )
 
             def recompute_at(offset: float) -> DescriptorRecompute:
@@ -708,8 +721,18 @@ class AnalysisRunMixin:
         if analysis_type == "environment_jacobian":
             if params.get("cutoff") is None:
                 cutoff_parameter = str(params.get("cutoff_parameter") or "rcut")
-                if cutoff_parameter in descriptor_parameters and isinstance(descriptor_parameters[cutoff_parameter], (int, float)):
+                schema = engine.schema(descriptor_name)
+                declared = schema.get("parameters", {}).get(cutoff_parameter)
+                if isinstance(descriptor_parameters.get(cutoff_parameter), (int, float)):
                     params = {**params, "cutoff": float(descriptor_parameters[cutoff_parameter])}
+                elif isinstance(declared, dict) and isinstance(declared.get("default"), (int, float)):
+                    params = {**params, "cutoff": float(declared["default"])}
+                else:
+                    raise AppError(
+                        ANALYSIS_INPUT_INVALID,
+                        f"the run parameters do not declare {cutoff_parameter!r}; enter the neighbor cutoff in angstrom "
+                        "(it should match the cutoff the descriptor itself uses, or the rank readout will mix a cutoff mismatch into the deficiency)",
+                    )
             return environment_jacobian(frames, lambda batch: recompute_with(descriptor, batch), params, report)
 
         # Pair-search diagnostics: raw values plus a lazy structural distance.

@@ -237,7 +237,10 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
         # the jacobian reads the neighbor sphere from the explicit request
         # cutoff (the run parameters here never spell it out).
         formal_id = run("analysis.formal_invariance", {"run_id": run_id, "granularity": "structure", "tolerance": 1e-6, "max_structures": 2})
-        cutoff_id = run("analysis.cutoff_smoothness", {"run_id": run_id, "cutoff_parameter": "rcut", "cutoff_value": 5.0, "max_delta": 0.2, "n_steps": 5, "max_structures": 2})
+        # No cutoff_value: the ACE run parameters omit rcut, so the base comes
+        # from the schema default (5.0) - the same resolution a UI run uses
+        # when the operator leaves the base cutoff empty.
+        cutoff_id = run("analysis.cutoff_smoothness", {"run_id": run_id, "cutoff_parameter": "rcut", "max_delta": 0.2, "n_steps": 5, "max_structures": 2})
         jacobian_id = run("analysis.environment_jacobian", {"run_id": run_id, "cutoff": 5.0, "displacement": 0.005, "max_atoms": 16, "max_structures": 1})
         degeneracy_id = run("analysis.degeneracy_search", {"run_id": run_id, "mode": "structure", "k_neighbors": 2, "max_samples": 8, "max_pairs": 10})
         consistency_id = run("analysis.distance_consistency", {"run_id": run_id, "mode": "structure", "max_samples": 6, "n_bins": 4})

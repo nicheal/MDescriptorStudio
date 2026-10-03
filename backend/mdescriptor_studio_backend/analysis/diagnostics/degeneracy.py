@@ -183,13 +183,23 @@ def degeneracy_search(
         warnings.append(
             "every candidate pair has zero structural distance: the structural fingerprint is degenerate on this set"
         )
+    # The published arrays must be finite (the artifact store rejects NaN/Inf)
+    # and they exist for the scatter view, so they carry the comparable pairs
+    # only; the preview table and counts keep the full candidate picture
+    # including atom-count-mismatched (structurally infinite) pairs.
+    publish = np.isfinite(structural)
+    if delta_energy is not None:
+        publish &= np.isfinite(delta_energy)
     return {
         "arrays": {
-            "pair_a": pair_a,
-            "pair_b": pair_b,
-            "descriptor_distance": pair_d,
-            "structural_distance": structural,
-            "delta_energy": delta_energy if delta_energy is not None else np.full(pair_a.size, np.nan),
+            "pair_a": pair_a[publish],
+            "pair_b": pair_b[publish],
+            "descriptor_distance": pair_d[publish],
+            "structural_distance": structural[publish],
+            # No energy signal: a zero placeholder keeps the array finite and
+            # aligned; the preview states energy_used=false and the view does
+            # not color by it.
+            "delta_energy": delta_energy[publish] if delta_energy is not None else np.zeros(int(np.count_nonzero(publish))),
         },
         "preview": preview,
         "warnings": warnings,
