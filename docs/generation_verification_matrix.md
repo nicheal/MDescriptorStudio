@@ -116,3 +116,11 @@
 > 跨材料数值比较不可做（random unique/100 两材料相差近一倍）。**无普适优化器默认值——新材料入库即跑
 > 同设计预注册 sweep**；random 仍是最稳基线（两材料方差均最小）。两条 sweep 均已收口，E2–E4（gen-5）
 > 门控解除。
+> **迁移验证补记（2026-10-03 晚，记录 `docs/reviews/2026-10-02-selection-strategy-sweep.md` §6）**：
+> §5 的"local vs fps 策略效应 20/20"**本身不可跨数据集检验**（PdCuNiP 无 local 臂）——可检验的是组效应
+> （各组 vs 本 sweep 内 random）的迁移：**方向 6/6 复现、显著性 4/6 复现**（genetic 与 target_region 的
+> 显著性在 PdCuNiP 上翻转）；幅度强依赖材料（reuse 复利 +111→+27.75）。reuse 是唯一在两材料两策略下
+> 从未显著为负的组；pso-target 定向失败两材料复现（可从 UI 推荐文案再降级）。PdCuNiP 上覆盖半径出现
+> 反转：除 target_region（+9.43，15/20，发现换覆盖）外各组显著劣于 random，genetic 呈发现/覆盖双优。
+> carbon_local − pdcunip_fps 原始跨 sweep 差值混杂数据集⊕策略两因子，仅存档不作策略效应引用；如需检验
+> 策略效应大小须补 local×PdCuNiP 臂（~19h wall）。

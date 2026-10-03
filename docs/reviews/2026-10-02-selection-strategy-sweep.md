@@ -121,3 +121,58 @@ pso 105.71±59.74 / 97.78±54.71；pso-target 118.18±30.60 / 114.35±27.41。
 - **已接受区域加密**：random-reuse + fps（发现损失即加密语义本身，且 wall 最低 315s）。
 - **定向补采样**：random + search target（不变；TR+local proximity 19.31 / 31.2%，
   discovery −4.13 不显著）。
+
+
+## 6. PdCuNiP 迁移验证（2026-10-03 晚，sweep `20261002T005922Z` 收口后）
+
+**先说清这个验证能回答什么**：PdCuNiP sweep 只有 fps 一个选择策略臂，因此 §5 的
+"local vs fps 策略效应 20/20" **本身无法跨数据集直接检验**（缺 local×PdCuNiP 臂）。
+可检验且预注册口径下干净的是：**优化器组效应（各组 vs 本 sweep 内 random 的逐 seed
+配对差值）在两个材料间是否复现**——两侧各自同口径（scaled）、同材料、同策略，组内配
+对完全合法。组内 PdCuNiP 的完整细节见
+`docs/reviews/2026-10-03-pdcunip-sweep-analysis.md`（绝对均值/邻近度/工程事实）；
+本节只做迁移判读。分析脚本 `tmp/analyze_pdcunip_migration.py`。
+
+### 6.1 组效应迁移表（各组 − 本 sweep 内 random，unique_per_100_evals，20 seeds 配对）
+
+| group | PdCuNiP + fps | carbon + local | 方向 | 显著性 |
+|---|---|---|---|---|
+| random-reuse | **+27.75±21.21 (18/20)**** | **+111.44±88.21 (20/20)**** | ✅ 一致 | ✅ 一致（幅度缩水 ~4×） |
+| genetic | **+11.56±16.85 (17/20)**** | +7.45±37.99 (8/20 n.s.) | ✅ 一致 | ⚠️ 翻转（PdCuNiP 上转显著正） |
+| genetic-target | **−30.03±5.77 (0/20)**** | **−12.38±12.36 (4/20)**** | ✅ 一致 | ✅ 一致（为负） |
+| pso | −3.05±31.33 (7/20 n.s.) | **−41.74±58.72 (4/20)**** | ✅ 一致 | ⚠️ 翻转（carbon 上显著负） |
+| pso-target | **−19.03±20.91 (2/20)**** | **−29.28±32.17 (3/20)**** | ✅ 一致 | ✅ 一致（为负） |
+| target_region | **−30.40±5.58 (0/20)**** | −4.13±12.23 (7/20 n.s.) | ✅ 一致 | ⚠️ 翻转（PdCuNiP 上显著负） |
+
+(random 基线：PdCuNiP 130.56±3.75 / carbon+local 147.45±10.26；全部 140 行
+stopped_by=max_evaluations，无早停混杂。)
+
+**判读**：方向 6/6 迁移；显著性 4/6 迁移。量级强依赖材料——reuse 的复利效应在
+PdCuNiP 上只有碳的约四分之一；定向组的发现代价在 PdCuNiP 上显著放大
+（target_region −4(n.s.) → −30(0/20)）。
+
+### 6.2 覆盖半径的反转（次级指标，各组 − random）
+
+PdCuNiP 上几乎全部组的覆盖半径显著**劣于** random（reuse −84.77、genetic
+−167.09、pso −58.92、pso-target −55.04 均 0/20–4/20），**唯独 target_region
++9.43 (15/20)****——定向加密在多组分玻璃上用发现换来了真实覆盖增益，这笔交换在
+carbon+local 上不存在（TR 覆盖 +10.70 20/20 但发现只 −4 n.s.）。genetic 在
+PdCuNiP 上呈"发现↑覆盖↑↑（240 vs 407）"双优（详见并行文档结论 1）。
+
+### 6.3 跨 sweep 原始配对差值（carbon_local − pdcunip_fps）——**混杂，仅存档**
+
+reuse +100.59 (19/20)、genetic-target +34.54 (20/20)、target_region +43.17 (20/20)、
+pso-target +6.65 (n.s.)、pso −21.80 (n.s.)、genetic +12.79 (n.s.)。
+**该差值混杂了数据集与选择策略两个因子（数据集效应 ⊕ 策略效应），禁止作为策略效应
+引用**——与 §5 解除的旧口径混杂同类，此处数字只作为未来 local×PdCuNiP 臂的对照基线。
+
+### 6.4 结论（对 §5 推荐默认的约束）
+
+- §5 的推荐默认表（全局发现=random+local / 加密=random-reuse+local / 定向=random+target）
+  **保持 carbon 校准范围**：组效应方向全部复现，但幅度与显著性随材料改变，
+  "无普适优化器默认"（并行文档结论 4）成立——新材料入库应跑同设计预注册 sweep。
+- reuse 的方向稳健性（两材料两策略下从未显著为负）是六组中最稳的信号；
+  pso-target 的定向失败（proximity 82 vs random 55）在两材料两策略下均复现，
+  该组合可从 UI 推荐文案中进一步降级。
+- 若未来需要检验策略效应本身在 PdCuNiP 上的大小，需补 local×PdCuNiP 臂
+  （~19h wall，模板同本 sweep）。
