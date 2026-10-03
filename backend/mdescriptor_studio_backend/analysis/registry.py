@@ -115,6 +115,13 @@ def build_default_registry() -> AnalysisRegistry:
     from .algorithms.tsne import TSNE
     from .algorithms.umap import UMAP
     from .clustering import Cluster, Outlier
+    from .diagnostics import (
+        cutoff_smoothness,
+        degeneracy_search,
+        distance_consistency,
+        environment_jacobian,
+        formal_invariance,
+    )
     from .metrics import (
         EffectiveDimension,
         FeatureVariance,
@@ -172,6 +179,18 @@ def build_default_registry() -> AnalysisRegistry:
     sampling = Sampling()
     for name in ("fps", "random", "stratified", "cluster_representative", "per_element", "element"):
         registry.register(AlgorithmSpec(name, "sampling", sampling.run, variant=name))
+
+    # Descriptor diagnostics recompute descriptors through the service layer
+    # (like perturbation_sensitivity), so they are registered as RPC wrappers:
+    # the job runner intercepts the category before registry.run is reached.
+    for name, handler in (
+        ("formal_invariance", formal_invariance),
+        ("cutoff_smoothness", cutoff_smoothness),
+        ("environment_jacobian", environment_jacobian),
+        ("degeneracy_search", degeneracy_search),
+        ("distance_consistency", distance_consistency),
+    ):
+        registry.register(AlgorithmSpec(name, "diagnostics", None, variant=name))
 
     # These names are wrapper RPC entry points, not numerical algorithms. They
     # remain discoverable so the protocol surface stays explicit.

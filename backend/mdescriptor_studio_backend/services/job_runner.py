@@ -19,7 +19,17 @@ from ..analysis import (
     StructureDescriptorMatrix,
 )
 from ..analysis.algorithms.sensitivity import perturbation_sensitivity
-from ..generation.evaluator import structure_values as _descriptor_structure_values
+from ..analysis.diagnostics import (
+    DescriptorRecompute,
+    cutoff_smoothness,
+    degeneracy_search,
+    distance_consistency,
+    environment_jacobian,
+    formal_invariance,
+    structure_fingerprint,
+)
+from ..analysis.diagnostics.geometry import composition_counts
+from ..generation.evaluator import evaluate_batch
 from ..generation.operators import displaced, strained
 from ..errors import (
     ANALYSIS_INPUT_INVALID,
@@ -479,6 +489,8 @@ class AnalysisRunMixin:
         spec = ANALYSIS_REGISTRY.get(analysis_type)
         if spec.category == "perturbation":
             return self._run_perturbation_sensitivity(params, rows[0], samples[0], ctx)
+        if spec.category == "diagnostics":
+            return self._run_diagnostics(analysis_type, params, rows[0], samples[0], ctx)
         if analysis_type in _HARD_CANCEL_ANALYSES:
             return self._run_isolated_analysis(analysis_type, params, samples, ctx, thread_limit=thread_limit)
         if spec.category in ("engine", "pair", "cluster", "outlier"):
@@ -531,6 +543,240 @@ class AnalysisRunMixin:
                 existing_blocks=existing_blocks,
             )
         raise AppError(ANALYSIS_INPUT_INVALID, f"unsupported analysis type: {analysis_type}")
+
+    def _bounded_subset(self, params: dict, total: int, *, default: int, cap: int, name: str = "max_structures") -> np.ndarray:
+        """Evenly-spaced subset selection with an explicit compute budget cap."""
+        raw = params.get(name, default)
+        try:
+            limit = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise AppError(ANALYSIS_INPUT_INVALID, f"{name} must be an integer") from exc
+        if limit < 1:
+            raise AppError(ANALYSIS_INPUT_INVALID, f"{name} must be >= 1")
+        if limit > cap:
+            raise AppError(ANALYSIS_INPUT_INVALID, f"{name} must be <= {cap}")
+        if total < 1:
+            raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "the descriptor run has no samples to diagnose")
+        return np.linspace(0, total - 1, min(total, limit), dtype=np.int64)
+
+    def _run_diagnostics(self, analysis_type: str, params: dict, run_row: dict, samples: DescriptorMatrix, ctx) -> dict:
+        """Descriptor diagnostics: recompute-driven formal/cutoff/jacobian searches.
+
+        Frames and recomputation are service-owned (the perturbation runner's
+        contract); the diagnostics algorithms stay engine-free numpy.  The
+        baseline for the recompute-driven diagnostics (invariance, cutoff,
+        jacobian) is a fresh recompute of the selected frames - comparisons are
+        internal to the recompute path, and the stored matrix is used only as
+        the cutoff rebuild cross-check.
+        """
+        if self.datasets is None:
+            raise AppError(ANALYSIS_INPUT_INVALID, "descriptor diagnostics require the dataset service")
+        dataset = self.db.query_one("SELECT * FROM datasets WHERE id = ?", (run_row["dataset_id"],))
+        if dataset is None:
+            raise AppError(ANALYSIS_INPUT_INVALID, f"dataset {run_row['dataset_id']} does not exist")
+        source_adapter = self.datasets.adapter_for(dataset)
+        try:
+            descriptor_parameters = json.loads(run_row.get("parameters_json") or "{}")
+        except (TypeError, ValueError):
+            descriptor_parameters = {}
+        if not isinstance(descriptor_parameters, dict):
+            descriptor_parameters = {}
+        run_device = str(run_row.get("device") or "cpu")
+        engine = self.datasets.adapter
+        control = engine.make_control()
+        ctx.attach_control(control)
+        descriptor_name = str(run_row["descriptor_name"])
+
+        def report(fraction: float, message: str) -> None:
+            ctx.check_cancelled()
+            ctx.progress(None, None, message, fraction=0.05 + 0.9 * float(fraction))
+
+        def build_descriptor(cutoff_parameter: str | None = None, cutoff_value: float | None = None):
+            if cutoff_parameter is None:
+                return engine.build(descriptor_name, descriptor_parameters, device=run_device)
+            if cutoff_value is None:
+                raise AppError(ANALYSIS_INPUT_INVALID, "cutoff_value must be a number when the cutoff is overridden")
+            overridden = {**descriptor_parameters, cutoff_parameter: float(cutoff_value)}
+            return engine.build(descriptor_name, overridden, device=run_device)
+
+        def recompute_with(descriptor_instance, frames) -> DescriptorRecompute:
+            ctx.check_cancelled()
+            batch = engine.to_structure_batch(frames)
+            computed = engine.compute(descriptor_instance, batch, control)
+            evaluation = evaluate_batch(computed, len(frames), what="diagnostics descriptor result")
+            return DescriptorRecompute(
+                structure_values=evaluation.structure_values,
+                atomic_values=evaluation.atomic_values,
+                row_offsets=evaluation.row_offsets,
+            )
+
+        descriptor = build_descriptor()
+
+        def load_frames(row_indices: np.ndarray) -> list:
+            frame_indices = np.asarray(samples.frame, dtype=np.float64)[row_indices]
+            return [source_adapter.get_frame(int(index)) for index in frame_indices.tolist()]
+
+        if analysis_type in ("formal_invariance", "cutoff_smoothness", "environment_jacobian"):
+            # These diagnostics operate on FRAMES.  With atom-granularity
+            # samples many rows share one frame, so the selection runs over the
+            # unique frame indices and the stored baseline pools rows per frame.
+            frame_indices = np.unique(np.asarray(samples.frame, dtype=np.int64))
+            defaults = {"formal_invariance": (64, 512), "cutoff_smoothness": (32, 128), "environment_jacobian": (2, 16)}
+            default_limit, hard_cap = defaults[analysis_type]
+            chosen = self._bounded_subset(params, frame_indices.size, default=default_limit, cap=hard_cap)
+            frames = [source_adapter.get_frame(int(frame_indices[index])) for index in chosen.tolist()]
+            selected = chosen  # positions into frame_indices, not matrix rows
+        else:
+            selected = self._bounded_subset(
+                params,
+                samples.n_samples,
+                default=1024 if analysis_type == "degeneracy_search" else 128,
+                cap=4096 if analysis_type == "degeneracy_search" else 512,
+                name="max_samples",
+            )
+            frames = load_frames(selected)
+
+        if analysis_type == "formal_invariance":
+            granularity = str(params.get("granularity") or "structure").lower()
+            baseline = recompute_with(descriptor, frames)
+            return formal_invariance(frames, baseline, lambda batch: recompute_with(descriptor, batch), params, report)
+
+        if analysis_type == "cutoff_smoothness":
+            cutoff_parameter = str(params.get("cutoff_parameter") or "rcut")
+            raw_base = params.get("cutoff_value")
+            if raw_base is not None:
+                try:
+                    base_cutoff = float(raw_base)
+                except (TypeError, ValueError) as exc:
+                    raise AppError(ANALYSIS_INPUT_INVALID, "cutoff_value must be a number") from exc
+            elif cutoff_parameter in descriptor_parameters and isinstance(descriptor_parameters[cutoff_parameter], (int, float)):
+                base_cutoff = float(descriptor_parameters[cutoff_parameter])
+            else:
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    f"cutoff parameter {cutoff_parameter!r} is not a number in the descriptor run parameters; pass cutoff_value explicitly",
+                )
+
+            def recompute_at(offset: float) -> DescriptorRecompute:
+                instance = build_descriptor(cutoff_parameter, base_cutoff + float(offset))
+                return recompute_with(instance, frames)
+
+            if isinstance(samples, StructureDescriptorMatrix):
+                stored_baseline = np.asarray(samples.values, dtype=np.float64)[selected]
+            else:
+                # Pool the stored per-atom rows into one row per selected frame
+                # so the rebuild cross-check compares like with like.
+                frame_of_row = np.asarray(samples.frame, dtype=np.int64)
+                pooled = []
+                for index in chosen.tolist():
+                    target = int(frame_indices[index])
+                    rows = np.flatnonzero(frame_of_row == target)
+                    pooled.append(np.asarray(samples.values, dtype=np.float64)[rows].mean(axis=0) if rows.size else 0.0)
+                stored_baseline = np.asarray(pooled, dtype=np.float64)
+            stored_params = {**params, "_stored_baseline": stored_baseline}
+            return cutoff_smoothness(frames, recompute_at, stored_params, report)
+
+        if analysis_type == "environment_jacobian":
+            if params.get("cutoff") is None:
+                cutoff_parameter = str(params.get("cutoff_parameter") or "rcut")
+                if cutoff_parameter in descriptor_parameters and isinstance(descriptor_parameters[cutoff_parameter], (int, float)):
+                    params = {**params, "cutoff": float(descriptor_parameters[cutoff_parameter])}
+            return environment_jacobian(frames, lambda batch: recompute_with(descriptor, batch), params, report)
+
+        # Pair-search diagnostics: raw values plus a lazy structural distance.
+        # Per-sample structural fingerprints are precomputed once; individual
+        # pair distances are then cheap L2 lookups instead of per-pair O(N^2)
+        # geometry rebuilds.
+        values = np.asarray(samples.values, dtype=np.float64)[selected]
+        ids = [samples.sample_ids[int(index)] for index in selected.tolist()] if samples.sample_ids else None
+        is_structure_granularity = isinstance(samples, StructureDescriptorMatrix)
+        composition_weight = float(params.get("composition_weight", 1.0))
+        species_weight = float(params.get("species_weight", 1.0))
+
+        fps: list[np.ndarray] = []
+        natoms: list[int] = []
+        centers: list[int] | None = None
+        composition_inputs: list[dict[int, int]] = []
+        if is_structure_granularity:
+            for frame in frames:
+                numbers = np.asarray(frame.numbers)
+                fps.append(structure_fingerprint(frame))
+                natoms.append(int(numbers.size))
+                composition_inputs.append(composition_counts(numbers))
+            centers = None
+        else:
+            if samples.positions is None or samples.elements is None:
+                raise AppError(
+                    ANALYSIS_INPUT_INVALID,
+                    "atom-granularity structural comparison requires verified per-atom geometry metadata",
+                )
+            centers = []
+            cutoff = float(params.get("cutoff") or params.get("neighbor_cutoff") or 6.0)
+            max_neighbors = int(params.get("max_neighbors", 24))
+            for row_position, sample_index in enumerate(selected.tolist()):
+                frame = frames[row_position]
+                numbers = np.asarray(frame.numbers)
+                positions = np.asarray(frame.positions, dtype=np.float64)
+                cell = np.asarray(frame.cell, dtype=np.float64)
+                pbc = np.asarray(frame.pbc, dtype=bool)
+                center = int(samples.row[int(sample_index)])
+                deltas = positions - positions[center]
+                if pbc.any() and np.any(np.abs(cell) > 1e-12):
+                    wrap = np.where(pbc, np.round(deltas @ np.linalg.inv(cell)), 0.0)
+                    deltas = deltas - wrap @ cell
+                distances = np.linalg.norm(deltas, axis=1)
+                mask = (distances <= cutoff) & (np.arange(numbers.size) != center)
+                neighbor_distances = np.sort(distances[mask])[:max_neighbors]
+                fingerprint = np.zeros(max_neighbors, dtype=np.float64)
+                fingerprint[: neighbor_distances.size] = neighbor_distances
+                fps.append(fingerprint)
+                natoms.append(int(neighbor_distances.size))
+                centers.append(int(numbers[center]))
+                composition_inputs.append(composition_counts(numbers[mask]))
+
+        # Shared species universe -> fraction vectors -> pairwise L1 matrix.
+        universe = sorted({species for counts in composition_inputs for species in counts})
+        totals = [sum(counts.values()) or 1 for counts in composition_inputs]
+        fractions = np.zeros((len(composition_inputs), len(universe)), dtype=np.float64)
+        for index, counts in enumerate(composition_inputs):
+            for column, species in enumerate(universe):
+                fractions[index, column] = counts.get(species, 0) / totals[index]
+        composition_l1 = 0.5 * np.abs(fractions[:, None, :] - fractions[None, :, :]).sum(axis=2) if universe else np.zeros((len(composition_inputs), len(composition_inputs)))
+
+        def pair_structural_distance(i: int, j: int) -> float:
+            if is_structure_granularity and natoms[i] != natoms[j]:
+                return float("inf")
+            distance = float(np.linalg.norm(fps[i] - fps[j]))
+            if centers is None:
+                return distance + composition_weight * float(composition_l1[i, j])
+            center_mismatch = 0.0 if centers[i] == centers[j] else 1.0
+            return distance + species_weight * (center_mismatch + float(composition_l1[i, j]))
+
+        energy = None
+        if is_structure_granularity:
+            energies = []
+            for frame in frames:
+                natoms_frame = len(np.asarray(frame.numbers))
+                value = getattr(frame, "energy", None)
+                energies.append(float(value) / natoms_frame if value is not None and natoms_frame else np.nan)
+            if any(np.isfinite(value) for value in energies):
+                energy = np.asarray(energies, dtype=np.float64)
+
+        if analysis_type == "degeneracy_search":
+            result = degeneracy_search(values, pair_structural_distance, params, ids, energy, report)
+        else:
+            count = int(selected.size)
+            structural_matrix = np.zeros((count, count), dtype=np.float64)
+            for i in range(count):
+                for j in range(i + 1, count):
+                    structural_matrix[i, j] = structural_matrix[j, i] = pair_structural_distance(i, j)
+            result = distance_consistency(values, structural_matrix, params, ids, energy, report)
+        if selected.size < samples.n_samples:
+            result["warnings"] = [
+                *result.get("warnings", []),
+                f"sampled {int(selected.size)} of {samples.n_samples} samples evenly across the run",
+            ]
+        return result
 
     def _run_perturbation_sensitivity(self, params: dict, run_row: dict, samples: StructureDescriptorMatrix, ctx) -> dict:
         """Recompute one descriptor on deterministic structure perturbations."""
@@ -626,7 +872,7 @@ class AnalysisRunMixin:
             ]
             batch = self.datasets.adapter.to_structure_batch(perturbed_frames)
             computed = self.datasets.adapter.compute(descriptor, batch, control)
-            values = _descriptor_structure_values(computed, len(perturbed_frames))
+            values = evaluate_batch(computed, len(perturbed_frames), what="perturbed descriptor result").structure_values
             perturbation_results.append((
                 amplitude,
                 StructureDescriptorMatrix(
