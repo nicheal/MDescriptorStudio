@@ -64,6 +64,17 @@ export const ANALYSIS_NAV_GROUPS: readonly AnalysisNavGroup[] = [
       { key: "representative_sampling", label: { en: "Representative Sampling", zh: "代表性采样" }, target: { tab: "sampling" } },
     ],
   },
+  {
+    key: "descriptor_diagnostics",
+    label: { en: "Descriptor Diagnostics", zh: "描述符诊断" },
+    modules: [
+      { key: "formal_invariance", label: { en: "Formal Invariance", zh: "形式不变性" }, target: { tab: "overview", overviewAnalysis: "formal_invariance" } },
+      { key: "cutoff_smoothness", label: { en: "Cutoff Smoothness", zh: "截断平滑性" }, target: { tab: "overview", overviewAnalysis: "cutoff_smoothness" } },
+      { key: "environment_jacobian", label: { en: "Environment Jacobian Rank", zh: "环境雅可比秩" }, target: { tab: "overview", overviewAnalysis: "environment_jacobian" } },
+      { key: "degeneracy_search", label: { en: "Degeneracy Search", zh: "退化搜索" }, target: { tab: "overview", overviewAnalysis: "degeneracy_search" } },
+      { key: "distance_consistency", label: { en: "Distance Consistency", zh: "距离一致性" }, target: { tab: "overview", overviewAnalysis: "distance_consistency" } },
+    ],
+  },
 ];
 
 const ANALYSIS_NAV_MODULES = ANALYSIS_NAV_GROUPS.flatMap((group) => group.modules);
@@ -88,6 +99,7 @@ const ANALYSIS_TYPE_ALIASES: Record<string, AnalysisModuleKey> = {
   coverage: "data_coverage", overlap: "train_test_overlap", drift: "dataset_drift", outlier: "outlier_environments", outliers: "outlier_environments", lof: "outlier_environments", knn: "outlier_environments", isolation_forest: "outlier_environments", "isolation-forest": "outlier_environments", iforest: "outlier_environments", mahalanobis: "outlier_environments", mahalanobis_distance: "outlier_environments",
   feature_variance: "feature_variance", feature_correlation: "feature_correlation", effective_dimension: "effective_dimension", kernel: "kernel_analysis", sensitivity: "parameter_sensitivity", compare: "descriptor_comparison", mantel: "descriptor_comparison",
   fps: "representative_sampling", novelty_fps: "representative_sampling", uncertainty_diversity: "representative_sampling", random: "representative_sampling", stratified: "representative_sampling", cluster_representative: "representative_sampling", per_element: "representative_sampling", acquisition: "representative_sampling", sampling: "representative_sampling", element: "representative_sampling",
+  formal_invariance: "formal_invariance", cutoff_smoothness: "cutoff_smoothness", environment_jacobian: "environment_jacobian", degeneracy_search: "degeneracy_search", distance_consistency: "distance_consistency",
 };
 
 export function analysisNavModuleForAnalysisType(analysisType: string): AnalysisNavModule | null {
@@ -103,6 +115,11 @@ export const OVERVIEW_KIND_LABELS: Record<string, Pair> = {
   drift: { en: "DATASET DRIFT", zh: "数据集漂移" },
   sensitivity: { en: "PARAMETER SENSITIVITY", zh: "参数敏感性" },
   perturbation_sensitivity: { en: "STRUCTURAL PERTURBATION SENSITIVITY", zh: "结构扰动敏感性" },
+  formal_invariance: { en: "FORMAL INVARIANCE", zh: "形式不变性" },
+  cutoff_smoothness: { en: "CUTOFF SMOOTHNESS", zh: "截断平滑性" },
+  environment_jacobian: { en: "ENVIRONMENT JACOBIAN RANK", zh: "环境雅可比秩" },
+  degeneracy_search: { en: "DEGENERACY SEARCH", zh: "退化搜索" },
+  distance_consistency: { en: "DISTANCE CONSISTENCY", zh: "距离一致性" },
 };
 
 export const SAMPLING_LABELS: Record<string, Pair> = {
@@ -143,6 +160,10 @@ export const ARTIFACT_ARRAYS: Record<string, string[]> = {
   kernel: ["kernel_matrix", "eigenvalues"],
   sampling: ["coverage_radius_curve", "coverage_mean_curve", "coverage_r2_curve"],
   acquisition: ["pick_scores"],
+  cutoff_smoothness: ["deltas", "response_curves"],
+  environment_jacobian: ["rank_deficiency", "expected_rank", "observed_rank"],
+  degeneracy_search: ["descriptor_distance", "structural_distance", "delta_energy"],
+  distance_consistency: ["d_descriptor", "d_structural", "delta_energy"],
 };
 
 /** Arrays needed by a result view after its algorithm-specific preview is known. */

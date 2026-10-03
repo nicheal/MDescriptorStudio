@@ -232,11 +232,20 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
             "analysis.perturbation_sensitivity",
             {"run_id": run_id, "perturbation": "strain", "n_amplitudes": 3, "max_amplitude": 0.05, "max_structures": 2, "seed": 42},
         )
+        # Descriptor diagnostics recompute the run's own descriptor through the
+        # service; ACE carries `rcut`, so the cutoff scan can override it, and
+        # the jacobian reads the neighbor sphere from the explicit request
+        # cutoff (the run parameters here never spell it out).
+        formal_id = run("analysis.formal_invariance", {"run_id": run_id, "granularity": "structure", "tolerance": 1e-6, "max_structures": 2})
+        cutoff_id = run("analysis.cutoff_smoothness", {"run_id": run_id, "cutoff_parameter": "rcut", "cutoff_value": 5.0, "max_delta": 0.2, "n_steps": 5, "max_structures": 2})
+        jacobian_id = run("analysis.environment_jacobian", {"run_id": run_id, "cutoff": 5.0, "displacement": 0.005, "max_atoms": 16, "max_structures": 1})
+        degeneracy_id = run("analysis.degeneracy_search", {"run_id": run_id, "mode": "structure", "k_neighbors": 2, "max_samples": 8, "max_pairs": 10})
+        consistency_id = run("analysis.distance_consistency", {"run_id": run_id, "mode": "structure", "max_samples": 6, "n_bins": 4})
 
         listed = bp.request(sequence, "analysis.list", {"run_id": run_id})
         sequence += 1
         assert listed["result"]
-        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (effective_id, "effective_dimension"), (trajectory_id, "trajectory"), (perturbation_id, "perturbation_sensitivity"), (strain_id, "perturbation_sensitivity")):
+        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (effective_id, "effective_dimension"), (trajectory_id, "trajectory"), (perturbation_id, "perturbation_sensitivity"), (strain_id, "perturbation_sensitivity"), (formal_id, "formal_invariance"), (cutoff_id, "cutoff_smoothness"), (jacobian_id, "environment_jacobian"), (degeneracy_id, "degeneracy_search"), (consistency_id, "distance_consistency")):
             checked = bp.request(sequence, "analysis.get", {"analysis_id": analysis_id})
             sequence += 1
             assert checked["result"]["status"] == "COMPLETED"
@@ -258,6 +267,32 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
                 assert preview["sample_count"] == 2
                 assert preview["available_structure_count"] == 8
                 assert any("sampled 2 of 8 structures" in warning for warning in checked["result"]["warnings"])
+            if kind == "formal_invariance":
+                preview = checked["result"]["preview"]
+                assert preview["passed"] is True
+                assert set(preview["checks"]) == {"translation", "rotation", "reflection", "permutation", "precision"}
+            if kind == "cutoff_smoothness":
+                preview = checked["result"]["preview"]
+                assert preview["frame_count"] == 2
+                assert preview["n_steps"] == 5
+                files = checked["result"]["artifact_manifest"]["files"]
+                for name in ("deltas", "response_curves"):
+                    assert name in files
+            if kind == "environment_jacobian":
+                preview = checked["result"]["preview"]
+                assert preview["atoms_analyzed"] > 0
+                assert preview["max_rotational_residual"] is not None
+                files = checked["result"]["artifact_manifest"]["files"]
+                for name in ("rank_deficiency", "expected_rank", "observed_rank"):
+                    assert name in files
+            if kind == "degeneracy_search":
+                preview = checked["result"]["preview"]
+                assert preview["candidate_pairs"] > 0
+                assert preview["sample_count"] == 8
+            if kind == "distance_consistency":
+                preview = checked["result"]["preview"]
+                assert preview["comparable_pairs"] > 0
+                assert preview["pearson_descriptor_structural"] is not None
             if kind == "trajectory":
                 # The trajectory view derives thresholds live, so the artifact
                 # must carry the robust statistics, the detection space and the

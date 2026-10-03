@@ -158,7 +158,17 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
           ? { run_ids: [ctx.selectedRun, ctx.secondRun] }
           : p.overviewAnalysis === "perturbation_sensitivity"
             ? { perturbation: p.perturbationType, n_amplitudes: p.perturbationCount, max_amplitude: p.perturbationMaximum, metric: p.perturbationMetric, max_structures: p.perturbationStructures, preprocess: "standardized" }
-            : p.overviewAnalysis === "trajectory"
+            : p.overviewAnalysis === "formal_invariance"
+              ? { granularity: p.diagnosticGranularity, tolerance: p.diagnosticTolerance, n_rotations: 3, max_structures: p.diagnosticStructures }
+              : p.overviewAnalysis === "cutoff_smoothness"
+                ? { cutoff_parameter: p.cutoffParameter, ...(p.cutoffValue != null ? { cutoff_value: p.cutoffValue } : {}), max_delta: p.cutoffMaxDelta, n_steps: p.cutoffSteps, max_structures: 32 }
+                : p.overviewAnalysis === "environment_jacobian"
+                  ? { ...(p.jacobianCutoff != null ? { cutoff: p.jacobianCutoff } : {}), displacement: p.jacobianDisplacement, max_atoms: p.jacobianAtoms, max_structures: p.jacobianStructures }
+                  : p.overviewAnalysis === "degeneracy_search"
+                    ? { mode: p.mode, k_neighbors: p.degeneracyNeighbors, max_samples: p.degeneracySamples, max_pairs: p.degeneracyPairs }
+                    : p.overviewAnalysis === "distance_consistency"
+                      ? { mode: p.mode, max_samples: p.consistencySamples, n_bins: p.consistencyBins }
+                      : p.overviewAnalysis === "trajectory"
               ? {}
             : p.overviewAnalysis === "property_correlation"
               ? { property: p.propertyName, folds: p.propertyFolds, top_k: 50, mode: p.mode, reliability_k: p.propertyReliabilityK, distance_metric: p.propertyDistanceMetric, sparse_quantile: p.propertySparsePercentile / 100, ood_quantile: p.propertyOodPercentile / 100 }

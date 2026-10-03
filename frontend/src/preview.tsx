@@ -846,6 +846,103 @@ function mockOverviewPreview() {
     };
     return { analysis_id: mockLatestAnalysisId, kind: "perturbation_sensitivity", perturbation: "jitter", metric: "euclidean", response_unit: "scaled descriptor distance", sample_count: responseMatrix.length, available_structure_count: 6320, curve_count: amplitudes.length, baseline_included: true, warnings: ["sampled 36 of 6320 structures evenly across the run"] };
   }
+  if (mockLatestAnalysisKind === "formal_invariance") {
+    return {
+      analysis_id: mockLatestAnalysisId, kind: "formal_invariance", granularity: "structure",
+      tolerance: 1e-6, n_rotations: 3, frame_count: 48, passed: true, chirality_sensitive: false,
+      checks: {
+        translation: { frames_measured: 48, worst_epsilon: 4.2e-15, mean_epsilon: 9.1e-16, failures: 0, passed: true },
+        rotation: { frames_measured: 48, worst_epsilon: 8.7e-14, mean_epsilon: 1.2e-14, failures: 0, passed: true },
+        reflection: { frames_measured: 48, worst_epsilon: 9.3e-14, mean_epsilon: 1.5e-14, failures: 0, passed: true },
+        permutation: { frames_measured: 48, worst_epsilon: 6.1e-15, mean_epsilon: 8.8e-16, failures: 0, passed: true },
+        precision: { frames_measured: 48, worst_epsilon: 2.9e-8, mean_epsilon: 6.4e-9, failures: 0, passed: true },
+      },
+      warnings: [],
+    };
+  }
+  if (mockLatestAnalysisKind === "cutoff_smoothness") {
+    const deltas = [-0.1, -0.075, -0.05, -0.025, 0, 0.025, 0.05, 0.075, 0.1];
+    const curveFor = (structure: number) => deltas.map((delta) => Number((Math.abs(delta) * (0.4 + (structure % 5) * 0.15) + (structure % 3) * 0.01).toFixed(6)));
+    const curves = Array.from({ length: 24 }, (_, structure) => curveFor(structure));
+    mockAnalysisArrays = { deltas, response_curves: curves, jump_ratio: curves.map((_, index) => (index % 6 === 0 ? 4.7 : 1.0)) };
+    return {
+      analysis_id: mockLatestAnalysisId, kind: "cutoff_smoothness", frame_count: 24, max_delta: 0.1,
+      n_steps: 9, jump_threshold: 3.0, worst_jump_ratio: 4.7, n_flagged: 1,
+      frames: Array.from({ length: 24 }, (_, structure) => ({
+        frame_index: structure, sample_id: `frame:${structure * 260}`, jump_ratio: structure % 6 === 0 ? 4.7 : 1.0,
+        worst_relative_response: Number((0.4 + (structure % 5) * 0.15).toFixed(4)), max_dd_dr: Number((1.8 + (structure % 4) * 0.3).toFixed(4)), flagged: structure % 6 === 0,
+      })),
+      warnings: [],
+    };
+  }
+  if (mockLatestAnalysisKind === "environment_jacobian") {
+    const count = 48;
+    const deficiency: number[] = Array.from({ length: count }, (_, atom) => (atom % 11 === 0 ? 2 : atom % 7 === 0 ? 1 : 0));
+    mockAnalysisArrays = {
+      rank_deficiency: deficiency,
+      expected_rank: Array.from({ length: count }, () => 9),
+      observed_rank: deficiency.map((gap) => 9 - gap),
+      neighbor_count: Array.from({ length: count }, () => 4),
+    };
+    const worst = deficiency
+      .map((gap, atom) => ({ gap, atom }))
+      .filter(({ gap }) => gap > 0)
+      .sort((a, b) => b.gap - a.gap)
+      .slice(0, 8)
+      .map(({ gap, atom }) => ({
+        structure_index: 0, atom_index: atom, species: 26, neighbor_count: 4, effective_neighbor_count: 4,
+        expected_rank: 9, observed_rank: 9 - gap, rank_deficiency: gap, sigma_max: 12.4,
+        sigma_min_significant: gap > 1 ? null : 0.42, condition_number: gap > 1 ? null : 29.5,
+        rotational_residual: 3.1e-9, verdict: "deficient",
+      }));
+    return {
+      analysis_id: mockLatestAnalysisId, kind: "environment_jacobian", cutoff: 6.0, displacement: 0.001,
+      rank_tolerance: 1e-6, structures: [{ structure_index: 0, atoms_analyzed: count, total_rank_deficiency: deficiency.reduce((a, b) => a + b, 0), evaluations: 288 }],
+      atoms_analyzed: count, n_deficient: worst.length, max_rotational_residual: 3.1e-9,
+      total_descriptor_evaluations: 289, worst_atoms: worst, isolated_atoms: 0, skipped_structures: [], max_atoms: 32,
+      warnings: [],
+    };
+  }
+  if (mockLatestAnalysisKind === "degeneracy_search") {
+    const pairs = Array.from({ length: 96 }, (_, index) => index);
+    const dangerous = Array.from({ length: 96 }, (_, index) => index < 4);
+    mockAnalysisArrays = {
+      pair_a: pairs.map((index) => index % 32),
+      pair_b: pairs.map((index) => (index * 7 + 3) % 32),
+      descriptor_distance: pairs.map((index) => Number((0.05 + (index % 10) * 0.22).toFixed(4))),
+      structural_distance: dangerous.map((flag, index) => (flag ? 18.4 : Number((2 + (index % 12) * 0.9).toFixed(4)))),
+      delta_energy: pairs.map((index) => Number(((index % 17) * 0.031).toFixed(4))),
+    };
+    return {
+      analysis_id: mockLatestAnalysisId, kind: "degeneracy_search", sample_count: 32, k_neighbors: 8,
+      candidate_pairs: 96, thresholds: { descriptor_distance: 0.14, structural_distance: 11.7, energy: 0.42 },
+      n_dangerous: 4, reason_counts: { structure: 3, "structure+energy": 1 }, different_atom_count_pairs: 0,
+      pairs: Array.from({ length: 4 }, (_, index) => ({
+        sample_a: `frame:${index * 5}`, sample_b: `frame:${index * 5 + 917}`,
+        descriptor_distance: Number((0.05 + index * 0.012).toFixed(4)), structural_distance: Number((18.4 - index * 0.8).toFixed(4)),
+        delta_energy: index === 0 ? 0.51 : null, reason: index === 0 ? "structure+energy" : "structure",
+      })),
+      energy_used: true, warnings: [],
+    };
+  }
+  if (mockLatestAnalysisKind === "distance_consistency") {
+    const pairCount = 512;
+    const dDescriptor = Array.from({ length: pairCount }, (_, index) => Number((0.02 + (index % 24) * 0.18).toFixed(4)));
+    const dStructural = Array.from({ length: pairCount }, (_, index) => Number(((index % 24) * 1.9 + (index % 5) * 0.37).toFixed(4)));
+    mockAnalysisArrays = { d_descriptor: dDescriptor, d_structural: dStructural, delta_energy: dDescriptor.map((value, index) => Number((value * (index % 9) * 0.14).toFixed(4))) };
+    return {
+      analysis_id: mockLatestAnalysisId, kind: "distance_consistency", sample_count: 32, pair_count: pairCount,
+      comparable_pairs: pairCount, pearson_descriptor_structural: 0.93, spearman_descriptor_structural: 0.91,
+      binned: Array.from({ length: 12 }, (_, bin) => ({ bin, d_descriptor_max: Number((0.06 + bin * 0.34).toFixed(3)), count: pairCount / 12, structural_mean: Number((1.2 + bin * 3.1).toFixed(3)), structural_median: Number((1.1 + bin * 3.0).toFixed(3)), structural_p90: Number((2.4 + bin * 4.4).toFixed(3)) })),
+      collapse: { d_quantile: 0.05, structure_quantile: 0.95, d_threshold: 0.078, structural_threshold: 41.2, fraction: 0.0059, independence_baseline: 0.0025, enrichment: 2.36, count: 3 },
+      energy: { pearson: 0.41, spearman: 0.39, pairs: pairCount },
+      dangerous_pairs: Array.from({ length: 3 }, (_, index) => ({
+        sample_a: `frame:${index * 11}`, sample_b: `frame:${index * 11 + 601}`,
+        descriptor_distance: Number((0.031 + index * 0.008).toFixed(4)), structural_distance: Number((44.1 - index * 1.2).toFixed(4)), delta_energy: Number((0.22 + index * 0.05).toFixed(4)),
+      })),
+      warnings: [],
+    };
+  }
   if (mockLatestAnalysisKind === "kernel") {
     const size = 48;
     mockAnalysisArrays = { kernel_matrix: Array.from({ length: size }, (_, i) => Array.from({ length: size }, (__, j) => Number(Math.exp(-Math.abs(i - j) / 10).toFixed(4)))), eigenvalues: Array.from({ length: size }, (_, i) => Math.exp(-i / 7) * 12) };
@@ -1223,6 +1320,11 @@ const ANALYSIS_RUN_PARAMS: Record<string, string[]> = {
   "analysis.kernel": ["run_id"],
   "analysis.trajectory": ["run_id"],
   "analysis.perturbation_sensitivity": ["run_id"],
+  "analysis.formal_invariance": ["run_id"],
+  "analysis.cutoff_smoothness": ["run_id"],
+  "analysis.environment_jacobian": ["run_id"],
+  "analysis.degeneracy_search": ["run_id"],
+  "analysis.distance_consistency": ["run_id"],
   "analysis.export": ["run_id"],
 };
 
@@ -1238,6 +1340,7 @@ const COUNT_PARAMS = [
   "n_samples", "k", "n_neighbors", "max_samples", "top_k", "heatmap_features", "n_clusters",
   "min_samples", "perplexity", "max_iter", "folds", "reliability_k", "n_amplitudes",
   "max_structures", "chunk_size", "reference_chunk_size", "uncertainty_k", "permutations",
+  "n_steps", "k_neighbors", "max_pairs", "n_bins", "n_rotations", "max_atoms",
 ];
 
 const EXPORT_FORMATS = ["json", "csv", "extxyz", "deepmd", "indices", "report"];
@@ -1927,6 +2030,11 @@ const METHODS: Record<string, Handler> = {
   "analysis.drift": (p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift", "drift", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.sensitivity": (p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity", "sensitivity", { mode: p.mode, run_ids: MOCK_RUN_PAIR }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.perturbation_sensitivity": (p) => mockAnalysisSubmit("job-perturbation-live", "ana-mock-perturbation", "perturbation_sensitivity", "perturbation_sensitivity", { perturbation: p.perturbation, n_amplitudes: p.n_amplitudes, max_amplitude: p.max_amplitude, max_structures: p.max_structures, metric: p.metric }),
+  "analysis.formal_invariance": (p) => mockAnalysisSubmit("job-formal-invariance-live", "ana-mock-formal-invariance", "formal_invariance", "formal_invariance", { granularity: p.granularity, tolerance: p.tolerance, n_rotations: p.n_rotations, max_structures: p.max_structures }),
+  "analysis.cutoff_smoothness": (p) => mockAnalysisSubmit("job-cutoff-smoothness-live", "ana-mock-cutoff-smoothness", "cutoff_smoothness", "cutoff_smoothness", { cutoff_parameter: p.cutoff_parameter, cutoff_value: p.cutoff_value, max_delta: p.max_delta, n_steps: p.n_steps, max_structures: p.max_structures }),
+  "analysis.environment_jacobian": (p) => mockAnalysisSubmit("job-environment-jacobian-live", "ana-mock-environment-jacobian", "environment_jacobian", "environment_jacobian", { cutoff: p.cutoff, displacement: p.displacement, max_atoms: p.max_atoms, max_structures: p.max_structures }),
+  "analysis.degeneracy_search": (p) => mockAnalysisSubmit("job-degeneracy-search-live", "ana-mock-degeneracy-search", "degeneracy_search", "degeneracy_search", { mode: p.mode, k_neighbors: p.k_neighbors, max_samples: p.max_samples, max_pairs: p.max_pairs }),
+  "analysis.distance_consistency": (p) => mockAnalysisSubmit("job-distance-consistency-live", "ana-mock-distance-consistency", "distance_consistency", "distance_consistency", { mode: p.mode, max_samples: p.max_samples, n_bins: p.n_bins }),
   "analysis.export": (_p) => mockAnalysisSubmit("job-export-live", "ana-mock-export", "projection", null),
   "result.get_pca": (p) => {
     const scale = mockLatestPcaPreprocess === "standardized" ? 1.35 : mockLatestPcaPreprocess === "center" ? 1 : 0.78;

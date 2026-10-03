@@ -46,6 +46,22 @@ const params = (overrides: Partial<AnalysisParams> = {}): AnalysisParams => ({
   perturbationMaximum: 0.2,
   perturbationStructures: 64,
   perturbationMetric: "euclidean",
+  diagnosticGranularity: "structure",
+  diagnosticTolerance: 1e-6,
+  diagnosticStructures: 64,
+  cutoffParameter: "rcut",
+  cutoffValue: null,
+  cutoffMaxDelta: 0.1,
+  cutoffSteps: 9,
+  jacobianCutoff: null,
+  jacobianDisplacement: 0.001,
+  jacobianAtoms: 32,
+  jacobianStructures: 2,
+  degeneracyNeighbors: 8,
+  degeneracySamples: 1024,
+  degeneracyPairs: 50,
+  consistencySamples: 128,
+  consistencyBins: 12,
   nearZeroThreshold: 0.02,
   lowVariationThreshold: 0.05,
   featureCorrelationMethod: "spearman",
@@ -187,6 +203,27 @@ describe("analysis submission payloads", () => {
       perturbation: "strain", n_amplitudes: 8, max_amplitude: 0.2, metric: "euclidean", max_structures: 12, preprocess: "standardized",
     });
     expect(run("overview", { overviewAnalysis: "trajectory", viewId: "view_1" }).params).toEqual({ view_id: "view_1" });
+    expect(run("overview", { overviewAnalysis: "formal_invariance", diagnosticGranularity: "atom", diagnosticTolerance: 1e-5, diagnosticStructures: 32 }).params).toEqual({
+      granularity: "atom", tolerance: 1e-5, n_rotations: 3, max_structures: 32,
+    });
+    expect(run("overview", { overviewAnalysis: "cutoff_smoothness", cutoffParameter: "r_cut", cutoffValue: 5.5, cutoffMaxDelta: 0.2, cutoffSteps: 11 }).params).toEqual({
+      cutoff_parameter: "r_cut", cutoff_value: 5.5, max_delta: 0.2, n_steps: 11, max_structures: 32,
+    });
+    expect(run("overview", { overviewAnalysis: "cutoff_smoothness" }).params).toEqual({
+      cutoff_parameter: "rcut", max_delta: 0.1, n_steps: 9, max_structures: 32,
+    });
+    expect(run("overview", { overviewAnalysis: "environment_jacobian", jacobianCutoff: 6, jacobianDisplacement: 0.002, jacobianAtoms: 24, jacobianStructures: 3 }).params).toEqual({
+      cutoff: 6, displacement: 0.002, max_atoms: 24, max_structures: 3,
+    });
+    expect(run("overview", { overviewAnalysis: "environment_jacobian" }).params).toEqual({
+      displacement: 0.001, max_atoms: 32, max_structures: 2,
+    });
+    expect(run("overview", { overviewAnalysis: "degeneracy_search", mode: "atom" as AnalysisParams["mode"], degeneracyNeighbors: 12, degeneracySamples: 512, degeneracyPairs: 25 }).params).toEqual({
+      mode: "atom", k_neighbors: 12, max_samples: 512, max_pairs: 25,
+    });
+    expect(run("overview", { overviewAnalysis: "distance_consistency", consistencySamples: 96, consistencyBins: 8 }).params).toEqual({
+      mode: "structure", max_samples: 96, n_bins: 8,
+    });
     expect(run("overview", { overviewAnalysis: "novelty" as AnalysisParams["overviewAnalysis"] }).labelFromModule).toBe(true);
   });
 

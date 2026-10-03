@@ -197,6 +197,39 @@ function restoreOverview(analysisType: string, p: Record<string, unknown>, curre
       // restore it, but `mode` decides which matrix the two runs are compared
       // on, the panel shows it as Granularity, and the identity key carries it.
       return { mode: mode(p.mode) };
+    case "formal_invariance":
+      return {
+        diagnosticGranularity: p.granularity === "atom" ? "atom" : "structure",
+        diagnosticTolerance: Math.min(0.1, Math.max(1e-12, finite(p.tolerance) ?? 1e-6)),
+        diagnosticStructures: intAt(p.max_structures, 64, 1),
+      };
+    case "cutoff_smoothness":
+      return {
+        cutoffParameter: text(p.cutoff_parameter) || "rcut",
+        cutoffValue: finite(p.cutoff_value),
+        cutoffMaxDelta: Math.min(5, Math.max(0.005, finite(p.max_delta) ?? 0.1)),
+        cutoffSteps: intAt(p.n_steps, 9, 5),
+      };
+    case "environment_jacobian":
+      return {
+        jacobianCutoff: finite(p.cutoff),
+        jacobianDisplacement: Math.min(0.1, Math.max(1e-6, finite(p.displacement) ?? 0.001)),
+        jacobianAtoms: intAt(p.max_atoms, 32, 1),
+        jacobianStructures: intAt(p.max_structures, 2, 1),
+      };
+    case "degeneracy_search":
+      return {
+        mode: mode(p.mode),
+        degeneracyNeighbors: intAt(p.k_neighbors, 8, 1),
+        degeneracySamples: intAt(p.max_samples, 1024, 2),
+        degeneracyPairs: intAt(p.max_pairs, 50, 1),
+      };
+    case "distance_consistency":
+      return {
+        mode: mode(p.mode),
+        consistencySamples: intAt(p.max_samples, 128, 3),
+        consistencyBins: intAt(p.n_bins, 12, 4),
+      };
     default:
       return {};
   }

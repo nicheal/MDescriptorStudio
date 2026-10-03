@@ -62,6 +62,22 @@ const baseParams: AnalysisParams = {
   overviewAnalysis: "feature_variance", propertyName: "energy_per_atom",
   propertyFolds: 5, propertyReliabilityK: 5, propertyDistanceMetric: "euclidean", propertySparsePercentile: 90, propertyOodPercentile: 99,
   perturbationType: "jitter", perturbationCount: 8, perturbationMaximum: 0.2, perturbationStructures: 64, perturbationMetric: "euclidean",
+ diagnosticGranularity: "structure",
+ diagnosticTolerance: 1e-6,
+ diagnosticStructures: 64,
+ cutoffParameter: "rcut",
+ cutoffValue: null,
+ cutoffMaxDelta: 0.1,
+ cutoffSteps: 9,
+ jacobianCutoff: null,
+ jacobianDisplacement: 0.001,
+ jacobianAtoms: 32,
+ jacobianStructures: 2,
+ degeneracyNeighbors: 8,
+ degeneracySamples: 1024,
+ degeneracyPairs: 50,
+ consistencySamples: 128,
+ consistencyBins: 12,
   nearZeroThreshold: 1e-4, lowVariationThreshold: 1e-2, featureCorrelationMethod: "pearson", featureCorrelationThreshold: 0.95,
   referenceRunId: "run-ref", queryRunId: "run-query", referenceViewId: null, queryViewId: "view-query", viewId: null,
 };
@@ -263,7 +279,7 @@ describe("useAnalysisUi", () => {
     expect(useAnalysisUi.getState().recentModulesByGroup).toEqual({ evolution_response: "descriptor_trajectory" });
     expect(requestMock).not.toHaveBeenCalled();
     expect(analysisNavModuleForView("overview", "trajectory", "coverage")?.key).toBe("descriptor_trajectory");
-    expect(ANALYSIS_NAV_GROUPS).toHaveLength(6);
+    expect(ANALYSIS_NAV_GROUPS).toHaveLength(7);
   });
 
   it("keeps threshold setters ordered and bounded", () => {

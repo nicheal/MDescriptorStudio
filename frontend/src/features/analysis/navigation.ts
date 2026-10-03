@@ -25,7 +25,7 @@ export const DEFAULT_ANALYSIS_VIEW: AnalysisView = {
 
 const TAB_KEYS: TabKey[] = ["overview", "projection", "similarity", "clusters", "outliers", "sampling", "coverage", "compare", "local", "kernel"];
 const PROJECTION_NAMES: ProjectionName[] = ["pca", "umap", "tsne"];
-const OVERVIEW_ANALYSES: OverviewAnalysis[] = ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity"];
+const OVERVIEW_ANALYSES: OverviewAnalysis[] = ["feature_variance", "feature_correlation", "effective_dimension", "property_correlation", "trajectory", "drift", "sensitivity", "perturbation_sensitivity", "formal_invariance", "cutoff_smoothness", "environment_jacobian", "degeneracy_search", "distance_consistency"];
 const COLOR_BY: ColorBy[] = ["none", "energy", "force_max", "volume"];
 // The three spellings the backend accepts; anything else in persisted state
 // would turn the next run into an ANALYSIS_INPUT_INVALID.

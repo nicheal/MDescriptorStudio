@@ -370,6 +370,49 @@ test("browser preview renders structural perturbation response curves", async ({
   await expect(page.getByLabel("Per-structure perturbation response heatmap")).toBeVisible({ timeout: 30_000 });
 });
 
+test("browser preview runs the formal invariance diagnostics", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Descriptor Diagnostics", "Formal Invariance");
+  await page.getByRole("button", { name: /Run Formal Invariance/i }).click();
+  await expect(page.getByText("FORMAL INVARIANCE", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("All checks passed", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("table")).toBeVisible();
+});
+
+test("browser preview renders the cutoff smoothness response curves", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Descriptor Diagnostics", "Cutoff Smoothness");
+  await page.getByRole("button", { name: /Run Cutoff Smoothness/i }).click();
+  await expect(page.getByText("CUTOFF SMOOTHNESS", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Descriptor response versus cutoff offset")).toBeVisible({ timeout: 30_000 });
+});
+
+test("browser preview renders the environment jacobian rank panel", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Descriptor Diagnostics", "Environment Jacobian Rank");
+  await page.getByRole("button", { name: /Run Environment Jacobian Rank/i }).click();
+  await expect(page.getByText("ENVIRONMENT JACOBIAN RANK", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Per-atom expected versus observed Jacobian rank")).toBeVisible({ timeout: 30_000 });
+});
+
+test("browser preview renders the degeneracy search and distance consistency panels", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Descriptor Diagnostics", "Degeneracy Search");
+  await page.getByRole("button", { name: /Run Degeneracy Search/i }).click();
+  await expect(page.getByText("DEGENERACY SEARCH", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Descriptor distance versus structural distance of candidate pairs")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Dangerous pairs", { exact: true }).first()).toBeVisible();
+
+  await selectAnalysisModule(page, "Descriptor Diagnostics", "Distance Consistency");
+  await page.getByRole("button", { name: /Run Distance Consistency/i }).click();
+  await expect(page.getByText("DISTANCE CONSISTENCY", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Descriptor distance versus structural distance")).toBeVisible({ timeout: 30_000 });
+});
+
 test("browser preview exposes the Mantel permutation visualization", async ({ page }) => {
   await page.goto("/preview.html");
   await openAnalysis(page);
@@ -397,6 +440,7 @@ test("Analysis navigation exposes six groups and all 18 modules in order", async
     { label: "Coverage & Novelty", modules: ["Data Coverage", "Train / Test Overlap", "Dataset Drift", "Outlier Environments"] },
     { label: "Representation Quality", modules: ["Feature Variance", "Feature Correlation", "Effective Dimension", "Kernel Analysis", "Parameter Sensitivity", "Descriptor Comparison"] },
     { label: "Dataset Sampling", modules: ["Representative Sampling"] },
+    { label: "Descriptor Diagnostics", modules: ["Formal Invariance", "Cutoff Smoothness", "Environment Jacobian Rank", "Degeneracy Search", "Distance Consistency"] },
   ];
 
   const groupTabs = page.locator(".analysis-group-tabs .ant-tabs-tab");
@@ -411,7 +455,7 @@ test("Analysis navigation exposes six groups and all 18 modules in order", async
     await expect(moduleTabs).toHaveText(group.modules);
     moduleCount += group.modules.length;
   }
-  expect(moduleCount).toBe(18);
+  expect(moduleCount).toBe(23);
 });
 
 test("narrow Analysis navigation keeps overflow groups keyboard accessible", async ({ page }) => {

@@ -43,10 +43,23 @@
 - **距离一致性**:线性关系 Pearson>0.99;植入坍缩对后 collapse 富集比超独立基线且危险对表命中;矩阵形状失配报错。
 - **真实引擎冒烟**:枚举引擎描述符注册表,取首个可构建者对周期混种小体系跑不变性电池(translation/rotation/permutation/precision 全过才放行;引擎缺失 skip)。
 
-## 4. 边界与后续(未决事项,按审查排序)
+## 4. 前端 UI(同日第二批,已落地)
+
+Analysis 页新增 **"描述符诊断"导航组**,五个模块端到端可用(参数卡 → `analysis.<name>` RPC → 结果面板):
+
+- **形式不变性**:判定指标条(通过/失败 + 手性敏感警示条)+ 五项检查表(最差 ε/均值 ε/失败数/判定)+ 原理说明;
+- **截断平滑性**:响应曲线图(全部结构均值线 + 被标记结构红色高亮,rcut 处虚线定位,y 轴对数)+ 被标记帧表;
+- **环境雅可比秩**:逐原子期望秩 vs 观测秩分组柱状(前 60 原子)+ 秩亏直方图 + 最差原子表(结构/原子/物种/邻居数/条件数/旋转残差/判定)+ 秩亏警示条;
+- **退化搜索**:候选对散点(d_D vs d_struct,有能量时按 |ΔE| Viridis 着色)+ 危险对表(理由中文化:结构不同/原子数不同/能量不同/结构+能量);
+- **距离一致性**:全体配对散点 + 分箱均值/P90 校准曲线叠加 + collapse 富集警示条 + ΔE 相关性文字 + 危险对表。
+
+接线清单(照仓库惯例逐处注册):`types.ts`(OverviewAnalysis/AnalysisModuleKey/AnalysisParams +16 参数)、`registry.ts`(新导航组/别名/ARTIFACT_ARRAYS)、`navigation.ts` 白名单、`submission.ts`、`useAnalysisParameters.ts`、`AnalysisModuleControls.tsx`(5 控件块)、`restore.ts`(5 restore 分支)、`analysisVisualizations.tsx`(TITLES + dispatcher + 5 视图)、`jobs.ts`(5 job 标签)、`analysisMethodGuides.ts`(5 份方法指南,双语)、`zh.ts`(+88 key)、`preview.tsx`(mock:提交路由/COUNT_PARAMS/预览分支)。
+
+验证:tsc/eslint 干净;vitest 252/252(submission/restore/identity 钉住测试覆盖全部 5 模块参数映射与恢复);e2e 62/62(新增 5 个诊断 spec + 导航清单更新至 7 组 23 模块);后端 `test_analysis_ipc.py` catalog 扩至真跑 5 个诊断方法(ACE 描述符,断言 preview 契约与 manifest 数组),`test_mock_backend_vocabulary.py` 通过。
+
+## 5. 边界与后续(未决事项,按审查排序)
 
 - **effective_dimension 命名/TwoNN**(审查 P1 §3):未动。改名涉及 API/前端/i18n 联动,与 Statistical Diagnostics V2(TwoNN、information imbalance、neighborhood preservation)一并做。
 - **等变描述符**:V1 只校验不变族;D_l(Rx) ≈ W_l(R) D_l(x) 的等变校验待接入等变描述符时加(检查项已在 checks 枚举之外独立可扩展)。
 - **ΔF 信号**:consistency/degeneracy 的能量项用逐结构 energy_per_atom;逐原子力差分需要 per-atom 力随行存储,V2。
-- **前端**:五个 RPC 已可用,但 Analysis 页面无 diagnostics 面板(审查本身定位为"后端算法层尚不存在"——先补算法层);面板设计(proposal:单页五卡片 + 危险对跳转 Structure Compare)另立批次。
 - **sweep 门控注记**:本轮全部为 analysis 侧新增,未触碰 generation 引擎/指标口径(gen-4 不动、RNG 不动、快照/缓存键不变),符合 2026-10-02 改进计划 §4 的 sweep 期间约束;E2–E4(gen-5 版本提升)仍等 PdCuNiP sweep(`20261002T005922Z`)结束。

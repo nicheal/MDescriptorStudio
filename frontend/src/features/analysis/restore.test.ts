@@ -18,6 +18,11 @@ const current: AnalysisParams = {
   propertyDistanceMetric: "euclidean", propertySparsePercentile: 90, propertyOodPercentile: 99,
   perturbationType: "jitter", perturbationCount: 8, perturbationMaximum: 0.2,
   perturbationStructures: 64, perturbationMetric: "euclidean",
+  diagnosticGranularity: "structure", diagnosticTolerance: 1e-6, diagnosticStructures: 64,
+  cutoffParameter: "rcut", cutoffValue: null, cutoffMaxDelta: 0.1, cutoffSteps: 9,
+  jacobianCutoff: null, jacobianDisplacement: 0.001, jacobianAtoms: 32, jacobianStructures: 2,
+  degeneracyNeighbors: 8, degeneracySamples: 1024, degeneracyPairs: 50,
+  consistencySamples: 128, consistencyBins: 12,
   nearZeroThreshold: 0.02, lowVariationThreshold: 0.05,
   featureCorrelationMethod: "spearman", featureCorrelationThreshold: 0.8,
   referenceRunId: null, queryRunId: null, referenceViewId: null, queryViewId: null, viewId: null,
@@ -137,6 +142,21 @@ describe("restoring controls from a stored analysis row", () => {
     expect(restore("overview", "effective_dimension", { preprocess: "center" })).toEqual({ effectiveDimensionPreprocess: "center" });
     expect(restore("overview", "perturbation_sensitivity", { perturbation: "strain", n_amplitudes: 1 })).toMatchObject({
       perturbationType: "strain", perturbationCount: 2, perturbationMaximum: 0.2, perturbationStructures: 64,
+    });
+    expect(restore("overview", "formal_invariance", { granularity: "atom", tolerance: 2e-5, max_structures: 33 })).toMatchObject({
+      diagnosticGranularity: "atom", diagnosticTolerance: 2e-5, diagnosticStructures: 33,
+    });
+    expect(restore("overview", "cutoff_smoothness", { cutoff_parameter: "r_cut", cutoff_value: 5.5, max_delta: 0.2, n_steps: 11 })).toMatchObject({
+      cutoffParameter: "r_cut", cutoffValue: 5.5, cutoffMaxDelta: 0.2, cutoffSteps: 11,
+    });
+    expect(restore("overview", "environment_jacobian", { cutoff: 6, displacement: 0.002, max_atoms: 24, max_structures: 3 })).toMatchObject({
+      jacobianCutoff: 6, jacobianDisplacement: 0.002, jacobianAtoms: 24, jacobianStructures: 3,
+    });
+    expect(restore("overview", "degeneracy_search", { mode: "atom", k_neighbors: 12, max_samples: 512, max_pairs: 25 })).toMatchObject({
+      mode: "atom", degeneracyNeighbors: 12, degeneracySamples: 512, degeneracyPairs: 25,
+    });
+    expect(restore("overview", "distance_consistency", { mode: "atom", max_samples: 96, n_bins: 8 })).toMatchObject({
+      mode: "atom", consistencySamples: 96, consistencyBins: 8,
     });
   });
 

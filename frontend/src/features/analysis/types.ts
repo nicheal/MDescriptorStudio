@@ -21,7 +21,12 @@ export type OverviewAnalysis =
   | "trajectory"
   | "drift"
   | "sensitivity"
-  | "perturbation_sensitivity";
+  | "perturbation_sensitivity"
+  | "formal_invariance"
+  | "cutoff_smoothness"
+  | "environment_jacobian"
+  | "degeneracy_search"
+  | "distance_consistency";
 export type ColorBy = "none" | "energy" | "force_max" | "volume";
 export type FeatureCorrelationMethod = "pearson" | "spearman";
 export type EffectiveDimensionPreprocess = "center" | "standardized";
@@ -33,7 +38,8 @@ export type AnalysisGroupKey =
   | "evolution_response"
   | "coverage_novelty"
   | "representation_quality"
-  | "dataset_sampling";
+  | "dataset_sampling"
+  | "descriptor_diagnostics";
 
 export type AnalysisModuleKey =
   | "descriptor_space"
@@ -53,7 +59,12 @@ export type AnalysisModuleKey =
   | "kernel_analysis"
   | "parameter_sensitivity"
   | "descriptor_comparison"
-  | "representative_sampling";
+  | "representative_sampling"
+  | "formal_invariance"
+  | "cutoff_smoothness"
+  | "environment_jacobian"
+  | "degeneracy_search"
+  | "distance_consistency";
 
 export interface AnalysisNavTarget {
   tab: TabKey;
@@ -130,6 +141,22 @@ export interface AnalysisParams {
   perturbationMaximum: number;
   perturbationStructures: number;
   perturbationMetric: string;
+  diagnosticGranularity: string;
+  diagnosticTolerance: number;
+  diagnosticStructures: number;
+  cutoffParameter: string;
+  cutoffValue: number | null;
+  cutoffMaxDelta: number;
+  cutoffSteps: number;
+  jacobianCutoff: number | null;
+  jacobianDisplacement: number;
+  jacobianAtoms: number;
+  jacobianStructures: number;
+  degeneracyNeighbors: number;
+  degeneracySamples: number;
+  degeneracyPairs: number;
+  consistencySamples: number;
+  consistencyBins: number;
   nearZeroThreshold: number;
   lowVariationThreshold: number;
   featureCorrelationMethod: FeatureCorrelationMethod;

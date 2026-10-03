@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, InputNumber, Select, Space, Tag, Tooltip, Typography } from "antd";
+import { Button, Input, InputNumber, Select, Space, Tag, Tooltip, Typography } from "antd";
 import { ipc } from "../ipc/client";
 import { useWorkspace } from "../stores/workspace";
 import type {
@@ -108,6 +108,22 @@ type AnalysisModuleControlSetters = Pick<AnalysisParameterState,
   | "setPerturbationMaximum"
   | "setPerturbationStructures"
   | "setPerturbationMetric"
+  | "setDiagnosticGranularity"
+  | "setDiagnosticTolerance"
+  | "setDiagnosticStructures"
+  | "setCutoffParameter"
+  | "setCutoffValue"
+  | "setCutoffMaxDelta"
+  | "setCutoffSteps"
+  | "setJacobianCutoff"
+  | "setJacobianDisplacement"
+  | "setJacobianAtoms"
+  | "setJacobianStructures"
+  | "setDegeneracyNeighbors"
+  | "setDegeneracySamples"
+  | "setDegeneracyPairs"
+  | "setConsistencySamples"
+  | "setConsistencyBins"
 > & {
   setProjection: (value: ProjectionName) => void;
   setMode: (value: PcaMode) => void;
@@ -319,6 +335,49 @@ export default function AnalysisModuleControls({
       <Tooltip title={t("Structures sampled evenly across the run; every one is recomputed per amplitude.")} placement="top"><InputNumber aria-label={t("Max structures")} min={1} max={2048} step={8} value={params.perturbationStructures} onChange={(value) => setters.setPerturbationStructures(Math.max(1, Math.min(2048, Math.round(value ?? 64))))} /></Tooltip>
       <Typography.Text>{t("Metric")}</Typography.Text>
       <Select value={params.perturbationMetric} onChange={setters.setPerturbationMetric} options={markOptions("perturbationMetric", ["euclidean", "cosine", "manhattan"].map((value) => ({ value, label: value })))} />
+    </Space>}
+    {tab === "overview" && overviewAnalysis === "formal_invariance" && <Space wrap>
+      <Typography.Text>{t("Granularity")}</Typography.Text>
+      <Select value={params.diagnosticGranularity} onChange={setters.setDiagnosticGranularity} options={markOptions("diagnosticGranularity", [{ value: "structure", label: t("Structure (pooled rows)") }, { value: "atom", label: t("Atom (per-environment rows)") }])} />
+      <ParamLabel label={t("Tolerance")} cached={cachedParam("diagnosticTolerance")} />
+      <InputNumber min={1e-12} max={0.1} step={1e-6} precision={12} value={params.diagnosticTolerance} onChange={(value) => setters.setDiagnosticTolerance(Math.max(1e-12, value ?? 1e-6))} />
+      <ParamLabel label={t("Max structures")} cached={cachedParam("diagnosticStructures")} />
+      <Tooltip title={t("Structures sampled evenly across the run; every symmetry check recomputes the descriptor.")} placement="top"><InputNumber aria-label={t("Max structures")} min={1} max={512} value={params.diagnosticStructures} onChange={(value) => setters.setDiagnosticStructures(Math.max(1, Math.min(512, Math.round(value ?? 64))))} /></Tooltip>
+    </Space>}
+    {tab === "overview" && overviewAnalysis === "cutoff_smoothness" && <Space wrap>
+      <Typography.Text>{t("Cutoff parameter")}</Typography.Text>
+      <Input aria-label={t("Cutoff parameter")} style={{ width: 120 }} value={params.cutoffParameter} onChange={(event) => setters.setCutoffParameter(event.target.value.trim() || "rcut")} />
+      <ParamLabel label={t("Base cutoff (Å)")} cached={cachedParam("cutoffValue")} />
+      <Tooltip title={t("Leave empty to read the value from the descriptor run parameters.")} placement="top"><InputNumber aria-label={t("Base cutoff (Å)")} min={0.1} max={20} step={0.1} value={params.cutoffValue ?? undefined} placeholder={t("auto")} onChange={(value) => setters.setCutoffValue(value ?? null)} /></Tooltip>
+      <ParamLabel label={t("Max delta (Å)")} cached={cachedParam("cutoffMaxDelta")} />
+      <InputNumber min={0.005} max={5} step={0.01} value={params.cutoffMaxDelta} onChange={(value) => setters.setCutoffMaxDelta(Math.min(5, Math.max(0.005, value ?? 0.1)))} />
+      <ParamLabel label={t("Grid steps")} cached={cachedParam("cutoffSteps")} />
+      <InputNumber min={5} max={41} step={2} value={params.cutoffSteps} onChange={(value) => setters.setCutoffSteps(Math.max(5, Math.min(41, Math.round(value ?? 9))))} />
+    </Space>}
+    {tab === "overview" && overviewAnalysis === "environment_jacobian" && <Space wrap>
+      <ParamLabel label={t("Neighbor cutoff (Å)")} cached={cachedParam("jacobianCutoff")} />
+      <Tooltip title={t("Leave empty to read the descriptor run's own cutoff parameter; a mismatch is reported as a hint, not silently accepted.")} placement="top"><InputNumber aria-label={t("Neighbor cutoff (Å)")} min={0.1} max={20} step={0.1} value={params.jacobianCutoff ?? undefined} placeholder={t("auto")} onChange={(value) => setters.setJacobianCutoff(value ?? null)} /></Tooltip>
+      <ParamLabel label={t("Displacement (Å)")} cached={cachedParam("jacobianDisplacement")} />
+      <InputNumber min={1e-6} max={0.1} step={0.0005} precision={6} value={params.jacobianDisplacement} onChange={(value) => setters.setJacobianDisplacement(Math.min(0.1, Math.max(1e-6, value ?? 0.001)))} />
+      <ParamLabel label={t("Max atoms")} cached={cachedParam("jacobianAtoms")} />
+      <Tooltip title={t("Structures with more atoms are skipped; the finite-difference cost grows with the square of the atom count.")} placement="top"><InputNumber aria-label={t("Max atoms")} min={1} max={64} value={params.jacobianAtoms} onChange={(value) => setters.setJacobianAtoms(Math.max(1, Math.min(64, Math.round(value ?? 32))))} /></Tooltip>
+      <ParamLabel label={t("Max structures")} cached={cachedParam("jacobianStructures")} />
+      <InputNumber aria-label={t("Max structures")} min={1} max={16} value={params.jacobianStructures} onChange={(value) => setters.setJacobianStructures(Math.max(1, Math.min(16, Math.round(value ?? 2))))} />
+    </Space>}
+    {(tab === "overview" && (overviewAnalysis === "degeneracy_search" || overviewAnalysis === "distance_consistency")) && <Space wrap>
+      <Typography.Text>{t("Granularity")}</Typography.Text>
+      <Select value={params.mode} onChange={setters.setMode} options={markOptions("mode", [{ value: "structure", label: t("Structure (pooled rows)") }, { value: "atom", label: t("Atom (per-environment rows)") }])} />
+      {overviewAnalysis === "degeneracy_search" ? <>
+        <ParamLabel label={t("Descriptor neighbors (k)")} cached={cachedParam("degeneracyNeighbors")} />
+        <InputNumber min={1} max={64} value={params.degeneracyNeighbors} onChange={(value) => setters.setDegeneracyNeighbors(Math.max(1, Math.min(64, Math.round(value ?? 8))))} />
+        <ParamLabel label={t("Max samples")} cached={cachedParam("degeneracySamples")} />
+        <InputNumber min={2} max={4096} step={64} value={params.degeneracySamples} onChange={(value) => setters.setDegeneracySamples(Math.max(2, Math.min(4096, Math.round(value ?? 1024))))} />
+      </> : <>
+        <ParamLabel label={t("Max samples")} cached={cachedParam("consistencySamples")} />
+        <InputNumber min={3} max={512} step={16} value={params.consistencySamples} onChange={(value) => setters.setConsistencySamples(Math.max(3, Math.min(512, Math.round(value ?? 128))))} />
+        <ParamLabel label={t("Distance bins")} cached={cachedParam("consistencyBins")} />
+        <InputNumber min={4} max={32} value={params.consistencyBins} onChange={(value) => setters.setConsistencyBins(Math.max(4, Math.min(32, Math.round(value ?? 12))))} />
+      </>}
     </Space>}
     {(tab === "compare" || (tab === "overview" && overviewAnalysis === "sensitivity")) && <Space wrap>
       <Typography.Text>{tab === "compare" ? t("Left") : t("Reference")}</Typography.Text>

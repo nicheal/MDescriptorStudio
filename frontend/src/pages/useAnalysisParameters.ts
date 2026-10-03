@@ -86,6 +86,22 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
   const [perturbationMaximum, setPerturbationMaximum] = useState(0.2);
   const [perturbationStructures, setPerturbationStructures] = useState(64);
   const [perturbationMetric, setPerturbationMetric] = useState("euclidean");
+  const [diagnosticGranularity, setDiagnosticGranularity] = useState("structure");
+  const [diagnosticTolerance, setDiagnosticTolerance] = useState(1e-6);
+  const [diagnosticStructures, setDiagnosticStructures] = useState(64);
+  const [cutoffParameter, setCutoffParameter] = useState("rcut");
+  const [cutoffValue, setCutoffValue] = useState<number | null>(null);
+  const [cutoffMaxDelta, setCutoffMaxDelta] = useState(0.1);
+  const [cutoffSteps, setCutoffSteps] = useState(9);
+  const [jacobianCutoff, setJacobianCutoff] = useState<number | null>(null);
+  const [jacobianDisplacement, setJacobianDisplacement] = useState(0.001);
+  const [jacobianAtoms, setJacobianAtoms] = useState(32);
+  const [jacobianStructures, setJacobianStructures] = useState(2);
+  const [degeneracyNeighbors, setDegeneracyNeighbors] = useState(8);
+  const [degeneracySamples, setDegeneracySamples] = useState(1024);
+  const [degeneracyPairs, setDegeneracyPairs] = useState(50);
+  const [consistencySamples, setConsistencySamples] = useState(128);
+  const [consistencyBins, setConsistencyBins] = useState(12);
   const [tsnePerplexity, setTsnePerplexity] = useState(30);
 
   const analysisParams = useMemo<AnalysisParams>(() => ({
@@ -134,6 +150,22 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     perturbationMaximum,
     perturbationStructures,
     perturbationMetric,
+    diagnosticGranularity,
+    diagnosticTolerance,
+    diagnosticStructures,
+    cutoffParameter,
+    cutoffValue,
+    cutoffMaxDelta,
+    cutoffSteps,
+    jacobianCutoff,
+    jacobianDisplacement,
+    jacobianAtoms,
+    jacobianStructures,
+    degeneracyNeighbors,
+    degeneracySamples,
+    degeneracyPairs,
+    consistencySamples,
+    consistencyBins,
     referenceRunId,
     queryRunId,
     referenceViewId,
@@ -166,6 +198,22 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     perturbationMetric,
     perturbationStructures,
     perturbationType,
+    diagnosticGranularity,
+    diagnosticTolerance,
+    diagnosticStructures,
+    cutoffParameter,
+    cutoffValue,
+    cutoffMaxDelta,
+    cutoffSteps,
+    jacobianCutoff,
+    jacobianDisplacement,
+    jacobianAtoms,
+    jacobianStructures,
+    degeneracyNeighbors,
+    degeneracySamples,
+    degeneracyPairs,
+    consistencySamples,
+    consistencyBins,
     propertyDistanceMetric,
     propertyFolds,
     propertyName,
@@ -228,6 +276,22 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     setPerturbationMaximum(loaded.perturbationMaximum);
     setPerturbationStructures(loaded.perturbationStructures);
     setPerturbationMetric(loaded.perturbationMetric);
+    setDiagnosticGranularity(loaded.diagnosticGranularity);
+    setDiagnosticTolerance(loaded.diagnosticTolerance);
+    setDiagnosticStructures(loaded.diagnosticStructures);
+    setCutoffParameter(loaded.cutoffParameter);
+    setCutoffValue(loaded.cutoffValue);
+    setCutoffMaxDelta(loaded.cutoffMaxDelta);
+    setCutoffSteps(loaded.cutoffSteps);
+    setJacobianCutoff(loaded.jacobianCutoff);
+    setJacobianDisplacement(loaded.jacobianDisplacement);
+    setJacobianAtoms(loaded.jacobianAtoms);
+    setJacobianStructures(loaded.jacobianStructures);
+    setDegeneracyNeighbors(loaded.degeneracyNeighbors);
+    setDegeneracySamples(loaded.degeneracySamples);
+    setDegeneracyPairs(loaded.degeneracyPairs);
+    setConsistencySamples(loaded.consistencySamples);
+    setConsistencyBins(loaded.consistencyBins);
   }, []);
 
   return {
@@ -280,6 +344,22 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     perturbationMaximum, setPerturbationMaximum,
     perturbationStructures, setPerturbationStructures,
     perturbationMetric, setPerturbationMetric,
+    diagnosticGranularity, setDiagnosticGranularity,
+    diagnosticTolerance, setDiagnosticTolerance,
+    diagnosticStructures, setDiagnosticStructures,
+    cutoffParameter, setCutoffParameter,
+    cutoffValue, setCutoffValue,
+    cutoffMaxDelta, setCutoffMaxDelta,
+    cutoffSteps, setCutoffSteps,
+    jacobianCutoff, setJacobianCutoff,
+    jacobianDisplacement, setJacobianDisplacement,
+    jacobianAtoms, setJacobianAtoms,
+    jacobianStructures, setJacobianStructures,
+    degeneracyNeighbors, setDegeneracyNeighbors,
+    degeneracySamples, setDegeneracySamples,
+    degeneracyPairs, setDegeneracyPairs,
+    consistencySamples, setConsistencySamples,
+    consistencyBins, setConsistencyBins,
     tsnePerplexity, setTsnePerplexity,
   };
 }
