@@ -57,7 +57,16 @@ Analysis 页新增 **"描述符诊断"导航组**,五个模块端到端可用(�
 
 验证:tsc/eslint 干净;vitest 252/252(submission/restore/identity 钉住测试覆盖全部 5 模块参数映射与恢复);e2e 62/62(新增 5 个诊断 spec + 导航清单更新至 7 组 23 模块);后端 `test_analysis_ipc.py` catalog 扩至真跑 5 个诊断方法(ACE 描述符,断言 preview 契约与 manifest 数组),`test_mock_backend_vocabulary.py` 通过。
 
-## 5. 边界与后续(未决事项,按审查排序)
+## 5. imported run 修复(同日第三批)
+
+用户实测即踩:全部 5 个诊断报 DESCRIPTOR_CONFIGURATION_ERROR。根因——`_run_diagnostics` 把 run 行的 `device` 原样传给 `engine.build`,而**结果导入的 run**(result_transfer_service 写入 `device="imported"`)不是执行设备,引擎报 `execution device must be exactly 'cpu' or 'cuda'`;且该 build 原先无条件执行,连不需要重算的 pair-search 诊断也被连累。修复:
+
+- `_run_diagnostics`:描述符实例只为三个重算驱动诊断构建;imported/external run 上重算诊断在 runner 边界即报 `RESULT_INCOMPATIBLE`(文案指路 pair-search 诊断),pair-search 诊断照常运行(只读存储矩阵 + 数据集几何);
+- `_run_perturbation_sensitivity`:同款守卫(修复同一潜伏问题——扰动响应对 imported run 原先也会报引擎配置错误);
+- `submit_generic`:Run 点击即拒绝(imported run × 重算诊断/扰动响应),job 行不再产生;
+- 回归:`tests/test_diagnostics_imported_runs.py` 7 项(imported run 构造经 ResultTransferService,断言 pair-search 可跑、重算诊断/扰动拒绝、提交期拒绝且零 job 行);并在用户真实 DPA4C imported run 上回放验证——degeneracy_search/distance_consistency 正常出结果,三个重算诊断给出明确错误。
+
+## 6. 边界与后续(未决事项,按审查排序)
 
 - **effective_dimension 命名/TwoNN**(审查 P1 §3):未动。改名涉及 API/前端/i18n 联动,与 Statistical Diagnostics V2(TwoNN、information imbalance、neighborhood preservation)一并做。
 - **等变描述符**:V1 只校验不变族;D_l(Rx) ≈ W_l(R) D_l(x) 的等变校验待接入等变描述符时加(检查项已在 checks 枚举之外独立可扩展)。

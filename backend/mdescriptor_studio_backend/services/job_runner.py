@@ -38,6 +38,7 @@ from ..errors import (
     INVALID_PARAMS,
     INTERNAL_ERROR,
     JOB_CANCELLED,
+    RESULT_INCOMPATIBLE,
 )
 from .analysis_helpers import (
     CROSS_DATASET_TYPES,
@@ -76,6 +77,14 @@ _HARD_CANCEL_ANALYSES = frozenset(
         "acquisition",
     }
 )
+
+
+# Diagnostics that recompute the run's own descriptor through the engine.
+# The pair-search diagnostics (degeneracy_search, distance_consistency) read
+# the stored matrix and geometry only, so they also work on imported runs
+# whose descriptor cannot be rebuilt locally.
+_RECOMPUTE_DIAGNOSTICS = frozenset({"formal_invariance", "cutoff_smoothness", "environment_jacobian"})
+_IMPORTED_DEVICES = frozenset({"imported", "external"})
 
 
 def _preprocessing(params: dict) -> dict:
@@ -128,6 +137,17 @@ class AnalysisRunMixin:
         # directory three times before loading a single sample.
         current_datasets: set[str] = set()
         run_rows = self._usable_runs(input_ids, current_datasets)
+        if analysis_type in _RECOMPUTE_DIAGNOSTICS or analysis_type == "perturbation_sensitivity":
+            # Fail at the Run click, not after the job starts: an imported run
+            # has no local descriptor to rebuild, and the engine error that
+            # surfaces otherwise is a generic configuration failure.
+            for row in run_rows:
+                if row.get("device") in _IMPORTED_DEVICES:
+                    raise AppError(
+                        RESULT_INCOMPATIBLE,
+                        f"run {row['id']} holds imported results and cannot be recomputed locally; "
+                        "use the pair-search diagnostics (degeneracy search, distance consistency) instead",
+                    )
         cross_dataset = analysis_type in CROSS_DATASET_TYPES
         warm_start_fps = analysis_type == "fps" and len(input_ids) == 2
         if cross_dataset or warm_start_fps:
@@ -582,6 +602,12 @@ class AnalysisRunMixin:
         if not isinstance(descriptor_parameters, dict):
             descriptor_parameters = {}
         run_device = str(run_row.get("device") or "cpu")
+        needs_recompute = analysis_type in _RECOMPUTE_DIAGNOSTICS
+        if run_device in _IMPORTED_DEVICES and needs_recompute:
+            raise AppError(
+                RESULT_INCOMPATIBLE,
+                "imported descriptor results cannot be recomputed locally; use the pair-search diagnostics (degeneracy search, distance consistency) instead",
+            )
         engine = self.datasets.adapter
         control = engine.make_control()
         ctx.attach_control(control)
@@ -610,7 +636,10 @@ class AnalysisRunMixin:
                 row_offsets=evaluation.row_offsets,
             )
 
-        descriptor = build_descriptor()
+        # Only the recompute-driven diagnostics need a descriptor instance;
+        # building NEP/DPA4C costs seconds and the pair-search branch never
+        # calls the recompute closure.
+        descriptor = build_descriptor() if needs_recompute else None
 
         def load_frames(row_indices: np.ndarray) -> list:
             frame_indices = np.asarray(samples.frame, dtype=np.float64)[row_indices]
@@ -858,6 +887,11 @@ class AnalysisRunMixin:
         # Sensitivity recomputes the producer descriptor; keep the device the
         # run originally declared so baselines stay reproducible.
         run_device = str(run_row.get("device") or "cpu")
+        if run_device in _IMPORTED_DEVICES:
+            raise AppError(
+                RESULT_INCOMPATIBLE,
+                "imported descriptor results cannot be recomputed locally; structural perturbation response needs a locally computed run",
+            )
         descriptor = self.datasets.adapter.build(run_row["descriptor_name"], descriptor_parameters, device=run_device)
         control = self.datasets.adapter.make_control()
         ctx.attach_control(control)
