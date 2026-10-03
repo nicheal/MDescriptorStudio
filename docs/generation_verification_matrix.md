@@ -53,6 +53,7 @@
   - **锚点几何预检**（worker 同款）：harness `run_once` 现在锚点越界或违反运行几何约束时 fail fast——PdCuNiP 拷贝锚点 1322 即因此被替换（见 §3）。
   - **预算合同**：`max_accepted=500`/`max_generations=10000` 从 run_once 字面量提取为 harness 常量并入预注册（config.pdcunip.json）；工件（config.used.json/run_results.jsonl/summary 等）显式 LF 写盘，发布校验不再受换行转换影响。
   - **进行中 sweep 的口径警示**：selection-strategy sweep（20260930T101403Z，scaled 口径）与 fps 基线（20260929T043150Z，raw 口径）的跨 sweep 配对 unique 差值**混杂了计数口径与选择策略两个因子**——引用时必须带口径注解，或先在修复后代码上重跑 fps 基线再下策略结论。
+  - **口径警示已解除（2026-10-03）**：fps 重跑基线已完成（`20261002T010733Z`，当前代码，同 scaled 口径）——local vs fps 的 unique 配对差值现为合法策略效应；raw 口径基线（20260929T043150Z）降级为纯历史参照。**新基线 wall 带 PdCuNiP 并行争用注记（较串行慢 +80–143s/组），unique/coverage/accepted 不受影响**。
 
 ## 5. 用户决策记录
 
@@ -96,3 +97,14 @@
 > 中"RUNNING 且有快照"的运行改标之，其余仍 CANCELLED）与 `generation.resume` RPC（restore_state 全指纹校验，
 > dataset 重导入/描述符重指/checkpoint 换字节/约束改动均拒绝）；验收测试 = 硬杀后端→重启→resume→与不间断
 > 固定种子参照运行轮次记录逐字节一致（`test_generation_ipc.py::test_generation_resume_after_interruption`）。
+> **更新（2026-10-03，选择策略对比 + fps 重跑基线去混杂，记录 `docs/reviews/2026-10-02-selection-strategy-sweep.md` §5）**：
+> local_incremental_maximin_v1 sweep（20260930T101403Z）与当前代码 fps 重跑基线（20261002T010733Z，同
+> scaled 口径）逐 seed 配对：**策略效应 20/20 成立**（random +77.46±8.07/100、genetic +95.75、
+> target_region +71.15、genetic-target +54.42；pso/pso-target 不显著——记忆式引导与局部选择可能同效）；
+> **reuse×策略交互翻案**：fps 下 reuse 是毒药（24.45，vs random 0/20）→ local 下最优（258.90，20/20），
+> 「reuse is poison」降级为 fps 策略专属结论。旧跨 sweep 混杂差值分解 = 口径 +61.6 ⊕ 策略 +77.5（random）。
+> **任何"优化器 X 优于 Y"的引用必须同时声明选择策略与计数口径**——local 下排名（reuse>genetic>random≈TR）
+> 与 fps 下排名（pso-target>pso>random>TR>genetic>reuse）几乎反转。
+> 推荐默认（最终版）：全局发现 = random+local（稳健 147.45±10.26）或 random-reuse+local（上限 258.90，重尾）；
+> 已接受区域加密 = random-reuse+fps；定向补采样 = random+search target（不变）。fps 为快路径（wall ≈0.55×，
+> 其下最优发现组 pso-target）。PdCuNiP sweep（20261002T005922Z，进行中）完成后仅做同口径组内迁移验证。
