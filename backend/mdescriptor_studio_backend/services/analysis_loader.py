@@ -153,7 +153,7 @@ class AnalysisDataMixin:
         elif analysis_type == "fps" and params.get("existing_run_id"):
             # Warm-start FPS: candidates plus the existing training set.
             ids = [params.get("run_id"), params.get("existing_run_id")]
-        elif analysis_type in ("compare", "mantel"):
+        elif analysis_type in ("compare", "mantel", "information_imbalance"):
             ids = [params.get("left_run_id") or params.get("reference_run_id"), params.get("right_run_id") or params.get("query_run_id")]
         elif analysis_type == "sensitivity":
             ids = params.get("run_ids") or []

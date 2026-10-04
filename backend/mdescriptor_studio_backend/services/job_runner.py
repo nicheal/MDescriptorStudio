@@ -127,7 +127,7 @@ class AnalysisRunMixin:
             # PCA is deterministic; keep old callers and the generic request
             # path on one cache identity regardless of an irrelevant seed.
             params.update({"mode": mode, "preprocess": preprocess, "seed": 42})
-        if analysis_type == "effective_dimension" and ("preprocess" not in params or params["preprocess"] is None or params["preprocess"] == ""):
+        if analysis_type in ("effective_dimension", "spectral_effective_dimension") and ("preprocess" not in params or params["preprocess"] is None or params["preprocess"] == ""):
             # Keep the backend default identical to the UI default so omitted
             # and explicit standardized requests share one cache identity.
             params["preprocess"] = "standardized"
