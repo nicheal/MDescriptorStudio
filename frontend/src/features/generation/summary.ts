@@ -22,6 +22,9 @@ export function discoveryStats(discovery: GenerationPcaDiscovery | null | undefi
     generated: discovery.generated_environments,
     novel: discovery.novel_environments,
     uniqueNovel: discovery.unique_novel_environments,
+    strictUniqueV2: discovery.strict_unique_v2,
+    archivedNovel: discovery.archived_unique_novel_environments,
+    rejectedScreening: discovery.rejected_screening ?? 0,
     fraction: discovery.generated_environments > 0
       ? (discovery.novel_environments / discovery.generated_environments) * 100
       : 0,

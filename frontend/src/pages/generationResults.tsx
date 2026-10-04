@@ -357,6 +357,9 @@ function LocalEnvironmentCard({ pca, error }: { pca: GenerationPca | null; error
         {metric(t("Generated environments"), stats.generated)}
         {metric(t("Novel environments (raw)"), stats.novel)}
         {stats.uniqueNovel != null && metric(t("Unique novel environments"), stats.uniqueNovel)}
+        {stats.strictUniqueV2 != null && metric(t("Order-invariant unique environments"), stats.strictUniqueV2)}
+        {stats.archivedNovel != null && stats.rejectedScreening > 0 &&
+          metric(t("Archived unique environments"), stats.archivedNovel)}
         {metric(t("Novel fraction"), `${stats.fraction.toFixed(1)} %`)}
       </div>
         </>}
@@ -364,6 +367,8 @@ function LocalEnvironmentCard({ pca, error }: { pca: GenerationPca | null; error
         {t("Novel environments are local descriptor rows farther than the novelty threshold from every archived environment. This is descriptor-space novelty and geometry screening; it does not establish physical stability or label quality.")}
         {" "}
         {t("The raw number sums per-candidate counts against the frozen archive; the unique number additionally removes environments already counted earlier in the same round — the convention the benchmark and the discovery-rate stop use.")}
+        {" "}
+        {t("The order-invariant number re-runs the same strict dedup in a canonical order — candidates by id, atom rows sorted — so permuting the arrival order or the atom rows cannot change it (gen-5). The archived number tracks what survived energy/force screening.")}
       </div>
       </Card>
   );

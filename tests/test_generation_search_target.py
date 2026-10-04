@@ -457,17 +457,23 @@ class TestRequestGating:
         with pytest.raises(AppError, match="requires anchor_frames"):
             parse_request(self._request(anchor_frames=[], target_mode="local_environment"))
 
-    def test_local_mode_requires_the_random_optimizer(self):
-        from mdescriptor_studio_backend.errors import AppError
-
-        with pytest.raises(AppError, match="random optimizer"):
-            parse_request(
+    def test_local_mode_supports_all_three_optimizers(self):
+        # gen-5 E3: the atomic-space kernel exists for random (targeted
+        # branch), genetic (roulette tickets) and pso (anchor pull); the
+        # parse gate admits all three.
+        for optimizer, params in (
+            ("random", {}),
+            ("genetic", {"children_per_seed": 4, "batch_accept": 2, "n_seeds": 8}),
+            ("pso", {"children_per_seed": 4, "batch_accept": 2, "n_seeds": 8}),
+        ):
+            request = parse_request(
                 self._request(
-                    optimizer="genetic",
-                    optimizer_params={"children_per_seed": 4, "batch_accept": 2, "n_seeds": 8},
+                    optimizer=optimizer,
+                    optimizer_params=params,
                     target_mode="local_environment",
                 )
             )
+            assert request.target_mode == "local_environment"
 
     def test_unknown_species_rejected(self):
         from mdescriptor_studio_backend.errors import AppError

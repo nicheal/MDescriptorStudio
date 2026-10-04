@@ -364,6 +364,72 @@ def count_strict_unique_environments(
     return unique
 
 
+def _canonical_row_order(rows: np.ndarray) -> np.ndarray:
+    """Canonical within-candidate row order: lexicographic by descriptor row.
+
+    ``np.lexsort`` with the column order reversed makes column 0 the primary
+    key; it is stable, so exact duplicate rows keep their stored order and the
+    permutation is deterministic. Per-dimension scaling with positive scales
+    preserves the first-differing coordinate and the sign of that difference,
+    so the order is identical whether rows are raw or scaled.
+    """
+    if rows.shape[0] <= 1:
+        return np.arange(rows.shape[0])
+    return np.lexsort(rows.T[::-1])
+
+
+def count_strict_unique_environments_v2(
+    selected: list[int],
+    candidate_ids: list[str],
+    atomic_values: np.ndarray,
+    row_offsets: np.ndarray,
+    threshold: float,
+    local_archive,
+) -> int:
+    """Permutation-invariant strict count (gen-5 ``strict_unique_v2``).
+
+    Same greedy strict-dedup semantics as :func:`count_strict_unique_environments`
+    — a row is counted only when strictly farther than ``threshold`` from the
+    frozen archive and from every already-counted novel row — but the visit
+    order is CANONICAL instead of arrival-defined: candidates are processed
+    sorted by ``candidate_id`` (the stable unique identity invariant added by
+    the 2026-10-02 audit P0 fix) and each candidate's atomic rows are processed
+    in :func:`_canonical_row_order` order. The count is therefore a pure
+    function of the selected row SET — permuting the arrival order or the
+    stored atom-row order cannot change it (both permutations are pinned by
+    tests). Canonical greedy is still greedy: it is not a maximum-spacing
+    representative set, and not a connected-component clustering — those are
+    different metric definitions (2026-09-30 local-selection audit §7.6).
+
+    The gen-4 visit-order count stays on the same record beside this one;
+    published R4 numbers are gen-4-caliber and remain valid. Space contract
+    identical to the gen-4 counter: batch-internal comparisons in the
+    archive's scaled space, frozen-archive mask queried with RAW rows.
+    """
+    atomic_values = np.asarray(atomic_values, dtype=np.float64)
+    threshold = float(threshold)
+    scaled = apply_scaling(local_archive.scaling, atomic_values)
+    blocks: list[tuple[str, int, int]] = []
+    for index in selected:
+        lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
+        if hi > lo:
+            blocks.append((candidate_ids[index], lo, hi))
+    blocks.sort(key=lambda item: item[0])
+    counted: np.ndarray | None = None
+    unique = 0
+    for _, lo, hi in blocks:
+        order = _canonical_row_order(scaled[lo:hi])
+        rows = atomic_values[lo:hi][order]
+        if rows.shape[0] == 0:
+            continue
+        archive_novel = local_archive.nearest_per_row(rows) > threshold
+        block = _candidate_novel_rows(scaled[lo:hi][order], archive_novel, counted, threshold)
+        if block.shape[0]:
+            unique += int(block.shape[0])
+            counted = block if counted is None else np.vstack([counted, block])
+    return unique
+
+
 @dataclass
 class RoundRecord:
     generation: int
@@ -392,6 +458,16 @@ class RoundRecord:
     # unique_novel_environments unless screening rejected a selected
     # candidate; None when the objective produces no counts.
     archived_unique_novel_environments: int | None = None
+    # Permutation-invariant counterpart of unique_novel_environments (gen-5
+    # strict_unique_v2): the same greedy strict dedup run in CANONICAL order
+    # (candidates by candidate_id, atomic rows lexicographic) so the count is
+    # a pure function of the selected row set. Coexists with the gen-4
+    # visit-order metric — published R4 numbers stay gen-4-caliber. None when
+    # the objective produces no counts.
+    strict_unique_v2: int | None = None
+    # strict_unique_v2 over the post-screening kept set; equals
+    # strict_unique_v2 unless screening rejected a selected candidate.
+    archived_strict_unique_v2: int | None = None
     # Candidates removed after selection by energy/force screening (R5.1):
     # still counted as discovered, never archived or fed back. Equal to the
     # round's "fail" verdict count — the screening breakdown below carries
@@ -424,6 +500,8 @@ class RoundRecord:
             "novel_environments": self.novel_environments,
             "unique_novel_environments": self.unique_novel_environments,
             "archived_unique_novel_environments": self.archived_unique_novel_environments,
+            "strict_unique_v2": self.strict_unique_v2,
+            "archived_strict_unique_v2": self.archived_strict_unique_v2,
             "rejected_screening": self.rejected_screening,
             "screening_passed": self.screening_passed,
             "screening_unscreenable": self.screening_unscreenable,
@@ -729,6 +807,18 @@ class GenerationEngine:
     ) -> int:
         return count_strict_unique_environments(selected, atomic_values, row_offsets, threshold, self.local_archive)
 
+    def _count_unique_novel_environments_v2(
+        self,
+        selected: list[int],
+        candidate_ids: list[str],
+        atomic_values: np.ndarray,
+        row_offsets: np.ndarray,
+        threshold: float,
+    ) -> int:
+        return count_strict_unique_environments_v2(
+            selected, candidate_ids, atomic_values, row_offsets, threshold, self.local_archive
+        )
+
     def run(self, check_cancelled=None, progress=None, on_round=None, on_evaluated=None) -> GenerationRunResult:
         check_cancelled = check_cancelled or (lambda: None)
         result = GenerationRunResult()
@@ -791,6 +881,9 @@ class GenerationEngine:
             # deliberately; extending a budget alone does not.
             if self._discovery_saturated(result.rounds, generation, counts_environments):
                 result.stopped_by = "discovery_saturated"
+                return result
+            if self._screening_bottleneck(result.rounds, generation, counts_environments):
+                result.stopped_by = "screening_bottleneck"
                 return result
             last_round = result.rounds[-1] if result.rounds else None
             if (
@@ -870,6 +963,8 @@ class GenerationEngine:
             novel_environments = 0
             unique_novel_environments: int | None = None
             archived_unique_novel_environments: int | None = None
+            strict_unique_v2: int | None = None
+            archived_strict_unique_v2: int | None = None
             # Screening verdict breakdown (2026-10-02 audit D); the gate below
             # only runs when candidates reached evaluation, so a round without
             # screening — or with none reaching it — keeps all three at zero.
@@ -981,8 +1076,12 @@ class GenerationEngine:
                 if scores.novel_environment_count is not None and self.local_archive is not None and evaluation.atomic_values is not None:
                     threshold = getattr(self.objective, "novel_environment_threshold", None)
                     if threshold is not None:
+                        candidate_ids = [candidate.candidate_id for candidate in valid]
                         unique_novel_environments = self._count_unique_novel_environments(
                             discovered, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
+                        )
+                        strict_unique_v2 = self._count_unique_novel_environments_v2(
+                            discovered, candidate_ids, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
                         )
                         if rejected_screening:
                             archived_unique_novel_environments = (
@@ -992,8 +1091,16 @@ class GenerationEngine:
                                 if selected
                                 else 0
                             )
+                            archived_strict_unique_v2 = (
+                                self._count_unique_novel_environments_v2(
+                                    selected, candidate_ids, evaluation.atomic_values, evaluation.row_offsets, float(threshold)
+                                )
+                                if selected
+                                else 0
+                            )
                         else:
                             archived_unique_novel_environments = unique_novel_environments
+                            archived_strict_unique_v2 = strict_unique_v2
                 # Every evaluated candidate (accepted or not) feeds the
                 # descriptor-space map the results view animates.
                 for index in range(len(valid)):
@@ -1183,6 +1290,8 @@ class GenerationEngine:
                 novel_environments=novel_environments,
                 unique_novel_environments=unique_novel_environments,
                 archived_unique_novel_environments=archived_unique_novel_environments,
+                strict_unique_v2=strict_unique_v2,
+                archived_strict_unique_v2=archived_strict_unique_v2,
                 rejected_screening=rejected_screening,
                 screening_passed=screening_passed,
                 screening_unscreenable=screening_unscreenable,
@@ -1207,6 +1316,9 @@ class GenerationEngine:
             # the original stop decision exactly (one definition).
             if self._discovery_saturated(result.rounds, generation, counts_environments):
                 result.stopped_by = "discovery_saturated"
+                break
+            if self._screening_bottleneck(result.rounds, generation, counts_environments):
+                result.stopped_by = "screening_bottleneck"
                 break
             if progress is not None:
                 fraction_cap = self.budget.max_evaluations
@@ -1242,6 +1354,37 @@ class GenerationEngine:
             record.unique_novel_environments if record.unique_novel_environments is not None else record.novel_environments
             for record in rounds[-window:]
         )
+        spent = sum(record.evaluations for record in rounds[-window:])
+        min_rate = float(getattr(self.budget, "min_novel_per_100_evals", 0.0) or 0.0)
+        return spent > 0 and gained < min_rate * spent / 100.0
+
+    def _screening_bottleneck(self, rounds: list, generation: int, counts_environments: bool) -> bool:
+        """Screening-bottleneck saturation (gen-5): the ARCHIVED discovery
+        rate — what survived the energy/force screen and actually entered the
+        local archive — fell below the floor while the pre-screen discovery
+        rate did not. The descriptor frontier is not exhausted; the screen is
+        rejecting nearly everything the selector finds, so expanding further
+        burns evaluations without growing the training set. Only runs with
+        energy screening can hit it, and it is consulted only AFTER
+        :meth:`_discovery_saturated` returned False, so descriptor
+        exhaustion keeps the stronger, pre-existing stop reason. Reads the
+        same ``discovery_window`` / ``min_novel_per_100_evals`` knobs (the
+        zero default keeps it off) and is shared verbatim by the round loop
+        and the resume re-check. Archived rounds without the gen-5 v2 fields
+        (old records) fall back to the gen-4 archived metric."""
+        if self.energy_screening is None:
+            return False
+        window = int(getattr(self.budget, "discovery_window", 0) or 0)
+        if not window or not counts_environments or generation < window:
+            return False
+        gained = 0
+        for record in rounds[-window:]:
+            if record.archived_unique_novel_environments is not None:
+                gained += record.archived_unique_novel_environments
+            elif record.unique_novel_environments is not None:
+                gained += record.unique_novel_environments
+            else:
+                gained += record.novel_environments
         spent = sum(record.evaluations for record in rounds[-window:])
         min_rate = float(getattr(self.budget, "min_novel_per_100_evals", 0.0) or 0.0)
         return spent > 0 and gained < min_rate * spent / 100.0

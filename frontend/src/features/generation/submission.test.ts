@@ -122,23 +122,27 @@ describe("buildSubmitPayload local-environment anchors", () => {
     expect(parseAnchorSpecies("")).toEqual([]);
   });
 
-  it("flags a local target without anchors and with a non-random optimizer", () => {
+  it("flags a local target without anchors; genetic and pso are now supported (gen-5 E3)", () => {
     const issues = validateConfigFields({
       ...config(defaultOptimizerConfig("random")),
       searchTarget: { ...defaultGenerationConfig().searchTarget, targetMode: "local_environment", anchorSpecies: "C" },
     });
     expect(issues.some((i) => i.field === "searchTarget.anchorFrames")).toBe(true);
-    const genetic = validateConfigFields({
-      ...config(defaultOptimizerConfig("genetic")),
-      searchTarget: {
-        ...defaultGenerationConfig().searchTarget,
-        anchorFrames: [1],
-        targetMode: "local_environment",
-        anchorSpecies: "C",
-      },
-    });
-    expect(genetic.some((i) => i.field === "searchTarget.targetMode")).toBe(true);
-    expect(genetic.some((i) => i.field === "searchTarget.anchorSpecies")).toBe(false);
+    for (const optimizer of ["genetic", "pso"] as const) {
+      const genetic = validateConfigFields({
+        ...config(defaultOptimizerConfig(optimizer)),
+        searchTarget: {
+          ...defaultGenerationConfig().searchTarget,
+          anchorFrames: [1],
+          targetMode: "local_environment",
+          anchorSpecies: "C",
+        },
+      });
+      // The optimizer gate is gone — the payload validation no longer
+      // rejects non-random optimizers for local targeting.
+      expect(genetic.some((i) => i.field === "searchTarget.targetMode")).toBe(false);
+      expect(genetic.some((i) => i.field === "searchTarget.anchorSpecies")).toBe(false);
+    }
   });
 });
 

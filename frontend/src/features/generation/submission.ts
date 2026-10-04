@@ -146,9 +146,10 @@ export function validateConfigFields(config: GenerationConfig): ConfigIssue[] {
   if (config.searchTarget.targetMode === "local_environment") {
     if (anchorFrames.length === 0) {
       add("searchTarget.anchorFrames", "Local-environment targeting requires anchor frames");
-    } else if (config.optimizer.type !== "random") {
-      add("searchTarget.targetMode", "Local-environment targeting is currently supported with the random optimizer");
     }
+    // gen-5 E3: the atomic-space kernel exists for all three optimizers
+    // (random targeted branch, GA roulette tickets, PSO anchor pull) — the
+    // backend parse gate remains the authority on unsupported combinations.
     const species = parseAnchorSpecies(config.searchTarget.anchorSpecies);
     if (species == null) {
       add("searchTarget.anchorSpecies", "Anchor species must be element symbols separated by commas");

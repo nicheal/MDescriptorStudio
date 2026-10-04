@@ -320,3 +320,38 @@ class TestEngineIntegration:
         assert result.evaluation_count <= 200
         particles = optimizer.state_dict()["particles"]
         assert any(p["pbest"] is not None for p in particles)
+
+
+class TestLocalTargeting:
+    def test_anchor_pull_selects_by_combined_distance(self):
+        # gen-5 E3: with local anchors active, the anchor-pull target is the
+        # seed minimizing hypot(structure, local) — a seed slightly farther
+        # in structure space but sitting on the local anchor wins.
+        optimizer = _optimizer(pso_weight_anchor=1.5)
+        pool = _seed_pool(2)
+        context = OptimizationContext(
+            seed_pool=tuple(pool),
+            n_seeds=2,
+            budget=Budget(),
+            anchor_descriptors=(np.asarray([0.0, 0.0, 0.0]),),
+            local_anchor_descriptors=(np.asarray([0.0, 0.0, 0.0]),),
+            region_radius=1.0,
+            seed_local_distances=(10.0, 0.0),
+            seed_descriptors=(np.asarray([1.0, 0.0, 0.0]), np.asarray([1.5, 0.0, 0.0])),
+        )
+        optimizer.initialize(context)
+        assert optimizer._nearest_anchor_structure() is pool[1]
+
+    def test_without_local_anchors_the_structure_distance_decides(self):
+        optimizer = _optimizer(pso_weight_anchor=1.5)
+        pool = _seed_pool(2)
+        context = OptimizationContext(
+            seed_pool=tuple(pool),
+            n_seeds=2,
+            budget=Budget(),
+            anchor_descriptors=(np.asarray([0.0, 0.0, 0.0]),),
+            region_radius=1.0,
+            seed_descriptors=(np.asarray([1.0, 0.0, 0.0]), np.asarray([1.5, 0.0, 0.0])),
+        )
+        optimizer.initialize(context)
+        assert optimizer._nearest_anchor_structure() is pool[0]

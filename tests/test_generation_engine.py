@@ -4,6 +4,9 @@ descriptor engine is needed."""
 
 from __future__ import annotations
 
+import itertools
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -11,7 +14,7 @@ from mdescriptor_studio_backend.analysis.sampling import fit_scaling
 from mdescriptor_studio_backend.datasets.base import DatasetFrame
 from mdescriptor_studio_backend.generation.archive import DescriptorArchive, LocalEnvironmentArchive
 from mdescriptor_studio_backend.generation.constraints import build_constraints
-from mdescriptor_studio_backend.generation.engine import GenerationEngine
+from mdescriptor_studio_backend.generation.engine import GenerationEngine, RoundRecord
 from mdescriptor_studio_backend.generation.evaluator import DescriptorEvaluation
 from mdescriptor_studio_backend.generation.models import Budget, OperatorSpec, StructureCandidate
 from mdescriptor_studio_backend.generation.objectives import CompositeObjective, NoveltyObjective
@@ -815,3 +818,148 @@ def test_evaluator_signature_captures_descriptor_identity():
     # Parameters are captured by value: later caller-side mutation must not
     # rewrite the identity of an already-built evaluator.
     assert DescriptorEvaluator(_Adapter(), "ACE", {}, device="cpu").signature()["descriptor_parameters"] == {}
+
+
+class TestStrictUniqueV2Metric:
+    """gen-5 strict_unique_v2: the canonical-order greedy count is a pure
+    function of the selected row set — candidate arrival order and stored
+    atom-row order cannot change it (2026-09-30 local-selection audit §7.6
+    sketched the fix, the 2026-10-02 audit P0 candidate-identity invariant
+    made it possible)."""
+
+    def _engine_with_archive(self):
+        engine = _engine(42)
+        # Archive reference far from every test row so archive-novelty is
+        # trivially true and the tests exercise batch-internal dedup only.
+        reference = np.array([[10.0]])
+        scaling, _ = fit_scaling(reference, "raw")
+        engine.local_archive = LocalEnvironmentArchive(reference, scaling)
+        return engine
+
+    def test_candidate_order_permutation_leaves_v2_unchanged(self):
+        # Star geometry, threshold 0.6: candidate A holds the two leaves
+        # [0.45, 1.55] (1.1 apart), candidate B the centre [1.0] (within
+        # 0.6 of both leaves). Visiting the leaves first claims both and
+        # the centre falls inside their radius → gen-4 reports 2; visiting
+        # the centre first claims it and both leaves fall inside its
+        # radius → gen-4 reports 1. The gen-4 metric is order-defined by
+        # contract; v2 sorts by candidate_id (leaves = cand-a process
+        # first) and must report the same number for every arrival order.
+        engine = self._engine_with_archive()
+        atomic = np.array([[0.45], [1.55], [1.0]])
+        offsets = np.array([0, 2, 3])
+        ids = ["cand-a", "cand-b"]
+        gen4_leaves_first = engine._count_unique_novel_environments([0, 1], atomic, offsets, 0.6)
+        gen4_centre_first = engine._count_unique_novel_environments([1, 0], atomic, offsets, 0.6)
+        assert (gen4_leaves_first, gen4_centre_first) == (2, 1)
+        for order in ([0, 1], [1, 0]):
+            assert engine._count_unique_novel_environments_v2(order, ids, atomic, offsets, 0.6) == 2
+
+    def test_atom_row_permutation_leaves_v2_unchanged(self):
+        # Same star in one candidate: stored order [1.0, 0.45, 1.55] claims
+        # the centre first and reports 1, ascending order reports 2 — gen-4
+        # is row-order-defined. v2 canonicalizes the row order, so every
+        # permutation reports 2.
+        engine = self._engine_with_archive()
+        offsets = np.array([0, 3])
+        gen4 = {}
+        for permutation in itertools.permutations([0, 1, 2]):
+            atomic = np.array([[1.0], [0.45], [1.55]])[list(permutation)]
+            gen4[permutation] = engine._count_unique_novel_environments([0], atomic, offsets, 0.6)
+            assert engine._count_unique_novel_environments_v2([0], ["cand-a"], atomic, offsets, 0.6) == 2, (
+                f"permutation {permutation} changed the v2 count"
+            )
+        assert len(set(gen4.values())) > 1, "test lost its teeth: gen-4 no longer varies with row order"
+
+    def test_v2_fields_flow_through_a_run(self):
+        pool = _seed_pool(2)
+        structure_archive, local_archive = _archives(pool)
+        operator = GENERATION_REGISTRY.build_operator(
+            OperatorSpec("atomic_displacement", {"max_sigma": 1e-9})
+        )
+        optimizer = RandomSearchOptimizer([operator], children_per_seed=2, batch_accept=1)
+        engine = GenerationEngine(
+            seed_pool=pool,
+            evaluator=_StubEvaluator(),
+            structure_archive=structure_archive,
+            local_archive=local_archive,
+            objective=CompositeObjective(structure_weight=0.5, local_weight=0.5, novelty_threshold=0.25),
+            optimizer=optimizer,
+            constraints=build_constraints({"min_distance_mode": "none"}),
+            budget=Budget(max_evaluations=10**6, max_accepted=4, max_generations=4),
+            rng=np.random.default_rng(5),
+            n_seeds=2,
+        )
+        result = engine.run()
+        for record in result.rounds:
+            assert record.strict_unique_v2 is not None
+            # Same greedy semantics, different visit order: the invariant
+            # count stays within the visit-order count's bounds.
+            assert record.strict_unique_v2 <= record.novel_environments
+        payload = result.rounds[-1].to_json()
+        assert "strict_unique_v2" in payload and "archived_strict_unique_v2" in payload
+
+    def test_screening_bottleneck_stop_fires_when_the_archive_starves(self):
+        # Screening rejects every selected candidate: the pre-screen
+        # discovery rate stays above the floor (the descriptor frontier is
+        # not exhausted) while the archived rate is zero — the screen is
+        # the bottleneck, and gen-5 stops with its own reason instead of
+        # running to max_generations.
+        pool = _seed_pool(2)
+        structure_archive, local_archive = _archives(pool)
+
+        class _FreshRegionEvaluator:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def evaluate(self, candidates, *, return_atomic=False, control=None):
+                n = len(candidates)
+                value = 100.0 + 10.0 * self.calls
+                self.calls += 1
+                return DescriptorEvaluation(
+                    structure_values=np.full((n, 3), value),
+                    atomic_values=np.full((n, 3), value),
+                    row_offsets=np.arange(n + 1, dtype=np.int64),
+                )
+
+        class _RejectAllScreen:
+            def screen(self, candidates):
+                return [_RejectAllScreen.verdict() for _ in candidates]
+
+            @staticmethod
+            def verdict():
+                return SimpleNamespace(accepted=False, status="fail", reasons=("energy",))
+
+        operators = [GENERATION_REGISTRY.build_operator(OperatorSpec("atomic_displacement", {"max_sigma": 1e-9}))]
+        engine = GenerationEngine(
+            seed_pool=pool,
+            evaluator=_FreshRegionEvaluator(),
+            structure_archive=structure_archive,
+            local_archive=local_archive,
+            objective=CompositeObjective(structure_weight=0.5, local_weight=0.5, novelty_threshold=0.25),
+            optimizer=RandomSearchOptimizer(operators, children_per_seed=4, batch_accept=4),
+            constraints=build_constraints({"min_distance_mode": "none"}),
+            budget=Budget(max_evaluations=10**6, max_accepted=100, max_generations=10, discovery_window=2, min_novel_per_100_evals=5.0),
+            rng=np.random.default_rng(7),
+            n_seeds=2,
+            energy_screening=_RejectAllScreen(),
+        )
+        result = engine.run()
+        assert result.stopped_by == "screening_bottleneck"
+        assert len(result.rounds) == 2
+        # The discovered rate stayed above the floor: the descriptor stop
+        # must NOT have fired.
+        assert result.rounds[-1].unique_novel_environments is not None
+        assert result.rounds[-1].archived_unique_novel_environments == 0
+        assert result.rounds[-1].archived_strict_unique_v2 == 0
+
+    def test_screening_bottleneck_never_fires_without_screening(self):
+        engine = _engine(42)
+        rounds = [
+            RoundRecord(generation=1, evaluations=100, proposed=10, rejected_geometry=0,
+                        rejected_duplicate=0, accepted=5, best_fitness=1.0, best_novelty=None,
+                        mean_novelty=None, coverage_radius=None, novel_environments=0,
+                        unique_novel_environments=0, archived_unique_novel_environments=0),
+        ]
+        assert engine.energy_screening is None
+        assert engine._screening_bottleneck(rounds, 1, True) is False

@@ -1203,6 +1203,17 @@ class GenerationService:
         # conventions instead of labelling the raw sum as "the" novel count.
         rounds = reader.convergence().get("rounds", [])
         unique_novel_environments = sum(int(r.get("unique_novel_environments") or 0) for r in rounds)
+        # gen-5 secondary metrics: the permutation-invariant counterpart and
+        # the post-screening archived rate. Keys are omitted entirely for
+        # older runs whose records carry no such fields, so the frontend can
+        # hide the rows instead of showing misleading zeros.
+        v2_rounds = [int(r["strict_unique_v2"]) for r in rounds if r.get("strict_unique_v2") is not None]
+        archived_rounds = [
+            int(r["archived_unique_novel_environments"])
+            for r in rounds
+            if r.get("archived_unique_novel_environments") is not None
+        ]
+        rejected_screening_total = sum(int(r.get("rejected_screening") or 0) for r in rounds)
         generated_environments = 0
         local_file = root / "local_environment_descriptors.npy"
         if local_file.is_file():
@@ -1237,6 +1248,9 @@ class GenerationService:
                 "generated_environments": generated_environments,
                 "novel_environments": novel_environments,
                 "unique_novel_environments": unique_novel_environments,
+                "rejected_screening": rejected_screening_total,
+                **({"strict_unique_v2": sum(v2_rounds)} if v2_rounds else {}),
+                **({"archived_unique_novel_environments": sum(archived_rounds)} if archived_rounds else {}),
             },
         }
         return _json_safe(payload)

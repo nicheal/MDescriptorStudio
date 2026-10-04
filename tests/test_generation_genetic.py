@@ -620,3 +620,59 @@ class TestRequestParsing:
             parse_request(
                 self._request(optimizer="random", optimizer_params={"children_per_seed": 4, "parent_fraction": 0.7})
             )
+
+
+class TestLocalTargeting:
+    def test_local_anchors_weight_the_roulette(self):
+        # gen-5 E3: with equal structure distances to the anchors, the pool
+        # member whose atom rows sit ON the local anchor carries its rank
+        # tickets times exp(-(d_local/r)^2) = 1, while the far member's
+        # weight collapses — the near member dominates the draws.
+        optimizer = _optimizer(pressure_warmup_pool=0, parent_fraction=1.0)
+        context = OptimizationContext(
+            seed_pool=tuple(_seed_pool(4)),
+            n_seeds=4,
+            budget=Budget(),
+            anchor_descriptors=(np.asarray([50.0, 50.0, 50.0]),),
+            local_anchor_descriptors=(np.asarray([0.0, 0.0, 0.0]),),
+            region_radius=1.0,
+            seed_local_distances=(None, None, None, None),
+        )
+        optimizer.initialize(context)
+        pool = _seed_pool(2)
+        optimizer._pool = [(candidate, optimizer._initial_genome()) for candidate in pool]
+        optimizer._pool_descriptors = [np.asarray([50.0, 50.0, 50.0]), np.asarray([50.0, 50.0, 50.0])]
+        optimizer._pool_local_distances = [0.0, 10.0]
+        rng = np.random.default_rng(11)
+        eligible = optimizer._eligible_parents()
+        picks = [optimizer._roulette_pick(eligible, rng)[0].candidate_id for _ in range(4000)]
+        near = picks.count(pool[0].candidate_id) / len(picks)
+        assert near > 0.95, near
+
+    def test_missing_atomic_signal_stays_neutral(self):
+        # A pool member without an atomic signal (None) keeps exactly its
+        # rank tickets — the local factor is an exact 1.0, so runs without
+        # local anchors are bit-identical to before.
+        optimizer = _optimizer(pressure_warmup_pool=0, parent_fraction=1.0)
+        context = OptimizationContext(
+            seed_pool=tuple(_seed_pool(4)),
+            n_seeds=4,
+            budget=Budget(),
+            anchor_descriptors=(np.asarray([50.0, 50.0, 50.0]),),
+            local_anchor_descriptors=(np.asarray([0.0, 0.0, 0.0]),),
+            region_radius=1.0,
+            seed_local_distances=(None, None, None, None),
+        )
+        optimizer.initialize(context)
+        pool = _seed_pool(2)
+        optimizer._pool = [(candidate, optimizer._initial_genome()) for candidate in pool]
+        optimizer._pool_descriptors = [np.asarray([50.0, 50.0, 50.0]), np.asarray([50.0, 50.0, 50.0])]
+        optimizer._pool_local_distances = [None, None]
+        expected = [(2 - r) ** 2 for r in range(2)]  # m=2 marginals: (4, 1)
+        total = sum(expected)
+        rng = np.random.default_rng(11)
+        eligible = optimizer._eligible_parents()
+        picks = [optimizer._roulette_pick(eligible, rng)[0].candidate_id for _ in range(40_000)]
+        for r, candidate in enumerate(pool):
+            observed = picks.count(candidate.candidate_id) / len(picks)
+            assert abs(observed - expected[r] / total) < 0.02, (candidate.candidate_id, observed)

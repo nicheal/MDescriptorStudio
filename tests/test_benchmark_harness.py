@@ -103,21 +103,34 @@ class TestSeedPoolAssembly:
 
 
 class TestPreregistration:
-    def test_repo_config_loads_and_matches_the_frozen_scenario(self):
-        # The checked-in benchmark/config.json must always validate against
-        # the harness constants — drift is exactly what pre-registration
-        # exists to surface.
+    def test_frozen_configs_are_rejected_for_rerun_after_a_version_bump(self):
+        # The checked-in configs are historical gen-4 pre-registrations.
+        # After the gen-5 bump the contract must refuse to rerun them —
+        # that is exactly the drift pre-registration exists to surface
+        # (improvement-plan F: a gen-5 freeze gets NEW pre-registrations,
+        # the archived numbers keep their own caliber annotation).
+        import json
+
         harness = _load_harness()
-        config = harness._load_preregistration(REPO / "benchmark" / "config.json")
+        assert harness.GENERATION_ALGORITHM_VERSION == "gen-5"
+        for name in ("config.json", "config.local-selection.json", "config.pdcunip.json"):
+            frozen = json.loads((REPO / "benchmark" / name).read_text(encoding="utf-8"))
+            assert frozen["algorithm_version"] == "gen-4"
+            with pytest.raises(SystemExit, match="algorithm_version"):
+                harness._load_preregistration(REPO / "benchmark" / name)
+
+    def test_restamped_preregistration_loads(self, tmp_path):
+        harness = _load_harness()
+        config = _current_preregistration("config.json", tmp_path)
         assert config["kind"] == "generation-benchmark-preregistration"
         assert config["selection_strategy"] == "structure_fps_v1"
         assert config["primary_metric"] == "unique_per_100_evals"
 
-    def test_local_selection_config_loads(self):
+    def test_local_selection_config_loads(self, tmp_path):
         # The second pre-registration (selection-strategy comparison) must
         # validate against the same frozen scenario constants.
         harness = _load_harness()
-        config = harness._load_preregistration(REPO / "benchmark" / "config.local-selection.json")
+        config = _current_preregistration("config.local-selection.json", tmp_path)
         assert config["selection_strategy"] == "local_incremental_maximin_v1"
         assert len(config["groups"]) == 7
 
@@ -127,6 +140,7 @@ class TestPreregistration:
         harness = _load_harness()
         config = json.loads((REPO / "benchmark" / "config.json").read_text(encoding="utf-8"))
         config["objective"]["novelty_threshold"] = 0.5  # any silent drift
+        config["algorithm_version"] = harness.GENERATION_ALGORITHM_VERSION
         path = tmp_path / "config.json"
         path.write_text(json.dumps(config), encoding="utf-8")
         with pytest.raises(SystemExit, match="diverges"):
@@ -136,9 +150,9 @@ class TestPreregistration:
         import json
 
         harness = _load_harness()
-        config = json.loads((REPO / "benchmark" / "config.json").read_text(encoding="utf-8"))
+        path = _mutated_config(tmp_path, {})
+        config = json.loads(path.read_text(encoding="utf-8"))
         del config["seed_base"]
-        path = tmp_path / "config.json"
         path.write_text(json.dumps(config), encoding="utf-8")
         with pytest.raises(SystemExit, match="seed_base"):
             harness._load_preregistration(path)
@@ -159,11 +173,32 @@ class TestPreregistration:
 def _mutated_config(tmp_path: Path, mutations: dict) -> Path:
     import json
 
+    harness = _load_harness()
     config = json.loads((REPO / "benchmark" / "config.json").read_text(encoding="utf-8"))
+    # The checked-in config is a historical gen-4 pre-registration; the
+    # contract clauses under test re-stamp the current version explicitly
+    # (a version mutation overrides it again).
+    config["algorithm_version"] = harness.GENERATION_ALGORITHM_VERSION
     config.update(mutations)
     path = tmp_path / "config.json"
     path.write_text(json.dumps(config), encoding="utf-8")
     return path
+
+
+def _current_preregistration(name: str, tmp_path: Path) -> dict:
+    """A frozen repo config re-stamped for the CURRENT engine version.
+
+    The checked-in configs are historical gen-4 pre-registrations; after a
+    GENERATION_ALGORITHM_VERSION bump the contract rejects them for rerun.
+    Tests exercising the other contract clauses re-stamp the version."""
+    import json
+
+    harness = _load_harness()
+    config = json.loads((REPO / "benchmark" / name).read_text(encoding="utf-8"))
+    config["algorithm_version"] = harness.GENERATION_ALGORITHM_VERSION
+    path = tmp_path / name
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return harness._load_preregistration(path)
 
 
 class TestPreregistrationContract:
@@ -171,9 +206,9 @@ class TestPreregistrationContract:
     configs that only failed (or silently ran) later; the full registration
     contract is now enforced at load."""
 
-    def test_pdcunip_config_loads_with_material_specific_anchors(self):
+    def test_pdcunip_config_pins_material_specific_anchors(self, tmp_path):
         harness = _load_harness()
-        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        config = _current_preregistration("config.pdcunip.json", tmp_path)
         assert config["dataset_id"] == "ds_9ca89d14f8f0"
         # 2026-10-01 pre-run correction: the copied carbon indices are not
         # valid anchors on PdCuNiP (one fails geometry, one sits in the
@@ -266,9 +301,9 @@ class TestPreregistrationContract:
         with pytest.raises(SystemExit, match="dataset_id"):
             harness._load_preregistration(path)
 
-    def test_apply_preregistration_resolves_the_material(self):
+    def test_apply_preregistration_resolves_the_material(self, tmp_path):
         harness = _load_harness()
-        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        config = _current_preregistration("config.pdcunip.json", tmp_path)
         params = harness.apply_preregistration(config)
         assert harness.DATASET_ID == "ds_9ca89d14f8f0"
         assert harness.RUN_ID == "run_644f6186340c"
@@ -300,7 +335,7 @@ class TestResumeMaterialGuard:
         import json
 
         harness, resume = self._harness_and_resume()
-        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        config = _current_preregistration("config.pdcunip.json", tmp_path)
         (tmp_path / "config.used.json").write_text(
             json.dumps(config | {"dataset_id": "ds_d56748fb4391"}), encoding="utf-8"
         )
@@ -314,7 +349,7 @@ class TestResumeMaterialGuard:
         import json
 
         harness, resume = self._harness_and_resume()
-        config = harness._load_preregistration(REPO / "benchmark" / "config.json")
+        config = _current_preregistration("config.json", tmp_path)
         used = {k: v for k, v in config.items() if k not in ("metric_caliber",)}
         used["note"] = used["note"] + " 2026-10-01 caliber annotation ..."
         (tmp_path / "config.used.json").write_text(json.dumps(used), encoding="utf-8")
@@ -322,22 +357,22 @@ class TestResumeMaterialGuard:
 
     def test_rows_of_another_material_are_refused(self, tmp_path):
         harness, resume = self._harness_and_resume()
-        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        config = _current_preregistration("config.pdcunip.json", tmp_path)
         rows = [{"optimizer": "random", "seed": 1000, "dataset_id": "ds_d56748fb4391", "descriptor_run_id": "run_57a8b8c40286"}]
         with pytest.raises(SystemExit, match="mixed-material"):
             resume._verify_row_identities(rows, config)
 
-    def test_matching_rows_pass(self):
+    def test_matching_rows_pass(self, tmp_path):
         harness, resume = self._harness_and_resume()
-        config = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        config = _current_preregistration("config.pdcunip.json", tmp_path)
         rows = [{"optimizer": "random", "seed": 1000, "dataset_id": "ds_9ca89d14f8f0", "descriptor_run_id": "run_644f6186340c"}]
         resume._verify_row_identities(rows, config)
 
-    def test_legacy_rows_without_identity_only_fit_the_default_experiment(self):
+    def test_legacy_rows_without_identity_only_fit_the_default_experiment(self, tmp_path):
         harness, resume = self._harness_and_resume()
         rows = [{"optimizer": "random", "seed": 1000}]
-        carbon = harness._load_preregistration(REPO / "benchmark" / "config.json")
+        carbon = _current_preregistration("config.json", tmp_path)
         resume._verify_row_identities(rows, carbon)  # default carbon: admissible
-        pdcunip = harness._load_preregistration(REPO / "benchmark" / "config.pdcunip.json")
+        pdcunip = _current_preregistration("config.pdcunip.json", tmp_path)
         with pytest.raises(SystemExit, match="predates material identity"):
             resume._verify_row_identities(rows, pdcunip)

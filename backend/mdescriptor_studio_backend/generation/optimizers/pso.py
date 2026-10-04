@@ -134,14 +134,20 @@ class PSOOptimizer:
     def _nearest_anchor_structure(self):
         """The seed-pool structure closest to the anchor region (the
         search-target pull target). Anchors are forced into the seed pool
-        by the worker, so this is the anchor frame itself."""
+        by the worker, so this is the anchor frame itself. With local
+        anchors active (gen-5 E3) the seed is chosen by the combined
+        structure + local-environment distance — the same combination the
+        random optimizer's targeted branch uses; a seed without an atomic
+        signal falls back to its structure distance."""
         if self._context is None or not self._context.anchor_descriptors:
             return None
+        local_anchors = list(self._context.local_anchor_descriptors)
+        seed_local = list(self._context.seed_local_distances)
         best, best_d = None, float("inf")
-        for candidate, descriptor in zip(
+        for index, (candidate, descriptor) in enumerate(zip(
             self._context.seed_pool,
             self._context.seed_descriptors or [None] * len(self._context.seed_pool),
-        ):
+        )):
             if descriptor is None:
                 continue
             d = self._distance(
@@ -151,6 +157,10 @@ class PSOOptimizer:
                     key=lambda a: float(np.linalg.norm(np.asarray(descriptor, dtype=np.float64) - a)),
                 ),
             )
+            if local_anchors:
+                dl = (seed_local + [None] * len(self._context.seed_pool))[index]
+                if dl is not None:
+                    d = float(np.hypot(d, float(dl)))
             if d < best_d:
                 best, best_d = candidate, d
         return best

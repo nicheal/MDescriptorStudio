@@ -191,6 +191,11 @@ GENERATION_REGISTRY = GenerationRegistry()
 # radius, and the objective-capability-gated discovery stop changed the
 # meaning of persisted metrics (convergence coverage_radius, coverage
 # fitness), so runs from gen-3 and gen-4 are not comparable.
-GENERATION_ALGORITHM_VERSION = "gen-4"
+# gen-5 (2026-10-03 improvement-plan E2): adds the permutation-invariant
+# strict_unique_v2 metric, its archived counterpart, and the
+# screening_bottleneck stop. The gen-4 visit-order metric itself is unchanged
+# and still reported, but persisted records now carry the new fields and the
+# stop vocabulary gained a reason — version the record schema accordingly.
+GENERATION_ALGORITHM_VERSION = "gen-5"
 
 __all__ = ["GENERATION_REGISTRY", "GENERATION_ALGORITHM_VERSION", "GenerationRegistry"]

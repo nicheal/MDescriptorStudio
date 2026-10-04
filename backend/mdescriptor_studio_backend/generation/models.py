@@ -620,13 +620,14 @@ def parse_request(params: dict) -> GenerationRequest:
             raise AppError(INVALID_PARAMS, "anchor_species must not repeat a symbol")
     if target_mode == "local_environment":
         # The local anchor rows are the anchor frames' atom rows — without
-        # anchors there is nothing to target; the atomic-space kernel is
-        # implemented for the random optimizer's targeted branch only (the
-        # recommended targeting optimizer; GA/PSO are a documented extension).
+        # anchors there is nothing to target. The atomic-space kernel exists
+        # for all three optimizers (gen-5 E3): the random targeted branch,
+        # the GA roulette tickets and the PSO anchor pull all carry the
+        # exp(-(d_local/r)^2) factor.
         if not anchor_frames:
             raise AppError(INVALID_PARAMS, "target_mode local_environment requires anchor_frames")
-        if optimizer != "random":
-            raise AppError(INVALID_PARAMS, "target_mode local_environment is currently supported with the random optimizer")
+        if optimizer not in ("random", "genetic", "pso"):
+            raise AppError(INVALID_PARAMS, "target_mode local_environment is not supported by this optimizer")
     operators = parse_operators(params.get("operators"))
     operator_names = {spec.name for spec in operators}
     for spec in operators:

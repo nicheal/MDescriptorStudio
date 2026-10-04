@@ -145,6 +145,11 @@ export interface GenerationRound {
   novel_environments: number;
   /** Selection-order-deduplicated novel environments; null when the objective emits no counts. */
   unique_novel_environments: number | null;
+  /** Permutation-invariant counterpart (gen-5 strict_unique_v2): the same greedy strict
+   *  dedup in canonical order (candidates by id, atom rows lexicographic); older runs omit it. */
+  strict_unique_v2?: number | null;
+  /** strict_unique_v2 over the post-screening kept set; older runs omit it. */
+  archived_strict_unique_v2?: number | null;
   /** Strict-dedup counterpart over the post-screening kept set (R5.1); equals
    *  unique_novel_environments when no selected candidate was screened out. */
   archived_unique_novel_environments?: number | null;
@@ -219,6 +224,12 @@ export interface GenerationPcaDiscovery {
   novel_environments: number;
   /** Strictly deduplicated counterpart of novel_environments (older runs omit it). */
   unique_novel_environments?: number;
+  /** Selected candidates removed by energy/force screening, summed over rounds. */
+  rejected_screening?: number;
+  /** Permutation-invariant strict count (gen-5 strict_unique_v2, summed over rounds); omitted for older runs. */
+  strict_unique_v2?: number;
+  /** Post-screening archived rate summed over rounds (secondary metric); omitted for older runs. */
+  archived_unique_novel_environments?: number;
 }
 
 export interface GenerationPca {

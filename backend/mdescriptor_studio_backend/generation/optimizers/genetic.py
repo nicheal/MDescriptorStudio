@@ -50,6 +50,7 @@ import statistics
 import numpy as np
 
 from ...analysis.sampling.fps import farthest_point_sampling
+from .._distance import min_sqdist_to_set
 from ..optimization import ObservationBatch, OptimizationContext, ProposalBatch
 from ..snapshot import require_keys
 
@@ -124,6 +125,12 @@ class GeneticOptimizer:
         # Parent pool: (candidate, genome) pairs in engine selection order.
         self._pool: list[tuple[object, dict]] = []
         self._pool_descriptors: list[np.ndarray] = []
+        # Per-pool-member minimum atom-row distance to the local anchors
+        # (gen-5 E3), aligned with _pool/_pool_descriptors; None = no atomic
+        # signal for that member (neutral weight factor). Populated at
+        # observe time from the observation's local_descriptor — the engine
+        # only populates it while local targeting is active (memory guard).
+        self._pool_local_distances: list = []
         # Proposal bookkeeping: id(candidate) → (candidate, operator name,
         # genome that produced it). Keyed by object identity, not
         # candidate_id: strain ids are derived from the volume change, so two
@@ -252,6 +259,19 @@ class GeneticOptimizer:
         targeted = self._context is not None and self._context.anchor_descriptors
         if targeted:
             radius = self._context.region_radius if self._context.region_radius is not None else 15.0
+
+            def _local_factor(local_distance) -> float:
+                # gen-5 E3: exp(-(d_local/r)^2) over the local anchors — the
+                # same multiplicative combination as the random optimizer's
+                # targeted branch. A member without an atomic signal (None)
+                # stays on its structure merit (neutral factor, exact 1.0,
+                # so non-local runs are bit-identical to before).
+                if local_distance is None:
+                    return 1.0
+                return float(np.exp(-np.square(min(float(local_distance), 1e12) / radius)))
+
+            pool_local = list(self._pool_local_distances)
+            seed_local = list(self._context.seed_local_distances)
             candidates = list(
                 zip(
                     [entry[0] for entry in eligible],
@@ -262,6 +282,7 @@ class GeneticOptimizer:
                         * float(
                             np.exp(-np.square(self._anchor_distance(self._pool_descriptors[index]) / radius))
                         )
+                        * _local_factor(pool_local[index] if index < len(pool_local) else None)
                         for index, tickets in enumerate(range(m, 0, -1))
                     ],
                 )
@@ -270,12 +291,13 @@ class GeneticOptimizer:
                 (
                     seed,
                     self._initial_genome(),
-                    float(np.exp(-np.square(self._anchor_distance(descriptor) / radius))),
+                    float(np.exp(-np.square(self._anchor_distance(descriptor) / radius)))
+                    * _local_factor((seed_local + [None] * len(self._context.seed_pool))[seed_index]),
                 )
-                for seed, descriptor in zip(
+                for seed_index, (seed, descriptor) in enumerate(zip(
                     self._context.seed_pool,
                     self._context.seed_descriptors or [None] * len(self._context.seed_pool),
-                )
+                ))
             ]
             total = sum(weight for _, _, weight in candidates)
             draw = float(rng.uniform(0.0, total))
@@ -364,6 +386,7 @@ class GeneticOptimizer:
         self._context = context
         self._pool = []
         self._pool_descriptors = []
+        self._pool_local_distances = []
         self._pending = {}
         self._operator_stats = {}
         self._rounds = 0
@@ -485,6 +508,7 @@ class GeneticOptimizer:
             _candidate, operator_name, genome = pending
             self._pool.append((obs.candidate, genome))
             self._pool_descriptors.append(np.asarray(obs.structure_descriptor, dtype=np.float64))
+            self._pool_local_distances.append(self._observation_local_distance(obs))
             stats = self._operator_stats.setdefault(operator_name, {"proposed": 0, "accepted": 0})
             stats["accepted"] += 1
         limit = min(256, max(1, 4 * int(self._context.n_seeds)))
@@ -492,6 +516,21 @@ class GeneticOptimizer:
             keep = farthest_point_sampling(np.stack(self._pool_descriptors), n_samples=limit).indices
             self._pool = [self._pool[int(index)] for index in keep]
             self._pool_descriptors = [self._pool_descriptors[int(index)] for index in keep]
+            self._pool_local_distances = [self._pool_local_distances[int(index)] for index in keep]
+
+    def _observation_local_distance(self, obs) -> float | None:
+        """Minimum atom-row distance from an observation to the local
+        anchors (gen-5 E3) — the atomic-space target signal, mirroring the
+        random optimizer's targeted branch. None without local anchors or
+        without an atomic signal for that candidate."""
+        anchors = self._context.local_anchor_descriptors if self._context is not None else ()
+        if not anchors or obs.local_descriptor is None:
+            return None
+        rows = np.asarray(obs.local_descriptor, dtype=np.float64)
+        if rows.shape[0] == 0:
+            return None
+        d2 = min_sqdist_to_set(rows, np.asarray(anchors, dtype=np.float64), workers=1)
+        return float(np.sqrt(np.clip(d2, 0.0, None)).min())
 
     def state_dict(self) -> dict:
         return {
@@ -532,6 +571,9 @@ class GeneticOptimizer:
                 for candidate, genome in self._pool
             ],
             "pool_descriptors": [np.asarray(descriptor).tolist() for descriptor in self._pool_descriptors],
+            "pool_local_distances": [
+                None if distance is None else float(distance) for distance in self._pool_local_distances
+            ],
             "operator_stats": {name: dict(counters) for name, counters in self._operator_stats.items()},
             "rounds": int(self._rounds),
         }
@@ -556,7 +598,11 @@ class GeneticOptimizer:
         Returns the rebuilt pool/descriptors/stats WITHOUT mutating the
         optimizer. An empty pool is legitimate (zero-accept rounds); a
         missing field is not."""
-        require_keys(state, ("type", "config", "rounds", "pool", "pool_descriptors", "operator_stats"), "genetic state")
+        require_keys(
+            state,
+            ("type", "config", "rounds", "pool", "pool_descriptors", "pool_local_distances", "operator_stats"),
+            "genetic state",
+        )
         if state["type"] != self.name:
             raise ValueError(f"snapshot optimizer type {state['type']!r} does not match {self.name!r}")
         if state["config"] != self._config():
@@ -566,10 +612,11 @@ class GeneticOptimizer:
             raise ValueError("snapshot genetic rounds must be a non-negative integer")
         pool_raw = state["pool"]
         descriptors_raw = state["pool_descriptors"]
-        if not isinstance(pool_raw, list) or not isinstance(descriptors_raw, list):
-            raise ValueError("snapshot genetic pool and pool_descriptors must be JSON arrays")
-        if len(pool_raw) != len(descriptors_raw):
-            raise ValueError("snapshot genetic pool and pool_descriptors lengths disagree")
+        local_raw = state["pool_local_distances"]
+        if not isinstance(pool_raw, list) or not isinstance(descriptors_raw, list) or not isinstance(local_raw, list):
+            raise ValueError("snapshot genetic pool, pool_descriptors and pool_local_distances must be JSON arrays")
+        if len(pool_raw) != len(descriptors_raw) or len(pool_raw) != len(local_raw):
+            raise ValueError("snapshot genetic pool, pool_descriptors and pool_local_distances lengths disagree")
         pool = []
         for entry in pool_raw:
             require_keys(entry, ("candidate_id", "genome"), "genetic pool entry")
@@ -592,6 +639,12 @@ class GeneticOptimizer:
                 descriptors.append(np.asarray(rows, dtype=np.float64))
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"snapshot genetic pool descriptor is malformed: {exc}") from exc
+        local_distances = []
+        for distance in local_raw:
+            if distance is None or isinstance(distance, (int, float)) and not isinstance(distance, bool):
+                local_distances.append(None if distance is None else float(distance))
+            else:
+                raise ValueError("snapshot genetic pool_local_distances entries must be numbers or null")
         stats_raw = state["operator_stats"]
         if not isinstance(stats_raw, dict):
             raise ValueError("snapshot genetic operator_stats must be an object")
@@ -599,12 +652,13 @@ class GeneticOptimizer:
         for name, counters in stats_raw.items():
             require_keys(counters, ("proposed", "accepted"), "genetic operator stats")
             stats[name] = dict(counters)
-        return pool, descriptors, stats, rounds
+        return pool, descriptors, local_distances, stats, rounds
 
     def load_state(self, state: dict, candidates_by_id: dict) -> None:
-        pool, descriptors, stats, rounds = self.validate_snapshot(state, candidates_by_id)
+        pool, descriptors, local_distances, stats, rounds = self.validate_snapshot(state, candidates_by_id)
         self._pool = pool
         self._pool_descriptors = descriptors
+        self._pool_local_distances = local_distances
         self._operator_stats = stats
         self._rounds = rounds
         self._pending = {}

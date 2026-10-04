@@ -22,12 +22,23 @@ describe("generation summaries", () => {
 
   it("keeps missing discovery data unavailable instead of inventing zero counts", () => {
     expect(discoveryStats(null)).toBeNull();
+    // gen-5 secondary metrics (strict_unique_v2 / archived rate) stay
+    // undefined when an older run omits them; rejected_screening defaults
+    // to 0 — the truthful count for runs without screening — which keeps
+    // the archived display row hidden.
     expect(discoveryStats({
       original_structures: 10,
       accepted_structures: 4,
       original_environments: 100,
       generated_environments: 20,
       novel_environments: 5,
-    })).toEqual({ generated: 20, novel: 5, fraction: 25 });
+    })).toEqual({
+      generated: 20,
+      novel: 5,
+      fraction: 25,
+      strictUniqueV2: undefined,
+      archivedNovel: undefined,
+      rejectedScreening: 0,
+    });
   });
 });
