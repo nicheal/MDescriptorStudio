@@ -91,5 +91,5 @@
 | C — 产品化 resume | ✅ | `57cb04a`,CI run 37015303356 success;杀进程→重启→resume 字节级一致验收 |
 | D — screening UI 语义 | ✅ | `0405ef6`(CI 经后继提交链确认 success);后端 747/前端 252/E2E 58 |
 | E1 — 锚点语义落地 | ✅(提前,不受 sweep 门控) | `90a6ea4`:种子范围汇总行 "+ N 个锚点";锚点清单本就随 params_json 持久化 |
-| E2–E4 — gen-5 指标/GA-PSO 局部目标 | ⏸ 按 §4 顺序约束等待 | PdCuNiP sweep repeat 7/20、fps 重基线 16/20 仍在跑(2026-10-02 晚核实);提前升版会破坏 benchmark resume 的 algorithm_version 校验 |
+| E2–E4 — gen-5 指标/GA-PSO 局部目标 | ✅(2026-10-03,sweep 收口后) | `8d10b3b`:strict_unique_v2 排列不变计数(两种排列回归钉住)、screening_bottleneck 停机、GA/PSO 局部目标核+解析门放开、GA 快照距离表;后端 818/0、前端 252;tsc 的 zh.ts 重复键报错来自并行在途批次,本提交只暂存 generation 侧 hunk |
 | F — 冻结后再基准 | ⏸ 依赖 E | 同上;预计 sweep 完成后 2026-10-04 前后解锁 |

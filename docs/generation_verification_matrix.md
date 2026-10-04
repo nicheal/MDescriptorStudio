@@ -9,7 +9,7 @@
 
 | 字段 | 当前值 | 语义变化时必须升级 |
 |---|---|---|
-| 指标版本（算法版本） | `GENERATION_ALGORITHM_VERSION = "gen-4"` | 持久化指标语义变化（如发现率停止改读严格唯一计数之类**改变停止行为/指标口径**的改动）。审计修复批次中 P0-02/P1-01 只收紧了 unique 指标计数与停止条件读取口径——`unique_novel_environments` 的字段语义（"冻结档案 + 本轮已计入去重"）自 A12 引入即未变，变化的是计数正确性（修复高估/低估），故 gen-4 维持；重新引用历史 unique 数值时须注明"修复后重算" |
+| 指标版本（算法版本） | `GENERATION_ALGORITHM_VERSION = "gen-5"`（2026-10-03 起；gen-4 访问序口径不变且继续上报，历史 gen-4 数值引用时注明口径；历史 gen-4 预注册配置在 gen-5 下拒绝重跑——F 需新预注册） | 持久化指标语义变化（如发现率停止改读严格唯一计数之类**改变停止行为/指标口径**的改动）。审计修复批次中 P0-02/P1-01 只收紧了 unique 指标计数与停止条件读取口径——`unique_novel_environments` 的字段语义（"冻结档案 + 本轮已计入去重"）自 A12 引入即未变，变化的是计数正确性（修复高估/低估），故 gen-4 维持；重新引用历史 unique 数值时须注明"修复后重算" |
 | 策略版本 | `selection_strategy = structure_fps_v1`（默认）\| `local_incremental_maximin_v1` | 批内选择语义变化。两策略共用同一严格计数定义（`count_strict_unique_environments`） |
 | 计数口径 | `metric_caliber = "strict-unique-scaled"`（当前引擎，2026-09-30 缩放空间修复起，基准 harness 未启用能量筛选，故不受 §5 筛选计数分界影响）；历史发布值 `"strict-unique-raw"`（修复前代码，含已发布的 R4 包 2026-09-30-r4） | 计数比较空间变化。2026-10-01 起预注册必须声明口径并在加载时强校验（不符即拒绝），`environment.json` 携带 harness/口径/算法版本戳，逐 run 行携带 dataset_id/descriptor_run_id——跨口径或跨材料数值一律不得混排 |
 | 基准版本 | harness 2026-10-01（预注册完整合同校验 + dataset↔run/fingerprint 门 + 锚点几何预检 + 预算合同 max_accepted/max_generations 入注册；此前 2026-09-29 为 P0-03/P0-04 修复后） | 锚点角色、种子池装配、半径口径、注册合同变化。**修复前的全部归档 sweep（20260925T042355Z 及以前、20260925T090608Z、20260925T133939Z、20260925T151421Z、20260926T024832Z）均产生于"锚点传给所有优化器 + within_radius=1.0"的旧 harness**，其 unique/coverage 数值仍可用于当时声明的对照，proximity 数值仅 target_region/genetic-target/pso-target 组可解释，random 组的"无定向"声明不成立（P0-03） |
@@ -124,3 +124,15 @@
 > 反转：除 target_region（+9.43，15/20，发现换覆盖）外各组显著劣于 random，genetic 呈发现/覆盖双优。
 > carbon_local − pdcunip_fps 原始跨 sweep 差值混杂数据集⊕策略两因子，仅存档不作策略效应引用；如需检验
 > 策略效应大小须补 local×PdCuNiP 臂（~19h wall）。
+> **更新（2026-10-03 深夜，里程碑 E2+E3 落地，提交 `8d10b3b`）**：
+> ① **gen-5 指标**：`strict_unique_v2`（排列不变严格唯一计数——规范化贪心：候选按稳定 ID 排序、原子行按
+> 字典序，同一选中行集合的计数与到达顺序/行序无关；两种排列危险各由星形几何测试钉住，gen-4 访问序计数
+> 在同一测试里合法地随序摆动 1↔2）。规范化贪心仍是贪心——非最大间隔集、非连通分量聚类（审计 §7.6 的
+> 两种替代定义，明确不采用）。轮记录新增 strict_unique_v2 / archived_strict_unique_v2（默认 None，
+> v3 快照与旧记录兼容）；pca discovery 载荷新增 v2 汇总、archived 汇总与筛选拒绝总数；结果卡仅在运行
+> 提供时显示。**引用任何 unique 数值必须同时声明：gen-4 访问序口径 or gen-5 v2 口径 × 筛选前 or 归档。**
+> ② **screening_bottleneck 停机**：筛选启用且归档发现率低于 min_novel_per_100_evals 而筛选前发现率
+> 未饱和时，以独立原因停机——描述符耗尽仍优先（先查原停机）。默认 0 关闭。③ **GA/PSO 局部目标（G5 收尾）**：
+> 解析门放开三种优化器；GA 轮盘票权乘 exp(-(d_local/r)²)（无原子信号=精确 1.0，非局部运行逐位不变；
+> 距离表入快照为必需字段）；PSO 锚点拉力目标按 hypot(结构, 局部) 联合距离选取。④ 冻结配置拒重跑：
+> 三个 gen-4 预注册在 gen-5 契约下加载即拒（测试钉住）——F 的新预注册以当前版本重写。
