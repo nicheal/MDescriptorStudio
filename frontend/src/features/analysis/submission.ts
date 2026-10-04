@@ -131,6 +131,9 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
           params: { left_run_id: ctx.selectedRun, right_run_id: ctx.secondRun, mode: p.mode, method: p.mantelMethod, permutations: p.mantelPermutations, max_samples: 600 },
         };
       }
+      if (p.compareMode === "information_imbalance") {
+        return { kind: "run", method: "analysis.information_imbalance", label: "Information imbalance", params: { left_run_id: ctx.selectedRun, right_run_id: ctx.secondRun, metric: "euclidean", preprocess: "standardized", max_samples: 600 } };
+      }
       return { kind: "run", method: "analysis.compare", label: "Compare", params: { left_run_id: ctx.selectedRun, right_run_id: ctx.secondRun, mode: p.mode } };
     }
 
@@ -158,6 +161,10 @@ export function buildSubmission(tab: TabKey, p: AnalysisParams, ctx: SubmissionC
           ? { run_ids: [ctx.selectedRun, ctx.secondRun] }
           : p.overviewAnalysis === "perturbation_sensitivity"
             ? { perturbation: p.perturbationType, n_amplitudes: p.perturbationCount, max_amplitude: p.perturbationMaximum, metric: p.perturbationMetric, max_structures: p.perturbationStructures, preprocess: "standardized" }
+            : p.overviewAnalysis === "spectral_effective_dimension"
+              ? { preprocess: p.effectiveDimensionPreprocess }
+              : p.overviewAnalysis === "two_nn_intrinsic_dimension"
+                ? { preprocess: "standardized", n_bootstrap: p.twoNnBootstrap }
             : p.overviewAnalysis === "formal_invariance"
               ? { granularity: p.diagnosticGranularity, tolerance: p.diagnosticTolerance, n_rotations: 3, max_structures: p.diagnosticStructures }
               : p.overviewAnalysis === "cutoff_smoothness"

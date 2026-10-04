@@ -62,6 +62,7 @@ const params = (overrides: Partial<AnalysisParams> = {}): AnalysisParams => ({
   degeneracyPairs: 50,
   consistencySamples: 128,
   consistencyBins: 12,
+  twoNnBootstrap: 32,
   nearZeroThreshold: 0.02,
   lowVariationThreshold: 0.05,
   featureCorrelationMethod: "spearman",
@@ -173,6 +174,11 @@ describe("analysis submission payloads", () => {
     expect(run("compare", {}, { secondRun: "run_b" })).toEqual({
       kind: "run", method: "analysis.compare", label: "Compare",
       params: { left_run_id: "run_a", right_run_id: "run_b", mode: "structure" },
+    });
+    const imbalance = run("compare", { compareMode: "information_imbalance" }, { secondRun: "run_b" });
+    expect(imbalance.method).toBe("analysis.information_imbalance");
+    expect(imbalance.params).toEqual({
+      left_run_id: "run_a", right_run_id: "run_b", metric: "euclidean", preprocess: "standardized", max_samples: 600,
     });
     expect(run("compare", { compareMode: "mantel", mantelMethod: "spearman", mantelPermutations: 499 }, { secondRun: "run_b" }).params).toMatchObject({
       method: "spearman", permutations: 499, max_samples: 600,

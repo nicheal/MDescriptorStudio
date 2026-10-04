@@ -124,7 +124,7 @@ export function restoreAnalysisParams(input: RestoreInput): Partial<AnalysisPara
 
     case "compare":
       return {
-        compareMode: analysisType === "mantel" || p.compare_mode === "mantel" ? "mantel" : "geometry",
+        compareMode: analysisType === "mantel" || p.compare_mode === "mantel" ? "mantel" : analysisType === "information_imbalance" || p.compare_mode === "information_imbalance" ? "information_imbalance" : "geometry",
         mode: mode(p.mode),
         mantelMethod: p.method === "spearman" || p.mantel_method === "spearman" ? "spearman" : "pearson",
         mantelPermutations: intAt(p.permutations ?? p.mantel_permutations, current.mantelPermutations, 1),
@@ -169,11 +169,14 @@ function restoreOverview(analysisType: string, p: Record<string, unknown>, curre
       };
     }
     case "effective_dimension":
+    case "spectral_effective_dimension":
       // The backend has always defaulted this one to standardized - it even
       // writes that default into the canonical params of a row that omitted it
       // - so a stored row without the key restores to the same basis it was
       // computed on. The old comment claimed the opposite (pass 5, 5-C3).
       return { effectiveDimensionPreprocess: p.preprocess === "center" ? "center" : "standardized" };
+    case "two_nn_intrinsic_dimension":
+      return { twoNnBootstrap: intAt(p.n_bootstrap, 32, 0) };
     case "property_correlation":
       return {
         propertyName: String(p.property ?? "energy_per_atom"),

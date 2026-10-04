@@ -73,7 +73,17 @@ Analysis 页新增 **"描述符诊断"导航组**,五个模块端到端可用(�
 1. **cutoff_smoothness / environment_jacobian 报 ANALYSIS_INPUT_INVALID**:NEP 的 schema 参数只有 `model`,**不存在可调的 rcut**(截断烧在模型文件里),而解析顺序是 显式值 > 运行参数,用户留空即报错。修复:解析顺序改为 显式值 > 运行参数 > **schema 默认**(运行省略参数时它算的就是默认值);若 descriptor 根本不声明该参数(NEP),cutoff_smoothness 明确报"its cutoff is fixed by the model and the cutoff scan can only rebuild descriptors with a tunable cutoff"(该诊断对模型内嵌截断不适用),jacobian 报"enter the neighbor cutoff in angstrom"(分析球由用户给定,应与描述符自身截断一致)。
 2. **degeneracy_search / distance_consistency 报 ARTIFACT_INVALID**:碳数据集各帧原子数不同,跨原子数配对的结构距离为 inf,而工件存储拒绝含 NaN/Inf 的数组(白名单只有 sensitivity 的 memory_peak_bytes)。修复:**发布数组只携带全有限的可比配对子集**(degeneracy 按 isfinite(structural) ∧ isfinite(ΔE) 过滤;consistency 按 finite ∧ isfinite(ΔE)),preview 表与计数保留完整图景(含 atom_count 理由);能量缺失时 ΔE 数组以零占位(能量信号缺失在 preview 中声明,视图不着色)。回归:`test_pair_search_arrays_stay_finite_across_atom_counts` + schema 门控两项 + IPC catalog 改走 schema 默认路径;并在真实 NEP run 回放(数组全有限、错误文案可操作)。
 
-## 7. 边界与后续(未决事项,按审查排序)
+## 7. Statistical Diagnostics V2(同日第五批)
+
+审查 §3/§18 步骤 4 的落地(analysis 侧,与并行的 generation E2 工作零交集):
+
+1. **`spectral_effective_dimension`**(P1 改名):API/新运行的规范名,`effective_dimension` 保留为 legacy 别名(旧历史行经 alias 加载,旧工件 kind 由 dispatcher 双分支渲染);算法实现共用,仅 kind 字符串不同。前端模块键同步改名,标签"有效维度(谱)",方法指南明确"参与率 vs 流形维数"的区分。
+2. **`two_nn_intrinsic_dimension`**(TwoNN,Facco et al. 2017):内禀流形维数 MLE。**实现关键:μ=r2/r1(≥1)在均匀泊松采样下服从 Pareto(d),MLE 为 d̂ = 1/⟨ln μ⟩**(曾误写为 −ln2/⟨ln μ⟩ 与 n/Σln(1+μ),均在 1/2/3/8 维均匀云上数值验证后纠正:实测 1.018/1.998/3.022/7.259)。精确重复行(r1=0)剔除并告警;bootstrap(B≤128)给出离散度与 95% CI;preprocess 是空间定义的一部分(默认 standardized,各向异性云上 raw/standardized 给出不同维数——测试钉住)。
+3. **`information_imbalance`**(Glielmo et al. 2022 风格,compare 页第三模式):Δ(a→b) = a 的最近邻在 b 排序中的归一化秩均值(0=复现,≈0.5=独立,1=系统性相反);双向报告 + top-k 邻域重叠曲线(k=1..32)+ 逐点贡献数组。走 compare/mantel 的 pair 形态(left/right run,允许不同特征数,要求对齐样本 ID)。**实现教训:`ranks[(n,1)索引, (n,)索引]` 会广播成 (n,n) 收集——逐点秩必须用两个 1-D 索引**(该 bug 在 identical-spaces 测试中以 Δ=0.43 而非 0 的形式暴露)。
+
+接线:registry 3 名(spectral/two_nn engine 类,imbalance pair 类)+ `_input_ids` compare 分支 + submit preprocess 默认覆盖双拼写;前端新模块"内禀维度 (TwoNN)"入 representation_quality 组(7 模块)、compareMode 第三选项、TwoNN 视图(ln μ 直方图 + mean 定位线 + bootstrap 分布)、不平衡视图(重叠-k 曲线 + 双向贡献叠加直方图);mock 3 条 RPC + 罐装谱统一(legacy 与 spectral 共用,旧 e2e 断言不动)。验证:后端 814/0(含 intrinsic 14 项 + IPC catalog 3 方法,同 run 双向 Δ 恰为 0);前端 tsc/eslint 干净、vitest 252、e2e 64/64。
+
+## 8. 边界与后续(未决事项,按审查排序)
 
 - **effective_dimension 命名/TwoNN**(审查 P1 §3):未动。改名涉及 API/前端/i18n 联动,与 Statistical Diagnostics V2(TwoNN、information imbalance、neighborhood preservation)一并做。
 - **等变描述符**:V1 只校验不变族;D_l(Rx) ≈ W_l(R) D_l(x) 的等变校验待接入等变描述符时加(检查项已在 checks 枚举之外独立可扩展)。

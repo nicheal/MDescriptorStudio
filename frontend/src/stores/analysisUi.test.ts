@@ -77,7 +77,7 @@ const baseParams: AnalysisParams = {
  degeneracySamples: 1024,
  degeneracyPairs: 50,
  consistencySamples: 128,
- consistencyBins: 12,
+ consistencyBins: 12, twoNnBootstrap: 32,
   nearZeroThreshold: 1e-4, lowVariationThreshold: 1e-2, featureCorrelationMethod: "pearson", featureCorrelationThreshold: 0.95,
   referenceRunId: "run-ref", queryRunId: "run-query", referenceViewId: null, queryViewId: "view-query", viewId: null,
 };

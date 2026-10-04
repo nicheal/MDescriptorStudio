@@ -114,6 +114,7 @@ def build_default_registry() -> AnalysisRegistry:
     from .algorithms.sensitivity import PerturbationSensitivity, Sensitivity
     from .algorithms.tsne import TSNE
     from .algorithms.umap import UMAP
+    from .algorithms.intrinsic import TwoNNIntrinsicDimension
     from .clustering import Cluster, Outlier
     from .diagnostics import (
         cutoff_smoothness,
@@ -129,8 +130,10 @@ def build_default_registry() -> AnalysisRegistry:
         Neighbors,
         Pairwise,
         Similarity,
+        SpectralEffectiveDimension,
         Trajectory,
     )
+    from .algorithms.pairs import InformationImbalance
     from .sampling.engine import Sampling
 
     registry = AnalysisRegistry()
@@ -156,6 +159,9 @@ def build_default_registry() -> AnalysisRegistry:
         Drift(),
         Sensitivity(),
         PerturbationSensitivity(),
+        SpectralEffectiveDimension(),
+        TwoNNIntrinsicDimension(),
+        InformationImbalance(),
     )
     for plugin in plugins:
         registry.register(plugin)

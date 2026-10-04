@@ -244,11 +244,17 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
         jacobian_id = run("analysis.environment_jacobian", {"run_id": run_id, "cutoff": 5.0, "displacement": 0.005, "max_atoms": 16, "max_structures": 1})
         degeneracy_id = run("analysis.degeneracy_search", {"run_id": run_id, "mode": "structure", "k_neighbors": 2, "max_samples": 8, "max_pairs": 10})
         consistency_id = run("analysis.distance_consistency", {"run_id": run_id, "mode": "structure", "max_samples": 6, "n_bins": 4})
+        # Statistical diagnostics V2: the spectral rename shares the engine
+        # path with the legacy spelling; TwoNN estimates the manifold
+        # dimension; the imbalance pair reads the same run on both sides.
+        spectral_id = run("analysis.spectral_effective_dimension", {"run_id": run_id, "preprocess": "standardized"})
+        twonn_id = run("analysis.two_nn_intrinsic_dimension", {"run_id": run_id, "preprocess": "standardized", "n_bootstrap": 4})
+        imbalance_id = run("analysis.information_imbalance", {"left_run_id": run_id, "right_run_id": run_id, "metric": "euclidean", "max_samples": 8})
 
         listed = bp.request(sequence, "analysis.list", {"run_id": run_id})
         sequence += 1
         assert listed["result"]
-        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (effective_id, "effective_dimension"), (trajectory_id, "trajectory"), (perturbation_id, "perturbation_sensitivity"), (strain_id, "perturbation_sensitivity"), (formal_id, "formal_invariance"), (cutoff_id, "cutoff_smoothness"), (jacobian_id, "environment_jacobian"), (degeneracy_id, "degeneracy_search"), (consistency_id, "distance_consistency")):
+        for analysis_id, kind in ((uncertainty_id, "acquisition"), (mantel_id, "mantel"), (local_id, "local_diversity"), (effective_id, "effective_dimension"), (trajectory_id, "trajectory"), (perturbation_id, "perturbation_sensitivity"), (strain_id, "perturbation_sensitivity"), (formal_id, "formal_invariance"), (cutoff_id, "cutoff_smoothness"), (jacobian_id, "environment_jacobian"), (degeneracy_id, "degeneracy_search"), (consistency_id, "distance_consistency"), (spectral_id, "spectral_effective_dimension"), (twonn_id, "two_nn_intrinsic_dimension"), (imbalance_id, "information_imbalance")):
             checked = bp.request(sequence, "analysis.get", {"analysis_id": analysis_id})
             sequence += 1
             assert checked["result"]["status"] == "COMPLETED"
@@ -296,6 +302,25 @@ def test_analysis_method_catalog_over_ipc(tmp_path: Path) -> None:
                 preview = checked["result"]["preview"]
                 assert preview["comparable_pairs"] > 0
                 assert preview["pearson_descriptor_structural"] is not None
+            if kind == "spectral_effective_dimension":
+                preview = checked["result"]["preview"]
+                assert preview["pca_basis"] == "correlation"
+                assert preview["participation_ratio"] > 0
+            if kind == "two_nn_intrinsic_dimension":
+                preview = checked["result"]["preview"]
+                assert preview["intrinsic_dimension"] > 0
+                assert preview["bootstrap"]["draws"] == 4
+                files = checked["result"]["artifact_manifest"]["files"]
+                for name in ("ln_mu", "bootstrap_estimates"):
+                    assert name in files
+            if kind == "information_imbalance":
+                preview = checked["result"]["preview"]
+                # Same run on both sides: the neighbor structure is identical.
+                assert preview["delta_a_to_b"] == 0.0
+                assert preview["delta_b_to_a"] == 0.0
+                files = checked["result"]["artifact_manifest"]["files"]
+                for name in ("contribution_a_to_b", "contribution_b_to_a", "ks", "overlap"):
+                    assert name in files
             if kind == "trajectory":
                 # The trajectory view derives thresholds live, so the artifact
                 # must carry the robust statistics, the detection space and the

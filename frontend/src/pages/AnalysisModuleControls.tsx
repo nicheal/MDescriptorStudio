@@ -124,6 +124,7 @@ type AnalysisModuleControlSetters = Pick<AnalysisParameterState,
   | "setDegeneracyPairs"
   | "setConsistencySamples"
   | "setConsistencyBins"
+  | "setTwoNnBootstrap"
 > & {
   setProjection: (value: ProjectionName) => void;
   setMode: (value: PcaMode) => void;
@@ -319,10 +320,15 @@ export default function AnalysisModuleControls({
       <InputNumber min={0.8} max={0.999} step={0.01} precision={2} value={params.featureCorrelationThreshold} onChange={(value) => setters.setFeatureCorrelationThreshold(Math.min(0.999, Math.max(0.8, value ?? 0.95)))} />
       <Typography.Text type="secondary">{t("High when |correlation| ≥ threshold")}</Typography.Text>
     </Space>}
-    {tab === "overview" && overviewAnalysis === "effective_dimension" && <Space wrap>
+    {tab === "overview" && (overviewAnalysis === "effective_dimension" || overviewAnalysis === "spectral_effective_dimension") && <Space wrap>
       <ParamLabel label={t("PCA preprocessing")} cached={cachedParam("effectiveDimensionPreprocess")} />
       <Select aria-label={t("PCA preprocessing")} value={params.effectiveDimensionPreprocess} onChange={setters.setEffectiveDimensionPreprocess} options={markOptions("effectiveDimensionPreprocess", [{ value: "standardized", label: t("Standardized") }, { value: "center", label: t("Centered") }])} />
       <Typography.Text type="secondary">{params.effectiveDimensionPreprocess === "standardized" ? t("Correlation basis") : t("Covariance basis")}</Typography.Text>
+    </Space>}
+    {tab === "overview" && overviewAnalysis === "two_nn_intrinsic_dimension" && <Space wrap>
+      <ParamLabel label={t("Bootstrap draws")} cached={cachedParam("twoNnBootstrap")} />
+      <Tooltip title={t("Resamples of the per-point log neighbor ratios; 0 disables the spread estimate.")} placement="top"><InputNumber aria-label={t("Bootstrap draws")} min={0} max={128} value={params.twoNnBootstrap} onChange={(value) => setters.setTwoNnBootstrap(Math.max(0, Math.min(128, Math.round(value ?? 32))))} /></Tooltip>
+      <Typography.Text type="secondary">{t("Estimates the manifold dimension from r2/r1 neighbor ratios - the spectral panel measures variance spread instead.")}</Typography.Text>
     </Space>}
     {tab === "overview" && overviewAnalysis === "perturbation_sensitivity" && <Space wrap>
       <Typography.Text>{t("Perturbation")}</Typography.Text>
@@ -387,7 +393,7 @@ export default function AnalysisModuleControls({
     </Space>}
     {tab === "compare" && <Space wrap>
       <Typography.Text>{t("Test")}</Typography.Text>
-      <Select value={params.compareMode as CompareMode} onChange={setters.setCompareMode} options={markOptions("compareMode", [{ value: "geometry", label: t("Geometry comparison") }, { value: "mantel", label: t("Mantel permutation test") }])} />
+      <Select value={params.compareMode as CompareMode} onChange={setters.setCompareMode} options={markOptions("compareMode", [{ value: "geometry", label: t("Geometry comparison") }, { value: "mantel", label: t("Mantel permutation test") }, { value: "information_imbalance", label: t("Information imbalance") }])} />
       {params.compareMode === "mantel" && <>
         <Typography.Text>{t("Statistic")}</Typography.Text>
         <Select value={params.mantelMethod} onChange={(value) => setters.setMantelMethod(value as "pearson" | "spearman")} options={markOptions("mantelMethod", [{ value: "pearson", label: "Pearson" }, { value: "spearman", label: "Spearman" }])} />

@@ -846,6 +846,33 @@ function mockOverviewPreview() {
     };
     return { analysis_id: mockLatestAnalysisId, kind: "perturbation_sensitivity", perturbation: "jitter", metric: "euclidean", response_unit: "scaled descriptor distance", sample_count: responseMatrix.length, available_structure_count: 6320, curve_count: amplitudes.length, baseline_included: true, warnings: ["sampled 36 of 6320 structures evenly across the run"] };
   }
+  if (mockLatestAnalysisKind === "spectral_effective_dimension") {
+    // Same canned spectrum as the legacy effective_dimension branch: the
+    // rename only changes the kind string, not the chart contract.
+    const head = [0.5, 0.2, 0.12, 0.1, 0.025, 0.01, 0.012, 0.009, 0.007, 0.005, 0.004];
+    const tailBase = Array.from({ length: 50 }, (_, index) => Math.pow(0.9, index));
+    const tailBaseTotal = tailBase.reduce((sum, value) => sum + value, 0);
+    const explained = [...head, ...tailBase.map((value) => 0.008 * value / tailBaseTotal)];
+    mockAnalysisArrays = { eigenvalues: explained.map((v) => Number((v * 42).toFixed(4))), explained_variance: explained };
+    return { analysis_id: mockLatestAnalysisId, kind: "spectral_effective_dimension", preprocess: "standardized", pca_basis: "correlation", sample_count: 6320, feature_count: 35, pca_feature_count: 35, component_count: explained.length, participation_ratio: 7.4, components_for_threshold: { "0.9": 4, "0.95": 6, "0.99": 11 } };
+  }
+  if (mockLatestAnalysisKind === "two_nn_intrinsic_dimension") {
+    const lnMu = Array.from({ length: 400 }, () => Number((-0.33 + gauss(0, 0.55)).toFixed(4)));
+    const draws = Array.from({ length: 32 }, () => Number((3.0 + gauss(0, 0.18)).toFixed(4)));
+    mockAnalysisArrays = { ln_mu: lnMu, mu: lnMu.map((v) => Number(Math.exp(v).toFixed(4))), bootstrap_estimates: draws };
+    return { analysis_id: mockLatestAnalysisId, kind: "two_nn_intrinsic_dimension", intrinsic_dimension: 3.02, bootstrap: { mean: 3.01, sd: 0.17, ci95: [2.68, 3.36], draws: 32 }, points_used: 400, points_total: 400, duplicates_excluded: 0, preprocess: "standardized", metric: "euclidean", sample_count: 400, feature_count: 35, pca_feature_count: 35, estimator: "two_nn_mle (Facco et al. 2017): d = 1 / mean(ln r2/r1)", note: "Intrinsic manifold dimension, not the PCA participation ratio." };
+  }
+  if (mockLatestAnalysisKind === "information_imbalance") {
+    const count = 240;
+    const ks = [1, 2, 4, 8, 16, 32];
+    mockAnalysisArrays = {
+      contribution_a_to_b: Array.from({ length: count }, () => Number(Math.min(1, Math.abs(gauss(0.12, 0.18))).toFixed(4))),
+      contribution_b_to_a: Array.from({ length: count }, () => Number(Math.min(1, Math.abs(gauss(0.3, 0.24))).toFixed(4))),
+      ks,
+      overlap: [0.62, 0.51, 0.42, 0.35, 0.3, 0.27],
+    };
+    return { analysis_id: mockLatestAnalysisId, kind: "information_imbalance", delta_a_to_b: 0.14, delta_b_to_a: 0.31, ks, mean_overlap: [0.62, 0.51, 0.42, 0.35, 0.3, 0.27], n_samples: count, metric: "euclidean", preprocess: "standardized", left_feature_count: 35, right_feature_count: 12, convention: "0 = neighbor structure of a reproduced in b; ~0.5 = independent; 1 = systematically opposite" };
+  }
   if (mockLatestAnalysisKind === "formal_invariance") {
     return {
       analysis_id: mockLatestAnalysisId, kind: "formal_invariance", granularity: "structure",
@@ -1320,6 +1347,9 @@ const ANALYSIS_RUN_PARAMS: Record<string, string[]> = {
   "analysis.kernel": ["run_id"],
   "analysis.trajectory": ["run_id"],
   "analysis.perturbation_sensitivity": ["run_id"],
+  "analysis.spectral_effective_dimension": ["run_id"],
+  "analysis.two_nn_intrinsic_dimension": ["run_id"],
+  "analysis.information_imbalance": ["left_run_id", "right_run_id"],
   "analysis.formal_invariance": ["run_id"],
   "analysis.cutoff_smoothness": ["run_id"],
   "analysis.environment_jacobian": ["run_id"],
@@ -1340,7 +1370,7 @@ const COUNT_PARAMS = [
   "n_samples", "k", "n_neighbors", "max_samples", "top_k", "heatmap_features", "n_clusters",
   "min_samples", "perplexity", "max_iter", "folds", "reliability_k", "n_amplitudes",
   "max_structures", "chunk_size", "reference_chunk_size", "uncertainty_k", "permutations",
-  "n_steps", "k_neighbors", "max_pairs", "n_bins", "n_rotations", "max_atoms",
+  "n_steps", "k_neighbors", "max_pairs", "n_bins", "n_rotations", "max_atoms", "n_bootstrap",
 ];
 
 const EXPORT_FORMATS = ["json", "csv", "extxyz", "deepmd", "indices", "report"];
@@ -2030,6 +2060,14 @@ const METHODS: Record<string, Handler> = {
   "analysis.drift": (p) => mockAnalysisSubmit("job-drift-live", "ana-mock-drift", "drift", "drift", { mode: p.mode, reference_view_id: p.reference_view_id, query_view_id: p.query_view_id }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.sensitivity": (p) => mockAnalysisSubmit("job-sensitivity-live", "ana-mock-sensitivity", "sensitivity", "sensitivity", { mode: p.mode, run_ids: MOCK_RUN_PAIR }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.perturbation_sensitivity": (p) => mockAnalysisSubmit("job-perturbation-live", "ana-mock-perturbation", "perturbation_sensitivity", "perturbation_sensitivity", { perturbation: p.perturbation, n_amplitudes: p.n_amplitudes, max_amplitude: p.max_amplitude, max_structures: p.max_structures, metric: p.metric }),
+  "analysis.spectral_effective_dimension": (p) => {
+    mockLatestEffectiveDimensionPreprocess = p.preprocess === "center" ? "center" : "standardized";
+    const response = mockAnalysisSubmit("job-spectral-effective-dimension-live", "ana-mock-spectral-effective-dimension", "spectral_effective_dimension", "spectral_effective_dimension");
+    mockRecordAnalysisRow("ana-mock-spectral-effective-dimension", "spectral_effective_dimension", { preprocess: mockLatestEffectiveDimensionPreprocess });
+    return response;
+  },
+  "analysis.two_nn_intrinsic_dimension": (p) => mockAnalysisSubmit("job-two-nn-live", "ana-mock-two-nn", "two_nn_intrinsic_dimension", "two_nn_intrinsic_dimension", { preprocess: p.preprocess, n_bootstrap: p.n_bootstrap, metric: p.metric }),
+  "analysis.information_imbalance": (p) => mockAnalysisSubmit("job-info-imbalance-live", "ana-mock-info-imbalance", "information_imbalance", "information_imbalance", { metric: p.metric, preprocess: p.preprocess, max_samples: p.max_samples }, MOCK_RUN_PAIR, MOCK_RUN_PAIR_DATASETS),
   "analysis.formal_invariance": (p) => mockAnalysisSubmit("job-formal-invariance-live", "ana-mock-formal-invariance", "formal_invariance", "formal_invariance", { granularity: p.granularity, tolerance: p.tolerance, n_rotations: p.n_rotations, max_structures: p.max_structures }),
   "analysis.cutoff_smoothness": (p) => mockAnalysisSubmit("job-cutoff-smoothness-live", "ana-mock-cutoff-smoothness", "cutoff_smoothness", "cutoff_smoothness", { cutoff_parameter: p.cutoff_parameter, cutoff_value: p.cutoff_value, max_delta: p.max_delta, n_steps: p.n_steps, max_structures: p.max_structures }),
   "analysis.environment_jacobian": (p) => mockAnalysisSubmit("job-environment-jacobian-live", "ana-mock-environment-jacobian", "environment_jacobian", "environment_jacobian", { cutoff: p.cutoff, displacement: p.displacement, max_atoms: p.max_atoms, max_structures: p.max_structures }),

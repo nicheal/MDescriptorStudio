@@ -22,7 +22,7 @@ const current: AnalysisParams = {
   cutoffParameter: "rcut", cutoffValue: null, cutoffMaxDelta: 0.1, cutoffSteps: 9,
   jacobianCutoff: null, jacobianDisplacement: 0.001, jacobianAtoms: 32, jacobianStructures: 2,
   degeneracyNeighbors: 8, degeneracySamples: 1024, degeneracyPairs: 50,
-  consistencySamples: 128, consistencyBins: 12,
+  consistencySamples: 128, consistencyBins: 12, twoNnBootstrap: 32,
   nearZeroThreshold: 0.02, lowVariationThreshold: 0.05,
   featureCorrelationMethod: "spearman", featureCorrelationThreshold: 0.8,
   referenceRunId: null, queryRunId: null, referenceViewId: null, queryViewId: null, viewId: null,

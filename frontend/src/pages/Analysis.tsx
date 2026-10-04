@@ -191,6 +191,7 @@ export default function Analysis() {
     setDegeneracyPairs,
     setConsistencySamples,
     setConsistencyBins,
+    setTwoNnBootstrap,
     tsnePerplexity, setTsnePerplexity,
   } = useAnalysisParameters({
     projection,
@@ -931,7 +932,7 @@ export default function Analysis() {
   const methodGuide = getAnalysisMethodGuide(methodGuideKey);
   const overviewModuleHint = tab === "overview" && overviewAnalysis === "sensitivity" && <Typography.Text type="secondary">{t("Compare parameter variants of the same descriptor; use Compare for different descriptors.")}</Typography.Text>;
   const activeModuleLabel = activeNavModule ? tr(activeNavModule.label) : t("Analysis");
-  const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension");
+  const legacyOverview = tab === "overview" && (preview?.kind === "feature_variance" || preview?.kind === "effective_dimension" || preview?.kind === "spectral_effective_dimension");
 
   return (
     <div className="analysis-page">
@@ -1089,6 +1090,7 @@ export default function Analysis() {
                 setDegeneracyPairs,
                 setConsistencySamples,
                 setConsistencyBins,
+                setTwoNnBootstrap,
                 setEffectiveDimensionPreprocess,
                 setNearZeroThreshold,
                 setLowVariationThreshold,

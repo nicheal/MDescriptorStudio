@@ -181,7 +181,7 @@ export function OverviewResultVisualization({ preview, arrays, loading, analysis
 
   let content: ReactNode;
   if (kind === "feature_variance") content = <FeatureVarianceChart preview={preview} analysisId={analysisId} />;
-  else if (kind === "effective_dimension") content = <EffectiveDimensionChart preview={preview} arrays={arrays} />;
+  else if (kind === "effective_dimension" || kind === "spectral_effective_dimension") content = <EffectiveDimensionChart preview={preview} arrays={arrays} />;
   else return null;
 
   return <section className="analysis-card analysis-visual-card"><SectionHeading title={title} meta={t("Visual summary")} />{content}</section>;
@@ -189,7 +189,7 @@ export function OverviewResultVisualization({ preview, arrays, loading, analysis
 
 export function ResultPanel({ preview, points, onSelect }: { preview: AnalysisPreview | null; points: Point[]; onSelect?: (row: Record<string, unknown>) => void }) {
   const { t } = useT();
-  if (preview?.kind === "feature_variance" || preview?.kind === "feature_correlation" || preview?.kind === "effective_dimension" || preview?.kind === "property_correlation") return null;
+  if (preview?.kind === "feature_variance" || preview?.kind === "feature_correlation" || preview?.kind === "effective_dimension" || preview?.kind === "spectral_effective_dimension" || preview?.kind === "property_correlation") return null;
   if (!preview && !points.length) return <section className="analysis-card"><Empty description={t("Run an analysis module to see its bounded result preview.")} /></section>;
   const rows = previewTableRows(preview);
   const tableRows = rows.slice(0, 1_000);

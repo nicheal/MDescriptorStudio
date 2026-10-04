@@ -102,6 +102,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
   const [degeneracyPairs, setDegeneracyPairs] = useState(50);
   const [consistencySamples, setConsistencySamples] = useState(128);
   const [consistencyBins, setConsistencyBins] = useState(12);
+  const [twoNnBootstrap, setTwoNnBootstrap] = useState(32);
   const [tsnePerplexity, setTsnePerplexity] = useState(30);
 
   const analysisParams = useMemo<AnalysisParams>(() => ({
@@ -166,6 +167,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     degeneracyPairs,
     consistencySamples,
     consistencyBins,
+    twoNnBootstrap,
     referenceRunId,
     queryRunId,
     referenceViewId,
@@ -214,6 +216,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     degeneracyPairs,
     consistencySamples,
     consistencyBins,
+    twoNnBootstrap,
     propertyDistanceMetric,
     propertyFolds,
     propertyName,
@@ -292,6 +295,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     setDegeneracyPairs(loaded.degeneracyPairs);
     setConsistencySamples(loaded.consistencySamples);
     setConsistencyBins(loaded.consistencyBins);
+    setTwoNnBootstrap(loaded.twoNnBootstrap);
   }, []);
 
   return {
@@ -360,6 +364,7 @@ export function useAnalysisParameters(view: AnalysisParameterView) {
     degeneracyPairs, setDegeneracyPairs,
     consistencySamples, setConsistencySamples,
     consistencyBins, setConsistencyBins,
+    twoNnBootstrap, setTwoNnBootstrap,
     tsnePerplexity, setTsnePerplexity,
   };
 }

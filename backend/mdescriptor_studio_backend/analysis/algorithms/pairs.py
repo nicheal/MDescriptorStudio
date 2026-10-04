@@ -6,7 +6,7 @@ from typing import Callable
 
 import numpy as np
 
-from ...errors import ANALYSIS_INPUT_INVALID, AppError
+from ...errors import ANALYSIS_INPUT_INVALID, ANALYSIS_INSUFFICIENT_SAMPLES, AppError
 from ..models import DescriptorMatrix
 from ._common import _aligned_space_metrics, _bounded_indices, _check_samples, _correlation_of_ranks, _cross_k_nearest, _cross_nearest, _effective_dimension_metrics, _float_param, _int_param, _joint_projection, _nearest_distances, _pairwise_matrix, _preprocess, _preprocess_reference_query, _reference_query_preprocess, _safe_correlation, _safe_import, _seed, _visual_pca
 
@@ -454,3 +454,111 @@ class Drift:
 
     def run(self, left, right, params: dict, progress=None) -> dict:
         return drift(left, right, params, progress)
+
+
+def information_imbalance(left: DescriptorMatrix, right: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
+    """Rank-based information imbalance between two aligned descriptor spaces.
+
+    Convention (review 2026-10-03 §2 "Descriptor Comparison 2.0", following the
+    nearest-neighbor rank statistic of Glielmo et al., PRX 2022):
+
+        Delta(a->b) = mean_i  R_b(i, j_a(i)) / (n - 2)
+
+    where ``j_a(i)`` is point i's nearest neighbor in space a and ``R_b(i, j)``
+    is j's 0-based rank among i's other points ordered by distance in b.
+    0 means a's nearest-neighbor choices are perfectly reproduced in b
+    (b carries at least a's coarse geometry); ~0.5 is the independent-space
+    expectation; values approaching 1 mean a's neighbors are systematically
+    far in b.  The statistic is asymmetric, so both directions are reported,
+    and the top-k neighborhood overlap curve accompanies it as the directly
+    interpretable "neighborhood preservation" reading.
+    """
+    a, left_warnings, _left_keep = _preprocess(left.values, params, "standardized")
+    b, right_warnings, _right_keep = _preprocess(right.values, params, "standardized")
+    _check_samples(a, 3)
+    _check_samples(b, 3)
+    if left.n_samples != right.n_samples or left.sample_ids != right.sample_ids:
+        raise AppError(
+            ANALYSIS_INPUT_INVALID,
+            "information imbalance requires aligned sample IDs",
+            {"left_samples": left.n_samples, "right_samples": right.n_samples},
+        )
+    metric = str(params.get("metric") or "euclidean")
+    if metric not in ("euclidean", "cosine", "manhattan"):
+        raise AppError(ANALYSIS_INPUT_INVALID, "information imbalance metric must be euclidean, cosine, or manhattan")
+    limit = min(_int_param(params, "max_samples", 600, 3), 2_000)
+    sample_indices = _bounded_indices(a.shape[0], limit)
+    a = a[sample_indices]
+    b = b[sample_indices]
+    n = int(sample_indices.size)
+    if n < 8:
+        raise AppError(ANALYSIS_INSUFFICIENT_SAMPLES, "information imbalance needs at least 8 aligned samples for a rank statistic")
+
+    distances_a = _pairwise_matrix(a, metric)
+    distances_b = _pairwise_matrix(b, metric)
+    # Rows sort the point itself (distance 0) first; neighbors are the rest.
+    order_a = np.argsort(distances_a, axis=1, kind="stable")
+    order_b = np.argsort(distances_b, axis=1, kind="stable")
+    ranks_b = np.empty_like(order_b)
+    row_index = np.arange(n)[:, None]
+    ranks_b[row_index, order_b] = np.arange(n)[None, :]
+    j_a = order_a[:, 1]  # nearest non-self neighbor in a
+
+    denominator = max(n - 2, 1)
+    # Both index arrays must be 1-D: a (n,1) row index would broadcast the
+    # (n,) neighbor index into an (n,n) gather - the whole rank matrix
+    # averaged instead of the per-point contribution.
+    self_index = np.arange(n)
+    contribution_ab = (ranks_b[self_index, j_a] - 1).astype(np.float64) / denominator
+    contribution_ab = np.clip(contribution_ab, 0.0, 1.0)
+    delta_a_to_b = float(contribution_ab.mean())
+    ranks_a = np.empty_like(order_a)
+    ranks_a[row_index, order_a] = np.arange(n)[None, :]
+    j_b = order_b[:, 1]
+    contribution_ba = (ranks_a[self_index, j_b] - 1).astype(np.float64) / denominator
+    contribution_ba = np.clip(contribution_ba, 0.0, 1.0)
+    delta_b_to_a = float(contribution_ba.mean())
+
+    ks = [k for k in (1, 2, 4, 8, 16, 32) if k <= n - 1]
+    # Top-k overlap: order columns 1..k hold the k nearest others.
+    overlap = []
+    for k in ks:
+        top_a = order_a[:, 1 : k + 1]
+        top_b = order_b[:, 1 : k + 1]
+        shared = np.array([len(set(top_a[i].tolist()) & set(top_b[i].tolist())) for i in range(n)], dtype=np.float64)
+        overlap.append(float((shared / k).mean()))
+        if progress:
+            progress(0.5 + 0.4 * ks.index(k) / max(len(ks), 1), "neighborhood overlap")
+
+    if progress:
+        progress(1.0, "information imbalance complete")
+    return {
+        "arrays": {
+            "contribution_a_to_b": contribution_ab,
+            "contribution_b_to_a": contribution_ba,
+            "ks": np.asarray(ks, dtype=np.float64),
+            "overlap": np.asarray(overlap, dtype=np.float64),
+        },
+        "preview": {
+            "kind": "information_imbalance",
+            "delta_a_to_b": delta_a_to_b,
+            "delta_b_to_a": delta_b_to_a,
+            "ks": ks,
+            "mean_overlap": overlap,
+            "n_samples": n,
+            "metric": metric,
+            "preprocess": params.get("preprocess") or "standardized",
+            "left_feature_count": left.n_features,
+            "right_feature_count": right.n_features,
+            "convention": "0 = neighbor structure of a reproduced in b; ~0.5 = independent; 1 = systematically opposite",
+        },
+        "warnings": list(dict.fromkeys([*left_warnings, *right_warnings])),
+    }
+
+
+class InformationImbalance:
+    name = "information_imbalance"
+    category = "pair"
+
+    def run(self, left, right, params: dict, progress=None) -> dict:
+        return information_imbalance(left, right, params, progress)

@@ -234,12 +234,12 @@ test("browser preview renders an Overview chart after a module run", async ({ pa
 test("browser preview explains effective dimension metrics and spectrum ranges", async ({ page }) => {
   await page.goto("/preview.html");
   await openAnalysis(page);
-  await selectAnalysisModule(page, "Representation Quality", "Effective Dimension");
+  await selectAnalysisModule(page, "Representation Quality", "Effective Dimension (spectral)");
   await expect(page.getByRole("button", { name: /Run Effective Dimension/i })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "PCA preprocessing" })).toBeVisible();
   await page.getByRole("button", { name: /Run Effective Dimension/i }).click();
 
-  await expect(page.getByText("EFFECTIVE DIMENSION", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("SPECTRAL EFFECTIVE DIMENSION", { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText("PR effective dimension", { exact: true })).toBeVisible();
   await expect(page.getByText("90% effective dimension", { exact: true })).toBeVisible();
   await expect(page.getByLabel("PCA method details")).toContainText("Scaling");
@@ -398,6 +398,29 @@ test("browser preview renders the environment jacobian rank panel", async ({ pag
   await expect(page.getByLabel("Per-atom expected versus observed Jacobian rank")).toBeVisible({ timeout: 30_000 });
 });
 
+test("browser preview runs the TwoNN intrinsic dimension panel", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Intrinsic Dimension (TwoNN)");
+  await page.getByRole("button", { name: /Run Intrinsic Dimension/i }).click();
+  await expect(page.getByText("INTRINSIC DIMENSION (TWONN)", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Log neighbor-ratio distribution")).toBeVisible({ timeout: 30_000 });
+});
+
+test("browser preview runs the information imbalance comparison", async ({ page }) => {
+  await page.goto("/preview.html");
+  await openAnalysis(page);
+  await selectAnalysisModule(page, "Representation Quality", "Descriptor Comparison");
+  const controls = page.locator(".analysis-controls");
+  await controls.locator(".ant-select").nth(1).click();
+  await page.getByText("ACE · run-ace", { exact: true }).last().click();
+  await controls.locator(".ant-select").nth(2).click();
+  await page.getByText("Information imbalance", { exact: true }).last().click();
+  await page.getByRole("button", { name: /Run Descriptor Comparison/i }).click();
+  await expect(page.getByText("INFORMATION IMBALANCE", { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByLabel("Neighborhood overlap versus k")).toBeVisible({ timeout: 30_000 });
+});
+
 test("browser preview renders the degeneracy search and distance consistency panels", async ({ page }) => {
   await page.goto("/preview.html");
   await openAnalysis(page);
@@ -438,7 +461,7 @@ test("Analysis navigation exposes six groups and all 18 modules in order", async
     { label: "Property Information", modules: ["Property Information Analysis"] },
     { label: "Evolution & Response", modules: ["Descriptor Trajectory", "Structural Perturbation Response"] },
     { label: "Coverage & Novelty", modules: ["Data Coverage", "Train / Test Overlap", "Dataset Drift", "Outlier Environments"] },
-    { label: "Representation Quality", modules: ["Feature Variance", "Feature Correlation", "Effective Dimension", "Kernel Analysis", "Parameter Sensitivity", "Descriptor Comparison"] },
+    { label: "Representation Quality", modules: ["Feature Variance", "Feature Correlation", "Effective Dimension (spectral)", "Intrinsic Dimension (TwoNN)", "Kernel Analysis", "Parameter Sensitivity", "Descriptor Comparison"] },
     { label: "Dataset Sampling", modules: ["Representative Sampling"] },
     { label: "Descriptor Diagnostics", modules: ["Formal Invariance", "Cutoff Smoothness", "Environment Jacobian Rank", "Degeneracy Search", "Distance Consistency"] },
   ];
@@ -455,7 +478,7 @@ test("Analysis navigation exposes six groups and all 18 modules in order", async
     await expect(moduleTabs).toHaveText(group.modules);
     moduleCount += group.modules.length;
   }
-  expect(moduleCount).toBe(23);
+  expect(moduleCount).toBe(24);
 });
 
 test("narrow Analysis navigation keeps overflow groups keyboard accessible", async ({ page }) => {

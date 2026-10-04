@@ -508,7 +508,14 @@ def local_diversity(samples: DescriptorMatrix, params: dict, progress: Callable[
     }
 
 
-def effective_dimension(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None) -> dict:
+def effective_dimension(samples: DescriptorMatrix, params: dict, progress: Callable[[float, str], None] | None = None, *, kind: str = "effective_dimension") -> dict:
+    """Participation-ratio spectral effective dimension.
+
+    The name "effective_dimension" is the legacy spelling kept for old
+    artifacts; new runs register as "spectral_effective_dimension" so the API
+    no longer conflates the PCA participation ratio with the intrinsic
+    manifold dimension (which TwoNN estimates, review 2026-10-03 §3).
+    """
     effective_params = dict(params or {})
     preprocess = effective_params.get("preprocess")
     if preprocess is None or preprocess == "":
@@ -540,7 +547,7 @@ def effective_dimension(samples: DescriptorMatrix, params: dict, progress: Calla
             "explained_variance": normalized.astype(np.float64),
         },
         "preview": {
-            "kind": "effective_dimension",
+            "kind": kind,
             "preprocess": preprocess,
             "pca_basis": pca_basis,
             "sample_count": int(samples.n_samples),
@@ -697,11 +704,21 @@ class LocalDiversity:
 
 
 class EffectiveDimension:
+    """Legacy spelling: kept registered so old history rows still load."""
+
     name = "effective_dimension"
     category = "engine"
 
     def run(self, data, params: dict, progress=None) -> dict:
         return effective_dimension(data, params, progress)
+
+
+class SpectralEffectiveDimension:
+    name = "spectral_effective_dimension"
+    category = "engine"
+
+    def run(self, data, params: dict, progress=None) -> dict:
+        return effective_dimension(data, params, progress, kind="spectral_effective_dimension")
 
 
 class Trajectory:

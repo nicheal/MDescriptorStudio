@@ -22,6 +22,8 @@ export type OverviewAnalysis =
   | "drift"
   | "sensitivity"
   | "perturbation_sensitivity"
+  | "spectral_effective_dimension"
+  | "two_nn_intrinsic_dimension"
   | "formal_invariance"
   | "cutoff_smoothness"
   | "environment_jacobian"
@@ -60,6 +62,8 @@ export type AnalysisModuleKey =
   | "parameter_sensitivity"
   | "descriptor_comparison"
   | "representative_sampling"
+  | "spectral_effective_dimension"
+  | "two_nn_intrinsic_dimension"
   | "formal_invariance"
   | "cutoff_smoothness"
   | "environment_jacobian"
@@ -157,6 +161,7 @@ export interface AnalysisParams {
   degeneracyPairs: number;
   consistencySamples: number;
   consistencyBins: number;
+  twoNnBootstrap: number;
   nearZeroThreshold: number;
   lowVariationThreshold: number;
   featureCorrelationMethod: FeatureCorrelationMethod;
