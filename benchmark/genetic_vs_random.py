@@ -91,7 +91,7 @@ TARGETING_LABELS = {"target_region", "genetic-target", "pso-target"}
 # ("strict-unique-raw"); the current engine counts in the archive scaled
 # space. A config stamped with another caliber is refused instead of
 # silently mixing counting spaces across materials or code versions.
-HARNESS_VERSION = "2026-10-01"
+HARNESS_VERSION = "2026-10-03"
 METRIC_CALIBER = "strict-unique-scaled"
 
 # The run's full budget contract (external review: caps that actually bind
@@ -101,7 +101,11 @@ MAX_GENERATIONS = 10_000
 
 KNOWN_OPTIMIZERS = {"random", "random-reuse", "genetic", "pso"} | TARGETING_LABELS
 KNOWN_SELECTION_STRATEGIES = ("structure_fps_v1", "local_incremental_maximin_v1")
-PRIMARY_METRICS = ("unique_per_100_evals",)
+# gen-5: strict_unique_v2 (permutation-invariant, canonical greedy) may serve
+# as a primary metric; the gen-4 visit-order metric stays available so the
+# two calibers can be compared within one sweep. The archived rate (what
+# survived energy/force screening) is always a secondary view.
+PRIMARY_METRICS = ("unique_per_100_evals", "strict_unique_v2_per_100_evals")
 KNOWN_SECONDARY_METRICS = (
     "final_coverage_radius",
     "anchor_proximity.median",
@@ -112,6 +116,10 @@ KNOWN_SECONDARY_METRICS = (
     "peak_rss_mb",
     "unique_novel_environments",
     "unique_per_100_evals",
+    "strict_unique_v2",
+    "strict_unique_v2_per_100_evals",
+    "archived_unique_novel_environments",
+    "archived_unique_per_100_evals",
 )
 
 
@@ -380,6 +388,13 @@ def run_once(
 
     rounds = [record.to_json() for record in result.rounds]
     total_unique = sum(r["unique_novel_environments"] or 0 for r in rounds)
+    # gen-5 secondary calibers: the permutation-invariant v2 count and the
+    # post-screening archived count. Without screening the archived rate
+    # equals the discovered one; records without the gen-5 fields (older
+    # engines) yield 0 — a gen-5 harness never pairs with an old engine
+    # (the preregistration contract pins algorithm_version).
+    total_unique_v2 = sum(r["strict_unique_v2"] or 0 for r in rounds)
+    total_archived = sum(r["archived_unique_novel_environments"] or 0 for r in rounds)
     total_evals = sum(r["evaluations"] for r in rounds)
     coverage = next((r["coverage_radius"] for r in reversed(rounds) if r["coverage_radius"] is not None), None)
     proximity = None
@@ -416,6 +431,10 @@ def run_once(
         "accepted": result.accepted_count,
         "unique_novel_environments": total_unique,
         "unique_per_100_evals": round(100.0 * total_unique / total_evals, 6) if total_evals else None,
+        "strict_unique_v2": total_unique_v2,
+        "strict_unique_v2_per_100_evals": round(100.0 * total_unique_v2 / total_evals, 6) if total_evals else None,
+        "archived_unique_novel_environments": total_archived,
+        "archived_unique_per_100_evals": round(100.0 * total_archived / total_evals, 6) if total_evals else None,
         "final_coverage_radius": coverage,
         "wall_seconds": round(elapsed, 1),
         "peak_rss_mb": rss.peak_mb,
@@ -612,6 +631,12 @@ def _summarise(runs: list[dict]) -> dict:
             "final_coverage_radius": _distribution(coverage),
             "accepted": {"mean": statistics.fmean(accepted)},
         }
+        v2 = _distribution([r.get("strict_unique_v2_per_100_evals") for r in group])
+        if v2 is not None:
+            summary[name]["strict_unique_v2_per_100_evals"] = v2
+        archived = _distribution([r.get("archived_unique_per_100_evals") for r in group])
+        if archived is not None:
+            summary[name]["archived_unique_per_100_evals"] = archived
         wall = _distribution([r.get("wall_seconds") for r in group])
         if wall is not None:
             summary[name]["wall_seconds"] = wall
@@ -680,6 +705,8 @@ def main() -> int:
             print(
                 f"    evals={run['evaluations']} accepted={run['accepted']} "
                 f"unique={run['unique_novel_environments']} ({run['unique_per_100_evals']}/100) "
+                f"v2={run['strict_unique_v2']} ({run['strict_unique_v2_per_100_evals']}/100) "
+                f"archived={run['archived_unique_per_100_evals']}/100 "
                 f"coverage={run['final_coverage_radius']} wall={run['wall_seconds']}s",
                 flush=True,
             )

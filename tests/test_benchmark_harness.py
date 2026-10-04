@@ -376,3 +376,76 @@ class TestResumeMaterialGuard:
         pdcunip = _current_preregistration("config.pdcunip.json", tmp_path)
         with pytest.raises(SystemExit, match="predates material identity"):
             resume._verify_row_identities(rows, pdcunip)
+
+
+class TestGen5Preregistrations:
+    """F (2026-10-03): the gen-5 freeze re-registers both materials with the
+    permutation-invariant primary and both calibers as secondaries."""
+
+    def test_gen5_carbon_config_loads(self, tmp_path):
+        import json
+
+        harness = _load_harness()
+        config = json.loads((REPO / "benchmark" / "config.gen5-carbon.json").read_text(encoding="utf-8"))
+        assert config["algorithm_version"] == "gen-5"
+        assert config["primary_metric"] == "strict_unique_v2_per_100_evals"
+        # Both calibers ride as secondaries: one sweep reports pre-screen vs
+        # archived and v1 vs v2 side by side.
+        for metric in (
+            "unique_per_100_evals",
+            "archived_unique_per_100_evals",
+            "unique_novel_environments",
+            "strict_unique_v2",
+            "archived_unique_novel_environments",
+            "peak_rss_mb",
+        ):
+            assert metric in config["secondary_metrics"], metric
+        loaded = harness._load_preregistration(REPO / "benchmark" / "config.gen5-carbon.json")
+        assert loaded["anchor_frames"] == [1322, 5075]
+        assert loaded["selection_strategy"] == "structure_fps_v1"
+
+    def test_gen5_pdcunip_config_loads(self):
+        harness = _load_harness()
+        config = harness._load_preregistration(REPO / "benchmark" / "config.gen5-pdcunip.json")
+        assert config["dataset_id"] == "ds_9ca89d14f8f0"
+        assert config["anchor_frames"] == [2256, 2133]
+        assert config["primary_metric"] == "strict_unique_v2_per_100_evals"
+
+    def test_v2_primary_is_accepted_and_archived_is_a_known_secondary(self, tmp_path):
+        harness = _load_harness()
+        path = _mutated_config(tmp_path, {"primary_metric": "strict_unique_v2_per_100_evals"})
+        config = harness._load_preregistration(path)
+        assert config["primary_metric"] == "strict_unique_v2_per_100_evals"
+        path2 = _mutated_config(tmp_path, {"secondary_metrics": ["archived_unique_per_100_evals"]})
+        assert harness._load_preregistration(path2)["secondary_metrics"] == ["archived_unique_per_100_evals"]
+
+    def test_summary_carries_gen5_distributions(self):
+        harness = _load_harness()
+        runs = [
+            {
+                "optimizer": "random",
+                "unique_per_100_evals": 70.0,
+                "strict_unique_v2_per_100_evals": 68.0,
+                "archived_unique_per_100_evals": 60.0,
+                "final_coverage_radius": 40.0,
+                "accepted": 170,
+                "wall_seconds": 300.0,
+                "peak_rss_mb": 900.0,
+                "anchor_proximity": None,
+            },
+            {
+                "optimizer": "random",
+                "unique_per_100_evals": 72.0,
+                "strict_unique_v2_per_100_evals": 70.0,
+                "archived_unique_per_100_evals": 62.0,
+                "final_coverage_radius": 41.0,
+                "accepted": 172,
+                "wall_seconds": 310.0,
+                "peak_rss_mb": 910.0,
+                "anchor_proximity": None,
+            },
+        ]
+        summary = harness._summarise(runs)["random"]
+        assert summary["strict_unique_v2_per_100_evals"]["mean"] == 69.0
+        assert summary["archived_unique_per_100_evals"]["mean"] == 61.0
+        assert summary["unique_per_100_evals"]["mean"] == 71.0
