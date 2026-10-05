@@ -56,3 +56,10 @@ tmp/
 
 # Playwright test artifacts
 test-results/
+
+# Large local-only datasets (user decision 2026-10-04: stay out of git)
+tests/data/PdCuNiP.xyz
+tests/data/LiICOF.xyz
+
+# Quarantined polluted sweep output (duplicate-launch collision, do not analyze)
+/benchmark/_quarantine/
