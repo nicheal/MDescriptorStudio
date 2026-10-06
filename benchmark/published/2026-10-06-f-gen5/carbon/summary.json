@@ -1,0 +1,336 @@
+{
+  "args": {
+    "repeats": 20,
+    "budget": 10000,
+    "pilot": false,
+    "optimizers": "random,random-reuse,genetic",
+    "anchor_frames": "1322,5075",
+    "config": "benchmark/config.gen5-carbon.json",
+    "dataset": "ds_d56748fb4391",
+    "run": "run_57a8b8c40286"
+  },
+  "summary": {
+    "random": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 69.9995,
+        "median": 69.66,
+        "stdev": 5.9507473878231645,
+        "p90": 78.42200000000001
+      },
+      "final_coverage_radius": {
+        "mean": 36.382007201574616,
+        "median": 37.14418246059704,
+        "stdev": 4.391808612761941,
+        "p90": 41.41728247148362
+      },
+      "accepted": {
+        "mean": 177.5
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 70.0,
+        "median": 69.66,
+        "stdev": 5.950747852161105,
+        "p90": 78.42200000000001
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 69.9995,
+        "median": 69.66,
+        "stdev": 5.9507473878231645,
+        "p90": 78.42200000000001
+      },
+      "wall_seconds": {
+        "mean": 500.33000000000004,
+        "median": 444.35,
+        "stdev": 107.37207369947883,
+        "p90": 676.15
+      },
+      "peak_rss_mb": {
+        "mean": 985.3299999999999,
+        "median": 983.5999999999999,
+        "stdev": 21.64785391089307,
+        "p90": 1015.47
+      },
+      "anchor_proximity": {
+        "median_of_medians": 47.4969,
+        "mean_within_radius": 0.054680000000000006
+      }
+    },
+    "random-reuse": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 24.446,
+        "median": 24.09,
+        "stdev": 9.974511938989927,
+        "p90": 39.094
+      },
+      "final_coverage_radius": {
+        "mean": 38.0373258728227,
+        "median": 39.06729474525305,
+        "stdev": 7.00826610141069,
+        "p90": 46.810997848608686
+      },
+      "accepted": {
+        "mean": 218.9
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 24.446,
+        "median": 24.09,
+        "stdev": 9.974511938989927,
+        "p90": 39.094
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 24.446,
+        "median": 24.09,
+        "stdev": 9.974511938989927,
+        "p90": 39.094
+      },
+      "wall_seconds": {
+        "mean": 344.475,
+        "median": 307.5,
+        "stdev": 92.61126949158026,
+        "p90": 496.44
+      },
+      "peak_rss_mb": {
+        "mean": 924.7700000000001,
+        "median": 928.9000000000001,
+        "stdev": 29.31326446652113,
+        "p90": 959.0899999999999
+      },
+      "anchor_proximity": {
+        "median_of_medians": 98.2884,
+        "mean_within_radius": 0.028820000000000002
+      }
+    },
+    "genetic": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 59.158500000000004,
+        "median": 58.945,
+        "stdev": 25.24511839732064,
+        "p90": 89.05000000000001
+      },
+      "final_coverage_radius": {
+        "mean": 39.46709576360986,
+        "median": 38.39047110407749,
+        "stdev": 6.581752647315874,
+        "p90": 46.346543721754315
+      },
+      "accepted": {
+        "mean": 192.5
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 59.159000000000006,
+        "median": 58.945,
+        "stdev": 25.244170958231546,
+        "p90": 89.05000000000001
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 59.158500000000004,
+        "median": 58.945,
+        "stdev": 25.24511839732064,
+        "p90": 89.05000000000001
+      },
+      "wall_seconds": {
+        "mean": 415.41499999999996,
+        "median": 422.75,
+        "stdev": 153.82907217872835,
+        "p90": 586.9399999999999
+      },
+      "peak_rss_mb": {
+        "mean": 918.0649999999999,
+        "median": 943.25,
+        "stdev": 57.60967823478785,
+        "p90": 969.23
+      },
+      "anchor_proximity": {
+        "median_of_medians": 55.092600000000004,
+        "mean_within_radius": 0.080305
+      }
+    },
+    "pso": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 97.77799999999999,
+        "median": 122.045,
+        "stdev": 54.71196728514271,
+        "p90": 145.71200000000002
+      },
+      "final_coverage_radius": {
+        "mean": 41.67254634008814,
+        "median": 41.14132856410946,
+        "stdev": 5.647900171164566,
+        "p90": 48.08132061993396
+      },
+      "accepted": {
+        "mean": 222.05
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 97.776,
+        "median": 122.045,
+        "stdev": 54.71078104089964,
+        "p90": 145.71200000000002
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 97.77799999999999,
+        "median": 122.045,
+        "stdev": 54.71196728514271,
+        "p90": 145.71200000000002
+      },
+      "wall_seconds": {
+        "mean": 520.095,
+        "median": 583.0999999999999,
+        "stdev": 211.83510090087574,
+        "p90": 672.4100000000001
+      },
+      "peak_rss_mb": {
+        "mean": 945.525,
+        "median": 982.05,
+        "stdev": 69.468871294612,
+        "p90": 1007.55
+      },
+      "anchor_proximity": {
+        "median_of_medians": 59.3748,
+        "mean_within_radius": 0.13042
+      }
+    },
+    "target_region": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 72.1775,
+        "median": 75.515,
+        "stdev": 12.558126693604885,
+        "p90": 84.9
+      },
+      "final_coverage_radius": {
+        "mean": 42.67916236515539,
+        "median": 41.71948292991161,
+        "stdev": 4.753392444865493,
+        "p90": 49.84404469826873
+      },
+      "accepted": {
+        "mean": 211.0
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 72.1775,
+        "median": 75.515,
+        "stdev": 12.558126693604885,
+        "p90": 84.9
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 72.1775,
+        "median": 75.515,
+        "stdev": 12.558126693604885,
+        "p90": 84.9
+      },
+      "wall_seconds": {
+        "mean": 485.58000000000004,
+        "median": 452.1,
+        "stdev": 91.93609107475291,
+        "p90": 629.3700000000001
+      },
+      "peak_rss_mb": {
+        "mean": 954.9200000000001,
+        "median": 953.15,
+        "stdev": 16.908098339957817,
+        "p90": 974.82
+      },
+      "anchor_proximity": {
+        "median_of_medians": 25.25935,
+        "mean_within_radius": 0.21563
+      }
+    },
+    "genetic-target": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 80.6555,
+        "median": 80.41499999999999,
+        "stdev": 21.601668910916167,
+        "p90": 105.41200000000002
+      },
+      "final_coverage_radius": {
+        "mean": 41.53698305217467,
+        "median": 43.22709703753876,
+        "stdev": 6.080243471026836,
+        "p90": 47.85480434303416
+      },
+      "accepted": {
+        "mean": 194.05
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 80.655,
+        "median": 80.41499999999999,
+        "stdev": 21.600479648670575,
+        "p90": 105.41200000000002
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 80.6555,
+        "median": 80.41499999999999,
+        "stdev": 21.601668910916167,
+        "p90": 105.41200000000002
+      },
+      "wall_seconds": {
+        "mean": 718.7,
+        "median": 688.7,
+        "stdev": 143.01618973499396,
+        "p90": 911.1700000000001
+      },
+      "peak_rss_mb": {
+        "mean": 973.2299999999999,
+        "median": 974.5,
+        "stdev": 24.33258806837577,
+        "p90": 997.29
+      },
+      "anchor_proximity": {
+        "median_of_medians": 26.437849999999997,
+        "mean_within_radius": 0.2251
+      }
+    },
+    "pso-target": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 114.35149999999999,
+        "median": 119.72,
+        "stdev": 27.40514497892302,
+        "p90": 139.096
+      },
+      "final_coverage_radius": {
+        "mean": 43.213413320211274,
+        "median": 44.38629355564316,
+        "stdev": 4.35711842879463,
+        "p90": 47.82154972784972
+      },
+      "accepted": {
+        "mean": 208.2
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 114.35149999999999,
+        "median": 119.72,
+        "stdev": 27.40514497892302,
+        "p90": 139.096
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 114.35149999999999,
+        "median": 119.72,
+        "stdev": 27.40514497892302,
+        "p90": 139.096
+      },
+      "wall_seconds": {
+        "mean": 716.8100000000001,
+        "median": 659.4000000000001,
+        "stdev": 164.63879411097432,
+        "p90": 944.9100000000001
+      },
+      "peak_rss_mb": {
+        "mean": 984.57,
+        "median": 983.55,
+        "stdev": 22.359975990948413,
+        "p90": 1010.65
+      },
+      "anchor_proximity": {
+        "median_of_medians": 54.41185,
+        "mean_within_radius": 0.16212
+      }
+    }
+  }
+}

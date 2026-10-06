@@ -140,3 +140,14 @@
 > `20261004T031310Z`，记录 `docs/reviews/2026-10-04-f-gen5-preregistrations.md`）——同 R4 设计重注册，
 > 主指标 `strict_unique_v2_per_100_evals`，双口径次级；完成后按其分析契约出配对结论 + 发布包（附数据集
 > 获取方式，关闭 L5）。引用规则新增：gen-5 v2 与 gen-4 v1 数值不混排；无筛选运行 archived=discovered。
+
+> **更新(2026-10-06,F 完成,Milestone A–F 全部关闭)**:双 gen-5 sweep 140/140 收口——碳 `20261004T031301Z`
+> 连续收尾;PdCuNiP `20261004T031310Z` 10-05 夜间进程外部终止(机器未重启、无 traceback),seed 1019 六行由
+> `resume_sweep.py` 补齐(resume 行 wall 与整夜争用行不可比)。**确定性互证:两 sweep 与同代码 gen-4 存档
+> (20261002T010733Z / 20261002T005922Z)140 对逐行共享 schema 逐位一致(含逐轮共享字段),resume 行同样逐位
+> 一致**——gen-5"仅增量不改轨迹"声明在真实数据成立。v1↔v2 仅 carbon 6/140、PdCuNiP 3/140 行有差
+> (|Δ|≤0.02/100),两材料 v2 排名与 v1 完全相同——真实数据上排列序效应可忽略,但引用规则不变(必须声明口径)。
+> 无筛选运行 pre-screen==archived 逐行成立。发布包 `benchmark/published/2026-10-06-f-gen5/`(双材料自含
+> config+jsonl+summary+environment+LF SHA256SUMS,顶层 README 含数据集获取方式)——L5 数据侧就绪。
+> 同日运维事故:2026-10-04 同秒双启动致 `20261004T035034Z` 混入两数据集行,已隔离 `benchmark/_quarantine/`
+> 勿分析;sweep 活性核查一律用 run_results.jsonl 行数,勿信 exec 完成通知。

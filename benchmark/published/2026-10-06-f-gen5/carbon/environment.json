@@ -1,0 +1,13 @@
+{
+  "python": "3.12.9",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "cpu_count": 32,
+  "packages": {
+    "numpy": "1.26.4",
+    "scipy": "1.15.3",
+    "mdescriptor": "0.2.3"
+  },
+  "harness_version": "2026-10-03",
+  "metric_caliber": "strict-unique-scaled",
+  "algorithm_version": "gen-5"
+}

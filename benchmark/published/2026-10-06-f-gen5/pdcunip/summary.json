@@ -1,0 +1,415 @@
+{
+  "config": {
+    "config_version": 1,
+    "kind": "generation-benchmark-preregistration",
+    "preregistered_at": "2026-09-30",
+    "note": "Second-material pre-registration (audit R4 default-switch gate: a second material class — PdCuNiP metallic glass, 9615 frames, median 106 atoms (range 2-256), multicomponent Pd/Cu/Ni/P — to test whether the optimizer conclusions transfer beyond the single carbon dataset). Scenario otherwise frozen and identical to benchmark/config.json. To be run AFTER the selection-strategy sweep completes. 2026-10-01 pre-run corrections (external review, docs/reviews/2026-10-01-pdcunip-review-response.md): anchor_frames re-derived for THIS material — the copied carbon indices are not valid anchors here (1322 fails the run's geometry constraints; 5075 sits in the dense core with 7719/9615 frames within region_radius on PdCuNiP, versus 21/6738 for the same index on carbon); replacements 2256/2133 are the most distinctive geometry-valid bulk-like frames (54 atoms each, nearest cloud frame ~27 scaled units away, mutually >40 apart). max_accepted/max_generations added to freeze the budget contract; metric_caliber stamped (the current engine counts strict-unique environments in the archive scaled space); peak_rss_mb registered. Analysis contract: primary comparison is paired per-seed unique_per_100_evals differences WITHIN this material; anchor proximity is interpreted for the targeting groups only; coverage radius is smallest-is-best; cross-material value comparisons against carbon are out of scope of this pre-registration. 2026-10-03 F pre-registration (gen-5 freeze): same R4 PdCuNiP scenario (anchors 2256/2133, geometry precheck) re-registered under gen-5 with strict_unique_v2_per_100_evals as primary and both calibers as secondaries (pre-screen vs archived, v1 vs v2). Cross-material value comparisons against carbon remain out of scope; paired per-seed differences WITHIN this material are the primary comparison.",
+    "algorithm_version": "gen-5",
+    "harness_min_version": "2026-10-03",
+    "metric_caliber": "strict-unique-scaled",
+    "selection_strategy": "structure_fps_v1",
+    "dataset_id": "ds_9ca89d14f8f0",
+    "descriptor_run_id": "run_644f6186340c",
+    "repeats": 20,
+    "seed_base": 1000,
+    "budget_evaluations": 10000,
+    "max_accepted": 500,
+    "max_generations": 10000,
+    "anchor_frames": [
+      2256,
+      2133
+    ],
+    "region_radius": 15.0,
+    "groups": [
+      "random",
+      "random-reuse",
+      "genetic",
+      "pso",
+      "target_region",
+      "genetic-target",
+      "pso-target"
+    ],
+    "primary_groups": [
+      "random",
+      "genetic",
+      "pso"
+    ],
+    "primary_metric": "strict_unique_v2_per_100_evals",
+    "metric_definition": "count_strict_unique_environments(sum over rounds) / descriptor evaluations * 100, threshold 0.25 robust-scaled units",
+    "secondary_metrics": [
+      "final_coverage_radius",
+      "anchor_proximity.median",
+      "anchor_proximity.p90",
+      "anchor_proximity.within_radius",
+      "accepted",
+      "wall_seconds",
+      "peak_rss_mb",
+      "unique_per_100_evals",
+      "strict_unique_v2_per_100_evals",
+      "archived_unique_per_100_evals",
+      "unique_novel_environments",
+      "strict_unique_v2",
+      "archived_unique_novel_environments"
+    ],
+    "operators": {
+      "atomic_displacement": {
+        "enabled": true,
+        "max_sigma": 0.15
+      },
+      "isotropic_strain": {
+        "enabled": true,
+        "max_strain": 0.05
+      },
+      "anisotropic_strain": {
+        "enabled": true,
+        "max_strain": 0.05
+      },
+      "cell_shear": {
+        "enabled": true,
+        "max_shear": 0.05
+      }
+    },
+    "objective": {
+      "type": "local_environment_novelty",
+      "aggregation": "top_fraction_mean",
+      "top_fraction": 0.2,
+      "novelty_threshold": 0.25,
+      "scaling": "robust"
+    },
+    "constraints": {
+      "min_distance_mode": "covalent",
+      "min_distance_factor": 0.7
+    },
+    "optimizer_params": {
+      "children_per_seed": 8,
+      "batch_accept": 8,
+      "n_seeds": 64
+    },
+    "dataset": "ds_9ca89d14f8f0",
+    "run": "run_644f6186340c"
+  },
+  "summary": {
+    "random": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 130.5595,
+        "median": 130.74,
+        "stdev": 3.7511057667952015,
+        "p90": 135.864
+      },
+      "final_coverage_radius": {
+        "mean": 407.276838571674,
+        "median": 405.8937415167918,
+        "stdev": 6.504702228481779,
+        "p90": 416.174308223847
+      },
+      "accepted": {
+        "mean": 170.55
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 130.559,
+        "median": 130.74,
+        "stdev": 3.7511779202636726,
+        "p90": 135.864
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 130.5595,
+        "median": 130.74,
+        "stdev": 3.7511057667952015,
+        "p90": 135.864
+      },
+      "wall_seconds": {
+        "mean": 1007.2450000000001,
+        "median": 976.9,
+        "stdev": 124.63006934207543,
+        "p90": 1160.39
+      },
+      "peak_rss_mb": {
+        "mean": 1233.49,
+        "median": 1230.85,
+        "stdev": 17.773957886395714,
+        "p90": 1254.0700000000002
+      },
+      "anchor_proximity": {
+        "median_of_medians": 54.774550000000005,
+        "mean_within_radius": 0.023745
+      }
+    },
+    "random-reuse": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 158.312,
+        "median": 158.34,
+        "stdev": 19.729539861788332,
+        "p90": 179.83200000000002
+      },
+      "final_coverage_radius": {
+        "mean": 322.5044357943153,
+        "median": 314.1506125749645,
+        "stdev": 40.24049609776503,
+        "p90": 372.7053607745348
+      },
+      "accepted": {
+        "mean": 218.8
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 158.312,
+        "median": 158.34,
+        "stdev": 19.729539861788332,
+        "p90": 179.83200000000002
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 158.312,
+        "median": 158.34,
+        "stdev": 19.729539861788332,
+        "p90": 179.83200000000002
+      },
+      "wall_seconds": {
+        "mean": 1051.0149999999999,
+        "median": 1050.4,
+        "stdev": 142.94781997932708,
+        "p90": 1236.6200000000001
+      },
+      "peak_rss_mb": {
+        "mean": 1226.3049999999998,
+        "median": 1227.7,
+        "stdev": 19.09658208602841,
+        "p90": 1248.67
+      },
+      "anchor_proximity": {
+        "median_of_medians": 64.77680000000001,
+        "mean_within_radius": 0.00541
+      }
+    },
+    "genetic": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 142.116,
+        "median": 142.39,
+        "stdev": 18.064393124247722,
+        "p90": 161.978
+      },
+      "final_coverage_radius": {
+        "mean": 240.19177311661662,
+        "median": 228.0511800796076,
+        "stdev": 32.263030378443105,
+        "p90": 267.5569465677296
+      },
+      "accepted": {
+        "mean": 178.4
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 142.1155,
+        "median": 142.39,
+        "stdev": 18.064343906975246,
+        "p90": 161.978
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 142.116,
+        "median": 142.39,
+        "stdev": 18.064393124247722,
+        "p90": 161.978
+      },
+      "wall_seconds": {
+        "mean": 1035.645,
+        "median": 968.3,
+        "stdev": 143.81431915750548,
+        "p90": 1211.0500000000002
+      },
+      "peak_rss_mb": {
+        "mean": 1234.0149999999999,
+        "median": 1235.6,
+        "stdev": 31.091194810377488,
+        "p90": 1260.1000000000001
+      },
+      "anchor_proximity": {
+        "median_of_medians": 153.5636,
+        "mean_within_radius": 0.01969
+      }
+    },
+    "pso": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 127.5095,
+        "median": 113.04,
+        "stdev": 32.47522350719245,
+        "p90": 164.62800000000001
+      },
+      "final_coverage_radius": {
+        "mean": 348.3551595088589,
+        "median": 362.3150017737186,
+        "stdev": 69.97703929710161,
+        "p90": 432.8710728583426
+      },
+      "accepted": {
+        "mean": 200.7
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 127.5095,
+        "median": 113.04,
+        "stdev": 32.47522350719245,
+        "p90": 164.62800000000001
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 127.5095,
+        "median": 113.04,
+        "stdev": 32.47522350719245,
+        "p90": 164.62800000000001
+      },
+      "wall_seconds": {
+        "mean": 951.32,
+        "median": 899.55,
+        "stdev": 200.01259591914652,
+        "p90": 1269.04
+      },
+      "peak_rss_mb": {
+        "mean": 1202.565,
+        "median": 1200.15,
+        "stdev": 33.45251583647297,
+        "p90": 1252.1000000000001
+      },
+      "anchor_proximity": {
+        "median_of_medians": 63.248799999999996,
+        "mean_within_radius": 0.009195
+      }
+    },
+    "target_region": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 100.15950000000001,
+        "median": 99.58500000000001,
+        "stdev": 3.3357496987381383,
+        "p90": 103.84200000000001
+      },
+      "final_coverage_radius": {
+        "mean": 416.7091551445521,
+        "median": 418.0252942712343,
+        "stdev": 9.917664436321619,
+        "p90": 427.851385172017
+      },
+      "accepted": {
+        "mean": 185.4
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 100.15950000000001,
+        "median": 99.58500000000001,
+        "stdev": 3.3357496987381383,
+        "p90": 103.84200000000001
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 100.15950000000001,
+        "median": 99.58500000000001,
+        "stdev": 3.3357496987381383,
+        "p90": 103.84200000000001
+      },
+      "wall_seconds": {
+        "mean": 827.4350000000001,
+        "median": 823.2,
+        "stdev": 109.94307270966236,
+        "p90": 997.49
+      },
+      "peak_rss_mb": {
+        "mean": 1189.24,
+        "median": 1186.9499999999998,
+        "stdev": 24.84017120035928,
+        "p90": 1215.18
+      },
+      "anchor_proximity": {
+        "median_of_medians": 33.0355,
+        "mean_within_radius": 0.04285
+      }
+    },
+    "genetic-target": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 100.53150000000001,
+        "median": 99.695,
+        "stdev": 3.716794423891868,
+        "p90": 106.394
+      },
+      "final_coverage_radius": {
+        "mean": 386.06126759536335,
+        "median": 384.0499657773273,
+        "stdev": 14.845174650587388,
+        "p90": 404.7168134095892
+      },
+      "accepted": {
+        "mean": 180.0
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 100.53200000000001,
+        "median": 99.695,
+        "stdev": 3.7170058691881223,
+        "p90": 106.394
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 100.53150000000001,
+        "median": 99.695,
+        "stdev": 3.716794423891868,
+        "p90": 106.394
+      },
+      "wall_seconds": {
+        "mean": 938.235,
+        "median": 896.9000000000001,
+        "stdev": 132.38900524789176,
+        "p90": 1168.08
+      },
+      "peak_rss_mb": {
+        "mean": 1184.52,
+        "median": 1183.0,
+        "stdev": 18.73790416859845,
+        "p90": 1212.06
+      },
+      "anchor_proximity": {
+        "median_of_medians": 37.3253,
+        "mean_within_radius": 0.052500000000000005
+      }
+    },
+    "pso-target": {
+      "repeats": 20,
+      "unique_per_100_evals": {
+        "mean": 111.5325,
+        "median": 107.36,
+        "stdev": 20.61647702688313,
+        "p90": 118.08000000000003
+      },
+      "final_coverage_radius": {
+        "mean": 352.23358614623936,
+        "median": 357.3466754480016,
+        "stdev": 45.498983352511836,
+        "p90": 406.2975243943003
+      },
+      "accepted": {
+        "mean": 187.3
+      },
+      "strict_unique_v2_per_100_evals": {
+        "mean": 111.5325,
+        "median": 107.36,
+        "stdev": 20.61647702688313,
+        "p90": 118.08000000000003
+      },
+      "archived_unique_per_100_evals": {
+        "mean": 111.5325,
+        "median": 107.36,
+        "stdev": 20.61647702688313,
+        "p90": 118.08000000000003
+      },
+      "wall_seconds": {
+        "mean": 916.1200000000001,
+        "median": 885.2,
+        "stdev": 164.80963372455219,
+        "p90": 1118.13
+      },
+      "peak_rss_mb": {
+        "mean": 1192.54,
+        "median": 1190.4,
+        "stdev": 22.303207227472445,
+        "p90": 1222.24
+      },
+      "anchor_proximity": {
+        "median_of_medians": 74.3318,
+        "mean_within_radius": 0.051245
+      }
+    }
+  }
+}

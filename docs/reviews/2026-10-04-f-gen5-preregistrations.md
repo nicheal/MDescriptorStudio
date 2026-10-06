@@ -91,16 +91,59 @@ carbon 结论不受 gen-5 口径修正影响:fps 策略下 pso-target 仍是发�
 (pso 方差极大、bimodal 延续),random-reuse 在 fps 下仍是毒药(与
 2026-10-02 选择策略 sweep 一致)。
 
-## 状态
+## PdCuNiP 结果(2026-10-06 完成 140/140,分析同日)
 
-- F1–F4 完成;**carbon sweep + 分析完成(见上),契约第 1/2/3 条对 carbon 关闭**。
-- 运维事故(2026-10-04 傍晚处置):启动当日 11:50 的第二次启动与 11:13 首次
-  启动的进程落在同一 UTC 秒,共享了结果目录 `20261004T035034Z`——该目录混入
-  carbon + PdCuNiP 两个数据集的行且有 (random, 1000) 重复键,已隔离至
-  `benchmark/_quarantine/`(gitignored,勿分析);冗余进程已杀,幸存 sweep
-  (carbon 031301Z、PdCuNiP 031310Z)经验证恢复出数。sweep 活性核查一律用
-  run_results.jsonl 行数,不要信 exec 完成通知。
-- PdCuNiP sweep 运行中(10-05 09:44:76/140,repeat 11/20,~17min/run,预计
-  10-06 凌晨完成);完成后:同款审计(对照 `20261002T005922Z`)+ 配对分析 +
-  发布包(`benchmark/published/2026-10-xx-f-gen5/`,README 附数据集获取方式)
-  → 关闭 L5。carbon 实际 wall ~20.7h(前 7h 处于 4 路争用)。
+sweep `20261004T031310Z` 收尾:10-05 23:24 进程被外部终止(机器未重启、无
+traceback),缺 seed 1019 共 6 个 run,由 `benchmark/resume_sweep.py` 从检查点
+补齐(dry-run 物料守卫先过:冻结配置核对 + 行身份检查)。完整性:140/140、
+无重复键、全部 `max_evaluations`、单数据集 `ds_9ca89d14f8f0`、SHA256SUMS
+校验通过。**注意:resume 的 6 行在空载机器上跑,wall 与整夜争用下的行不可比。**
+
+**bit-exact 审计(对照同代码 gen-4 存档 `20261002T005922Z`)——通过。**
+140 对 (optimizer, seed) 逐行:行级轨迹字段(unique/raw/accepted/coverage/
+evaluations/stopped_by/anchor_proximity/targeting_enabled)与逐轮共享字段全部
+逐位一致、轮数一致;**resume 补跑的 6 行同样逐位一致**(确定性只依赖
+seed+config,与机器负载无关)。gen-5 仅新增字段。
+
+**口径分化:** v1 ≠ v2 仅 3/140 行(比 carbon 还少);pre-screen == archived
+全部成立;**v2 与 v1 组排名完全相同**:
+
+`random-reuse > genetic > random > pso > pso-target > genetic-target > target_region`
+
+**v2 主指标配对结果(paired vs random,20 seeds):**
+
+| group | v2 unique/100 | paired Δ | wins | coverage | prox median |
+|---|---|---|---|---|---|
+| random-reuse | 158.31±19.73 | +27.75±21.21 | 18/20 | 322.50 | 73.50 |
+| genetic | 142.12±18.06 | +11.56±16.85 | 17/20 | 240.19 | 158.69 |
+| random | 130.56±3.75 | — | — | 407.28 | 55.08 |
+| pso | 127.51±32.48 | −3.05±31.33 | 7/20 (n.s.) | 348.36 | 140.56 |
+| pso-target | 111.53±20.62 | −19.03±20.91 | 2/20 | 352.23 | 82.23 |
+| genetic-target | 100.53±3.72 | −30.03±5.77 | 0/20 | 386.06 | 36.68 |
+| target_region | 100.16±3.34 | −30.40±5.58 | 0/20 | 416.71 | 33.35 |
+
+与 R4 时代 PdCuNiP 结论一致(2026-10-03 迁移记录):**random-reuse 在多组分
+材料上是最优发现策略**(碳上它是毒药 — 排名不迁移);genetic 有真实的
+coverage/致密化生态位(240.19 vs 407.28,20/20);定向机制迁移(TR prox
+33.35 最优)但发现代价放大(−30.40);pso-target 在两材料上定向都失败。
+无普适优化器默认值 — 新材料复用本冻结预注册重跑。
+
+## 发布包与 L5 收口(2026-10-06)
+
+- `benchmark/published/2026-10-06-f-gen5/`:carbon/ + pdcunip/ 两个自含子包
+  (config.frozen.json + run_results.jsonl + summary.json + environment.json +
+  SHA256SUMS,LF 清单,自包根 `sha256sum -c <mat>/SHA256SUMS` 校验通过)+
+  顶层 README(指标契约、可复现范围、两材料结论、数据集获取方式)。
+  `.gitattributes`(`benchmark/published/** -text`)保证入库字节一致。
+- **L5(独立复现)数据侧就绪**:包内可完整重算全部配对分析表格;描述符
+  重算需按 README 的获取方式取得两个数据集。
+
+## 状态(F 完成)
+
+- F1–F4 完成;carbon + PdCuNiP 双 sweep 完成、双审计通过、双口径分析完成;
+  发布包已构建。**Milestone F 关闭,2026-10-02 改进计划(A–F)全部完成。**
+- 运维事故记录:①2026-10-04 同秒双启动(035034Z 污染,隔离于
+  `benchmark/_quarantine/`);②2026-10-05 夜间 PdCuNiP 进程外部终止
+  (resume 恢复,6 行补齐)。sweep 活性核查一律用 run_results.jsonl 行数,
+  不要信 exec 完成通知。
+- 未提交:F 记录文档 + 发布包,等用户示意。

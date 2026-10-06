@@ -92,4 +92,4 @@
 | D — screening UI 语义 | ✅ | `0405ef6`(CI 经后继提交链确认 success);后端 747/前端 252/E2E 58 |
 | E1 — 锚点语义落地 | ✅(提前,不受 sweep 门控) | `90a6ea4`:种子范围汇总行 "+ N 个锚点";锚点清单本就随 params_json 持久化 |
 | E2–E4 — gen-5 指标/GA-PSO 局部目标 | ✅(2026-10-03,sweep 收口后) | `8d10b3b`:strict_unique_v2 排列不变计数(两种排列回归钉住)、screening_bottleneck 停机、GA/PSO 局部目标核+解析门放开、GA 快照距离表;后端 818/0、前端 252;tsc 的 zh.ts 重复键报错来自并行在途批次,本提交只暂存 generation 侧 hunk |
-| F — 冻结后再基准 | 🔄 进行中(2026-10-04 启动) | 预注册 `config.gen5-carbon.json`/`config.gen5-pdcunip.json`(v2 主指标+双口径次级,harness 升 2026-10-03);两 sweep 并行运行中(记录 `docs/reviews/2026-10-04-f-gen5-preregistrations.md`);分析+发布包+L5 收口等完成 |
+| F — 冻结后再基准 | ✅ 已完成(2026-10-06) | 双 sweep 140/140(碳 `20261004T031301Z` 连续收尾;PdCuNiP `20261004T031310Z` 夜间中断后 resume 补齐 seed 1019 六行);bit-exact 审计双通过(vs `20261002T010733Z`/`20261002T005922Z` 逐行逐位一致);v2 排名=v1 排名(两材料),结论不变:carbon pso-target 最优 / PdCuNiP random-reuse 最优、排名不迁移;发布包 `benchmark/published/2026-10-06-f-gen5/`(双材料自含+README 数据集获取方式)→ L5 数据侧就绪(记录 `docs/reviews/2026-10-04-f-gen5-preregistrations.md`) |

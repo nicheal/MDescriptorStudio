@@ -1,0 +1,85 @@
+{
+  "config_version": 1,
+  "kind": "generation-benchmark-preregistration",
+  "preregistered_at": "2026-09-29",
+  "note": "R4 pre-registration (audit P1-06/R4). The scenario below is frozen before any rerun: per-seed rows land in run_results.jsonl with SHA256SUMS, and historical sweep results (pre-2026-09-29 harness) must never be mixed into the same tables or figures. Primary comparison: paired per-seed differences on unique_per_100_evals across repeats; targeting groups are interpreted on anchor_proximity only. 2026-10-01 caliber annotation (external review): the PUBLISHED run of this config (benchmark/published/2026-09-30-r4/, results 20260929T043150Z) was produced by pre-2026-09-30 code whose batch-internal strict dedup counted in RAW space ('strict-unique-raw'); the current engine counts in the archive scaled space ('strict-unique-scaled'). The metric_caliber stamp below describes a re-run under current code — never mix the published unique numbers with post-fix runs without that annotation (verification matrix §4). 2026-10-03 F pre-registration (gen-5 freeze, improvement-plan F): same frozen R4 scenario (repeats/budget/objective/threshold/operator family/anchors) re-registered under GENERATION_ALGORITHM_VERSION gen-5. Primary metric is the permutation-invariant strict_unique_v2_per_100_evals (canonical greedy: candidates by stable id, atom rows lexicographic — pure function of the selected row set); secondaries carry BOTH calibers (gen-4 visit-order unique + archived rate) so one sweep reports pre-screen vs archived and v1 vs v2 side by side. The gen-4 config.json is now a historical preregistration and rejected for rerun by the contract.",
+  "algorithm_version": "gen-5",
+  "harness_min_version": "2026-10-03",
+  "metric_caliber": "strict-unique-scaled",
+  "selection_strategy": "structure_fps_v1",
+  "dataset_id": "ds_d56748fb4391",
+  "descriptor_run_id": "run_57a8b8c40286",
+  "repeats": 20,
+  "seed_base": 1000,
+  "budget_evaluations": 10000,
+  "anchor_frames": [
+    1322,
+    5075
+  ],
+  "region_radius": 15.0,
+  "groups": [
+    "random",
+    "random-reuse",
+    "genetic",
+    "pso",
+    "target_region",
+    "genetic-target",
+    "pso-target"
+  ],
+  "primary_groups": [
+    "random",
+    "genetic",
+    "pso"
+  ],
+  "primary_metric": "strict_unique_v2_per_100_evals",
+  "metric_definition": "count_strict_unique_environments(sum over rounds) / descriptor evaluations * 100, threshold 0.25 robust-scaled units",
+  "secondary_metrics": [
+    "final_coverage_radius",
+    "anchor_proximity.median",
+    "anchor_proximity.p90",
+    "anchor_proximity.within_radius",
+    "accepted",
+    "wall_seconds",
+    "unique_per_100_evals",
+    "strict_unique_v2_per_100_evals",
+    "archived_unique_per_100_evals",
+    "unique_novel_environments",
+    "strict_unique_v2",
+    "archived_unique_novel_environments",
+    "peak_rss_mb"
+  ],
+  "operators": {
+    "atomic_displacement": {
+      "enabled": true,
+      "max_sigma": 0.15
+    },
+    "isotropic_strain": {
+      "enabled": true,
+      "max_strain": 0.05
+    },
+    "anisotropic_strain": {
+      "enabled": true,
+      "max_strain": 0.05
+    },
+    "cell_shear": {
+      "enabled": true,
+      "max_shear": 0.05
+    }
+  },
+  "objective": {
+    "type": "local_environment_novelty",
+    "aggregation": "top_fraction_mean",
+    "top_fraction": 0.2,
+    "novelty_threshold": 0.25,
+    "scaling": "robust"
+  },
+  "constraints": {
+    "min_distance_mode": "covalent",
+    "min_distance_factor": 0.7
+  },
+  "optimizer_params": {
+    "children_per_seed": 8,
+    "batch_accept": 8,
+    "n_seeds": 64
+  }
+}
