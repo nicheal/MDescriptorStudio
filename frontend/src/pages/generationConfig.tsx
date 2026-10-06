@@ -916,11 +916,28 @@ export default function GenerationConfigPanel({
                 aria-label={t("Max force")}
                 onChange={(v) => update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningMaxForce: v ?? null } }))}
               />
+              <span style={labelStyle}>{t("Unscreenable frames")}</span>
+              <Select
+                id="constraints-energyScreeningUnscreenablePolicy"
+                style={{ minWidth: 170 }}
+                aria-label={t("Unscreenable frames")}
+                value={config.constraints.energyScreeningUnscreenablePolicy}
+                options={[
+                  { value: "keep", label: t("Keep for review") },
+                  { value: "reject", label: t("Drop like rejected") },
+                ]}
+                onChange={(energyScreeningUnscreenablePolicy) =>
+                  update((c) => ({ ...c, constraints: { ...c.constraints, energyScreeningUnscreenablePolicy } }))
+                }
+              />
             </>
           )}
         </div>
         <div style={{ fontSize: 12, color: "#616161", marginTop: 4 }}>
           {t("Second-stage filter (audit R5.1): after selection, accepted candidates are predicted with the engine's NEP/DPA4C energy and force models (CPU or CUDA); candidates above a bound are rejected and never enter the dataset. Unscreened candidates carry energy_screened=false and are never train-ready.")}
+        </div>
+        <div style={{ fontSize: 12, color: "#616161" }}>
+          {t("Unscreenable frames (the screener could not judge them, e.g. partial periodicity) are kept with their provenance by default; dropping them removes them from the archive - they still count as discovered.")}
         </div>
       </Subsection>
       </Card>

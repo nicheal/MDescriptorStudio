@@ -214,3 +214,30 @@ describe("estimateRunResources", () => {
     expect(estimateRunResources(structure).activeMetric).toBe("structure_novelty");
   });
 });
+
+describe("buildSubmitPayload energy/force screening", () => {
+  const screeningConfig = (constraints: Partial<GenerationConfig["constraints"]>): GenerationConfig => ({
+    ...defaultGenerationConfig(),
+    source: { datasetId: "ds_x", descriptorRunId: "run_x", seedViewId: null },
+    optimizer: defaultOptimizerConfig("random"),
+    constraints: { ...defaultGenerationConfig().constraints, ...constraints },
+  });
+
+  it("omits the policy for the default keep so cache keys stay stable", () => {
+    const payload = buildSubmitPayload(
+      screeningConfig({ energyScreeningEnabled: true, energyScreeningMaxEnergy: -0.5 }),
+    );
+    const screening = (payload.constraints as Record<string, unknown>).energy_screening as Record<string, unknown>;
+    expect(screening.enabled).toBe(true);
+    expect(screening.max_energy_per_atom).toBe(-0.5);
+    expect("unscreenable_policy" in screening).toBe(false);
+  });
+
+  it("sends unscreenable_policy only when reject is chosen", () => {
+    const payload = buildSubmitPayload(
+      screeningConfig({ energyScreeningEnabled: true, energyScreeningUnscreenablePolicy: "reject" }),
+    );
+    const screening = (payload.constraints as Record<string, unknown>).energy_screening as Record<string, unknown>;
+    expect(screening.unscreenable_policy).toBe("reject");
+  });
+});

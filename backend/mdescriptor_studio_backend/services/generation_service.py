@@ -82,6 +82,29 @@ def _now() -> str:
     return _NOW()
 
 
+def _geometry_constraints_metadata(constraints, request_constraints: dict) -> dict:
+    """Effective geometry constraints for metadata.json (P1 review item).
+
+    ``metadata.request.constraints`` carries the validated payload, where an
+    omitted key means "constructor default" — an independent geometry
+    recomputation from the artifact alone needs what the engine actually
+    enforced, defaults filled in. The engine's pair-cutoff matrix renders
+    back as the normalized pair table it was built from.
+    """
+    return {
+        "min_distance_mode": constraints.min_distance_mode,
+        "min_distance": constraints.min_distance,
+        "min_distance_factor": constraints.min_distance_factor,
+        "min_distance_pairs": (request_constraints or {}).get("min_distance_pairs"),
+        "max_displacement": constraints.max_displacement,
+        "max_volume_change": constraints.max_volume_change,
+        "min_volume_per_atom": constraints.min_volume_per_atom,
+        "max_volume_per_atom": constraints.max_volume_per_atom,
+        "composition_locked": constraints.composition_locked,
+        "atom_count_locked": constraints.atom_count_locked,
+    }
+
+
 def _json_safe(value):
     return AnalysisArtifactMixin._json_safe(value)
 
@@ -915,6 +938,15 @@ class GenerationService:
                         "warnings": warnings,
                         "screening_model_identity": (
                             energy_screening.model_identity() if energy_screening is not None else None
+                        ),
+                        # Effective geometry constraints (P1): the request
+                        # echo above carries the validated payload, where an
+                        # omitted key means "constructor default" -- an
+                        # independent geometry recomputation from
+                        # metadata.json alone needs what the engine actually
+                        # enforced, defaults filled in.
+                        "geometry_constraints": _geometry_constraints_metadata(
+                            constraints, request.constraints
                         ),
                     },
                     evaluated_structures_path=evaluated_frames_path,

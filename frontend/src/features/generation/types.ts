@@ -66,6 +66,10 @@ export interface ConstraintConfig {
   energyScreeningCheckpoint: string;
   energyScreeningMaxEnergy: number | null; // eV/atom upper bound (may be negative)
   energyScreeningMaxForce: number | null; // eV/Å max-|F| upper bound
+  /** What happens to "unscreenable" verdicts (the screener could not judge
+   *  the frame): keep (default, stays archived with provenance) or reject
+   *  (dropped from the archive like a fail; still counted as discovered). */
+  energyScreeningUnscreenablePolicy: "keep" | "reject";
 }
 
 export type OptimizerConfig =

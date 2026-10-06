@@ -365,7 +365,7 @@ class TestRequestValidation:
             "descriptor_run_id": "run",
             "optimizer": "random",
             "optimizer_params": {"children_per_seed": 2, "batch_accept": 2, "n_seeds": 2},
-            "objective": {"type": "novelty", "aggregation": "mean"},
+            "objective": {"type": "novelty"},
             "operators": {"atomic_displacement": {"enabled": True, "max_sigma": 0.1}},
             "constraints": {"min_distance_mode": "none"},
             "budget": {"max_evaluations": 16},

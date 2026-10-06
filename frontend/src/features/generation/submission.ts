@@ -321,6 +321,11 @@ export function buildSubmitPayload(config: GenerationConfig): Record<string, unk
     if (config.constraints.energyScreeningMaxForce != null) {
       screening.max_force = config.constraints.energyScreeningMaxForce;
     }
+    // Omitted for the default "keep" so existing screening cache keys stay
+    // stable (the key rides inside constraints).
+    if (config.constraints.energyScreeningUnscreenablePolicy === "reject") {
+      screening.unscreenable_policy = "reject";
+    }
     constraints.energy_screening = screening;
   }
   if (config.searchTarget.anchorFrames.length > 0) {

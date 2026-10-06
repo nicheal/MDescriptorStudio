@@ -14,6 +14,11 @@ The optimizer lifecycle (G3.5): initialize → propose → observe → state. Th
 engine reports every proposed candidate's outcome back through ``observe``
 (fitness, novelty, acceptance, geometry rejection) so feedback-driven
 optimizers (GA/PSO) can steer the next round; Random ignores the feedback.
+
+Module layout (2026-10-06 architecture split, zero behavior): the strict
+unique-environment counters live in ``counting.py``, the batch selection
+strategies in ``selection.py``, the round/result records in ``records.py``;
+this module re-exports them so existing import sites are unchanged.
 """
 
 from __future__ import annotations
@@ -23,15 +28,13 @@ import json
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 import numpy as np
 
 from ..analysis.sampling import apply_scaling
-from ..analysis.sampling.fps import farthest_point_sampling
 from ..errors import AppError, JOB_CANCELLED
-from ._distance import min_sqdist_to_set
 from .registry import GENERATION_ALGORITHM_VERSION
 from .snapshot import durable_write, fsync_directory, require_keys
 from .optimization import CandidateObservation, ObservationBatch, OptimizationContext
@@ -42,6 +45,17 @@ from .models import (
     CandidateEvaluation,
     ConstraintResult,
     StructureCandidate,
+)
+
+from .counting import (
+    count_strict_unique_environments,
+    count_strict_unique_environments_v2,
+)
+from .records import EvaluatedRecord, GenerationRunResult, RoundRecord
+from .selection import (
+    SELECTION_STRATEGIES,
+    select_diverse_batch,
+    select_local_incremental_batch,
 )
 
 _GEOMETRY_REJECTION_CODES = {
@@ -273,415 +287,6 @@ def _finite_or_none(values: np.ndarray | None, index: int) -> float | None:
         return None
     value = float(values[index])
     return value if np.isfinite(value) else None
-
-
-def _candidate_novel_rows(
-    rows: np.ndarray,
-    archive_novel: np.ndarray,
-    counted: np.ndarray | None,
-    threshold: float,
-) -> np.ndarray:
-    """The rows one candidate contributes to the strict novel set right now.
-
-    Shared by the round metric and the local selection strategy so both use
-    one definition: archive-near rows are dropped, rows within ``threshold``
-    of an already-counted row are dropped, and within-candidate duplicates
-    are deduped greedily in fixed row order.
-
-    Space contract (2026-09-30 audit P0): ``rows`` must already live in the
-    space every batch-internal comparison is defined in (the archive's
-    scaled space) and ``archive_novel`` must be a mask over those same row
-    indices — computed by querying the archive with the RAW rows, since
-    ``nearest_per_row`` scales internally.
-    """
-    fresh = rows[archive_novel]
-    if fresh.shape[0] and counted is not None:
-        d2 = min_sqdist_to_set(fresh, counted, workers=1)
-        fresh = fresh[np.sqrt(np.clip(d2, 0.0, None)) > threshold]
-    kept: list[np.ndarray] = []
-    kept_matrix: np.ndarray | None = None
-    for row in fresh:
-        if kept_matrix is not None:
-            d2 = min_sqdist_to_set(row[None, :], kept_matrix, workers=1)[0]
-            if not np.sqrt(max(float(d2), 0.0)) > threshold:
-                continue
-        kept.append(row)
-        kept_matrix = row[None, :] if kept_matrix is None else np.vstack([kept_matrix, row[None, :]])
-    if not kept:
-        return np.empty((0, rows.shape[1]), dtype=np.float64)
-    return np.vstack(kept) if len(kept) > 1 else kept[0][None, :]
-
-
-def count_strict_unique_environments(
-    selected: list[int],
-    atomic_values: np.ndarray,
-    row_offsets: np.ndarray,
-    threshold: float,
-    local_archive,
-) -> int:
-    """Strict greedy union dedup of novel environments over ``selected``.
-
-    Rows are visited in fixed candidate order, then fixed atomic row order.
-    A row is counted only when its distance to the frozen archive AND to
-    every already-counted novel row is strictly greater than ``threshold``;
-    only counted rows join the novel set. Two accepted structures that found
-    the same new region therefore contribute it once, within-candidate
-    duplicates count once, and archive-near rows can never repel a later
-    novel row. Environments accepted in earlier rounds reach this comparison
-    only through the formal local_archive update. This one function is the
-    single definition behind the round metric, the discovery-rate stop and
-    the local selection strategy (P0-02/P1-01/P1-03).
-
-    Every batch-internal comparison (already-counted dedup, within-candidate
-    dedup) runs in the archive's scaled space — the space the threshold is
-    defined in and the local strategy optimizes in (2026-09-30 audit P0: a
-    raw-space counter over-counted when the archive scale > 1 and
-    under-counted when < 1). The frozen-archive mask still queries raw rows
-    because ``nearest_per_row`` applies the scaling itself — never pass it
-    scaled rows, that would scale twice.
-
-    The count is defined for the given visit order (selection order, then
-    stored row order): threshold nearness is not transitive, so permuting
-    candidates or atomic rows may legitimately change the greedy count. A
-    permutation-invariant metric needs stable candidate identities and a
-    versioned redefinition, not a silent change here.
-    """
-    atomic_values = np.asarray(atomic_values, dtype=np.float64)
-    threshold = float(threshold)
-    scaled = apply_scaling(local_archive.scaling, atomic_values)
-    counted: np.ndarray | None = None
-    unique = 0
-    for index in selected:
-        lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
-        rows = atomic_values[lo:hi]
-        if rows.shape[0] == 0:
-            continue
-        archive_novel = local_archive.nearest_per_row(rows) > threshold
-        block = _candidate_novel_rows(scaled[lo:hi], archive_novel, counted, threshold)
-        if block.shape[0]:
-            unique += int(block.shape[0])
-            counted = block if counted is None else np.vstack([counted, block])
-    return unique
-
-
-def _canonical_row_order(rows: np.ndarray) -> np.ndarray:
-    """Canonical within-candidate row order: lexicographic by descriptor row.
-
-    ``np.lexsort`` with the column order reversed makes column 0 the primary
-    key; it is stable, so exact duplicate rows keep their stored order and the
-    permutation is deterministic. Per-dimension scaling with positive scales
-    preserves the first-differing coordinate and the sign of that difference,
-    so the order is identical whether rows are raw or scaled.
-    """
-    if rows.shape[0] <= 1:
-        return np.arange(rows.shape[0])
-    return np.lexsort(rows.T[::-1])
-
-
-def count_strict_unique_environments_v2(
-    selected: list[int],
-    candidate_ids: list[str],
-    atomic_values: np.ndarray,
-    row_offsets: np.ndarray,
-    threshold: float,
-    local_archive,
-) -> int:
-    """Permutation-invariant strict count (gen-5 ``strict_unique_v2``).
-
-    Same greedy strict-dedup semantics as :func:`count_strict_unique_environments`
-    — a row is counted only when strictly farther than ``threshold`` from the
-    frozen archive and from every already-counted novel row — but the visit
-    order is CANONICAL instead of arrival-defined: candidates are processed
-    sorted by ``candidate_id`` (the stable unique identity invariant added by
-    the 2026-10-02 audit P0 fix) and each candidate's atomic rows are processed
-    in :func:`_canonical_row_order` order. The count is therefore a pure
-    function of the selected row SET — permuting the arrival order or the
-    stored atom-row order cannot change it (both permutations are pinned by
-    tests). Canonical greedy is still greedy: it is not a maximum-spacing
-    representative set, and not a connected-component clustering — those are
-    different metric definitions (2026-09-30 local-selection audit §7.6).
-
-    The gen-4 visit-order count stays on the same record beside this one;
-    published R4 numbers are gen-4-caliber and remain valid. Space contract
-    identical to the gen-4 counter: batch-internal comparisons in the
-    archive's scaled space, frozen-archive mask queried with RAW rows.
-    """
-    atomic_values = np.asarray(atomic_values, dtype=np.float64)
-    threshold = float(threshold)
-    scaled = apply_scaling(local_archive.scaling, atomic_values)
-    blocks: list[tuple[str, int, int]] = []
-    for index in selected:
-        lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
-        if hi > lo:
-            blocks.append((candidate_ids[index], lo, hi))
-    blocks.sort(key=lambda item: item[0])
-    counted: np.ndarray | None = None
-    unique = 0
-    for _, lo, hi in blocks:
-        order = _canonical_row_order(scaled[lo:hi])
-        rows = atomic_values[lo:hi][order]
-        if rows.shape[0] == 0:
-            continue
-        archive_novel = local_archive.nearest_per_row(rows) > threshold
-        block = _candidate_novel_rows(scaled[lo:hi][order], archive_novel, counted, threshold)
-        if block.shape[0]:
-            unique += int(block.shape[0])
-            counted = block if counted is None else np.vstack([counted, block])
-    return unique
-
-
-@dataclass
-class RoundRecord:
-    generation: int
-    evaluations: int
-    proposed: int
-    rejected_geometry: int
-    rejected_duplicate: int
-    accepted: int
-    best_fitness: float
-    best_novelty: float | None
-    mean_novelty: float | None
-    # Covering radius of the *accepted* set over the reference domain
-    # (None until the first accept). The reference rows themselves always
-    # cover the domain exactly, so the old archive-level number was a
-    # structural 0.0 — not a coverage metric.
-    coverage_radius: float | None
-    novel_environments: int
-    # Novel environments accepted this round, deduplicated greedily against
-    # the frozen archive *plus* everything already counted this round (in
-    # selection order). Two accepted structures that found the same new
-    # region count it once — the benchmark-honest number (G3.5 A12). None
-    # when the objective does not produce environment counts.
-    unique_novel_environments: int | None = None
-    # The strict-dedup counterpart over the post-screening kept set (R5.1):
-    # what actually entered the local archive this round. Equals
-    # unique_novel_environments unless screening rejected a selected
-    # candidate; None when the objective produces no counts.
-    archived_unique_novel_environments: int | None = None
-    # Permutation-invariant counterpart of unique_novel_environments (gen-5
-    # strict_unique_v2): the same greedy strict dedup run in CANONICAL order
-    # (candidates by candidate_id, atomic rows lexicographic) so the count is
-    # a pure function of the selected row set. Coexists with the gen-4
-    # visit-order metric — published R4 numbers stay gen-4-caliber. None when
-    # the objective produces no counts.
-    strict_unique_v2: int | None = None
-    # strict_unique_v2 over the post-screening kept set; equals
-    # strict_unique_v2 unless screening rejected a selected candidate.
-    archived_strict_unique_v2: int | None = None
-    # Candidates removed after selection by energy/force screening (R5.1):
-    # still counted as discovered, never archived or fed back. Equal to the
-    # round's "fail" verdict count — the screening breakdown below carries
-    # the other two states explicitly.
-    rejected_screening: int = 0
-    # Screening verdict breakdown over the selected batch (2026-10-02 audit
-    # D): "pass" = judged physically plausible; "unscreenable" = the screener
-    # could not judge the frame (partial periodicity, non-finite prediction) —
-    # kept but never equivalent to a screened pass; "train_ready" = pass AND
-    # at least one energy/force bound configured (the writer's
-    # train_set_ready semantics, one definition at the source).
-    screening_passed: int = 0
-    screening_unscreenable: int = 0
-    screening_train_ready: int = 0
-    rejected_geometry_by_reason: dict[str, int] = field(default_factory=dict)
-
-    def to_json(self) -> dict:
-        return {
-            "generation": self.generation,
-            "evaluations": self.evaluations,
-            "proposed": self.proposed,
-            "rejected_geometry": self.rejected_geometry,
-            "rejected_geometry_by_reason": dict(self.rejected_geometry_by_reason),
-            "rejected_duplicate": self.rejected_duplicate,
-            "accepted": self.accepted,
-            "best_fitness": self.best_fitness,
-            "best_novelty": self.best_novelty,
-            "mean_novelty": self.mean_novelty,
-            "coverage_radius": self.coverage_radius,
-            "novel_environments": self.novel_environments,
-            "unique_novel_environments": self.unique_novel_environments,
-            "archived_unique_novel_environments": self.archived_unique_novel_environments,
-            "strict_unique_v2": self.strict_unique_v2,
-            "archived_strict_unique_v2": self.archived_strict_unique_v2,
-            "rejected_screening": self.rejected_screening,
-            "screening_passed": self.screening_passed,
-            "screening_unscreenable": self.screening_unscreenable,
-            "screening_train_ready": self.screening_train_ready,
-        }
-
-
-@dataclass
-class EvaluatedRecord:
-    """One valid candidate that reached descriptor evaluation (accepted or not)."""
-
-    candidate_id: str
-    generation: int
-    structure_descriptor: np.ndarray
-    novelty: float | None
-    fitness: float
-    accepted: bool
-
-
-@dataclass
-class GenerationRunResult:
-    accepted: list = field(default_factory=list)  # list[StructureCandidate]
-    evaluations: list = field(default_factory=list)  # list[CandidateEvaluation]
-    rounds: list = field(default_factory=list)  # list[RoundRecord]
-    evaluated: list = field(default_factory=list)  # list[EvaluatedRecord]
-    stopped_by: str = "max_generations"
-    # Resume mirrors (audit R5.5), updated at every round boundary so a
-    # snapshot taken from on_round is fully consistent.
-    best_fitness: float | None = None
-    stagnant: int = 0
-
-    @property
-    def accepted_count(self) -> int:
-        return len(self.accepted)
-
-    @property
-    def evaluation_count(self) -> int:
-        return int(sum(r.evaluations for r in self.rounds)) if self.rounds else 0
-
-
-def _fitness_elite_order(fitness: np.ndarray, finite: np.ndarray, pool_size: int) -> np.ndarray:
-    """Descending-fitness elite order: stable ascending argsort, reversed.
-
-    This is ``structure_fps_v1``'s historical order, kept bit-identical on
-    purpose — equal-fitness ties resolve to the *later* input index first.
-    Both selection strategies share this one helper so a pool cutoff or
-    budget that falls inside an equal-fitness group leaves the same elite
-    membership and pick order in both (2026-09-30 audit P1: the local
-    strategy used to sort ``-fitness`` stably and kept *earlier* ties, so
-    the two strategies could pick different identities from one tie group).
-    """
-    return finite[np.argsort(fitness[finite], kind="stable")[::-1][:pool_size]]
-
-
-def select_diverse_batch(
-    fitness: np.ndarray,
-    candidate_values: np.ndarray,
-    budget: int,
-    *,
-    top_pool_factor: int = 4,
-) -> list[int]:
-    """Novelty ranking, then farthest-point sampling inside the batch (§16).
-
-    Without the FPS pass the top-K could be K near-identical structures that
-    all sit far from the archive — the budget would be spent on one region.
-    FPS runs on the fitness-elite pool only (top ``budget * top_pool_factor``),
-    so selection stays a coverage decision among the candidates that already
-    scored well, not a re-ranking by geometry alone.
-    """
-    fitness = np.asarray(fitness, dtype=np.float64)
-    candidate_values = np.asarray(candidate_values, dtype=np.float64)
-    finite = np.flatnonzero(np.isfinite(fitness))
-    if finite.size == 0 or budget <= 0:
-        return []
-    pool_size = min(max(int(budget) * int(top_pool_factor), int(budget)), int(finite.size))
-    ranked = _fitness_elite_order(fitness, finite, pool_size)
-    pool = candidate_values[ranked]
-    picked = farthest_point_sampling(pool, n_samples=min(int(budget), pool.shape[0]))
-    return [int(ranked[i]) for i in picked.indices]
-
-
-SELECTION_STRATEGIES = ("structure_fps_v1", "local_incremental_maximin_v1")
-
-
-def select_local_incremental_batch(
-    fitness: np.ndarray,
-    candidate_values: np.ndarray,
-    atomic_values: np.ndarray,
-    row_offsets: np.ndarray,
-    budget: int,
-    *,
-    local_archive,
-    threshold: float,
-    top_pool_factor: int = 4,
-    max_candidates: int = 128,
-) -> list[int]:
-    """``local_incremental_maximin_v1``: batch selection in environment space.
-
-    A fixed fitness-elite sub-pool (same shape as the structure-FPS baseline)
-    is accepted iteratively: each step picks the candidate with the largest
-    marginal count of strictly new environments versus the frozen archive
-    plus the environments already claimed by this batch (exactly the
-    ``count_strict_unique_environments`` semantics, so the strategy optimizes
-    the metric the benchmark reports). Ties break on the maximin structure
-    distance to the already-selected candidates — before the first selection
-    the ranked order decides, which is the shared descending-fitness elite
-    order of :func:`_fitness_elite_order` (ties in reverse input order,
-    identical to the FPS baseline so equal-fitness cutoffs compare fairly) —
-    and zero-gain candidates still fill the batch so accepted counts stay
-    comparable with the baseline at equal budget.
-
-    Compute is bounded by design (audit R3.3): the elite pool caps the
-    per-step candidate sweep at ``max_candidates`` (on top of the
-    ``budget * top_pool_factor`` bound) — but never below the requested
-    budget, so acceptance counts stay equal to the uncapped FPS baseline
-    whenever the budget exceeds the cap (2026-09-30 audit case J) —, all
-    distance passes run through the blocked ``min_sqdist_to_set`` kernel (no
-    materialized N×M matrix), and the batch memory holds only the counted
-    novel rows. Atomic rows are scaled once with the archive's own scaling
-    so every comparison lives in the space the threshold is defined in.
-    """
-    fitness = np.asarray(fitness, dtype=np.float64)
-    finite = np.flatnonzero(np.isfinite(fitness))
-    if finite.size == 0 or budget <= 0:
-        return []
-    pool_size = min(
-        max(int(budget) * int(top_pool_factor), int(budget)),
-        int(finite.size),
-        # The elite cap bounds the sweep, but truncating the pool below the
-        # budget would silently accept fewer candidates than the FPS
-        # baseline at the same budget — the cap may only limit the elite
-        # surplus beyond it.
-        max(int(budget), max(1, int(max_candidates))),
-    )
-    ranked = _fitness_elite_order(fitness, finite, pool_size)
-    candidate_values = np.asarray(candidate_values, dtype=np.float64)
-    atomic_values = np.asarray(atomic_values, dtype=np.float64)
-    threshold = float(threshold)
-
-    # One scaling pass: batch-internal distances must live in the same space
-    # the frozen archive's threshold is defined in (nearest_per_row scales
-    # internally, so the frozen-archive mask below stays consistent).
-    scaled_rows = apply_scaling(local_archive.scaling, atomic_values)
-    archive_novel = local_archive.nearest_per_row(atomic_values) > threshold
-
-    memory: np.ndarray | None = None
-    selected: list[int] = []
-    selected_structures: list[np.ndarray] = []
-    remaining = [int(index) for index in ranked]
-
-    def _marginal_gain(index: int) -> tuple[int, np.ndarray]:
-        lo, hi = int(row_offsets[index]), int(row_offsets[index + 1])
-        rows = scaled_rows[lo:hi]
-        if rows.shape[0] == 0:
-            return 0, np.empty((0, rows.shape[1] if rows.ndim == 2 else 0), dtype=np.float64)
-        block = _candidate_novel_rows(rows, archive_novel[lo:hi], memory, threshold)
-        return int(block.shape[0]), block
-
-    while len(selected) < int(budget) and remaining:
-        best_index: int | None = None
-        best_gain = -1
-        best_struct_dist = -np.inf
-        best_block: np.ndarray | None = None
-        for index in remaining:
-            gain, block = _marginal_gain(index)
-            structure = candidate_values[index]
-            if selected_structures:
-                d2 = min_sqdist_to_set(structure[None, :], np.asarray(selected_structures), workers=1)[0]
-                struct_dist = float(np.sqrt(max(float(d2), 0.0)))
-            else:
-                struct_dist = 0.0  # first pick: ranked order decides ties
-            if gain > best_gain or (gain == best_gain and struct_dist > best_struct_dist):
-                best_index, best_gain, best_struct_dist, best_block = index, gain, struct_dist, block
-        assert best_index is not None
-        selected.append(best_index)
-        remaining.remove(best_index)
-        selected_structures.append(candidate_values[best_index])
-        if best_block is not None and best_block.shape[0]:
-            memory = best_block if memory is None else np.vstack([memory, best_block])
-    return selected
 
 
 class GenerationEngine:
@@ -1038,15 +643,30 @@ class GenerationEngine:
                 discovered = list(selected)
                 if self.energy_screening is not None and discovered:
                     screen_verdicts = self.energy_screening.screen([valid[i] for i in discovered])
+                    spec = getattr(self.energy_screening, "spec", None)
+                    # Policy for "unscreenable" verdicts (the screener could
+                    # not judge the frame): "keep" (default) leaves them in
+                    # the archive/feedback stream with their provenance --
+                    # "we could not judge" is not "we judged badly";
+                    # "reject" drops them from the archive exactly like a
+                    # fail. Either way they stay discovered (the discovery
+                    # metrics count the pre-screening selection) and a "fail"
+                    # verdict is never keepable.
+                    unscreenable_policy = (
+                        getattr(spec, "unscreenable_policy", "keep") if spec is not None else "keep"
+                    )
                     kept: list[int] = []
                     for index, verdict in zip(discovered, screen_verdicts):
                         if verdict.accepted:
-                            kept.append(index)
-                            screening_verdicts[index] = verdict
                             if verdict.status == "pass":
                                 screening_passed += 1
                             else:
                                 screening_unscreenable += 1
+                            if verdict.status == "unscreenable" and unscreenable_policy == "reject":
+                                screening_reasons[index] = tuple(verdict.reasons) or ("unscreenable",)
+                            else:
+                                kept.append(index)
+                                screening_verdicts[index] = verdict
                         else:
                             screening_reasons[index] = tuple(verdict.reasons) or ("energy_screening",)
                     rejected_screening = len(discovered) - len(kept)
@@ -1054,7 +674,6 @@ class GenerationEngine:
                     # configured bound (the writer's train_set_ready
                     # semantics); a measure-only pass is a measurement, not a
                     # plausibility verdict.
-                    spec = getattr(self.energy_screening, "spec", None)
                     if spec is not None and (
                         getattr(spec, "max_energy_per_atom", None) is not None
                         or getattr(spec, "max_force", None) is not None

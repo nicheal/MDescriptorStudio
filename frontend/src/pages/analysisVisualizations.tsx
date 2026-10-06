@@ -671,12 +671,12 @@ function TwoNNView({ preview, arrays }: { preview: AnalysisPreview; arrays: Anal
     <Metrics values={[
       { k: t("Intrinsic dimension"), v: preview.intrinsic_dimension },
       { k: t("Bootstrap"), text: ci.mean != null ? `${formatFixed(Number(ci.mean), 2)} ± ${formatFixed(Number(ci.sd ?? 0), 2)} (95% CI ${formatFixed(Number((ci.ci95 as number[] | undefined)?.[0] ?? 0), 2)}–${formatFixed(Number((ci.ci95 as number[] | undefined)?.[1] ?? 0), 2)})` : t("disabled") },
-      { k: t("Points"), text: `${formatCount(Number(preview.points_used ?? 0))} / ${formatCount(Number(preview.points_total ?? 0))}` },
+      { k: t("Number of points"), text: `${formatCount(Number(preview.points_used ?? 0))} / ${formatCount(Number(preview.points_total ?? 0))}` },
       { k: t("Duplicates excluded"), v: preview.duplicates_excluded },
       { k: t("Feature scale"), v: preview.preprocess },
     ]} />
     <div className="analysis-chart-grid">
-      <PlotFrame compact ariaLabel={t("Log neighbor-ratio distribution")} data={[{ type: "histogram", x: lnMu, marker: { color: "#0F6CBD" } }]} layout={layout({ xaxis: { title: { text: t("ln(r2/r1)") } }, yaxis: { title: { text: t("Points") } }, shapes: (() => { const estimate = num(preview.intrinsic_dimension); const meanLn = estimate && estimate > 0 ? 1 / estimate : null; return meanLn == null ? [] : [{ type: "line" as const, x0: meanLn, x1: meanLn, y0: 0, y1: 1, yref: "paper", line: { color: "#D13438", dash: "dash" } }]; })() })} />
+      <PlotFrame compact ariaLabel={t("Log neighbor-ratio distribution")} data={[{ type: "histogram", x: lnMu, marker: { color: "#0F6CBD" } }]} layout={layout({ xaxis: { title: { text: t("ln(r2/r1)") } }, yaxis: { title: { text: t("Number of points") } }, shapes: (() => { const estimate = num(preview.intrinsic_dimension); const meanLn = estimate && estimate > 0 ? 1 / estimate : null; return meanLn == null ? [] : [{ type: "line" as const, x0: meanLn, x1: meanLn, y0: 0, y1: 1, yref: "paper", line: { color: "#D13438", dash: "dash" } }]; })() })} />
       {bootstrap.length > 0 && <PlotFrame compact ariaLabel={t("Bootstrap dimension estimates")} data={[{ type: "histogram", x: bootstrap, marker: { color: "#107C10" } }]} layout={layout({ xaxis: { title: { text: t("Resampled intrinsic dimension") } }, yaxis: { title: { text: t("Draws") } } })} />}
     </div>
     <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("TwoNN estimates the manifold dimension from first/second neighbor distance ratios (Facco et al. 2017); the spectral effective dimension measures PCA variance spread - a large gap between the two numbers means strong redundancy, not a lossless low-dimensional projection.")}</Typography.Paragraph>
@@ -703,7 +703,7 @@ function InformationImbalanceView({ preview, arrays }: { preview: AnalysisPrevie
       <PlotFrame compact ariaLabel={t("Per-point rank contribution distributions")} data={[
         { type: "histogram", name: t("left → right"), x: contributionsAb, marker: { color: "#0F6CBD", opacity: 0.6 }, nbinsx: 24 },
         { type: "histogram", name: t("right → left"), x: contributionsBa, marker: { color: "#F7630C", opacity: 0.6 }, nbinsx: 24 },
-      ]} layout={layout({ barmode: "overlay", xaxis: { title: { text: t("Normalized neighbor rank (0 = reproduced, 0.5 = independent)") } }, yaxis: { title: { text: t("Points") } }, legend: { orientation: "h" } })} />
+      ]} layout={layout({ barmode: "overlay", xaxis: { title: { text: t("Normalized neighbor rank (0 = reproduced, 0.5 = independent)") } }, yaxis: { title: { text: t("Number of points") } }, legend: { orientation: "h" } })} />
     </div>
     <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>{t("Δ reads how well one descriptor space reproduces the other's nearest-neighbor choices: 0 = reproduced, ~0.5 = independent. The asymmetry says which side loses information when compressed into the other.")}</Typography.Paragraph>
   </>;

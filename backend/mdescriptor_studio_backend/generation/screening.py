@@ -61,6 +61,13 @@ class ScreeningSpec:
     num_threads: int | None = None
     max_energy_per_atom: float | None = None  # eV/atom upper bound
     max_force: float | None = None  # eV/angstrom max-|F| upper bound
+    # What to do with "unscreenable" verdicts (partial periodicity, non-finite
+    # prediction -- the screener could not judge the frame): "keep" (default)
+    # leaves them in the archive/feedback stream with their provenance;
+    # "reject" drops them from the archive exactly like a fail. Either way
+    # they stay discovered (the discovery metrics count the pre-screening
+    # selection) and a "fail" verdict is never keepable.
+    unscreenable_policy: str = "keep"
 
     def __post_init__(self) -> None:
         # The frontend trims the checkpoint path before submitting; the API
@@ -77,6 +84,8 @@ class ScreeningSpec:
             raise ValueError(f"energy_screening model must be one of {', '.join(_SCREENING_MODELS)}")
         if self.device not in ("cpu", "cuda"):
             raise ValueError("energy_screening device must be cpu or cuda")
+        if self.unscreenable_policy not in ("keep", "reject"):
+            raise ValueError("energy_screening unscreenable_policy must be keep or reject")
         # Both models ship a bundled default (NEP: nep89_20250409, DPA4C:
         # DPA4C-Air-OMat24-v20260819) that auto-resolves with checksum
         # verification; ``checkpoint`` is an optional explicit override.
@@ -102,6 +111,7 @@ class ScreeningSpec:
             num_threads=raw.get("num_threads"),
             max_energy_per_atom=raw.get("max_energy_per_atom"),
             max_force=raw.get("max_force"),
+            unscreenable_policy=str(raw.get("unscreenable_policy") or "keep"),
         )
         spec.validate()
         if spec.num_threads is not None and (isinstance(spec.num_threads, bool) or not isinstance(spec.num_threads, int) or not 1 <= spec.num_threads <= 64):

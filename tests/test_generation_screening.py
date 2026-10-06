@@ -249,3 +249,77 @@ class TestParseValidation:
             )
         )
         assert request.constraints["energy_screening"]["model"] == "NEP"
+
+
+class TestUnscreenablePolicy:
+    """unscreenable_policy (P1): "keep" (default) archives unscreenable
+    candidates; "reject" drops them from the archive exactly like a fail."""
+
+    class _AlternateUnscreenable:
+        """Passes every second selected candidate, marks the rest unscreenable."""
+
+        def __init__(self, policy: str = "keep"):
+            self.spec = ScreeningSpec(unscreenable_policy=policy)
+
+        def screen(self, candidates):
+            verdicts = []
+            for index in range(len(candidates)):
+                if index % 2 == 1:
+                    verdicts.append(ScreeningVerdict(status="unscreenable", reasons=("partial_periodicity_not_screenable",)))
+                else:
+                    verdicts.append(
+                        ScreeningVerdict(status="pass", energy=-1.0, energy_per_atom=-0.5, max_force=0.1)
+                    )
+            return verdicts
+
+    def test_default_keep_archives_unscreenable_candidates(self):
+        engine = TestEngineGate._engine(TestEngineGate(), self._AlternateUnscreenable("keep"))
+        result = engine.run()
+        assert sum(r.rejected_screening for r in result.rounds) == 0
+        assert sum(r.screening_unscreenable for r in result.rounds) > 0
+        assert result.accepted_count > 0
+
+    def test_reject_policy_drops_them_like_a_fail_but_they_stay_discovered(self):
+        engine = TestEngineGate._engine(TestEngineGate(), self._AlternateUnscreenable("reject"))
+        result = engine.run()
+        assert sum(r.rejected_screening for r in result.rounds) > 0
+        assert sum(r.screening_unscreenable for r in result.rounds) > 0
+        # Strict discovery counts the pre-screening selection either way.
+        assert all(r.unique_novel_environments is None or r.rejected_screening >= 0 for r in result.rounds)
+        rejected_ids = {
+            record.candidate_id
+            for record in result.evaluated
+            if not record.accepted
+        }
+        assert rejected_ids
+
+    def test_spec_rejects_unknown_policy(self):
+        with pytest.raises(ValueError, match="unscreenable_policy must be keep or reject"):
+            ScreeningSpec(unscreenable_policy="drop").validate()
+
+    def test_from_constraints_reads_the_policy(self):
+        spec = ScreeningSpec.from_constraints({"energy_screening": {"enabled": True}})
+        assert spec.unscreenable_policy == "keep"
+        spec = ScreeningSpec.from_constraints({"energy_screening": {"enabled": True, "unscreenable_policy": "reject"}})
+        assert spec.unscreenable_policy == "reject"
+
+
+class TestUnscreenablePolicyParsing:
+    def test_policy_parses_and_absent_stays_absent(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+
+        request = parse_request(
+            TestParseValidation._payload(energy_screening={"enabled": True, "unscreenable_policy": "reject"})
+        )
+        assert request.constraints["energy_screening"]["unscreenable_policy"] == "reject"
+        # Absent stays absent: the key rides inside constraints in the cache
+        # key and writing the default back would invalidate existing runs.
+        request = parse_request(TestParseValidation._payload(energy_screening={"enabled": True}))
+        assert "unscreenable_policy" not in request.constraints["energy_screening"]
+
+    def test_unknown_policy_rejected_at_submit(self):
+        from mdescriptor_studio_backend.errors import AppError
+        from mdescriptor_studio_backend.generation.models import parse_request
+
+        with pytest.raises(AppError, match="unscreenable_policy must be keep or reject"):
+            parse_request(TestParseValidation._payload(energy_screening={"enabled": True, "unscreenable_policy": "drop"}))

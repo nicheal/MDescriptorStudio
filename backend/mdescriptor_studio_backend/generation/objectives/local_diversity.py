@@ -27,6 +27,9 @@ from ..archive import LocalEnvironmentArchive
 from .base import ObjectiveBatchResult
 
 _AGGREGATIONS = ("mean", "top_fraction_mean", "quantile", "max")
+# Public alias: the parse-time objective schema (objectives.__init__) validates
+# against the same vocabulary the constructor enforces here.
+AGGREGATIONS = _AGGREGATIONS
 
 
 def _aggregate(distances: np.ndarray, aggregation: str, top_fraction: float, quantile: float) -> float:

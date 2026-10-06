@@ -86,12 +86,17 @@ def _service(
 
 
 def _payload(dataset_id: str, objective: str = "novelty") -> dict:
+    # Per-type payload keys: aggregation is a local/composite tunable, not a
+    # novelty one — the parse-time objective schema rejects mismatched keys.
+    objective_payload = {"type": objective}
+    if objective in ("local_environment_novelty", "composite"):
+        objective_payload["aggregation"] = "mean"
     return {
         "dataset_id": dataset_id,
         "descriptor_run_id": "run_1",
         "optimizer": "random",
         "optimizer_params": {"children_per_seed": 2, "batch_accept": 2, "n_seeds": 2},
-        "objective": {"type": objective, "aggregation": "mean"},
+        "objective": objective_payload,
         "operators": {"atomic_displacement": {"enabled": True, "max_sigma": 0.1}},
         "constraints": {"min_distance_mode": "none"},
         "budget": {"max_evaluations": 16, "max_accepted": 4, "max_generations": 4},
@@ -444,3 +449,42 @@ class TestGenerationResumeRpc:
         service.db._generation_row["status"] = "COMPLETED"
         service.delete({"id": "gen_1"})
         assert not snapshot_dir.exists()
+
+
+class TestGeometryConstraintsMetadata:
+    """metadata.json carries the EFFECTIVE constraints (P1): geometry verdicts
+    must be recomputable from the artifact alone, defaults filled in."""
+
+    def test_defaults_are_filled_when_the_payload_omits_keys(self):
+        from mdescriptor_studio_backend.generation.constraints import build_constraints
+        from mdescriptor_studio_backend.services.generation_service import _geometry_constraints_metadata
+
+        payload = _geometry_constraints_metadata(build_constraints({}), {})
+        assert payload["min_distance_mode"] == "none"
+        assert payload["min_distance"] is None
+        assert payload["min_distance_factor"] == 0.7
+        assert payload["min_distance_pairs"] is None
+        assert payload["max_displacement"] is None and payload["max_volume_change"] is None
+        assert payload["min_volume_per_atom"] is None and payload["max_volume_per_atom"] is None
+        assert payload["composition_locked"] is True
+        assert payload["atom_count_locked"] is True
+
+    def test_explicit_values_are_carried_verbatim(self):
+        from mdescriptor_studio_backend.generation.constraints import build_constraints
+        from mdescriptor_studio_backend.services.generation_service import _geometry_constraints_metadata
+
+        request_constraints = {
+            "min_distance_mode": "absolute",
+            "min_distance": 1.2,
+            "min_distance_pairs": {"Si-Si": 2.0},
+            "max_displacement": 0.3,
+            "composition_locked": False,
+        }
+        payload = _geometry_constraints_metadata(build_constraints(request_constraints), request_constraints)
+        assert payload["min_distance_mode"] == "absolute"
+        assert payload["min_distance"] == 1.2
+        assert payload["min_distance_factor"] == 0.7
+        assert payload["min_distance_pairs"] == {"Si-Si": 2.0}
+        assert payload["max_displacement"] == 0.3
+        assert payload["composition_locked"] is False
+        assert payload["atom_count_locked"] is True

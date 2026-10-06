@@ -36,10 +36,12 @@ class CoverageGainObjective:
     # so the engine must not run the local-environment discovery-rate stop.
     produces_novel_environment_count = False
 
-    def __init__(self, **_ignored) -> None:
+    def __init__(self) -> None:
         # The covering radius is fully determined by the archive; there are no
-        # tunable weights. Extra payload keys are ignored so forward-compatible
-        # clients do not break.
+        # tunable weights. Forward compatibility is the parse-time objective
+        # schema's job (objectives.validate_objective_params rejects unknown
+        # keys at submit with a clear message) — a stray kwarg reaching this
+        # constructor is a loud TypeError, never silence (P1: no 参数吞没).
         pass
 
     def evaluate_batch(self, structure_values, atomic_values, row_offsets, structure_archive, local_archive, penalties):

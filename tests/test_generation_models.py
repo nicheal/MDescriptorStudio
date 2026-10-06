@@ -513,3 +513,128 @@ class TestRequestParsing:
             )
         with pytest.raises(AppError, match="max_sigma"):
             parse_request(_request(operators={"atomic_displacement": {"enabled": True, "max_sigma": 9.0}}))
+
+
+class TestObjectiveSchema:
+    """Parse-time objective validation (P1): no queue-then-fail for objectives.
+
+    Every payload the UI can send (submission.ts) must pass; anything the
+    constructors would reject at worker time must be rejected here instead.
+    """
+
+    def test_unknown_objective_param_rejected_per_type(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        # novelty/coverage have no tunables at all.
+        for otype in ("novelty", "coverage"):
+            with pytest.raises(AppError, match="unknown objective params"):
+                parse_request(_request(objective={"type": otype, "aggregation": "mean"}))
+        with pytest.raises(AppError, match="unknown objective params for 'local_environment_novelty': structure_weight"):
+            parse_request(_request(objective={"type": "local_environment_novelty", "structure_weight": 0.1}))
+        with pytest.raises(AppError, match="unknown objective params for 'composite': novelty_threshold_typo"):
+            parse_request(_request(objective={"type": "composite", "novelty_threshold_typo": 1}))
+
+    def test_scaling_mode_validated(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        for mode in ("raw", "standardized", "robust"):
+            parse_request(_request(objective={"type": "novelty", "scaling": mode}))
+        with pytest.raises(AppError, match="objective scaling must be one of"):
+            parse_request(_request(objective={"type": "novelty", "scaling": "quantile"}))
+        with pytest.raises(AppError, match="objective scaling must be one of"):
+            parse_request(_request(objective={"type": "novelty", "scaling": 7}))
+
+    def test_local_objective_param_ranges_rejected_at_submit(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        cases = [
+            ({"aggregation": "median"}, "aggregation"),
+            ({"aggregation": 3}, "aggregation"),
+            ({"top_fraction": 0}, "top_fraction"),
+            ({"top_fraction": 1.01}, "top_fraction"),
+            ({"top_fraction": True}, "top_fraction"),
+            ({"quantile": 0}, "quantile"),
+            ({"quantile": 1.5}, "quantile"),
+            ({"novelty_threshold": 0}, "novelty_threshold"),
+            ({"novelty_threshold": -0.5}, "novelty_threshold"),
+            ({"novelty_threshold": "0.25"}, "novelty_threshold"),
+        ]
+        for extra, fragment in cases:
+            with pytest.raises(AppError, match=fragment):
+                parse_request(_request(objective={"type": "local_environment_novelty", **extra}))
+
+    def test_local_objective_valid_params_pass(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+
+        request = parse_request(
+            _request(
+                objective={
+                    "type": "local_environment_novelty",
+                    "aggregation": "quantile",
+                    "quantile": 0.9,
+                    "top_fraction": 0.5,
+                    "novelty_threshold": None,
+                    "scaling": "raw",
+                }
+            )
+        )
+        assert request.objective["quantile"] == 0.9
+        assert request.objective["novelty_threshold"] is None
+        # Absent optionals fall through to the constructor defaults.
+        parse_request(_request(objective={"type": "local_environment_novelty"}))
+
+    def test_composite_weight_validation(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+        from mdescriptor_studio_backend.errors import AppError
+
+        with pytest.raises(AppError, match="non-negative"):
+            parse_request(_request(objective={"type": "composite", "structure_weight": -0.1}))
+        with pytest.raises(AppError, match="positive sum"):
+            parse_request(_request(objective={"type": "composite", "structure_weight": 0, "local_weight": 0}))
+        request = parse_request(
+            _request(
+                objective={
+                    "type": "composite",
+                    "structure_weight": 0.5,
+                    "local_weight": 0.5,
+                    "novelty_threshold": 0.25,
+                }
+            )
+        )
+        assert request.objective["structure_weight"] == 0.5
+
+    def test_every_ui_payload_shape_passes(self):
+        from mdescriptor_studio_backend.generation.models import parse_request
+
+        # Exactly what submission.ts can emit, per objective type.
+        parse_request(_request(objective={"type": "novelty", "scaling": "robust"}))
+        parse_request(_request(objective={"type": "coverage", "scaling": "raw"}))
+        parse_request(
+            _request(
+                objective={
+                    "type": "local_environment_novelty",
+                    "scaling": "robust",
+                    "aggregation": "top_fraction_mean",
+                    "top_fraction": 0.2,
+                    "quantile": 0.5,
+                    "novelty_threshold": 0.25,
+                }
+            )
+        )
+        parse_request(
+            _request(
+                objective={
+                    "type": "composite",
+                    "scaling": "robust",
+                    "aggregation": "mean",
+                    "top_fraction": 0.2,
+                    "quantile": 0.5,
+                    "novelty_threshold": None,
+                    "structure_weight": 0.3,
+                    "local_weight": 0.7,
+                }
+            )
+        )

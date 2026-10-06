@@ -151,3 +151,10 @@
 > config+jsonl+summary+environment+LF SHA256SUMS,顶层 README 含数据集获取方式)——L5 数据侧就绪。
 > 同日运维事故:2026-10-04 同秒双启动致 `20261004T035034Z` 混入两数据集行,已隔离 `benchmark/_quarantine/`
 > 勿分析;sweep 活性核查一律用 run_results.jsonl 行数,勿信 exec 完成通知。
+
+> **Coverage 术语表(P1 术语统一,2026-10-06)**:generation 域内两个 "coverage" 是不同概念,引用时必须区分——
+> ① **coverage gain**(覆盖增益)= objective 适应度项:一个候选使已接受集覆盖半径下降的量。注册表载荷键仍叫
+> `coverage`(历史兼容,改名会破坏已存 params_json 与缓存键);UI 显示 Coverage gain / 覆盖度增益;类
+> `CoverageGainObjective`。② **coverage radius**(覆盖半径)= 指标:已接受集对参考域的覆盖半径(轮内
+> `coverage_radius`、图表 Coverage radius per round、run 末 `final_coverage_radius`)。analysis 域的 coverage
+> (采样覆盖)是另一套语义,不与上述混用。提交期 objective schema(2026-10-06)与 UI 文案已按此统一。

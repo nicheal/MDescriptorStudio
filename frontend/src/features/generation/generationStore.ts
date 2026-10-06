@@ -80,6 +80,7 @@ export const defaultGenerationConfig = (): GenerationConfig => ({
     energyScreeningCheckpoint: "",
     energyScreeningMaxEnergy: null,
     energyScreeningMaxForce: null,
+    energyScreeningUnscreenablePolicy: "keep",
   },
   optimizer: { ...defaultOptimizerConfig("random") },
   searchTarget: { anchorFrames: [], regionRadius: 15.0, targetMode: "structure", anchorSpecies: "" },

@@ -392,6 +392,15 @@ def parse_request(params: dict) -> GenerationRequest:
         GENERATION_REGISTRY.objective(objective["type"])
     except KeyError as exc:
         raise AppError(INVALID_PARAMS, str(exc)) from exc
+    # Parse-time objective schema (P1): unknown keys / out-of-range values
+    # are rejected here, not by a worker TypeError after queueing — the same
+    # no-queue-then-fail contract the optimizer params have had since A10.
+    from .objectives import validate_objective_params
+
+    try:
+        validate_objective_params(objective)
+    except ValueError as exc:
+        raise AppError(INVALID_PARAMS, str(exc)) from exc
     constraints = params.get("constraints") or {}
     if not isinstance(constraints, dict):
         raise AppError(INVALID_PARAMS, "constraints must be an object")
@@ -582,6 +591,7 @@ def parse_request(params: dict) -> GenerationRequest:
             raise AppError(INVALID_PARAMS, "energy_screening must be an object")
         unknown = set(energy_screening) - {
             "enabled", "model", "checkpoint", "device", "num_threads", "max_energy_per_atom", "max_force",
+            "unscreenable_policy",
         }
         if unknown:
             raise AppError(INVALID_PARAMS, f"unknown energy_screening keys: {', '.join(sorted(unknown))}")
@@ -603,6 +613,12 @@ def parse_request(params: dict) -> GenerationRequest:
             threads = energy_screening.get("num_threads")
             if threads is not None and (isinstance(threads, bool) or not isinstance(threads, int) or not 1 <= threads <= 64):
                 raise AppError(INVALID_PARAMS, "energy_screening num_threads must be an integer in [1, 64]")
+            # Absent stays absent: the field rides inside constraints in the
+            # cache key, and writing the "keep" default back would invalidate
+            # every existing screening run's cache for no behavioral reason.
+            policy = energy_screening.get("unscreenable_policy")
+            if policy is not None and policy not in ("keep", "reject"):
+                raise AppError(INVALID_PARAMS, "energy_screening unscreenable_policy must be keep or reject")
     target_mode = str(params.get("target_mode") or "structure")
     if target_mode not in ("structure", "local_environment"):
         raise AppError(INVALID_PARAMS, "target_mode must be structure or local_environment")
